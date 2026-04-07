@@ -284,6 +284,7 @@ ANTHROPIC_API_KEY=xxx ./tests/test-tool-stop.sh
 
 ## 待处理
 
+- [ ] **`--print` stream-json 模式**：参考 Claude Code 的 `--print`，输入输出均为 JSON stream（每行一个 JSON 事件），便于程序化集成和管道编排
 - [ ] OpenAI Responses API 的完整测试（目前只有 Claude 和 OpenAI Chat 经过验证）
 - [ ] agent.sh 交互模式的完善（历史记录、多行输入）
 - [ ] 更多 provider 的兼容性测试（DeepSeek、Groq 等的真实 API）
