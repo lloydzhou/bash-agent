@@ -185,7 +185,7 @@ conv_add_tool_results() {
         result=$(echo "$tr" | cut -d: -f2-)
         $first || content+=","
         first=false
-        content+="{\"type\":\"tool_result\",\"tool_use_id\":\"${tid}\",\"content\":\"$(json_escape "$result")\"}"
+        content+="{\"type\":\"tool_result\",\"tool_use_id\":\"${tid}\",\"content\":\"${result}\"}"
     done <<< "$results"
 
     content+="]"
@@ -437,12 +437,19 @@ agent_loop() {
         local text="" tool_calls="" stop=""
         local cur_tool_name="" cur_tool_id=""
 
+        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
         while IFS= read -r line; do
             [[ "$VERBOSE" == true ]] && printf '[debug] <%s>\n' "$line" >&2
             case "$line" in
                 TEXT:*)
                     t="${line#TEXT:}"
-                    printf '%s' "$(unescape_display "$t")"
+                    # Inline unescape (avoid $() which strips trailing newlines)
+                    local d="$t"
+                    d="${d//\\n/$'\n'}"
+                    d="${d//\\t/$'\t'}"
+                    d="${d//\\\"/\"}"
+                    d="${d//\\\\/\\}"
+                    printf '%s' "$d"
                     text+="$t"
                     ;;
                 TOOL_START:*)
@@ -510,7 +517,10 @@ execute_tool_calls() {
         input=$(echo "$tc" | cut -d: -f3-)
         local output
         output=$(dispatch_tool "$name" "$input" 2>&1) || output="Error: tool execution failed"
-        results+="${id}:${output}"$'\n'
+        # json_escape so newlines in output don't break the line-based format
+        local escaped
+        escaped=$(json_escape "$output")
+        results+="${id}:${escaped}"$'\n'
     done <<< "$calls"
     printf '%s' "$results"
 }
