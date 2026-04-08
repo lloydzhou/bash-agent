@@ -1,31 +1,50 @@
 #!/usr/bin/env bash
-# bash-agent — AI Agent in pure bash, powered by bash-llm
-# Implements agent loop with tools: read_file, write_file, edit_file, bash
-# No dependencies beyond: bash, curl, awk, llm.sh
+# bash-agent — AI Agent in pure bash/awk
+# Supports: Anthropic Claude, OpenAI Chat, OpenAI Responses
+# No dependencies beyond: bash, curl, awk
 
 set -uo pipefail
 
 # ============================================================================
-# Configuration
+# Section 1: Configuration & Defaults
 # ============================================================================
 
-LLM_SH=""       # Path to llm.sh (auto-detected or set via --llm)
 PROVIDER=""
 MODEL=""
+MAX_TOKENS=4096
 SYSTEM_PROMPT=""
-MAX_TURNS=20
 RAW_MODE=false
+NO_STREAM=false
+PRINT_MODE=false
 VERBOSE=false
 API_KEY=""
 BASE_URL=""
 PROMPT=""
+MAX_TURNS=20
+INTERACTIVE=false
 
+# Session
+SESSION_MODE=false
+SESSION_ID=""
+CONTINUE_SESSION=false
+SESSION_DIR=""
+
+# Internal
 CONV_FILE=""
 TOOL_DEF_FILE=""
 AGENT_TMPDIR=""
+API_URL=""
+AWK_DIR=""
+
+# Env defaults
+: "${ANTHROPIC_API_KEY:=}"
+: "${OPENAI_API_KEY:=}"
+: "${LLM_BASE_URL:=}"
+: "${ANTHROPIC_BASE_URL:=}"
+: "${OPENAI_BASE_URL:=}"
 
 # ============================================================================
-# Utility Functions
+# Section 2: Utility Functions
 # ============================================================================
 
 log_error() {
@@ -38,6 +57,10 @@ log_info() {
 
 log_tool() {
     printf '\033[33m[tool] %s\033[0m\n' "$*" >&2
+}
+
+log_verbose() {
+    $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
 }
 
 die() {
@@ -66,7 +89,6 @@ json_escape() {
 # Unescape JSON escape sequences for display
 unescape_display() {
     local input="$1"
-    # Decode in order: \\ last to avoid double-decoding
     input="${input//\\n/$'\n'}"
     input="${input//\\t/$'\t'}"
     input="${input//\\\"/\"}"
@@ -83,10 +105,8 @@ extract_json_field() {
         idx = index($0, key)
         if (idx == 0) { print ""; exit }
         rest = substr($0, idx + length(key))
-        # Skip whitespace
         gsub(/^[ \t]+/, "", rest)
         if (substr(rest, 1, 1) == "\"") {
-            # String value — extract with escape handling
             rest = substr(rest, 2)
             result = ""
             i = 1
@@ -104,7 +124,6 @@ extract_json_field() {
             }
             printf "%s", result
         } else {
-            # Non-string (number, bool, null, object, array) — grab until comma or brace
             result = ""
             i = 1
             while (i <= length(rest)) {
@@ -121,18 +140,56 @@ extract_json_field() {
 }
 
 cleanup() {
+    # Only clean tmpdir, not session files
     [[ -n "${AGENT_TMPDIR:-}" && -d "${AGENT_TMPDIR:-}" ]] && rm -rf "$AGENT_TMPDIR"
 }
 trap cleanup EXIT
 
+find_awk_dir() {
+    # If already set via env, use it
+    if [[ -n "${AWK_DIR:-}" ]]; then
+        [[ -d "$AWK_DIR" ]] && return
+        die "AWK_DIR not found: $AWK_DIR"
+    fi
+    # Try same directory as agent.sh
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -d "$script_dir/awk" ]]; then
+        AWK_DIR="$script_dir/awk"
+        return
+    fi
+    die "Cannot find awk/ directory. Set AWK_DIR or ensure awk/ exists alongside agent.sh"
+}
+
 # ============================================================================
-# Conversation Management (temp file, one JSON message per line)
+# Section 3: Conversation Management (temp file, one JSON message per line)
 # ============================================================================
 
 conv_init() {
-    CONV_FILE=$(mktemp "${AGENT_TMPDIR}/conv.XXXXXX")
-    # Add system prompt if provided
-    if [[ -n "$SYSTEM_PROMPT" ]]; then
+    if [[ "$SESSION_MODE" == true ]]; then
+        SESSION_DIR="${HOME}/.bash-agent/sessions"
+        mkdir -p "$SESSION_DIR"
+
+        if [[ -n "$SESSION_ID" ]]; then
+            # Named session
+            CONV_FILE="${SESSION_DIR}/${SESSION_ID}.jsonl"
+        elif [[ "$CONTINUE_SESSION" == true ]]; then
+            # Continue most recent session
+            CONV_FILE=$(ls -t "${SESSION_DIR}"/*.jsonl 2>/dev/null | head -1)
+            [[ -z "$CONV_FILE" ]] && CONV_FILE="${SESSION_DIR}/$(date +%Y%m%d-%H%M%S).jsonl"
+        else
+            # New unnamed session
+            CONV_FILE="${SESSION_DIR}/$(date +%Y%m%d-%H%M%S).jsonl"
+        fi
+        # Touch to create if not exists
+        touch "$CONV_FILE"
+    else
+        # Ephemeral: use tmpdir (cleaned on exit)
+        CONV_FILE=$(mktemp "${AGENT_TMPDIR}/conv.XXXXXX")
+    fi
+
+    # Add system prompt if provided (only for empty conversation)
+    if [[ -n "$SYSTEM_PROMPT" && ! -s "$CONV_FILE" ]]; then
         local escaped
         escaped=$(json_escape "$SYSTEM_PROMPT")
         printf '{"role":"user","content":"%s"}\n' "$escaped" >> "$CONV_FILE"
@@ -148,7 +205,6 @@ conv_add_user() {
 
 conv_add_assistant() {
     local text="$1" calls="$2"
-    # Build content array
     local content="[" first=true
 
     if [[ -n "$text" ]]; then
@@ -156,7 +212,6 @@ conv_add_assistant() {
         first=false
     fi
 
-    # Process tool calls: format is name:id:input per line
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         local name id input
@@ -177,7 +232,6 @@ conv_add_tool_results() {
     local content="["
     local first=true
 
-    # Format: tool_use_id:result per line
     while IFS= read -r tr; do
         [[ -z "$tr" ]] && continue
         local tid result
@@ -193,7 +247,6 @@ conv_add_tool_results() {
 }
 
 conv_get_messages() {
-    # Join lines with commas into a JSON array
     local result="[" first=true
     while IFS= read -r msg; do
         [[ -z "$msg" ]] && continue
@@ -205,7 +258,7 @@ conv_get_messages() {
 }
 
 # ============================================================================
-# Tool Definitions (auto-generated JSON)
+# Section 4: Tool Definitions (auto-generated JSON)
 # ============================================================================
 
 generate_tool_defs() {
@@ -287,21 +340,19 @@ TOOLDEFS
 }
 
 # ============================================================================
-# Tool Implementations
+# Section 5: Tool Implementations
 # ============================================================================
 
 tool_read_file() {
     local input="$1"
     local path
     path=$(extract_json_field "$input" "path")
-    # Remove surrounding quotes if any
     path="${path#\"}" ; path="${path%\"}"
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
 
-    # Limit to 100KB
     head -c 100000 "$path"
     local size
     size=$(wc -c < "$path" 2>/dev/null || echo "0")
@@ -336,13 +387,11 @@ tool_edit_file() {
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ -z "$old_str" ]] && { echo "Error: empty old_string"; return 1; }
 
-    # Check if old_string exists in file
     if ! grep -qF "$old_str" "$path" 2>/dev/null; then
         echo "Error: old_string not found in $path"
         return 1
     fi
 
-    # Use awk for safe replacement via ENVIRON (avoids quoting issues)
     export _AGENT_OLD="$old_str" _AGENT_NEW="$new_str"
     local tmp
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
@@ -372,7 +421,6 @@ tool_bash_exec() {
 
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
 
-    # Run with timeout, capture output, truncate to 50KB
     local output
     output=$(timeout 30 bash -c "$cmd" 2>&1) || true
     local outlen=${#output}
@@ -398,31 +446,251 @@ dispatch_tool() {
 }
 
 # ============================================================================
-# LLM Call
+# Section 6: Format Conversion (call awk/*.awk)
+# ============================================================================
+
+convert_messages_to_openai() {
+    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"
+}
+
+convert_tools_to_openai() {
+    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"
+}
+
+# ============================================================================
+# Section 7: API Request Builders
+# ============================================================================
+
+build_claude_request() {
+    local messages="$1" tools="$2"
+    local body
+    body="{\"model\":\"${MODEL}\",\"max_tokens\":${MAX_TOKENS},\"stream\":true"
+
+    [[ -n "$SYSTEM_PROMPT" ]] && body+=",\"system\":\"$(json_escape "$SYSTEM_PROMPT")\""
+    [[ -n "$tools" ]] && body+=",\"tools\":${tools}"
+
+    body+=",\"messages\":${messages}}"
+    printf '%s' "$body"
+}
+
+build_openai_request() {
+    local messages="$1" tools="$2"
+    local msgs
+    msgs=$(printf '%s' "$messages" | convert_messages_to_openai)
+
+    if [[ -n "$SYSTEM_PROMPT" ]]; then
+        local sys_msg="{\"role\":\"system\",\"content\":\"$(json_escape "$SYSTEM_PROMPT")\"}"
+        msgs="${msgs%]}"
+        msgs="[${sys_msg},${msgs#\[}"
+    fi
+
+    local body
+    body="{\"model\":\"${MODEL}\",\"max_tokens\":${MAX_TOKENS},\"stream\":true"
+
+    if [[ -n "$tools" ]]; then
+        local openai_tools
+        openai_tools=$(printf '%s' "$tools" | convert_tools_to_openai)
+        body+=",\"tools\":${openai_tools}"
+    fi
+
+    body+=",\"messages\":${msgs}}"
+    printf '%s' "$body"
+}
+
+build_openai_responses_request() {
+    local messages="$1" tools="$2"
+    local msgs
+    msgs=$(printf '%s' "$messages" | convert_messages_to_openai)
+
+    local body
+    body="{\"model\":\"${MODEL}\",\"max_output_tokens\":${MAX_TOKENS},\"stream\":true"
+
+    [[ -n "$SYSTEM_PROMPT" ]] && body+=",\"instructions\":\"$(json_escape "$SYSTEM_PROMPT")\""
+
+    if [[ -n "$tools" ]]; then
+        local openai_tools
+        openai_tools=$(printf '%s' "$tools" | convert_tools_to_openai)
+        body+=",\"tools\":${openai_tools}"
+    fi
+
+    body+=",\"input\":${msgs}}"
+    printf '%s' "$body"
+}
+
+build_request() {
+    local messages="$1" tools="$2"
+    case "$PROVIDER" in
+        claude)            build_claude_request "$messages" "$tools" ;;
+        openai)            build_openai_request "$messages" "$tools" ;;
+        openai-responses)  build_openai_responses_request "$messages" "$tools" ;;
+    esac
+}
+
+# ============================================================================
+# Section 8: SSE Parsers (call awk/*.awk)
+# ============================================================================
+
+parse_claude_sse() {
+    awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk"
+}
+
+parse_openai_sse() {
+    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk"
+}
+
+parse_openai_responses_sse() {
+    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_responses.awk"
+}
+
+parse_sse() {
+    case "$PROVIDER" in
+        claude)            parse_claude_sse ;;
+        openai)            parse_openai_sse ;;
+        openai-responses)  parse_openai_responses_sse ;;
+    esac
+}
+
+# ============================================================================
+# Section 9: API Calls (curl)
+# ============================================================================
+
+_stream_curl() {
+    local body="$1"
+    shift
+    local header_args=("$@")
+
+    $VERBOSE && log_verbose "POST $API_URL ($((${#body}/1024))KB body)"
+
+    # Merge stderr to stdout: curl errors come through same pipe
+    # Handles: network errors, HTTP errors, and API JSON errors in body
+    curl -sS --no-buffer -D - \
+        "${header_args[@]}" \
+        -d "$body" \
+        "$API_URL" 2>&1 | awk '
+    BEGIN { http_code = ""; in_body = 0 }
+    {
+        # Strip trailing \r from each line (HTTP headers use \r\n)
+        sub(/\r$/, "")
+    }
+    /^curl: / {
+        printf "ERROR:%s\n", $0
+        exit 1
+    }
+    /^HTTP\// {
+        http_code = $2
+        next
+    }
+    /^[ \t]*$/ && !in_body {
+        if (http_code >= 400) {
+            printf "ERROR:HTTP %s\n", http_code
+            exit 1
+        }
+        in_body = 1
+        next
+    }
+    !in_body { next }
+    # Handle non-SSE JSON error responses (e.g., {"code":500,"msg":"..."})
+    in_body && /^{/ && /"code"/ && /"msg"/ {
+        # Simple extraction without gawk-specific match()
+        line = $0
+        # Extract code (number)
+        code = ""
+        if (match(line, /"code"[ \t]*:[ \t]*[0-9]+/)) {
+            s = substr(line, RSTART, RLENGTH)
+            sub(/.*:[ \t]*/, "", s)
+            code = s
+        }
+        # Extract msg (string)
+        msg = ""
+        if (match(line, /"msg"[ \t]*:[ \t]*"[^"]*"/)) {
+            s = substr(line, RSTART, RLENGTH)
+            sub(/.*:[ \t]*"/, "", s)
+            sub(/"$/, "", s)
+            msg = s
+        }
+        printf "ERROR:API error (code %s): %s\n", code, msg
+        exit 1
+    }
+    { print; fflush() }
+    '
+}
+
+call_claude_api() {
+    local body="$1"
+    _stream_curl "$body" \
+        -H "Content-Type: application/json" \
+        -H "x-api-key: ${API_KEY}" \
+        -H "anthropic-version: 2023-06-01"
+}
+
+call_openai_api() {
+    local body="$1"
+    _stream_curl "$body" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${API_KEY}"
+}
+
+call_openai_responses_api() {
+    local body="$1"
+    _stream_curl "$body" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${API_KEY}"
+}
+
+call_api() {
+    local body="$1"
+    case "$PROVIDER" in
+        claude)            call_claude_api "$body" ;;
+        openai)            call_openai_api "$body" ;;
+        openai-responses)  call_openai_responses_api "$body" ;;
+    esac
+}
+
+# ============================================================================
+# Section 10: Output Formatting
+# ============================================================================
+
+format_output() {
+    if [[ "$RAW_MODE" == true ]]; then
+        awk '
+        /^TEXT:/ {
+            text = substr($0, 6)
+            gsub(/\\n/, "\n", text)
+            gsub(/\\t/, "\t", text)
+            gsub(/\\\"/, "\"", text)
+            gsub(/\\\\/, "\\", text)
+            printf "%s", text
+            fflush()
+        }
+        /^STOP:/ { printf "\n"; fflush() }
+        /^ERROR:/ {
+            msg = substr($0, 7)
+            printf "Error: %s\n", msg > "/dev/stderr"
+        }
+        '
+    else
+        cat
+    fi
+}
+
+# ============================================================================
+# Section 11: LLM Call (internal)
 # ============================================================================
 
 llm_call() {
     local messages="$1"
+    local tools
+    tools=$(cat "$TOOL_DEF_FILE")
 
-    # Build llm.sh arguments
-    local llm_args=()
-    llm_args+=("-p" "$PROVIDER")
-    llm_args+=("-m" "$MODEL")
-    llm_args+=("--max-tokens" "4096")
-    [[ -n "$API_KEY" ]] && llm_args+=("--api-key" "$API_KEY")
-    [[ -n "$BASE_URL" ]] && llm_args+=("--base-url" "$BASE_URL")
-    llm_args+=("--tools" "$TOOL_DEF_FILE")
+    local body
+    body=$(build_request "$messages" "$tools")
+    log_verbose "Request body ($((${#body} / 1024))KB): ${body:0:200}..."
 
-    # Write messages to temp file
-    local msg_file
-    msg_file=$(mktemp "${AGENT_TMPDIR}/msg.XXXXXX")
-    printf '%s' "$messages" > "$msg_file"
-
-    "$LLM_SH" "${llm_args[@]}" --messages "$msg_file"
+    call_api "$body" | parse_sse | format_output
 }
 
 # ============================================================================
-# Agent Loop
+# Section 12: Agent Loop
 # ============================================================================
 
 agent_loop() {
@@ -443,33 +711,45 @@ agent_loop() {
             case "$line" in
                 TEXT:*)
                     t="${line#TEXT:}"
-                    # Inline unescape (avoid $() which strips trailing newlines)
-                    local d="$t"
-                    d="${d//\\n/$'\n'}"
-                    d="${d//\\t/$'\t'}"
-                    d="${d//\\\"/\"}"
-                    d="${d//\\\\/\\}"
-                    printf '%s' "$d"
+                    if [[ "$PRINT_MODE" == true ]]; then
+                        printf '{"type":"text","content":"%s"}\n' "$(json_escape "$t")"
+                    else
+                        local d="$t"
+                        d="${d//\\n/$'\n'}"
+                        d="${d//\\t/$'\t'}"
+                        d="${d//\\\"/\"}"
+                        d="${d//\\\\/\\}"
+                        printf '%s' "$d"
+                    fi
                     text+="$t"
                     ;;
                 TOOL_START:*)
-                    printf '\n'
-                    # Parse TOOL_START:name:id
+                    if [[ "$PRINT_MODE" != true ]]; then
+                        printf '\n'
+                    fi
                     local rest="${line#TOOL_START:}"
                     cur_tool_name="${rest%%:*}"
                     cur_tool_id="${rest#*:}"
-                    log_tool "$cur_tool_name"
+                    if [[ "$PRINT_MODE" == true ]]; then
+                        printf '{"type":"tool_start","name":"%s","id":"%s"}\n' "$cur_tool_name" "$cur_tool_id"
+                    else
+                        log_tool "$cur_tool_name"
+                    fi
                     ;;
                 TOOL_INPUT:*)
                     input="${line#TOOL_INPUT:}"
                     tool_calls+="${cur_tool_name}:${cur_tool_id}:${input}"$'\n'
                     ;;
                 USAGE:*)
-                    # Token usage info — could log
+                    # Token usage info
                     ;;
                 STOP:*)
                     stop="${line#STOP:}"
-                    printf '\n'
+                    if [[ "$PRINT_MODE" == true ]]; then
+                        printf '{"type":"stop","reason":"%s"}\n' "$stop"
+                    else
+                        printf '\n'
+                    fi
                     ;;
                 ERROR:*)
                     log_error "${line#ERROR:}"
@@ -521,12 +801,17 @@ execute_tool_calls() {
         local escaped
         escaped=$(json_escape "$output")
         results+="${id}:${escaped}"$'\n'
+
+        # Print tool_result event in --print mode
+        if [[ "$PRINT_MODE" == true ]]; then
+            printf '{"type":"tool_result","tool_use_id":"%s","content":"%s"}\n' "$id" "$escaped"
+        fi
     done <<< "$calls"
     printf '%s' "$results"
 }
 
 # ============================================================================
-# CLI
+# Section 13: CLI
 # ============================================================================
 
 usage() {
@@ -534,40 +819,68 @@ usage() {
 Usage: agent.sh [options] [prompt]
 
 Options:
-  -p, --provider PROV     LLM provider: claude | openai (default: claude)
+  -p, --provider PROV     LLM provider: claude | openai | openai-responses
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
-  --llm PATH              Path to llm.sh (auto-detected if not set)
+  --max-tokens N          Max output tokens (default: 4096)
   --system PROMPT         System prompt for the agent
   --max-turns N           Max agent turns (default: 20)
   --api-key KEY           API key (default from env)
+  --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
+  --print                 Stream JSON events to stdout (for programmatic use)
+  --raw                   Raw text output (no protocol prefixes)
+  --no-stream             Disable streaming
+  --session [NAME]        Use named session (persist conversation)
+  --continue              Continue most recent session
+  --list-sessions         List all saved sessions
+  -v, --verbose           Verbose mode
   -i, --interactive       Interactive mode (REPL)
   -h, --help              Show this help
 
 Environment:
   ANTHROPIC_API_KEY       API key for Claude
   OPENAI_API_KEY          API key for OpenAI
+  LLM_BASE_URL            Default base URL override
+  ANTHROPIC_BASE_URL      Claude API base URL
+  OPENAI_BASE_URL         OpenAI API base URL
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
   ./agent.sh -p openai -m gpt-4o "List files in /tmp"
-  echo "What day is it?" | ./agent.sh
+  ./agent.sh --session code-review "Analyze this code"
+  ./agent.sh --continue "What did we discuss?"
+  ./agent.sh --print "Hello" | jq -r 'select(.type=="text") .content'
+  echo "prompt" | ./agent.sh --print
   ./agent.sh -i
 EOF
     exit 0
 }
-
-INTERACTIVE=false
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
             -m|--model)      MODEL="$2"; shift 2 ;;
-            --llm)           LLM_SH="$2"; shift 2 ;;
+            --max-tokens)    MAX_TOKENS="$2"; shift 2 ;;
             --system)        SYSTEM_PROMPT="$2"; shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
             --api-key)       API_KEY="$2"; shift 2 ;;
             --base-url)      BASE_URL="$2"; shift 2 ;;
+            --print)         PRINT_MODE=true; shift ;;
+            --raw)           RAW_MODE=true; shift ;;
+            --no-stream)     NO_STREAM=true; shift ;;
+            --session)
+                SESSION_MODE=true
+                if [[ $# -gt 1 && ! "$2" =~ ^- ]]; then
+                    SESSION_ID="$2"; shift 2
+                else
+                    shift
+                fi
+                ;;
+            --continue)      SESSION_MODE=true; CONTINUE_SESSION=true; shift ;;
+            --list-sessions)
+                list_sessions
+                exit 0
+                ;;
             -v|--verbose)    VERBOSE=true; shift ;;
             -i|--interactive) INTERACTIVE=true; shift ;;
             -h|--help)       usage ;;
@@ -577,28 +890,65 @@ parse_args() {
     done
 }
 
-find_llm_sh() {
-    # If already set, validate
-    if [[ -n "$LLM_SH" ]]; then
-        [[ -x "$LLM_SH" ]] && return
-        die "Specified llm.sh not found or not executable: $LLM_SH"
-    fi
-
-    # Try same directory as agent.sh
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [[ -x "$script_dir/llm.sh" ]]; then
-        LLM_SH="$script_dir/llm.sh"
+list_sessions() {
+    local dir="${HOME}/.bash-agent/sessions"
+    if [[ ! -d "$dir" ]]; then
+        echo "No sessions found."
         return
     fi
-
-    # Try PATH
-    if command -v llm.sh &>/dev/null; then
-        LLM_SH="$(command -v llm.sh)"
+    local files
+    files=$(ls -t "$dir"/*.jsonl 2>/dev/null)
+    if [[ -z "$files" ]]; then
+        echo "No sessions found."
         return
     fi
+    printf "%-40s %s\n" "NAME" "MODIFIED"
+    while IFS= read -r f; do
+        local name mod
+        name=$(basename "$f" .jsonl)
+        mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$f" 2>/dev/null || stat -c "%y" "$f" 2>/dev/null | cut -d. -f1)
+        printf "%-40s %s\n" "$name" "$mod"
+    done <<< "$files"
+}
 
-    die "Cannot find llm.sh. Use --llm PATH or ensure bash-llm/llm.sh exists"
+validate_config() {
+    [[ -z "$PROVIDER" ]] && die "No provider specified. Use -p claude|openai|openai-responses"
+
+    case "$PROVIDER" in
+        claude)
+            : "${API_KEY:=$ANTHROPIC_API_KEY}"
+            : "${BASE_URL:=${LLM_BASE_URL:-${ANTHROPIC_BASE_URL:-}}}"
+            : "${MODEL:=claude-sonnet-4-20250514}"
+            ;;
+        openai)
+            : "${API_KEY:=$OPENAI_API_KEY}"
+            : "${BASE_URL:=${LLM_BASE_URL:-${OPENAI_BASE_URL:-}}}"
+            : "${MODEL:=gpt-4o}"
+            ;;
+        openai-responses)
+            : "${API_KEY:=$OPENAI_API_KEY}"
+            : "${BASE_URL:=${LLM_BASE_URL:-${OPENAI_BASE_URL:-}}}"
+            : "${MODEL:=gpt-4o}"
+            ;;
+        *)
+            die "Unknown provider: $PROVIDER (use claude|openai|openai-responses)"
+            ;;
+    esac
+
+    if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
+        case "$PROVIDER" in
+            claude) die "No API key. Set ANTHROPIC_API_KEY or use --api-key" ;;
+            openai|openai-responses) die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
+        esac
+    fi
+}
+
+setup_api_url() {
+    case "$PROVIDER" in
+        claude)            API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages" ;;
+        openai)            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions" ;;
+        openai-responses)  API_URL="${BASE_URL:-https://api.openai.com/v1}/responses" ;;
+    esac
 }
 
 interactive_mode() {
@@ -615,19 +965,13 @@ interactive_mode() {
 
 main() {
     parse_args "$@"
+    validate_config
+    setup_api_url
 
-    # Set defaults
-    : "${PROVIDER:=claude}"
-    : "${MODEL:=claude-sonnet-4-20250514}"
-
-    # Find llm.sh
-    find_llm_sh
-
-    # Setup
     AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent.XXXXXX")
+    find_awk_dir
     conv_init
 
-    # Generate tool definitions
     TOOL_DEF_FILE=$(generate_tool_defs)
 
     if [[ "$INTERACTIVE" == true ]]; then
@@ -635,7 +979,6 @@ main() {
     elif [[ -n "$PROMPT" ]]; then
         agent_loop "$PROMPT"
     elif [[ ! -t 0 ]]; then
-        # Read from stdin
         local input
         input=$(cat)
         agent_loop "$input"

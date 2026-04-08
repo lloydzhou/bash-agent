@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# test.sh — Test llm.sh against mock server
+# test.sh — Test bash-agent against mock server
+# Tests SSE parsing via awk files and agent.sh end-to-end
 # Usage: ./test.sh [--no-server] [port]
-#   --no-server  Don't start mock server (use an already running one)
-#   port         Port number (default: 9888)
 
 set -uo pipefail
 
@@ -17,7 +16,9 @@ done
 
 BASE="http://localhost:$PORT"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LLM="$SCRIPT_DIR/../llm.sh"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+AGENT="$ROOT_DIR/src/agent.sh"
+AWK_DIR="$ROOT_DIR/src/awk"
 PASS=0
 FAIL=0
 
@@ -42,26 +43,15 @@ class H(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         w = self.wfile
         if path.startswith('/v1/messages'):
-            test = path.split('test=')[-1] if 'test=' in path else ''
-            if test == 'tool_use':
-                for c in [
-                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":15,\"output_tokens\":0}}}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_123\",\"name\":\"read_file\",\"input\":{}}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"/etc/hostname\\\"}\"}}\n\n',
-                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
-                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
-                ]: w.write(c.encode()); w.flush()
-            else:
-                for c in [
-                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello from\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" mock server!\"}}\n\n',
-                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n',
-                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
-                ]: w.write(c.encode()); w.flush()
+            for c in [
+                'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello from\"}}\n\n',
+                'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" mock server!\"}}\n\n',
+                'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n',
+                'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+            ]: w.write(c.encode()); w.flush()
         elif path.startswith('/v1/chat/completions'):
             for c in [
                 'data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello from\"},\"finish_reason\":null}]}\n\n',
@@ -90,7 +80,6 @@ import time; time.sleep(120); httpd.shutdown()
 " &
     MOCK_PID=$!
     sleep 1
-    # Verify it started
     if ! curl -sS "$BASE/" 2>/dev/null | grep -q ok; then
         echo "Failed to start mock server on $BASE"
         kill $MOCK_PID 2>/dev/null
@@ -104,59 +93,45 @@ stop_mock() {
 
 # ===== Tests =====
 
-test_claude_basic() {
-    info "Test 1: Claude basic text streaming"
+# Test 1: Claude SSE awk parser directly
+test_claude_sse() {
+    info "Test 1: Claude SSE awk parser"
     local output
-    output=$($LLM -p claude --base-url "$BASE" -m test --api-key test 'Hello' 2>&1) || true
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello from"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" mock server!"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}
+
+event: message_stop
+data: {"type":"message_stop"}
+SSE
+)
     if echo "$output" | grep -q "TEXT:Hello from" && echo "$output" | grep -q "TEXT:.*mock" && echo "$output" | grep -q "STOP:end_turn"; then
-        green "Claude basic streaming"; ((PASS++)) || true
+        green "Claude SSE parser"; ((PASS++)) || true
     else
-        red "Claude basic streaming"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Claude SSE parser"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
-test_claude_raw() {
-    info "Test 2: Claude raw text output"
-    local output
-    output=$($LLM -p claude --base-url "$BASE" -m test --api-key test --raw 'Hello' 2>&1) || true
-    if echo "$output" | grep -q "Hello from" && echo "$output" | grep -q "mock server"; then
-        green "Claude raw mode"; ((PASS++)) || true
-    else
-        red "Claude raw mode"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-}
-
+# Test 2: Claude SSE tool_use parsing
 test_claude_tool_use() {
-    info "Test 3: Claude tool_use SSE parsing"
-    # Direct SSE parser test (doesn't need mock server route)
+    info "Test 2: Claude SSE tool_use parsing"
     local output
-    output=$(awk '
-BEGIN { event=""; block_type=""; tool_name=""; tool_id=""; partial_json=""; stop_reason="" }
-/^:/ { next }
-/^event: / { event=substr($0,8); next }
-/^data: / {
-    json=substr($0,7)
-    if (event=="content_block_start" && json ~ /"type":"tool_use"/) {
-        block_type="tool"
-        match(json, /"name":"[^"]*"/); tool_name=substr(json,RSTART+8,RLENGTH-9)
-        match(json, /"id":"[^"]*"/); tool_id=substr(json,RSTART+5,RLENGTH-6)
-        partial_json=""
-        printf "TOOL_START:%s:%s\n",tool_name,tool_id; fflush()
-    } else if (event=="content_block_delta" && block_type=="tool") {
-        match(json, /"partial_json":"[^"]*"/)
-        s=substr(json,RSTART+16,RLENGTH-17)
-        partial_json=partial_json s
-    } else if (event=="content_block_stop" && block_type=="tool") {
-        printf "TOOL_INPUT:%s\n",partial_json; fflush()
-        block_type=""
-    } else if (event=="message_delta") {
-        match(json, /"stop_reason":"[^"]*"/)
-        stop_reason=substr(json,RSTART+15,RLENGTH-16)
-    } else if (event=="message_stop") {
-        printf "STOP:%s\n",stop_reason; fflush()
-    }
-    next
-}' <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -183,58 +158,93 @@ SSE
     fi
 }
 
-test_openai_basic() {
-    info "Test 4: OpenAI Chat streaming"
+# Test 3: OpenAI SSE awk parser
+test_openai_sse() {
+    info "Test 3: OpenAI SSE awk parser"
     local output
-    output=$($LLM -p openai --base-url "$BASE" -m test --api-key test 'Hello' 2>&1) || true
-    if echo "$output" | grep -q "TEXT:" && echo "$output" | grep -q "STOP:"; then
-        green "OpenAI Chat streaming"; ((PASS++)) || true
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello from"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" OpenAI mock!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12}}
+
+data: [DONE]
+SSE
+)
+    if echo "$output" | grep -q "TEXT:Hello from" && echo "$output" | grep -q "TEXT:.*OpenAI" && echo "$output" | grep -q "STOP:stop"; then
+        green "OpenAI SSE parser"; ((PASS++)) || true
     else
-        red "OpenAI Chat streaming"; echo "  Output: $output"; ((FAIL++)) || true
+        red "OpenAI SSE parser"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
-test_openai_raw() {
-    info "Test 5: OpenAI raw text output"
+# Test 4: OpenAI Responses SSE awk parser
+test_openai_responses_sse() {
+    info "Test 4: OpenAI Responses SSE awk parser"
     local output
-    output=$($LLM -p openai --base-url "$BASE" -m test --api-key test --raw 'Hello' 2>&1) || true
-    if echo "$output" | grep -q "mock"; then
-        green "OpenAI raw mode"; ((PASS++)) || true
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_responses.awk" <<'SSE'
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hello from"}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":" Responses mock!"}
+
+data: {"type":"response.completed","response":{"id":"resp_test","status":"completed","usage":{"input_tokens":10,"output_tokens":8}}}
+SSE
+)
+    if echo "$output" | grep -q "TEXT:Hello from" && echo "$output" | grep -q "TEXT:.*Responses" && echo "$output" | grep -q "STOP:end_turn"; then
+        green "OpenAI Responses SSE parser"; ((PASS++)) || true
     else
-        red "OpenAI raw mode"; echo "  Output: $output"; ((FAIL++)) || true
+        red "OpenAI Responses SSE parser"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
-test_verbose() {
-    info "Test 6: Verbose mode"
+# Test 5: Message format conversion
+test_convert_messages() {
+    info "Test 5: Message format conversion (Claude → OpenAI)"
     local output
-    output=$($LLM -p claude --base-url "$BASE" -m test --api-key test -v 'Hello' 2>&1) || true
-    if echo "$output" | grep -q "verbose"; then
-        green "Verbose mode"; ((PASS++)) || true
+    output=$(printf '%s' '[{"role":"user","content":"hello"}]' | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
+    if echo "$output" | grep -q '"role":"user"' && echo "$output" | grep -q '"content":"hello"'; then
+        green "Message conversion (simple)"; ((PASS++)) || true
     else
-        red "Verbose mode"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Message conversion (simple)"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
-test_piped() {
-    info "Test 7: Piped messages JSON"
+# Test 6: Tool format conversion
+test_convert_tools() {
+    info "Test 6: Tool format conversion (Claude → OpenAI)"
     local output
-    output=$(echo '[{"role":"user","content":"hello"}]' | $LLM -p claude --base-url "$BASE" -m test --api-key test 2>&1) || true
-    if echo "$output" | grep -q "TEXT:"; then
-        green "Piped messages"; ((PASS++)) || true
+    output=$(printf '%s' '[{"name":"read_file","description":"Read file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]' | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
+    if echo "$output" | grep -q '"type":"function"' && echo "$output" | grep -q '"parameters"'; then
+        green "Tool conversion"; ((PASS++)) || true
     else
-        red "Piped messages"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Tool conversion"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
-test_usage() {
-    info "Test 8: USAGE token counting"
+# Test 7: Agent.sh end-to-end with mock (Claude provider)
+test_agent_e2e_claude() {
+    info "Test 7: Agent.sh e2e (Claude mock)"
     local output
-    output=$($LLM -p claude --base-url "$BASE" -m test --api-key test 'Hello' 2>&1) || true
-    if echo "$output" | grep -q "USAGE:in="; then
-        green "USAGE output"; ((PASS++)) || true
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1) || true
+    if echo "$output" | grep -q "Hello from" && echo "$output" | grep -q "mock"; then
+        green "Agent e2e Claude"; ((PASS++)) || true
     else
-        red "USAGE output"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent e2e Claude"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
+# Test 8: Agent.sh end-to-end with mock (OpenAI provider)
+test_agent_e2e_openai() {
+    info "Test 8: Agent.sh e2e (OpenAI mock)"
+    local output
+    output=$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1) || true
+    if echo "$output" | grep -q "Hello from" && echo "$output" | grep -q "mock"; then
+        green "Agent e2e OpenAI"; ((PASS++)) || true
+    else
+        red "Agent e2e OpenAI"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -245,14 +255,14 @@ if $START_SERVER; then
     start_mock
 fi
 
-test_claude_basic
-test_claude_raw
+test_claude_sse
 test_claude_tool_use
-test_openai_basic
-test_openai_raw
-test_verbose
-test_piped
-test_usage
+test_openai_sse
+test_openai_responses_sse
+test_convert_messages
+test_convert_tools
+test_agent_e2e_claude
+test_agent_e2e_openai
 
 echo ""
 echo "=============================="

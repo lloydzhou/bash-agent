@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mock-server.sh — Minimal HTTP mock server for testing llm.sh
+# mock-server.sh — Minimal HTTP mock server for testing agent.sh
 # Uses Python's http.server (available on any macOS/Linux with python3)
 # Usage: ./mock-server.sh [port]
 # Defaults to port 8888
@@ -154,8 +154,8 @@ MOCK_PID=$!
 echo "PID: $MOCK_PID"
 echo ""
 echo "Quick test commands:"
-echo "  ./llm.sh -p claude --base-url http://localhost:$PORT -m test-model --raw 'Hello'"
-echo "  ./llm.sh -p openai --base-url http://localhost:$PORT -m test-model --raw 'Hello'"
+echo "  ./agent.sh -p claude --base-url http://localhost:$PORT -m test-model --raw 'Hello'"
+echo "  ./agent.sh -p openai --base-url http://localhost:$PORT -m test-model --raw 'Hello'"
 echo ""
 echo "Or run tests:"
 echo "  bash test.sh $PORT"
