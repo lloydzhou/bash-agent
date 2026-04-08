@@ -13,6 +13,7 @@ PROVIDER=""
 MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
+TOOL_TIMEOUT_SECS=600
 SYSTEM_PROMPT=""
 BASE_SYSTEM_PROMPT=""
 OUTPUT_FORMAT="human"
@@ -27,7 +28,7 @@ MAX_CONTEXT_BUFFER_MESSAGES=4
 INTERACTIVE=false
 COMMAND="chat"
 COMPACT_MODE=false
-SKILL_NAMES=()
+declare -a SKILL_NAMES=()
 
 # Session
 SESSION_MODE=false
@@ -68,6 +69,62 @@ log_tool() {
     printf '\033[33m[tool] %s\033[0m\n' "$*" >&2
 }
 
+log_tool_result() {
+    local name="$1" output="$2"
+    printf '\033[33m[tool] %s result\033[0m\n' "$name" >&2
+    if [[ -n "$output" ]]; then
+        printf '%s\n' "$output" >&2
+    fi
+}
+
+run_with_timeout() {
+    local timeout_secs="$1"
+    shift
+
+    local tmp_out pid rc elapsed=0 use_process_group=false
+    tmp_out=$(mktemp "${AGENT_TMPDIR}/tool.XXXXXX")
+
+    if command -v setsid >/dev/null 2>&1; then
+        setsid "$@" >"$tmp_out" 2>&1 &
+        pid=$!
+        use_process_group=true
+    else
+        ( "$@" ) >"$tmp_out" 2>&1 &
+        pid=$!
+    fi
+
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( elapsed >= timeout_secs )); then
+            if $use_process_group; then
+                kill -TERM -- "-$pid" 2>/dev/null || true
+            else
+                kill -TERM "$pid" 2>/dev/null || true
+            fi
+            sleep 1
+            if kill -0 "$pid" 2>/dev/null; then
+                if $use_process_group; then
+                    kill -KILL -- "-$pid" 2>/dev/null || true
+                else
+                    kill -KILL "$pid" 2>/dev/null || true
+                fi
+            fi
+            wait "$pid" 2>/dev/null || true
+            cat "$tmp_out"
+            rm -f "$tmp_out"
+            printf '\n[... truncated, command timed out after %s seconds ...]' "$timeout_secs"
+            return 124
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+
+    wait "$pid"
+    rc=$?
+    cat "$tmp_out"
+    rm -f "$tmp_out"
+    return "$rc"
+}
+
 log_verbose() {
     $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
 }
@@ -93,6 +150,50 @@ json_escape() {
         (( i++ )) || true
     done
     printf '%s' "$output"
+}
+
+json_unescape() {
+    local input="${1:-}" output="" i=0 len c esc=0
+    len=${#input}
+    while (( i < len )); do
+        c="${input:i:1}"
+        if (( esc )); then
+            case "$c" in
+                '"') output+='"' ;;
+                '\') output+='\' ;;
+                /) output+='/' ;;
+                b) output+=$'\b' ;;
+                f) output+=$'\f' ;;
+                n) output+=$'\n' ;;
+                r) output+=$'\r' ;;
+                t) output+=$'\t' ;;
+                u)
+                    # Keep unknown unicode escapes literal; they are rare in tool inputs.
+                    output+='u'
+                    ;;
+                *) output+="$c" ;;
+            esac
+            esc=0
+        elif [[ "$c" == '\' ]]; then
+            esc=1
+        else
+            output+="$c"
+        fi
+        (( i++ )) || true
+    done
+    if (( esc )); then
+        output+='\\'
+    fi
+    printf '%s' "$output"
+}
+
+strip_ansi() {
+    local input="$1"
+    printf '%s' "$input" | awk '
+    {
+        gsub(/\033\[[0-9;]*[[:alpha:]]/, "", $0)
+        print
+    }'
 }
 
 is_stream_json_mode() {
@@ -191,13 +292,22 @@ find_skill_file() {
 }
 
 load_skill_content() {
-    local skill_name="$1" skill_file=""
+    local skill_name="$1" skill_file="" skill_dir="" content=""
     skill_file=$(find_skill_file "$skill_name") || return 1
-    cat "$skill_file"
+    skill_dir=$(dirname "$skill_file")
+    content=$(cat "$skill_file") || return 1
+    content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$skill_dir}"
+    printf 'Base directory for this skill: %s\n\n%s' "$skill_dir" "$content"
 }
 
 build_skills_section() {
     local section="" skill_name skill_content
+
+    if [[ ${#SKILL_NAMES[@]} -eq 0 ]]; then
+        printf ''
+        return 0
+    fi
+
     for skill_name in "${SKILL_NAMES[@]}"; do
         skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md or skills/$skill_name/SKILL.md)"
         section+="$(wrap_named_section "skill" "$skill_name" "$skill_content")"$'\n'
@@ -370,12 +480,10 @@ conv_add_assistant() {
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         local name id input
-        name=$(echo "$tc" | cut -d: -f1)
-        id=$(echo "$tc" | cut -d: -f2)
-        input=$(echo "$tc" | cut -d: -f3-)
+        IFS=$'\t' read -r name id input <<< "$tc"
         $first || content+=","
         first=false
-        content+="{\"type\":\"tool_use\",\"id\":\"${id}\",\"name\":\"${name}\",\"input\":${input}}"
+        content+="{\"type\":\"tool_use\",\"id\":\"$(json_escape "$id")\",\"name\":\"$(json_escape "$name")\",\"input\":${input}}"
     done <<< "$calls"
 
     content+="]"
@@ -391,11 +499,10 @@ conv_add_tool_results() {
     while IFS= read -r tr; do
         [[ -z "$tr" ]] && continue
         local tid result
-        tid=$(echo "$tr" | cut -d: -f1)
-        result=$(echo "$tr" | cut -d: -f2-)
+        IFS=$'\t' read -r tid result <<< "$tr"
         $first || content+=","
         first=false
-        content+="{\"type\":\"tool_result\",\"tool_use_id\":\"${tid}\",\"content\":\"${result}\"}"
+        content+="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"${result}\"}"
     done <<< "$results"
 
     content+="]"
@@ -512,9 +619,7 @@ session_log_assistant() {
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         local name id input
-        name=$(echo "$tc" | cut -d: -f1)
-        id=$(echo "$tc" | cut -d: -f2)
-        input=$(echo "$tc" | cut -d: -f3-)
+        IFS=$'\t' read -r name id input <<< "$tc"
         $first || tool_json+=","
         first=false
         tool_json+="{\"name\":\"$(json_escape "$name")\",\"id\":\"$(json_escape "$id")\",\"input\":$input}"
@@ -529,9 +634,8 @@ session_log_tool_results() {
     while IFS= read -r tr; do
         [[ -z "$tr" ]] && continue
         local tid result
-        tid=$(echo "$tr" | cut -d: -f1)
-        result=$(echo "$tr" | cut -d: -f2-)
-        session_append_line "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"$(json_escape "$result")\"}"
+        IFS=$'\t' read -r tid result <<< "$tr"
+        session_append_line "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"${result}\"}"
     done <<< "$results"
 }
 
@@ -625,7 +729,7 @@ tool_read_file() {
     local input="$1"
     local path
     path=$(extract_json_field "$input" "path")
-    path="${path#\"}" ; path="${path%\"}"
+    path=$(json_unescape "$path")
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
@@ -644,7 +748,8 @@ tool_write_file() {
     local path content
     path=$(extract_json_field "$input" "path")
     content=$(extract_json_field "$input" "content")
-    path="${path#\"}" ; path="${path%\"}"
+    path=$(json_unescape "$path")
+    content=$(json_unescape "$content")
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
 
@@ -659,7 +764,9 @@ tool_edit_file() {
     path=$(extract_json_field "$input" "path")
     old_str=$(extract_json_field "$input" "old_string")
     new_str=$(extract_json_field "$input" "new_string")
-    path="${path#\"}" ; path="${path%\"}"
+    path=$(json_unescape "$path")
+    old_str=$(json_unescape "$old_str")
+    new_str=$(json_unescape "$new_str")
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
@@ -694,13 +801,18 @@ tool_edit_file() {
 
 tool_bash_exec() {
     local input="$1"
-    local cmd
+    local cmd script_file
     cmd=$(extract_json_field "$input" "command")
+    cmd=$(json_unescape "$cmd")
 
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
 
     local output
-    output=$(timeout 30 bash -c "$cmd" 2>&1) || true
+    script_file=$(mktemp "${AGENT_TMPDIR}/bash.XXXXXX.sh")
+    printf '%s\n' "$cmd" > "$script_file"
+    chmod 700 "$script_file" 2>/dev/null || true
+    output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file") || true
+    rm -f "$script_file"
     local outlen=${#output}
     if (( outlen > 50000 )); then
         output="${output:0:50000}"
@@ -765,7 +877,7 @@ build_openai_request() {
     if [[ -n "$system_prompt" ]]; then
         local sys_msg="{\"role\":\"system\",\"content\":\"$(json_escape "$system_prompt")\"}"
         msgs="${msgs%]}"
-        msgs="[${sys_msg},${msgs#\[}"
+        msgs="[${sys_msg},${msgs#\[}]"
     fi
 
     local body
@@ -878,24 +990,7 @@ _stream_curl() {
     !in_body { next }
     # Handle non-SSE JSON error responses (e.g., {"code":500,"msg":"..."})
     in_body && /^{/ && /"code"/ && /"msg"/ {
-        # Simple extraction without gawk-specific match()
-        line = $0
-        # Extract code (number)
-        code = ""
-        if (match(line, /"code"[ \t]*:[ \t]*[0-9]+/)) {
-            s = substr(line, RSTART, RLENGTH)
-            sub(/.*:[ \t]*/, "", s)
-            code = s
-        }
-        # Extract msg (string)
-        msg = ""
-        if (match(line, /"msg"[ \t]*:[ \t]*"[^"]*"/)) {
-            s = substr(line, RSTART, RLENGTH)
-            sub(/.*:[ \t]*"/, "", s)
-            sub(/"$/, "", s)
-            msg = s
-        }
-        printf "ERROR:API error (code %s): %s\n", code, msg
+        printf "ERROR:API response body received\n"
         exit 1
     }
     { print; fflush() }
@@ -1016,7 +1111,7 @@ agent_loop() {
                     ;;
                 TOOL_INPUT:*)
                     input="${line#TOOL_INPUT:}"
-                    tool_calls+="${cur_tool_name}:${cur_tool_id}:${input}"$'\n'
+                    tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
                     ;;
                 USAGE:*)
                     if is_stream_json_mode; then
@@ -1082,19 +1177,24 @@ execute_tool_calls() {
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         local name id input
-        name=$(echo "$tc" | cut -d: -f1)
-        id=$(echo "$tc" | cut -d: -f2)
-        input=$(echo "$tc" | cut -d: -f3-)
+        IFS=$'\t' read -r name id input <<< "$tc"
         local output
-        output=$(dispatch_tool "$name" "$input" 2>&1) || output="Error: tool execution failed"
+        output=$(dispatch_tool "$name" "$input" 2>&1)
+        local tool_rc=$?
+        output=$(strip_ansi "$output")
+        if (( tool_rc != 0 )); then
+            output="Error: tool execution failed: $output"
+        fi
         # json_escape so newlines in output don't break the line-based format
         local escaped
         escaped=$(json_escape "$output")
-        results+="${id}:${escaped}"$'\n'
+        results+="${id}"$'\t'"${escaped}"$'\n'
 
         # Print tool_result event in stream-json mode
         if is_stream_json_mode; then
             emit_stream_event "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$escaped\"}"
+        else
+            log_tool_result "$name" "$output"
         fi
     done <<< "$calls"
     printf '%s' "$results"
@@ -1113,6 +1213,7 @@ Options:
   -p, --provider PROV     LLM provider: claude | openai | openai-responses
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
   --max-tokens N          Max output tokens (default: 4096)
+  --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --system PROMPT         System prompt for the agent
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md
   --max-turns N           Max agent turns (default: 20)
@@ -1162,6 +1263,7 @@ parse_args() {
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
             -m|--model)      MODEL="$2"; shift 2 ;;
             --max-tokens)    MAX_TOKENS="$2"; shift 2 ;;
+            --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --system)        SYSTEM_PROMPT="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;

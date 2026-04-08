@@ -131,3 +131,58 @@ function extract_value(json, key,    pos, rest, c, result, depth, in_str, i) {
     }
     return result
 }
+
+# Decode a JSON string value that already has surrounding quotes removed.
+# Handles common escapes used by tool inputs/arguments.
+function unescape_json_string(s,    out, i, c, esc) {
+    out = ""
+    esc = 0
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (esc) {
+            if (c == "b") out = out "\b"
+            else if (c == "f") out = out "\f"
+            else if (c == "n") out = out "\n"
+            else if (c == "r") out = out "\r"
+            else if (c == "t") out = out "\t"
+            else if (c == "\"") out = out "\""
+            else if (c == "\\") out = out "\\"
+            else if (c == "/") out = out "/"
+            else out = out c
+            esc = 0
+        } else if (c == "\\") {
+            esc = 1
+        } else {
+            out = out c
+        }
+    }
+    if (esc) out = out "\\"
+    return out
+}
+
+# Extract a JSON string value while preserving escape sequences.
+# Unlike extract_escaped(), this correctly handles sequences such as \\\".
+function extract_json_string(json, key,    pos, rest, i, c, result, bs) {
+    pos = find_key(json, key)
+    if (pos == 0) return ""
+    rest = substr(json, pos)
+    if (substr(rest, 1, 1) != "\"") return ""
+    rest = substr(rest, 2)
+    result = ""
+    bs = 0
+    for (i = 1; i <= length(rest); i++) {
+        c = substr(rest, i, 1)
+        if (c == "\"") {
+            if ((bs % 2) == 0) return result
+            result = result c
+            bs = 0
+        } else {
+            result = result c
+            if (c == "\\") bs++
+            else bs = 0
+        }
+    }
+    return result
+}
+
+# Extract a field value and strip surrounding quotes if it is a JSON string.

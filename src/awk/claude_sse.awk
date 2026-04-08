@@ -42,21 +42,19 @@ BEGIN {
     }
     else if (event == "content_block_delta") {
         if (block_type == "text") {
-            text = extract_escaped(json, "text")
+            text = extract_json_string(json, "text")
             if (text != "") {
                 printf "TEXT:%s\n", text
                 fflush()
             }
         }
         else if (block_type == "tool") {
-            partial_json = partial_json extract_escaped(json, "partial_json")
+            partial_json = partial_json extract_json_string(json, "partial_json")
         }
     }
     else if (event == "content_block_stop") {
         if (block_type == "tool") {
-            # Decode JSON string escapes so TOOL_INPUT is valid JSON
-            gsub(/\\["]/, "\"", partial_json)
-            printf "TOOL_INPUT:%s\n", partial_json
+            printf "TOOL_INPUT:%s\n", unescape_json_string(partial_json)
             fflush()
         }
         block_type = ""

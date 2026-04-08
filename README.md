@@ -140,6 +140,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 - `skills/<name>/SKILL.md`
 
 通过 `--skill NAME` 可以注入一个或多个技能，skills 会作为独立 section 插入 system prompt。
+`SKILL.md` 是入口文件，但注入时会附带 skill 根目录，并支持在内容里使用 `${BASH_AGENT_SKILL_DIR}` 引用同目录下的脚本、模板或其他资源文件。
 
 ## 环境变量
 

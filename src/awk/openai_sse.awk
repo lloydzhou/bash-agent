@@ -33,7 +33,7 @@ BEGIN {
     if (fr != "" && fr != "null") stop_reason = fr
 
     # Extract text content from delta
-    content = extract_escaped_nested(json, "content")
+    content = extract_json_string(json, "content")
     if (content != "") {
         printf "TEXT:%s\n", content
         fflush()
@@ -72,7 +72,7 @@ function parse_tool_calls(json,    pos, end, tc_json) {
         idx = extract_num(tc, "index")
         tc_id = extract_str(tc, "id")
         name = extract_str(tc, "name")
-        args = extract_escaped(tc, "arguments")
+        args = extract_json_string(tc, "arguments")
 
         # If this is a new tool call (has id and name)
         if (tc_id != "" && name != "") {
@@ -90,38 +90,11 @@ function parse_tool_calls(json,    pos, end, tc_json) {
 
         # Check if arguments are complete (finish_reason = tool_calls or block end)
         if (fr != "" || tc ~ /\}\]/) {
-            if (idx in tool_args && tool_args[idx] != "") {
-                gsub(/\\["]/, "\"", tool_args[idx])
-                printf "TOOL_INPUT:%s\n", tool_args[idx]
+        if (idx in tool_args && tool_args[idx] != "") {
+                printf "TOOL_INPUT:%s\n", unescape_json_string(tool_args[idx])
                 fflush()
                 tool_args[idx] = ""
             }
         }
     }
 }
-
-# For OpenAI, content is nested in delta: {"choices":[{"delta":{"content":"..."}}]}
-function extract_escaped_nested(json, key,    pos, rest, i, c, result) {
-    pos = find_key(json, key)
-    if (pos == 0) return ""
-    rest = substr(json, pos)
-    if (substr(rest, 1, 1) != "\"") return ""
-    rest = substr(rest, 2)
-    result = ""
-    i = 1
-    while (i <= length(rest)) {
-        c = substr(rest, i, 1)
-        if (c == "\\" && i < length(rest)) {
-            result = result substr(rest, i, 2)
-            i += 2
-        } else if (c == "\"") {
-            break
-        } else {
-            result = result c
-            i++
-        }
-    }
-    return result
-}
-
-

@@ -52,6 +52,7 @@ BEGIN {
     else if (json ~ /"type":"response.function_call_arguments.done"/ || json ~ /"type\":\"response.function_call_arguments.done\"/) {
         args = extract_str(json, "arguments")
         if (args == "") args = partial_args
+        args = unescape_json_string(args)
         printf "TOOL_INPUT:%s\n", args
         fflush()
         partial_args = ""
@@ -81,5 +82,4 @@ BEGIN {
 
     next
 }
-
 
