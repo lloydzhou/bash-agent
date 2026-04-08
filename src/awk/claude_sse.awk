@@ -49,11 +49,17 @@ BEGIN {
             }
         }
         else if (block_type == "tool") {
+            # Claude streams tool input as partial_json, which is itself a JSON string
+            # embedded inside the outer SSE JSON payload. Accumulate the escaped string
+            # fragments here and decode that outer string exactly once at block stop.
             partial_json = partial_json extract_json_string(json, "partial_json")
         }
     }
     else if (event == "content_block_stop") {
         if (block_type == "tool") {
+            # Emit TOOL_INPUT as a JSON object text fragment, not a quoted JSON string.
+            # Downstream shell code should treat this as structured JSON and avoid
+            # decoding the whole payload a second time.
             printf "TOOL_INPUT:%s\n", unescape_json_string(partial_json)
             fflush()
         }

@@ -88,9 +88,12 @@ function parse_tool_calls(json,    pos, end, tc_json) {
             }
         }
 
+        # OpenAI streams function.arguments as an escaped JSON string. Accumulate the
+        # string fragments first, then decode that outer string once before emitting
+        # TOOL_INPUT as JSON object text.
         # Check if arguments are complete (finish_reason = tool_calls or block end)
         if (fr != "" || tc ~ /\}\]/) {
-        if (idx in tool_args && tool_args[idx] != "") {
+            if (idx in tool_args && tool_args[idx] != "") {
                 printf "TOOL_INPUT:%s\n", unescape_json_string(tool_args[idx])
                 fflush()
                 tool_args[idx] = ""
