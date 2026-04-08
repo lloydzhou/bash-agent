@@ -12,22 +12,30 @@ set -uo pipefail
 PROVIDER=""
 MODEL=""
 MAX_TOKENS=4096
+SUMMARY_MAX_TOKENS=1024
 SYSTEM_PROMPT=""
-RAW_MODE=false
+BASE_SYSTEM_PROMPT=""
+OUTPUT_FORMAT="human"
 NO_STREAM=false
-PRINT_MODE=false
 VERBOSE=false
 API_KEY=""
 BASE_URL=""
 PROMPT=""
 MAX_TURNS=20
+MAX_CONTEXT_MESSAGES=40
+MAX_CONTEXT_BUFFER_MESSAGES=4
 INTERACTIVE=false
+COMMAND="chat"
+COMPACT_MODE=false
 
 # Session
 SESSION_MODE=false
 SESSION_ID=""
 CONTINUE_SESSION=false
 SESSION_DIR=""
+PROJECT_KEY=""
+SESSION_EVENT_FILE=""
+CONTEXT_SUMMARY_FILE=""
 
 # Internal
 CONV_FILE=""
@@ -84,6 +92,92 @@ json_escape() {
         (( i++ )) || true
     done
     printf '%s' "$output"
+}
+
+is_stream_json_mode() {
+    [[ "$OUTPUT_FORMAT" == "stream-json" ]]
+}
+
+render_template() {
+    local template="$1"
+    shift
+    local key value
+    while [[ $# -gt 0 ]]; do
+        key="$1"
+        value="$2"
+        shift 2
+        template="${template//\{\{$key\}\}/$value}"
+    done
+    printf '%s' "$template"
+}
+
+wrap_section() {
+    local tag="$1" content="$2"
+    if [[ -z "$content" ]]; then
+        printf ''
+        return 0
+    fi
+    printf '<%s>\n%s\n</%s>' "$tag" "$content" "$tag"
+}
+
+prompt_template_default() {
+    cat <<'EOF'
+{{agent_identity_section}}
+{{core_rules_section}}
+{{stable_context_section}}
+{{recent_context_section}}
+{{task_instructions_section}}
+EOF
+}
+
+session_append_line() {
+    [[ "$SESSION_MODE" == true && -n "${SESSION_EVENT_FILE:-}" ]] || return 0
+    printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"
+}
+
+emit_stream_event() {
+    local line="$1"
+    printf '%s\n' "$line"
+    session_append_line "$line"
+}
+
+build_system_prompt() {
+    local template agent_identity core_rules stable_context recent_context task_instructions agent_identity_section core_rules_section stable_context_section recent_context_section task_instructions_section
+    template=$(prompt_template_default)
+    BASE_SYSTEM_PROMPT="$template"
+    agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
+    core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
+    stable_context=$(build_stable_context_section)
+    recent_context=$(build_recent_context_section)
+    task_instructions=$(build_task_instructions_section)
+    agent_identity_section=$(wrap_section "agent-identity" "$agent_identity")
+    core_rules_section=$(wrap_section "rules" "$core_rules")
+    stable_context_section=$(wrap_section "context-summary" "$stable_context")
+    recent_context_section=$(wrap_section "recent-messages" "$recent_context")
+    task_instructions_section=$(wrap_section "instructions" "$task_instructions")
+    render_template "$template" \
+        "agent_identity_section" "$agent_identity_section" \
+        "core_rules_section" "$core_rules_section" \
+        "stable_context_section" "$stable_context_section" \
+        "recent_context_section" "$recent_context_section" \
+        "task_instructions_section" "$task_instructions_section"
+}
+
+build_compact_system_prompt() {
+    cat <<'EOF'
+You are compressing conversation context for a lightweight coding agent.
+
+Return only plain text.
+Do not include analysis, markdown fences, or extra commentary.
+Update the existing summary snapshot using the dropped messages.
+Keep the output concise and specific.
+
+Use exactly these fields:
+Task focus:
+Latest request:
+Progress:
+Tool evidence:
+EOF
 }
 
 # Unescape JSON escape sequences for display
@@ -161,39 +255,56 @@ find_awk_dir() {
     die "Cannot find awk/ directory. Set AWK_DIR or ensure awk/ exists alongside agent.sh"
 }
 
+get_project_key() {
+    local cwd="${PWD:-$(pwd)}"
+    cwd="$(cd "$cwd" && pwd -P)"
+    cwd="${cwd#/}"
+    cwd="${cwd//\//-}"
+    cwd="$(printf '%s' "$cwd" | awk '{ gsub(/[^A-Za-z0-9._-]/, "-"); gsub(/-+/, "-", $0); sub(/^-+/, "", $0); sub(/-+$/, "", $0); print }')"
+    printf -- '-%s' "$cwd"
+}
+
 # ============================================================================
 # Section 3: Conversation Management (temp file, one JSON message per line)
 # ============================================================================
 
 conv_init() {
     if [[ "$SESSION_MODE" == true ]]; then
-        SESSION_DIR="${HOME}/.bash-agent/sessions"
+        PROJECT_KEY="$(get_project_key)"
+        SESSION_DIR="${HOME}/.bash-agent/projects/${PROJECT_KEY}"
         mkdir -p "$SESSION_DIR"
 
+        local session_base=""
         if [[ -n "$SESSION_ID" ]]; then
             # Named session
-            CONV_FILE="${SESSION_DIR}/${SESSION_ID}.jsonl"
+            session_base="$SESSION_ID"
         elif [[ "$CONTINUE_SESSION" == true ]]; then
             # Continue most recent session
-            CONV_FILE=$(ls -t "${SESSION_DIR}"/*.jsonl 2>/dev/null | head -1)
-            [[ -z "$CONV_FILE" ]] && CONV_FILE="${SESSION_DIR}/$(date +%Y%m%d-%H%M%S).jsonl"
+            CONV_FILE=$(ls -t "${SESSION_DIR}"/*.jsonl 2>/dev/null | grep -v '\.events\.jsonl$' | grep -v '\.summary\.txt$' | head -1)
+            if [[ -n "$CONV_FILE" ]]; then
+                session_base="$(basename "$CONV_FILE" .jsonl)"
+            elif [[ "$COMPACT_MODE" == true ]]; then
+                die "No existing session found to compact. Use --session NAME or run a session first."
+            else
+                session_base="$(date +%Y%m%d-%H%M%S)"
+            fi
         else
             # New unnamed session
-            CONV_FILE="${SESSION_DIR}/$(date +%Y%m%d-%H%M%S).jsonl"
+            session_base="$(date +%Y%m%d-%H%M%S)"
         fi
-        # Touch to create if not exists
+
+        [[ -z "$session_base" ]] && session_base="$(date +%Y%m%d-%H%M%S)"
+        CONV_FILE="${SESSION_DIR}/${session_base}.jsonl"
+        SESSION_EVENT_FILE="${SESSION_DIR}/${session_base}.events.jsonl"
+        CONTEXT_SUMMARY_FILE="${SESSION_DIR}/${session_base}.summary.txt"
         touch "$CONV_FILE"
+        touch "$SESSION_EVENT_FILE"
+        touch "$CONTEXT_SUMMARY_FILE"
+        session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$session_base")\"}"
     else
         # Ephemeral: use tmpdir (cleaned on exit)
         CONV_FILE=$(mktemp "${AGENT_TMPDIR}/conv.XXXXXX")
-    fi
-
-    # Add system prompt if provided (only for empty conversation)
-    if [[ -n "$SYSTEM_PROMPT" && ! -s "$CONV_FILE" ]]; then
-        local escaped
-        escaped=$(json_escape "$SYSTEM_PROMPT")
-        printf '{"role":"user","content":"%s"}\n' "$escaped" >> "$CONV_FILE"
-        printf '{"role":"assistant","content":"Understood. I will follow these instructions."}\n' >> "$CONV_FILE"
+        CONTEXT_SUMMARY_FILE=$(mktemp "${AGENT_TMPDIR}/summary.XXXXXX")
     fi
 }
 
@@ -201,6 +312,7 @@ conv_add_user() {
     local content
     content=$(json_escape "$1")
     printf '{"role":"user","content":"%s"}\n' "$content" >> "$CONV_FILE"
+    session_append_line "{\"type\":\"user_message\",\"content\":\"$content\"}"
 }
 
 conv_add_assistant() {
@@ -225,6 +337,7 @@ conv_add_assistant() {
 
     content+="]"
     printf '{"role":"assistant","content":%s}\n' "$content" >> "$CONV_FILE"
+    session_log_assistant "$text" "$calls"
 }
 
 conv_add_tool_results() {
@@ -244,6 +357,7 @@ conv_add_tool_results() {
 
     content+="]"
     printf '{"role":"user","content":%s}\n' "$content" >> "$CONV_FILE"
+    session_log_tool_results "$results"
 }
 
 conv_get_messages() {
@@ -255,6 +369,127 @@ conv_get_messages() {
         result+="$msg"
     done < "$CONV_FILE"
     printf '%s]' "$result"
+}
+
+conv_trim() {
+    compact_context_window "auto" false
+}
+
+context_append_summary() {
+    local text="$1"
+    [[ -n "${CONTEXT_SUMMARY_FILE:-}" ]] || return 0
+    [[ -n "$text" ]] || return 0
+    printf '%s\n' "$text" > "$CONTEXT_SUMMARY_FILE"
+}
+
+build_stable_context_section() {
+    local section=""
+    if [[ -n "${CONTEXT_SUMMARY_FILE:-}" && -s "$CONTEXT_SUMMARY_FILE" ]]; then
+        section="$(cat "$CONTEXT_SUMMARY_FILE")"
+    fi
+    printf '%s' "$section"
+}
+
+build_recent_context_section() {
+    local section=""
+    if [[ -s "$CONV_FILE" ]]; then
+        section+="$(tail -n "$MAX_CONTEXT_MESSAGES" "$CONV_FILE")"
+    fi
+    printf '%s' "$section"
+}
+
+build_task_instructions_section() {
+    local section=""
+    if [[ -n "$SYSTEM_PROMPT" ]]; then
+        section="$SYSTEM_PROMPT"
+    fi
+    printf '%s' "$section"
+}
+
+build_compact_summary_prompt() {
+    local current_summary="$1" dropped_messages="$2" summary_section dropped_section
+    summary_section=$(wrap_section "current-summary" "$current_summary")
+    dropped_section=$(wrap_section "dropped-messages" "$dropped_messages")
+    cat <<EOF
+${summary_section}
+
+${dropped_section}
+EOF
+}
+
+compact_context_window() {
+    local trigger="$1" force="${2:-false}" total keep drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response summary_text
+
+    total=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+    local threshold=$MAX_CONTEXT_MESSAGES
+    local target_keep=$MAX_CONTEXT_BUFFER_MESSAGES
+    (( target_keep < 1 )) && target_keep=1
+
+    if ! $force && (( total <= threshold )); then
+        return 1
+    fi
+
+    keep=$target_keep
+    (( total > keep )) || keep=$total
+    drop=$(( total - keep ))
+    [[ $drop -gt 0 ]] || return 1
+
+    tmp_dropped=$(mktemp "${AGENT_TMPDIR}/dropped.XXXXXX")
+    head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
+    dropped_messages=$(cat "$tmp_dropped")
+    current_summary=""
+    if [[ -n "${CONTEXT_SUMMARY_FILE:-}" && -s "$CONTEXT_SUMMARY_FILE" ]]; then
+        current_summary=$(cat "$CONTEXT_SUMMARY_FILE")
+    fi
+
+    prompt=$(build_compact_summary_prompt "$current_summary" "$dropped_messages")
+    summary_request="[{\"role\":\"user\",\"content\":\"$(json_escape "$prompt")\"}]"
+    summary_response=$(run_summary_call "$summary_request")
+    context_append_summary "$summary_response"
+
+    if (( keep < total )); then
+        tmp=$(mktemp "${AGENT_TMPDIR}/conv_trim.XXXXXX")
+        tail -n "$keep" "$CONV_FILE" > "$tmp"
+        mv "$tmp" "$CONV_FILE"
+    fi
+
+    rm -f "$tmp_dropped"
+    if is_stream_json_mode; then
+        emit_stream_event "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
+    elif [[ "$trigger" == "auto" ]]; then
+        log_info "Context compacted automatically."
+    fi
+    return 0
+}
+
+session_log_assistant() {
+    local text="$1" calls="$2"
+    local payload="{\"type\":\"assistant_message\",\"text\":\"$(json_escape "$text")\""
+    local tool_json="[" first=true
+    while IFS= read -r tc; do
+        [[ -z "$tc" ]] && continue
+        local name id input
+        name=$(echo "$tc" | cut -d: -f1)
+        id=$(echo "$tc" | cut -d: -f2)
+        input=$(echo "$tc" | cut -d: -f3-)
+        $first || tool_json+=","
+        first=false
+        tool_json+="{\"name\":\"$(json_escape "$name")\",\"id\":\"$(json_escape "$id")\",\"input\":$input}"
+    done <<< "$calls"
+    tool_json+="]"
+    payload+=",\"tool_calls\":${tool_json}}"
+    session_append_line "$payload"
+}
+
+session_log_tool_results() {
+    local results="$1"
+    while IFS= read -r tr; do
+        [[ -z "$tr" ]] && continue
+        local tid result
+        tid=$(echo "$tr" | cut -d: -f1)
+        result=$(echo "$tr" | cut -d: -f2-)
+        session_append_line "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"$(json_escape "$result")\"}"
+    done <<< "$results"
 }
 
 # ============================================================================
@@ -462,11 +697,14 @@ convert_tools_to_openai() {
 # ============================================================================
 
 build_claude_request() {
-    local messages="$1" tools="$2"
+    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
     local body
-    body="{\"model\":\"${MODEL}\",\"max_tokens\":${MAX_TOKENS},\"stream\":true"
+    if [[ -z "$system_prompt" ]]; then
+        system_prompt=$(build_system_prompt)
+    fi
+    body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
 
-    [[ -n "$SYSTEM_PROMPT" ]] && body+=",\"system\":\"$(json_escape "$SYSTEM_PROMPT")\""
+    [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(json_escape "$system_prompt")\""
     [[ -n "$tools" ]] && body+=",\"tools\":${tools}"
 
     body+=",\"messages\":${messages}}"
@@ -474,18 +712,21 @@ build_claude_request() {
 }
 
 build_openai_request() {
-    local messages="$1" tools="$2"
+    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
     local msgs
     msgs=$(printf '%s' "$messages" | convert_messages_to_openai)
+    if [[ -z "$system_prompt" ]]; then
+        system_prompt=$(build_system_prompt)
+    fi
 
-    if [[ -n "$SYSTEM_PROMPT" ]]; then
-        local sys_msg="{\"role\":\"system\",\"content\":\"$(json_escape "$SYSTEM_PROMPT")\"}"
+    if [[ -n "$system_prompt" ]]; then
+        local sys_msg="{\"role\":\"system\",\"content\":\"$(json_escape "$system_prompt")\"}"
         msgs="${msgs%]}"
         msgs="[${sys_msg},${msgs#\[}"
     fi
 
     local body
-    body="{\"model\":\"${MODEL}\",\"max_tokens\":${MAX_TOKENS},\"stream\":true"
+    body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
 
     if [[ -n "$tools" ]]; then
         local openai_tools
@@ -498,14 +739,17 @@ build_openai_request() {
 }
 
 build_openai_responses_request() {
-    local messages="$1" tools="$2"
+    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
     local msgs
     msgs=$(printf '%s' "$messages" | convert_messages_to_openai)
+    if [[ -z "$system_prompt" ]]; then
+        system_prompt=$(build_system_prompt)
+    fi
 
     local body
-    body="{\"model\":\"${MODEL}\",\"max_output_tokens\":${MAX_TOKENS},\"stream\":true"
+    body="{\"model\":\"${MODEL}\",\"max_output_tokens\":${max_tokens},\"stream\":true"
 
-    [[ -n "$SYSTEM_PROMPT" ]] && body+=",\"instructions\":\"$(json_escape "$SYSTEM_PROMPT")\""
+    [[ -n "$system_prompt" ]] && body+=",\"instructions\":\"$(json_escape "$system_prompt")\""
 
     if [[ -n "$tools" ]]; then
         local openai_tools
@@ -518,11 +762,11 @@ build_openai_responses_request() {
 }
 
 build_request() {
-    local messages="$1" tools="$2"
+    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
     case "$PROVIDER" in
-        claude)            build_claude_request "$messages" "$tools" ;;
-        openai)            build_openai_request "$messages" "$tools" ;;
-        openai-responses)  build_openai_responses_request "$messages" "$tools" ;;
+        claude)            build_claude_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
+        openai)            build_openai_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
+        openai-responses)  build_openai_responses_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
     esac
 }
 
@@ -647,33 +891,6 @@ call_api() {
 }
 
 # ============================================================================
-# Section 10: Output Formatting
-# ============================================================================
-
-format_output() {
-    if [[ "$RAW_MODE" == true ]]; then
-        awk '
-        /^TEXT:/ {
-            text = substr($0, 6)
-            gsub(/\\n/, "\n", text)
-            gsub(/\\t/, "\t", text)
-            gsub(/\\\"/, "\"", text)
-            gsub(/\\\\/, "\\", text)
-            printf "%s", text
-            fflush()
-        }
-        /^STOP:/ { printf "\n"; fflush() }
-        /^ERROR:/ {
-            msg = substr($0, 7)
-            printf "Error: %s\n", msg > "/dev/stderr"
-        }
-        '
-    else
-        cat
-    fi
-}
-
-# ============================================================================
 # Section 11: LLM Call (internal)
 # ============================================================================
 
@@ -686,7 +903,29 @@ llm_call() {
     body=$(build_request "$messages" "$tools")
     log_verbose "Request body ($((${#body} / 1024))KB): ${body:0:200}..."
 
-    call_api "$body" | parse_sse | format_output
+    call_api "$body" | parse_sse
+}
+
+run_summary_call() {
+    local messages="$1"
+    local body text line
+    body=$(build_request "$messages" "" "$(build_compact_system_prompt)" "$SUMMARY_MAX_TOKENS")
+    log_verbose "Summary request body ($((${#body} / 1024))KB): ${body:0:200}..."
+
+    text=""
+    while IFS= read -r line; do
+        case "$line" in
+            TEXT:*)
+                text+="${line#TEXT:}"
+                ;;
+            ERROR:*)
+                die "${line#ERROR:}"
+                ;;
+        esac
+    done < <(call_api "$body" | parse_sse)
+
+    [[ -n "$text" ]] || die "Failed to generate context summary"
+    printf '%s' "$text"
 }
 
 # ============================================================================
@@ -711,27 +950,23 @@ agent_loop() {
             case "$line" in
                 TEXT:*)
                     t="${line#TEXT:}"
-                    if [[ "$PRINT_MODE" == true ]]; then
-                        printf '{"type":"text","content":"%s"}\n' "$(json_escape "$t")"
+                    if is_stream_json_mode; then
+                        emit_stream_event "{\"type\":\"text\",\"content\":\"$(json_escape "$t")\"}"
                     else
                         local d="$t"
-                        d="${d//\\n/$'\n'}"
-                        d="${d//\\t/$'\t'}"
-                        d="${d//\\\"/\"}"
-                        d="${d//\\\\/\\}"
-                        printf '%s' "$d"
+                        printf '%s' "$(unescape_display "$d")"
                     fi
                     text+="$t"
                     ;;
                 TOOL_START:*)
-                    if [[ "$PRINT_MODE" != true ]]; then
+                    if ! is_stream_json_mode; then
                         printf '\n'
                     fi
                     local rest="${line#TOOL_START:}"
                     cur_tool_name="${rest%%:*}"
                     cur_tool_id="${rest#*:}"
-                    if [[ "$PRINT_MODE" == true ]]; then
-                        printf '{"type":"tool_start","name":"%s","id":"%s"}\n' "$cur_tool_name" "$cur_tool_id"
+                    if is_stream_json_mode; then
+                        emit_stream_event "{\"type\":\"tool_start\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\"}"
                     else
                         log_tool "$cur_tool_name"
                     fi
@@ -741,17 +976,27 @@ agent_loop() {
                     tool_calls+="${cur_tool_name}:${cur_tool_id}:${input}"$'\n'
                     ;;
                 USAGE:*)
-                    # Token usage info
+                    if is_stream_json_mode; then
+                        local usage="${line#USAGE:}"
+                        local input_tokens output_tokens
+                        input_tokens="${usage#in=}"
+                        input_tokens="${input_tokens%%,*}"
+                        output_tokens="${usage##*,out=}"
+                        emit_stream_event "{\"type\":\"usage\",\"input_tokens\":${input_tokens:-0},\"output_tokens\":${output_tokens:-0}}"
+                    fi
                     ;;
                 STOP:*)
                     stop="${line#STOP:}"
-                    if [[ "$PRINT_MODE" == true ]]; then
-                        printf '{"type":"stop","reason":"%s"}\n' "$stop"
+                    if is_stream_json_mode; then
+                        emit_stream_event "{\"type\":\"stop\",\"reason\":\"$(json_escape "$stop")\"}"
                     else
                         printf '\n'
                     fi
                     ;;
                 ERROR:*)
+                    if is_stream_json_mode; then
+                        emit_stream_event "{\"type\":\"error\",\"message\":\"$(json_escape "${line#ERROR:}")\"}"
+                    fi
                     log_error "${line#ERROR:}"
                     return 1
                     ;;
@@ -763,6 +1008,7 @@ agent_loop() {
 
         case "$stop" in
             end_turn|stop|done)
+                compact_context_window "auto" false || true
                 break
                 ;;
             tool_use|tool_calls)
@@ -770,6 +1016,7 @@ agent_loop() {
                 local results=""
                 results=$(execute_tool_calls "$tool_calls")
                 conv_add_tool_results "$results"
+                compact_context_window "auto" false || true
                 ;;
             max_tokens|length)
                 log_error "Response truncated (max_tokens reached)"
@@ -802,9 +1049,9 @@ execute_tool_calls() {
         escaped=$(json_escape "$output")
         results+="${id}:${escaped}"$'\n'
 
-        # Print tool_result event in --print mode
-        if [[ "$PRINT_MODE" == true ]]; then
-            printf '{"type":"tool_result","tool_use_id":"%s","content":"%s"}\n' "$id" "$escaped"
+        # Print tool_result event in stream-json mode
+        if is_stream_json_mode; then
+            emit_stream_event "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$escaped\"}"
         fi
     done <<< "$calls"
     printf '%s' "$results"
@@ -817,6 +1064,7 @@ execute_tool_calls() {
 usage() {
     cat <<'EOF'
 Usage: agent.sh [options] [prompt]
+       agent.sh compact [options]
 
 Options:
   -p, --provider PROV     LLM provider: claude | openai | openai-responses
@@ -824,10 +1072,11 @@ Options:
   --max-tokens N          Max output tokens (default: 4096)
   --system PROMPT         System prompt for the agent
   --max-turns N           Max agent turns (default: 20)
+  --max-context N         Max stored context messages (default: 40)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
-  --print                 Stream JSON events to stdout (for programmatic use)
-  --raw                   Raw text output (no protocol prefixes)
+  --output-format FMT     Output format: human | stream-json
+  --print                 Alias for --output-format stream-json
   --no-stream             Disable streaming
   --session [NAME]        Use named session (persist conversation)
   --continue              Continue most recent session
@@ -848,14 +1097,21 @@ Examples:
   ./agent.sh -p openai -m gpt-4o "List files in /tmp"
   ./agent.sh --session code-review "Analyze this code"
   ./agent.sh --continue "What did we discuss?"
-  ./agent.sh --print "Hello" | jq -r 'select(.type=="text") .content'
+  ./agent.sh --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'
   echo "prompt" | ./agent.sh --print
+  ./agent.sh compact --session code-review
   ./agent.sh -i
 EOF
     exit 0
 }
 
 parse_args() {
+    if [[ $# -gt 0 && "$1" == "compact" ]]; then
+        COMMAND="compact"
+        COMPACT_MODE=true
+        shift
+    fi
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
@@ -863,10 +1119,11 @@ parse_args() {
             --max-tokens)    MAX_TOKENS="$2"; shift 2 ;;
             --system)        SYSTEM_PROMPT="$2"; shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
+            --max-context)   MAX_CONTEXT_MESSAGES="$2"; shift 2 ;;
             --api-key)       API_KEY="$2"; shift 2 ;;
             --base-url)      BASE_URL="$2"; shift 2 ;;
-            --print)         PRINT_MODE=true; shift ;;
-            --raw)           RAW_MODE=true; shift ;;
+            --output-format)  OUTPUT_FORMAT="$2"; shift 2 ;;
+            --print)         OUTPUT_FORMAT="stream-json"; shift ;;
             --no-stream)     NO_STREAM=true; shift ;;
             --session)
                 SESSION_MODE=true
@@ -888,16 +1145,24 @@ parse_args() {
             *)               PROMPT="$1"; shift ;;
         esac
     done
+
+    case "$OUTPUT_FORMAT" in
+        human|stream-json) ;;
+        *)
+            die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json)"
+            ;;
+    esac
 }
 
 list_sessions() {
-    local dir="${HOME}/.bash-agent/sessions"
+    local dir
+    dir="${HOME}/.bash-agent/projects/$(get_project_key)"
     if [[ ! -d "$dir" ]]; then
         echo "No sessions found."
         return
     fi
     local files
-    files=$(ls -t "$dir"/*.jsonl 2>/dev/null)
+    files=$(ls -t "$dir"/*.jsonl 2>/dev/null | grep -v '\.events\.jsonl$' | grep -v '\.summary\.txt$')
     if [[ -z "$files" ]]; then
         echo "No sessions found."
         return
@@ -968,17 +1233,34 @@ main() {
     validate_config
     setup_api_url
 
+    if [[ "$COMMAND" == "compact" && "$SESSION_MODE" != true && "$CONTINUE_SESSION" != true && -z "$SESSION_ID" ]]; then
+        SESSION_MODE=true
+        CONTINUE_SESSION=true
+        COMPACT_MODE=true
+    fi
+
     AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent.XXXXXX")
     find_awk_dir
     conv_init
 
-    TOOL_DEF_FILE=$(generate_tool_defs)
-
-    if [[ "$INTERACTIVE" == true ]]; then
+    if [[ "$COMMAND" == "compact" ]]; then
+        if compact_context_window "manual" true; then
+            if [[ "$OUTPUT_FORMAT" == "human" ]]; then
+                log_info "Context compacted."
+            fi
+        else
+            if [[ "$OUTPUT_FORMAT" == "human" ]]; then
+                log_info "Context is within budget; no compaction needed."
+            fi
+        fi
+    elif [[ "$INTERACTIVE" == true ]]; then
+        TOOL_DEF_FILE=$(generate_tool_defs)
         interactive_mode
     elif [[ -n "$PROMPT" ]]; then
+        TOOL_DEF_FILE=$(generate_tool_defs)
         agent_loop "$PROMPT"
     elif [[ ! -t 0 ]]; then
+        TOOL_DEF_FILE=$(generate_tool_defs)
         local input
         input=$(cat)
         agent_loop "$input"

@@ -22,6 +22,15 @@ AWK_DIR="$ROOT_DIR/src/awk"
 PASS=0
 FAIL=0
 
+project_key() {
+    local cwd
+    cwd=$(pwd -P)
+    cwd="${cwd#/}"
+    cwd="${cwd//\//-}"
+    cwd=$(printf '%s' "$cwd" | awk '{ gsub(/[^A-Za-z0-9._-]/, "-"); gsub(/-+/, "-", $0); sub(/^-+/, "", $0); sub(/-+$/, "", $0); print }')
+    printf -- '-%s' "$cwd"
+}
+
 green() { printf '\033[32m✓ PASS: %s\033[0m\n' "$1"; }
 red()   { printf '\033[31m✗ FAIL: %s\033[0m\n' "$1"; }
 info()  { printf '\033[36m→ %s\033[0m\n' "$1"; }
@@ -36,12 +45,45 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         cl = int(self.headers.get('Content-Length',0))
-        self.rfile.read(cl)
+        body = self.rfile.read(cl)
         path = self.path
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.end_headers()
         w = self.wfile
+        if b'You are compressing conversation context' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_summary\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Task focus: summarize compact test\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\nLatest request: compact session\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\nProgress: trimmed old context\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\nTool evidence: none\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/v1/chat/completions'):
+                for c in [
+                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Task focus: summarize compact test\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\nLatest request: compact session\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\nProgress: trimmed old context\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\nTool evidence: none\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
+                    'data: [DONE]\n\n',
+                ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/v1/responses'):
+                for c in [
+                    'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
+                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Task focus: summarize compact test\"}\n\n',
+                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"\\nLatest request: compact session\"}\n\n',
+                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"\\nProgress: trimmed old context\"}\n\n',
+                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"\\nTool evidence: none\"}\n\n',
+                    'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_summary\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8}}}\n\n',
+                    'data: [DONE]\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         if path.startswith('/v1/messages'):
             for c in [
                 'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -248,6 +290,27 @@ test_agent_e2e_openai() {
     fi
 }
 
+# Test 9: Compact subcommand
+test_agent_compact() {
+    info "Test 9: Agent.sh compact subcommand"
+    local home_dir session_dir session_file summary_file output
+    home_dir=$(mktemp -d)
+    session_dir="$home_dir/.bash-agent/projects/$(project_key)"
+    mkdir -p "$session_dir"
+    session_file="$session_dir/demo.jsonl"
+    summary_file="$session_dir/demo.summary.txt"
+    : > "$session_file"
+    for i in $(seq 1 45); do
+        printf '{"role":"user","content":"message %s"}\n' "$i" >> "$session_file"
+    done
+    output=$(HOME="$home_dir" "$AGENT" compact -p claude --base-url "$BASE/v1" --api-key test --session demo 2>&1) || true
+    if echo "$output" | grep -q "Context compacted" && grep -q "Task focus: summarize compact test" "$summary_file" && [[ "$(wc -l < "$session_file")" -eq 4 ]]; then
+        green "Agent compact subcommand"; ((PASS++)) || true
+    else
+        red "Agent compact subcommand"; echo "  Output: $output"; echo "  Session lines: $(wc -l < "$session_file")"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+}
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -263,6 +326,7 @@ test_convert_messages
 test_convert_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
+test_agent_compact
 
 echo ""
 echo "=============================="
