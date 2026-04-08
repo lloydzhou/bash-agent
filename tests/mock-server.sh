@@ -47,6 +47,31 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
         self.log(f'Body: {body[:200]}...')
         test = self.path.split('?')[-1] if '?' in self.path else ''
 
+        if b'Skill marker for tests' in body:
+            self.send_sse([
+                'event: message_start',
+                'data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_skill\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}',
+                '',
+                'event: content_block_start',
+                'data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}',
+                '',
+                'event: content_block_delta',
+                'data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello from skill-aware\"}}',
+                '',
+                'event: content_block_delta',
+                'data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" mock server!\"}}',
+                '',
+                'event: content_block_stop',
+                'data: {\"type\":\"content_block_stop\",\"index\":0}',
+                '',
+                'event: message_delta',
+                'data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}',
+                '',
+                'event: message_stop',
+                'data: {\"type\":\"message_stop\"}',
+            ])
+            return
+
         if self.path.startswith('/v1/messages'):
             if test == 'tool_use':
                 self.send_sse([

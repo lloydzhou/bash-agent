@@ -65,6 +65,9 @@ STOP:end_turn
 # 机器输出
 ./src/agent.sh -p claude --output-format stream-json "Tell me a joke" | jq -c .
 
+# 加载技能
+./src/agent.sh --skill shell-safety "List files in /tmp"
+
 # 交互模式
 ./src/agent.sh -p openai -m gpt-4o -i
 ```
@@ -100,6 +103,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 | `-m / --model` | 模型名 |
 | `--max-tokens` | 最大输出 token |
 | `--system` | 系统提示词 |
+| `--skill NAME` | 从 `.claude/skills/NAME/SKILL.md` 加载技能 |
 | `--max-turns` | 最大 agent 循环次数 |
 | `--max-context` | context 消息上限 |
 | `--api-key` | 手动指定 API key |
@@ -127,6 +131,15 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 - `jsonl`：当前给模型看的 context 窗口
 - `events.jsonl`：完整事件日志
 - `summary.txt`：压缩后的稳定摘要
+
+## Skills
+
+技能文件按项目目录加载，默认查找顺序是：
+
+- `.claude/skills/<name>/SKILL.md`
+- `skills/<name>/SKILL.md`
+
+通过 `--skill NAME` 可以注入一个或多个技能，skills 会作为独立 section 插入 system prompt。
 
 ## 环境变量
 
@@ -178,7 +191,8 @@ kill %1
 - 已完成 4 个内置 tools
 - 已支持 project-scoped session 存储
 - 已支持 `compact` 子命令与自动 compaction
-- 已通过 9 个 mock / e2e 测试
+- 已支持 `--skill` skills 注入
+- 已通过 10 个 mock / e2e 测试
 
 ## 相关文档
 

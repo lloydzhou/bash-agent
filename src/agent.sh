@@ -27,6 +27,7 @@ MAX_CONTEXT_BUFFER_MESSAGES=4
 INTERACTIVE=false
 COMMAND="chat"
 COMPACT_MODE=false
+SKILL_NAMES=()
 
 # Session
 SESSION_MODE=false
@@ -120,10 +121,20 @@ wrap_section() {
     printf '<%s>\n%s\n</%s>' "$tag" "$content" "$tag"
 }
 
+wrap_named_section() {
+    local tag="$1" name="$2" content="$3"
+    if [[ -z "$content" ]]; then
+        printf ''
+        return 0
+    fi
+    printf '<%s name="%s">\n%s\n</%s>' "$tag" "$(json_escape "$name")" "$content" "$tag"
+}
+
 prompt_template_default() {
     cat <<'EOF'
 {{agent_identity_section}}
 {{core_rules_section}}
+{{skills_section}}
 {{stable_context_section}}
 {{recent_context_section}}
 {{task_instructions_section}}
@@ -142,25 +153,57 @@ emit_stream_event() {
 }
 
 build_system_prompt() {
-    local template agent_identity core_rules stable_context recent_context task_instructions agent_identity_section core_rules_section stable_context_section recent_context_section task_instructions_section
+    local template agent_identity core_rules skills stable_context recent_context task_instructions agent_identity_section core_rules_section skills_section stable_context_section recent_context_section task_instructions_section
     template=$(prompt_template_default)
     BASE_SYSTEM_PROMPT="$template"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
+    skills=$(build_skills_section)
     stable_context=$(build_stable_context_section)
     recent_context=$(build_recent_context_section)
     task_instructions=$(build_task_instructions_section)
     agent_identity_section=$(wrap_section "agent-identity" "$agent_identity")
     core_rules_section=$(wrap_section "rules" "$core_rules")
+    skills_section=$(wrap_section "skills" "$skills")
     stable_context_section=$(wrap_section "context-summary" "$stable_context")
     recent_context_section=$(wrap_section "recent-messages" "$recent_context")
     task_instructions_section=$(wrap_section "instructions" "$task_instructions")
     render_template "$template" \
         "agent_identity_section" "$agent_identity_section" \
         "core_rules_section" "$core_rules_section" \
+        "skills_section" "$skills_section" \
         "stable_context_section" "$stable_context_section" \
         "recent_context_section" "$recent_context_section" \
         "task_instructions_section" "$task_instructions_section"
+}
+
+find_skill_file() {
+    local skill_name="$1" cwd base candidate
+    cwd="${PWD:-$(pwd)}"
+    for base in "$cwd/.claude/skills" "$cwd/skills"; do
+        candidate="$base/$skill_name/SKILL.md"
+        if [[ -f "$candidate" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+load_skill_content() {
+    local skill_name="$1" skill_file=""
+    skill_file=$(find_skill_file "$skill_name") || return 1
+    cat "$skill_file"
+}
+
+build_skills_section() {
+    local section="" skill_name skill_content
+    for skill_name in "${SKILL_NAMES[@]}"; do
+        skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md or skills/$skill_name/SKILL.md)"
+        section+="$(wrap_named_section "skill" "$skill_name" "$skill_content")"$'\n'
+    done
+    section="${section%$'\n'}"
+    printf '%s' "$section"
 }
 
 build_compact_system_prompt() {
@@ -1071,6 +1114,7 @@ Options:
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
   --max-tokens N          Max output tokens (default: 4096)
   --system PROMPT         System prompt for the agent
+  --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md
   --max-turns N           Max agent turns (default: 20)
   --max-context N         Max stored context messages (default: 40)
   --api-key KEY           API key (default from env)
@@ -1096,6 +1140,7 @@ Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
   ./agent.sh -p openai -m gpt-4o "List files in /tmp"
   ./agent.sh --session code-review "Analyze this code"
+  ./agent.sh --skill shell-safety "List files in /tmp"
   ./agent.sh --continue "What did we discuss?"
   ./agent.sh --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'
   echo "prompt" | ./agent.sh --print
@@ -1118,6 +1163,7 @@ parse_args() {
             -m|--model)      MODEL="$2"; shift 2 ;;
             --max-tokens)    MAX_TOKENS="$2"; shift 2 ;;
             --system)        SYSTEM_PROMPT="$2"; shift 2 ;;
+            --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
             --max-context)   MAX_CONTEXT_MESSAGES="$2"; shift 2 ;;
             --api-key)       API_KEY="$2"; shift 2 ;;

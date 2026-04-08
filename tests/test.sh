@@ -84,6 +84,33 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        if b'Skill marker for tests' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_skill\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello from skill-aware\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" mock server!\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/v1/chat/completions'):
+                for c in [
+                    'data: {\"id\":\"chatcmpl-skill\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello from skill-aware\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-skill\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" mock server!\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-skill\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
+                    'data: [DONE]\n\n',
+                ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/v1/responses'):
+                for c in [
+                    'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
+                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello from skill-aware\"}\n\n',
+                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\" mock server!\"}\n\n',
+                    'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_skill\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8}}}\n\n',
+                    'data: [DONE]\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         if path.startswith('/v1/messages'):
             for c in [
                 'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -311,6 +338,27 @@ test_agent_compact() {
     fi
 }
 
+# Test 10: Skill injection
+test_agent_skill_injection() {
+    info "Test 10: Agent.sh skill injection"
+    local skill_dir skill_file output
+    skill_dir="$ROOT_DIR/.claude/skills/test-skill"
+    skill_file="$skill_dir/SKILL.md"
+    mkdir -p "$skill_dir"
+    cat > "$skill_file" <<'EOF'
+# test-skill
+
+Skill marker for tests
+EOF
+    output=$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --skill test-skill 'Hello' 2>&1) || true
+    rm -rf "$skill_dir"
+    if echo "$output" | grep -q "skill-aware" && echo "$output" | grep -q "mock"; then
+        green "Agent skill injection"; ((PASS++)) || true
+    else
+        red "Agent skill injection"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -327,6 +375,7 @@ test_convert_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_compact
+test_agent_skill_injection
 
 echo ""
 echo "=============================="

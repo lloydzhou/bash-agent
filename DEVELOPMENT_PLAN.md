@@ -83,6 +83,7 @@
 - 按名称加载 `SKILL.md`
 - 只在相关场景注入 skills
 - 保持 skill 加载是声明式的
+- 不改 session 存储，只扩展 prompt assembly
 
 ### 阶段 4：扩展能力
 

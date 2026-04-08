@@ -95,6 +95,10 @@ prompt 组装不要做成重型模板引擎。
 更合适的是少量占位符替换 + section 化拼接。
 稳定内容尽量前置，动态内容尽量后置，这样更接近 Claude Code 的缓存友好实践。
 
+skills 也是这一层的一部分。
+它们应该按名称从项目目录加载，作为独立 section 注入 prompt，而不是改写 session 存储或主循环。
+默认推荐路径是 `.claude/skills/<name>/SKILL.md`，也可以兼容 `skills/<name>/SKILL.md`。
+
 ### 4. Agent Loop
 
 核心执行循环是：
@@ -134,9 +138,10 @@ session 持久化可以消费这个协议，但 session 数据本身不要和 co
 
 1. agent identity
 2. core rules
-3. stable context
-4. recent context
-5. task instructions
+3. skills
+4. stable context
+5. recent context
+6. task instructions
 
 实现上可以用少量 XML-like tag 来标记段落边界，例如：
 
