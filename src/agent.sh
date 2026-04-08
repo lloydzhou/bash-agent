@@ -236,6 +236,7 @@ prompt_template_default() {
 {{agent_identity_section}}
 {{core_rules_section}}
 {{skills_section}}
+{{instruction_files_section}}
 {{stable_context_section}}
 {{recent_context_section}}
 {{task_instructions_section}}
@@ -254,18 +255,21 @@ emit_stream_event() {
 }
 
 build_system_prompt() {
-    local template agent_identity core_rules skills stable_context recent_context task_instructions agent_identity_section core_rules_section skills_section stable_context_section recent_context_section task_instructions_section
+    local template agent_identity core_rules skills instruction_files stable_context recent_context task_instructions
+    local agent_identity_section core_rules_section skills_section instruction_files_section stable_context_section recent_context_section task_instructions_section
     template=$(prompt_template_default)
     BASE_SYSTEM_PROMPT="$template"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
     skills=$(build_skills_section)
+    instruction_files=$(build_instruction_files_section)
     stable_context=$(build_stable_context_section)
     recent_context=$(build_recent_context_section)
     task_instructions=$(build_task_instructions_section)
     agent_identity_section=$(wrap_section "agent-identity" "$agent_identity")
     core_rules_section=$(wrap_section "rules" "$core_rules")
     skills_section=$(wrap_section "skills" "$skills")
+    instruction_files_section=$(wrap_section "instruction-files" "$instruction_files")
     stable_context_section=$(wrap_section "context-summary" "$stable_context")
     recent_context_section=$(wrap_section "recent-messages" "$recent_context")
     task_instructions_section=$(wrap_section "instructions" "$task_instructions")
@@ -273,6 +277,7 @@ build_system_prompt() {
         "agent_identity_section" "$agent_identity_section" \
         "core_rules_section" "$core_rules_section" \
         "skills_section" "$skills_section" \
+        "instruction_files_section" "$instruction_files_section" \
         "stable_context_section" "$stable_context_section" \
         "recent_context_section" "$recent_context_section" \
         "task_instructions_section" "$task_instructions_section"
@@ -312,6 +317,48 @@ build_skills_section() {
         skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md or skills/$skill_name/SKILL.md)"
         section+="$(wrap_named_section "skill" "$skill_name" "$skill_content")"$'\n'
     done
+    section="${section%$'\n'}"
+    printf '%s' "$section"
+}
+
+find_instruction_file_in_dir() {
+    local dir="$1" candidate
+    [[ -n "$dir" && -d "$dir" ]] || return 1
+    for candidate in \
+        "$dir/AGENTS.md" \
+        "$dir/AGENT.md" \
+        "$dir/CLAUDE.md" \
+        "$dir/.claude/CLAUDE.md"
+    do
+        if [[ -f "$candidate" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+load_instruction_file_content() {
+    local scope="$1" file="$2" content=""
+    content=$(cat "$file") || return 1
+    printf 'Source: %s\nPath: %s\n\n%s' "$scope" "$file" "$content"
+}
+
+build_instruction_files_section() {
+    local section="" global_file="" project_file="" global_content="" project_content=""
+    global_file=$(find_instruction_file_in_dir "${HOME}/.bash-agent" 2>/dev/null || true)
+    project_file=$(find_instruction_file_in_dir "${PWD:-$(pwd)}" 2>/dev/null || true)
+
+    if [[ -n "$global_file" ]]; then
+        global_content=$(load_instruction_file_content "global" "$global_file") || return 1
+        section+="$(wrap_named_section "instruction-file" "global" "$global_content")"$'\n'
+    fi
+
+    if [[ -n "$project_file" ]]; then
+        project_content=$(load_instruction_file_content "project" "$project_file") || return 1
+        section+="$(wrap_named_section "instruction-file" "project" "$project_content")"$'\n'
+    fi
+
     section="${section%$'\n'}"
     printf '%s' "$section"
 }

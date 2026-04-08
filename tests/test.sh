@@ -122,6 +122,20 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        if b'INSTRUCTION_FILE_MARKER' in body:
+            if path.startswith('/v1/messages'):
+                if b'Global agent instruction marker' in body and b'Project agent instruction marker' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_instruction_file\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Instruction files loaded.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing instruction file content in prompt')
+            return
         if b'READ_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -620,9 +634,32 @@ EOF
     fi
 }
 
+test_agent_instruction_files() {
+    info "Test 12: Agent.sh instruction file injection"
+    local home_dir global_dir project_file output
+    home_dir=$(mktemp -d)
+    global_dir="$home_dir/.bash-agent"
+    project_file="$ROOT_DIR/AGENTS.md"
+    mkdir -p "$global_dir"
+    cat > "$global_dir/AGENTS.md" <<'EOF'
+Global agent instruction marker
+EOF
+    cat > "$project_file" <<'EOF'
+Project agent instruction marker
+EOF
+    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'INSTRUCTION_FILE_MARKER' 2>&1) || true
+    rm -rf "$home_dir"
+    rm -f "$project_file"
+    if echo "$output" | grep -q "Instruction files loaded."; then
+        green "Agent instruction file injection"; ((PASS++)) || true
+    else
+        red "Agent instruction file injection"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 # Test 12: Read file end-to-end
 test_agent_read_file() {
-    info "Test 12: Agent.sh read_file"
+    info "Test 13: Agent.sh read_file"
     local output target_file
     target_file="/tmp/bash-agent-read-test.txt"
     printf 'read-test-content\n' > "$target_file"
@@ -637,7 +674,7 @@ test_agent_read_file() {
 
 # Test 13: Edit file end-to-end
 test_agent_edit_file() {
-    info "Test 13: Agent.sh edit_file"
+    info "Test 14: Agent.sh edit_file"
     local output target_file
     target_file="/tmp/bash-agent-edit-test.txt"
     printf 'prefix old-value suffix\n' > "$target_file"
@@ -652,7 +689,7 @@ test_agent_edit_file() {
 
 # Test 14: Write file preserves newlines
 test_agent_write_file_newlines() {
-    info "Test 14: Agent.sh write_file newline handling"
+    info "Test 15: Agent.sh write_file newline handling"
     local output target_file
     target_file="/tmp/bash-agent-write-test.txt"
     rm -f "$target_file"
@@ -667,7 +704,7 @@ test_agent_write_file_newlines() {
 
 # Test 15: Bash tool preserves quoted command content
 test_agent_bash_quotes() {
-    info "Test 15: Agent.sh bash tool quoted command"
+    info "Test 16: Agent.sh bash tool quoted command"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test -v 'BASH_QUOTE_MARKER' 2>&1) || true
     if echo "$output" | grep -q "hello" && ! echo "$output" | grep -q "no command provided"; then
@@ -678,7 +715,7 @@ test_agent_bash_quotes() {
 }
 
 test_agent_tool_result_multiline_url() {
-    info "Test 16: Agent.sh tool_result multiline URL"
+    info "Test 17: Agent.sh tool_result multiline URL"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'TOOL_RESULT_URL_MARKER' 2>&1) || true
     if echo "$output" | grep -q "Final answer after tool result"; then
@@ -689,7 +726,7 @@ test_agent_tool_result_multiline_url() {
 }
 
 test_agent_tool_result_strips_ansi() {
-    info "Test 17: Agent.sh tool_result strips ANSI"
+    info "Test 18: Agent.sh tool_result strips ANSI"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'ANSI_TOOL_RESULT_MARKER' 2>&1) || true
     if echo "$output" | grep -q "ANSI output sanitized."; then
@@ -700,7 +737,7 @@ test_agent_tool_result_strips_ansi() {
 }
 
 test_agent_multiple_tool_calls() {
-    info "Test 18: Agent.sh multiple tool calls in one turn"
+    info "Test 19: Agent.sh multiple tool calls in one turn"
     local output target_file
     target_file="/tmp/bash-agent-multi-read.txt"
     printf 'multi-read-content\n' > "$target_file"
@@ -731,6 +768,7 @@ test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_compact
 test_agent_skill_injection
+test_agent_instruction_files
 test_agent_read_file
 test_agent_edit_file
 test_agent_write_file_newlines
