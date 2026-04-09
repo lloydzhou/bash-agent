@@ -88,6 +88,7 @@ Session 存储应该可以重放。
 - 必要时压缩旧上下文
 - 把被裁掉的内容整理成任务级快照，而不是简单流水账
 - `compact` 是独立入口，loop 内也会在超预算时自动触发同一套压缩逻辑
+- session 级 planning state 单独保存在 `todo.md`，由正常对话轮次里的 `Current plan:` 更新
 
 只要 session 变长，这一层就是必需的。
 
@@ -98,6 +99,10 @@ prompt 组装不要做成重型模板引擎。
 skills 也是这一层的一部分。
 它们应该按名称从项目目录加载，作为独立 section 注入 prompt，而不是改写 session 存储或主循环。
 默认推荐路径是 `.claude/skills/<name>/SKILL.md`，也可以兼容 `skills/<name>/SKILL.md`。
+
+`summary.txt` 和 `todo.md` 不同。
+`summary.txt` 服务于 compact，是历史摘要。
+`todo.md` 服务于 planning，是当前 session 的执行计划。
 
 ### 4. Agent Loop
 

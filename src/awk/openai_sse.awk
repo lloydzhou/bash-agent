@@ -9,6 +9,7 @@ BEGIN {
     tc_count = 0
     input_tokens = 0
     output_tokens = 0
+    cache_input_tokens = 0
 }
 
 /^:/ { next }
@@ -18,7 +19,7 @@ BEGIN {
 
 /^data: \[DONE\]/ {
     if (stop_reason == "") stop_reason = "done"
-    printf "USAGE:in=%d,out=%d\n", input_tokens, output_tokens
+    printf "USAGE:in=%d,out=%d,cache_input_tokens=%d\n", input_tokens, output_tokens, cache_input_tokens
     fflush()
     printf "STOP:%s\n", stop_reason
     fflush()
@@ -35,7 +36,7 @@ BEGIN {
     # Extract text content from delta
     content = extract_json_string(json, "content")
     if (content != "") {
-        printf "TEXT:%s\n", content
+        printf "TEXT:%s\n", escape_protocol_text(unescape_json_string(content))
         fflush()
     }
 
@@ -50,6 +51,9 @@ BEGIN {
     if (pt != "") input_tokens = pt
     ct = extract_num(json, "completion_tokens")
     if (ct != "") output_tokens = ct
+    crt = extract_num(json, "cached_tokens")
+    if (crt == "") crt = extract_num(json, "cache_read_input_tokens")
+    if (crt != "") cache_input_tokens = crt
 
     next
 }

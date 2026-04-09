@@ -37,7 +37,7 @@ TEXT:Hello, I'll help you with that.
 TEXT: Let me think...
 TOOL_START:get_weather:call_abc123
 TOOL_INPUT:{"location":"San Francisco"}
-USAGE:in=25,out=42
+USAGE:in=25,out=42,cache_input_tokens=8
 STOP:end_turn
 ```
 
@@ -46,7 +46,8 @@ STOP:end_turn
 | `TEXT:<content>` | 文本增量 |
 | `TOOL_START:<name>:<call_id>` | 工具调用开始 |
 | `TOOL_INPUT:<json>` | 完整工具输入 |
-| `USAGE:in=<n>,out=<n>` | token 用量 |
+| `tool_input`（`stream-json`） | 结构化工具输入事件，包含 `name` / `id` / `input` |
+| `USAGE:in=<n>,out=<n>,cache_input_tokens=<n>` | token 用量（缓存字段可为 0） |
 | `STOP:<reason>` | 结束原因 |
 | `ERROR:<message>` | 错误信息 |
 
@@ -100,6 +101,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 | `--max-tokens` | 最大输出 token |
 | `--system` | 系统提示词 |
 | `--skill NAME` | 从 `.claude/skills/NAME/SKILL.md` 加载技能 |
+| `--plan-mode MODE` | planning 模式：`auto` \| `on` \| `off` |
 | `--max-turns` | 最大 agent 循环次数 |
 | `--max-context` | context 消息上限 |
 | `--tool-timeout N` | tool 执行超时秒数，默认 600 |
@@ -123,11 +125,13 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 ~/.bash-agent/projects/<project_key>/<session_id>.jsonl
 ~/.bash-agent/projects/<project_key>/<session_id>.events.jsonl
 ~/.bash-agent/projects/<project_key>/<session_id>.summary.txt
+~/.bash-agent/projects/<project_key>/<session_id>.todo.md
 ```
 
 - `jsonl`：当前给模型看的 context 窗口
 - `events.jsonl`：完整事件日志
 - `summary.txt`：压缩后的稳定摘要
+- `todo.md`：session 级 planning state，只保存当前计划
 
 ## Skills
 

@@ -160,6 +160,19 @@ function unescape_json_string(s,    out, i, c, esc) {
     return out
 }
 
+function escape_protocol_text(s,    out, i, c) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") out = out "\\\\"
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else out = out c
+    }
+    return out
+}
+
 # Extract a JSON string value while preserving escape sequences.
 # Unlike extract_escaped(), this correctly handles sequences such as \\\".
 function extract_json_string(json, key,    pos, rest, i, c, result, bs) {

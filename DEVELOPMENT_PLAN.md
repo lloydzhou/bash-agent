@@ -14,13 +14,13 @@
 - `stream-json` 输出模式
 - 安全的 tool 执行边界
 - 模型和 tool 的错误恢复
-- 最小的任务 / todo 机制
+- 最小的 session planning state
 
 ## P1：应该做
 
 这些能力会明显增强核心，但不会改变项目形态。
 
-- todo / planning 细化
+- planning state 细化
 - skills 加载
 - prompt 级 skills 注入
 - tool 前后钩子
@@ -73,8 +73,8 @@
 - 控制 context 长度
 - 用 `compact` 子命令和 loop 自动触发共用同一套摘要压缩逻辑
 - 保留最近的 tool 结果和关键状态
-- 引入 todo / task state
-- 把 planning 状态回灌给模型
+- 引入 session 级 planning state
+- 把 planning state 回灌给模型
 
 ### 阶段 3：Skills
 

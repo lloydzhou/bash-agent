@@ -26,6 +26,7 @@ VERBOSE=false
 API_KEY=""
 BASE_URL=""
 PROMPT=""
+PLAN_MODE="auto"
 MAX_TURNS=20
 MAX_CONTEXT_MESSAGES=40
 MAX_CONTEXT_BUFFER_MESSAGES=4
@@ -42,6 +43,7 @@ SESSION_DIR=""
 PROJECT_KEY=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
+TODO_FILE=""
 
 # Internal
 CONV_FILE=""
@@ -191,6 +193,17 @@ json_unescape() {
     printf '%s' "$output"
 }
 
+usage_field_value() {
+    local usage="$1" key="$2" value=""
+    case "$usage" in
+        *"${key}="*)
+            value="${usage#*${key}=}"
+            value="${value%%,*}"
+            ;;
+    esac
+    printf '%s' "$value"
+}
+
 strip_ansi() {
     local input="$1"
     printf '%s' "$input" | awk '
@@ -243,6 +256,7 @@ prompt_template_default() {
 {{skill_index_section}}
 {{selected_skills_section}}
 {{stable_context_section}}
+{{todo_section}}
 {{recent_context_section}}
 {{task_instructions_section}}
 EOF
@@ -260,16 +274,17 @@ emit_stream_event() {
 }
 
 build_system_prompt() {
-    local template agent_identity core_rules instruction_files skill_index selected_skills stable_context recent_context task_instructions
-    local agent_identity_section core_rules_section instruction_files_section skill_index_section selected_skills_section stable_context_section recent_context_section task_instructions_section
+    local template agent_identity core_rules instruction_files skill_index selected_skills stable_context todo recent_context task_instructions
+    local agent_identity_section core_rules_section instruction_files_section skill_index_section selected_skills_section stable_context_section todo_section recent_context_section task_instructions_section
     template=$(prompt_template_default)
     BASE_SYSTEM_PROMPT="$template"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
-    core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
+    core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- For multi-step work or any task that needs tools, keep a short current plan.\n- When a multi-step task starts, your first substantive reply must end with a block exactly starting with \"Current plan:\".\n- When the plan changes because a step completed, failed, or was replaced, append a revised final block exactly starting with \"Current plan:\".\n- Omit that block only when the plan is unchanged.'
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
     selected_skills=$(build_selected_skills_section)
     stable_context=$(build_stable_context_section)
+    todo=$(build_todo_section)
     recent_context=$(build_recent_context_section)
     task_instructions=$(build_task_instructions_section)
     agent_identity_section=$(wrap_section "agent-identity" "$agent_identity")
@@ -278,6 +293,7 @@ build_system_prompt() {
     skill_index_section=$(wrap_section "skill-index" "$skill_index")
     selected_skills_section=$(wrap_section "selected-skills" "$selected_skills")
     stable_context_section=$(wrap_section "context-summary" "$stable_context")
+    todo_section=$(wrap_section "current-plan" "$todo")
     recent_context_section=$(wrap_section "recent-messages" "$recent_context")
     task_instructions_section=$(wrap_section "instructions" "$task_instructions")
     render_template "$template" \
@@ -287,6 +303,7 @@ build_system_prompt() {
         "skill_index_section" "$skill_index_section" \
         "selected_skills_section" "$selected_skills_section" \
         "stable_context_section" "$stable_context_section" \
+        "todo_section" "$todo_section" \
         "recent_context_section" "$recent_context_section" \
         "task_instructions_section" "$task_instructions_section"
 }
@@ -434,6 +451,27 @@ Tool evidence:
 EOF
 }
 
+build_plan_system_prompt() {
+    cat <<'EOF'
+You are preparing a short execution plan for a lightweight coding agent.
+
+Return only plain text.
+Do not call tools.
+Do not include analysis, markdown fences, or extra commentary.
+
+If the task is simple and can be completed in a single direct response, return:
+Current plan:
+- [ ] answer directly
+
+If the task needs multiple steps or tools, return a short actionable checklist.
+
+Your output must end with a block exactly in this format:
+Current plan:
+- [ ] first step
+- [ ] second step
+EOF
+}
+
 # Unescape JSON escape sequences for display
 unescape_display_to_var() {
     local __outvar="$1" input="$2"
@@ -524,14 +562,17 @@ conv_init() {
         CONV_FILE="${SESSION_DIR}/${session_base}.jsonl"
         SESSION_EVENT_FILE="${SESSION_DIR}/${session_base}.events.jsonl"
         CONTEXT_SUMMARY_FILE="${SESSION_DIR}/${session_base}.summary.txt"
+        TODO_FILE="${SESSION_DIR}/${session_base}.todo.md"
         touch "$CONV_FILE"
         touch "$SESSION_EVENT_FILE"
         touch "$CONTEXT_SUMMARY_FILE"
+        touch "$TODO_FILE"
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$session_base")\"}"
     else
         # Ephemeral: use tmpdir (cleaned on exit)
         CONV_FILE=$(mktemp "${AGENT_TMPDIR}/conv.XXXXXX")
         CONTEXT_SUMMARY_FILE=$(mktemp "${AGENT_TMPDIR}/summary.XXXXXX")
+        TODO_FILE=$(mktemp "${AGENT_TMPDIR}/todo.XXXXXX")
     fi
 }
 
@@ -614,6 +655,39 @@ build_stable_context_section() {
     printf '%s' "$section"
 }
 
+build_todo_section() {
+    local section=""
+    if [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]]; then
+        section="$(cat "$TODO_FILE")"
+    fi
+    printf '%s' "$section"
+}
+
+extract_current_plan_block() {
+    local text="$1"
+    printf '%s\n' "$text" | awk '
+        BEGIN { capture = 0 }
+        /^Current plan:[[:space:]]*$/ { capture = 1 }
+        capture { print }
+    '
+}
+
+strip_current_plan_block() {
+    local text="$1"
+    printf '%s\n' "$text" | awk '
+        BEGIN { plan = 0 }
+        /^Current plan:[[:space:]]*$/ { plan = 1; exit }
+        { print }
+    ' | awk '
+        { lines[NR] = $0 }
+        END {
+            last = NR
+            while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+            for (i = 1; i <= last; i++) print lines[i]
+        }
+    '
+}
+
 build_recent_context_section() {
     local section=""
     if [[ -s "$CONV_FILE" ]]; then
@@ -628,6 +702,27 @@ build_task_instructions_section() {
         section="$SYSTEM_PROMPT"
     fi
     printf '%s' "$section"
+}
+
+todo_exists() {
+    [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]]
+}
+
+is_multi_step_prompt() {
+    local text="$1"
+    [[ -z "$text" ]] && return 1
+    [[ "$text" =~ (先|再|然后|接着|最后|同时|并且|修掉|检查|测试|分析|实现|修改|排查|提交|and|then|after|test|tests|fix|debug|inspect|analyze|review|implement|modify|edit|refactor|commit) ]]
+}
+
+should_init_plan() {
+    local user_input="$1"
+    todo_exists && return 1
+    case "$PLAN_MODE" in
+        on) return 0 ;;
+        off) return 1 ;;
+        auto) is_multi_step_prompt "$user_input" ;;
+        *) return 1 ;;
+    esac
 }
 
 build_compact_summary_prompt() {
@@ -1075,12 +1170,45 @@ run_summary_call() {
     printf '%s' "$text"
 }
 
+run_plan_init_call() {
+    local user_input="$1"
+    local messages body text line plan_text
+    messages="[{\"role\":\"user\",\"content\":\"$(json_escape "$user_input")\"}]"
+    body=$(build_request "$messages" "" "$(build_plan_system_prompt)" "$SUMMARY_MAX_TOKENS")
+    log_verbose "Plan request body ($((${#body} / 1024))KB): ${body:0:200}..."
+
+    text=""
+    while IFS= read -r line; do
+        case "$line" in
+            TEXT:*)
+                local t="${line#TEXT:}"
+                local d="$t"
+                unescape_display_to_var d "$d"
+                text+="$d"
+                ;;
+            ERROR:*)
+                die "${line#ERROR:}"
+                ;;
+        esac
+    done < <(call_api "$body" | parse_sse)
+
+    plan_text=$(extract_current_plan_block "$text")
+    [[ -n "$plan_text" ]] || return 1
+    printf '%s\n' "$plan_text" > "$TODO_FILE"
+    if is_stream_json_mode; then
+        emit_stream_event "{\"type\":\"plan_update\",\"content\":\"$(json_escape "$plan_text")\"}"
+    fi
+}
+
 # ============================================================================
 # Section 12: Agent Loop
 # ============================================================================
 
 agent_loop() {
     local user_input="$1"
+    if should_init_plan "$user_input"; then
+        run_plan_init_call "$user_input" || true
+    fi
     conv_add_user "$user_input"
 
     local turn=0
@@ -1089,7 +1217,7 @@ agent_loop() {
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
 
-        local text="" tool_calls="" stop=""
+        local text="" visible_text="" plan_text="" tool_calls="" stop=""
         local cur_tool_name="" cur_tool_id=""
 
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
@@ -1098,17 +1226,17 @@ agent_loop() {
             case "$line" in
                 TEXT:*)
                     t="${line#TEXT:}"
+                    local d="$t"
+                    unescape_display_to_var d "$d"
                     if is_stream_json_mode; then
-                        emit_stream_event "{\"type\":\"text\",\"content\":\"$(json_escape "$t")\"}"
+                        emit_stream_event "{\"type\":\"text\",\"content\":\"$(json_escape "$d")\"}"
                     else
-                        local d="$t"
-                        unescape_display_to_var d "$d"
                         printf '%s' "$d"
                         if [[ -n "$d" ]]; then
                             human_last_char="${d: -1}"
                         fi
                     fi
-                    text+="$t"
+                    text+="$d"
                     ;;
                 TOOL_START:*)
                     if ! is_stream_json_mode; then
@@ -1128,16 +1256,19 @@ agent_loop() {
                     ;;
                 TOOL_INPUT:*)
                     input="${line#TOOL_INPUT:}"
+                    if is_stream_json_mode && [[ -n "$input" ]]; then
+                        emit_stream_event "{\"type\":\"tool_input\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\",\"input\":$input}"
+                    fi
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
                     ;;
                 USAGE:*)
                     if is_stream_json_mode; then
                         local usage="${line#USAGE:}"
-                        local input_tokens output_tokens
-                        input_tokens="${usage#in=}"
-                        input_tokens="${input_tokens%%,*}"
-                        output_tokens="${usage##*,out=}"
-                        emit_stream_event "{\"type\":\"usage\",\"input_tokens\":${input_tokens:-0},\"output_tokens\":${output_tokens:-0}}"
+                        local input_tokens output_tokens cache_input_tokens
+                        input_tokens=$(usage_field_value "$usage" "in")
+                        output_tokens=$(usage_field_value "$usage" "out")
+                        cache_input_tokens=$(usage_field_value "$usage" "cache_input_tokens")
+                        emit_stream_event "{\"type\":\"usage\",\"input_tokens\":${input_tokens:-0},\"output_tokens\":${output_tokens:-0},\"cache_input_tokens\":${cache_input_tokens:-0}}"
                     fi
                     ;;
                 STOP:*)
@@ -1161,8 +1292,20 @@ agent_loop() {
             esac
         done < <(llm_call "$(conv_get_messages)")
 
+        visible_text="$text"
+        plan_text=$(extract_current_plan_block "$text")
+        if [[ -n "$plan_text" ]]; then
+            if [[ -n "${TODO_FILE:-}" ]]; then
+                printf '%s\n' "$plan_text" > "$TODO_FILE"
+            fi
+            if is_stream_json_mode; then
+                emit_stream_event "{\"type\":\"plan_update\",\"content\":\"$(json_escape "$plan_text")\"}"
+            fi
+            visible_text=$(strip_current_plan_block "$text")
+        fi
+
         # Record assistant response
-        conv_add_assistant "$text" "$tool_calls"
+        conv_add_assistant "$visible_text" "$tool_calls"
 
         case "$stop" in
             end_turn|stop|done)
@@ -1236,6 +1379,7 @@ Options:
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --system PROMPT         System prompt for the agent
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md
+  --plan-mode MODE        Planning mode: auto | on | off (default: auto)
   --max-turns N           Max agent turns (default: 20)
   --max-context N         Max stored context messages (default: 40)
   --api-key KEY           API key (default from env)
@@ -1286,6 +1430,7 @@ parse_args() {
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --system)        SYSTEM_PROMPT="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
+            --plan-mode)     PLAN_MODE="$2"; shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
             --max-context)   MAX_CONTEXT_MESSAGES="$2"; shift 2 ;;
             --api-key)       API_KEY="$2"; shift 2 ;;
@@ -1318,6 +1463,12 @@ parse_args() {
         human|stream-json) ;;
         *)
             die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json)"
+            ;;
+    esac
+    case "$PLAN_MODE" in
+        auto|on|off) ;;
+        *)
+            die "Unknown plan mode: $PLAN_MODE (use auto|on|off)"
             ;;
     esac
 }
@@ -1392,6 +1543,7 @@ interactive_mode() {
 
 main() {
     parse_args "$@"
+
     validate_config
     setup_api_url
 

@@ -12,6 +12,7 @@ BEGIN {
     stop_reason = ""
     input_tokens = 0
     output_tokens = 0
+    cache_input_tokens = 0
 }
 
 /^:/ { next }
@@ -44,7 +45,7 @@ BEGIN {
         if (block_type == "text") {
             text = unescape_json_string(extract_json_string(json, "text"))
             if (text != "") {
-                printf "TEXT:%s\n", text
+                printf "TEXT:%s\n", escape_protocol_text(text)
                 fflush()
             }
         }
@@ -73,13 +74,19 @@ BEGIN {
         if (it != "") input_tokens = it
         ot = extract_num(json, "output_tokens")
         if (ot != "") output_tokens = ot
+        crt = extract_num(json, "cache_read_input_tokens")
+        if (crt == "") crt = extract_num(json, "cache_creation_input_tokens")
+        if (crt != "") cache_input_tokens = crt
     }
     else if (event == "message_start") {
         it = extract_num_from_nested(json, "input_tokens")
         if (it != "") input_tokens = it
+        crt = extract_num_from_nested(json, "cache_read_input_tokens")
+        if (crt == "") crt = extract_num_from_nested(json, "cache_creation_input_tokens")
+        if (crt != "") cache_input_tokens = crt
     }
     else if (event == "message_stop") {
-        printf "USAGE:in=%d,out=%d\n", input_tokens, output_tokens
+        printf "USAGE:in=%d,out=%d,cache_input_tokens=%d\n", input_tokens, output_tokens, cache_input_tokens
         fflush()
         printf "STOP:%s\n", stop_reason
         fflush()
