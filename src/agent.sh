@@ -436,13 +436,13 @@ EOF
 }
 
 # Unescape JSON escape sequences for display
-unescape_display() {
-    local input="$1"
+unescape_display_to_var() {
+    local __outvar="$1" input="$2"
     input="${input//\\n/$'\n'}"
     input="${input//\\t/$'\t'}"
     input="${input//\\\"/\"}"
     input="${input//\\\\/\\}"
-    printf '%s' "$input"
+    printf -v "$__outvar" '%s' "$input"
 }
 
 # Extract a field value from JSON using awk
@@ -1177,6 +1177,7 @@ agent_loop() {
     conv_add_user "$user_input"
 
     local turn=0
+    local human_last_char=""
 
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
@@ -1194,13 +1195,20 @@ agent_loop() {
                         emit_stream_event "{\"type\":\"text\",\"content\":\"$(json_escape "$t")\"}"
                     else
                         local d="$t"
-                        printf '%s' "$(unescape_display "$d")"
+                        unescape_display_to_var d "$d"
+                        printf '%s' "$d"
+                        if [[ -n "$d" ]]; then
+                            human_last_char="${d: -1}"
+                        fi
                     fi
                     text+="$t"
                     ;;
                 TOOL_START:*)
                     if ! is_stream_json_mode; then
-                        printf '\n'
+                        if [[ "$human_last_char" != $'\n' ]]; then
+                            printf '\n'
+                        fi
+                        human_last_char=$'\n'
                     fi
                     local rest="${line#TOOL_START:}"
                     cur_tool_name="${rest%%:*}"
@@ -1230,7 +1238,10 @@ agent_loop() {
                     if is_stream_json_mode; then
                         emit_stream_event "{\"type\":\"stop\",\"reason\":\"$(json_escape "$stop")\"}"
                     else
-                        printf '\n'
+                        if [[ "$human_last_char" != $'\n' ]]; then
+                            printf '\n'
+                        fi
+                        human_last_char=$'\n'
                     fi
                     ;;
                 ERROR:*)

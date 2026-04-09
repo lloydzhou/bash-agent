@@ -42,7 +42,7 @@ BEGIN {
     }
     else if (event == "content_block_delta") {
         if (block_type == "text") {
-            text = extract_json_string(json, "text")
+            text = unescape_json_string(extract_json_string(json, "text"))
             if (text != "") {
                 printf "TEXT:%s\n", text
                 fflush()
