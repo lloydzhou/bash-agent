@@ -37,7 +37,7 @@ TEXT:Hello, I'll help you with that.
 TEXT: Let me think...
 TOOL_START:get_weather:call_abc123
 TOOL_INPUT:{"location":"San Francisco"}
-USAGE:in=25,out=42,cache_input_tokens=8
+USAGE:{"input_tokens":25,"output_tokens":42,"cache_input_tokens":8}
 STOP:end_turn
 ```
 
@@ -47,7 +47,7 @@ STOP:end_turn
 | `TOOL_START:<name>:<call_id>` | 工具调用开始 |
 | `TOOL_INPUT:<json>` | 完整工具输入 |
 | `tool_input`（`stream-json`） | 结构化工具输入事件，包含 `name` / `id` / `input` |
-| `USAGE:in=<n>,out=<n>,cache_input_tokens=<n>` | token 用量（缓存字段可为 0） |
+| `USAGE:{"input_tokens":<n>,"output_tokens":<n>,"cache_input_tokens":<n>}` | token 用量（JSON object） |
 | `STOP:<reason>` | 结束原因 |
 | `ERROR:<message>` | 错误信息 |
 

@@ -19,7 +19,7 @@ BEGIN {
 
 /^data: \[DONE\]/ {
     if (stop_reason == "") stop_reason = "done"
-    printf "USAGE:in=%d,out=%d,cache_input_tokens=%d\n", input_tokens, output_tokens, cache_input_tokens
+    printf "USAGE:{\"input_tokens\":%d,\"output_tokens\":%d,\"cache_input_tokens\":%d}\n", input_tokens, output_tokens, cache_input_tokens
     fflush()
     printf "STOP:%s\n", stop_reason
     fflush()

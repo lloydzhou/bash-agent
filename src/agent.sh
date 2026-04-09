@@ -193,17 +193,6 @@ json_unescape() {
     printf '%s' "$output"
 }
 
-usage_field_value() {
-    local usage="$1" key="$2" value=""
-    case "$usage" in
-        *"${key}="*)
-            value="${usage#*${key}=}"
-            value="${value%%,*}"
-            ;;
-    esac
-    printf '%s' "$value"
-}
-
 strip_ansi() {
     local input="$1"
     printf '%s' "$input" | awk '
@@ -1265,9 +1254,9 @@ agent_loop() {
                     if is_stream_json_mode; then
                         local usage="${line#USAGE:}"
                         local input_tokens output_tokens cache_input_tokens
-                        input_tokens=$(usage_field_value "$usage" "in")
-                        output_tokens=$(usage_field_value "$usage" "out")
-                        cache_input_tokens=$(usage_field_value "$usage" "cache_input_tokens")
+                        input_tokens=$(extract_json_field "$usage" "input_tokens")
+                        output_tokens=$(extract_json_field "$usage" "output_tokens")
+                        cache_input_tokens=$(extract_json_field "$usage" "cache_input_tokens")
                         emit_stream_event "{\"type\":\"usage\",\"input_tokens\":${input_tokens:-0},\"output_tokens\":${output_tokens:-0},\"cache_input_tokens\":${cache_input_tokens:-0}}"
                     fi
                     ;;

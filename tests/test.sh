@@ -581,7 +581,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -q "USAGE:in=10,out=7,cache_input_tokens=4" && echo "$output" | grep -q "STOP:end_turn"; then
+    if echo "$output" | grep -q 'USAGE:{"input_tokens":10,"output_tokens":7,"cache_input_tokens":4}' && echo "$output" | grep -q "STOP:end_turn"; then
         green "Claude usage cache tokens"; ((PASS++)) || true
     else
         red "Claude usage cache tokens"; echo "  Output: $output"; ((FAIL++)) || true
@@ -652,7 +652,7 @@ data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":12345678
 data: [DONE]
 SSE
 )
-    if echo "$output" | grep -q "USAGE:in=10,out=12,cache_input_tokens=5" && echo "$output" | grep -q "STOP:stop"; then
+    if echo "$output" | grep -q 'USAGE:{"input_tokens":10,"output_tokens":12,"cache_input_tokens":5}' && echo "$output" | grep -q "STOP:stop"; then
         green "OpenAI usage cache tokens"; ((PASS++)) || true
     else
         red "OpenAI usage cache tokens"; echo "  Output: $output"; ((FAIL++)) || true
