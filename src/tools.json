@@ -68,6 +68,46 @@
     }
   },
   {
+    "name": "glob",
+    "description": "Find files by glob pattern using rg --files.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern, for example **/*.sh"
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional directory to search from. Defaults to ."
+        }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "grep",
+    "description": "Search file contents using ripgrep and return matching lines.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Text or regex pattern to search for"
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional file or directory to search. Defaults to ."
+        },
+        "glob": {
+          "type": "string",
+          "description": "Optional file glob filter, for example *.sh"
+        }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
     "name": "todo_write",
     "description": "Create or update the full session todo checklist for a complex multi-step task. Use proactively for non-trivial implementation, debugging, refactoring, or review work. Do not use for trivial single-step or purely informational requests. Keep the checklist short and concrete, and prefer exactly one in_progress item when actively working.",
     "input_schema": {

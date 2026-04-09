@@ -1,171 +1,258 @@
 # 架构说明
 
-这个项目是一个轻量级 agent 内核。
-核心目标不是 UI。
-核心目标是一个稳定的命令行执行器，它可以：
+## 项目定位
 
-- 独立运行
-- 通过 stdout 输出结构化事件
-- 持久化和恢复 session
-- 作为其他工具的嵌入式组件
+`bash-agent` 是一个纯 `bash`/`awk` 的轻量 agent 内核。
 
-## 设计目标
+目标不是做完整平台，而是做一个：
 
-保持运行时足够小、足够可组合。
-凡是不属于内核自身必需的能力，都尽量放在 core 之外。
+- 可在终端独立运行的 agent
+- 可被其他程序嵌入和编排的命令行内核
+- 运行时依赖尽量少
+- 协议和状态边界清楚
 
-最重要的接口是 `stream-json`。
-文本模式是给人看的。
-`stream-json` 是给机器、远程客户端、持久化和编排系统用的。
-协议细节见 [STREAM_JSON.md](STREAM_JSON.md)。
+当前核心方向是：
+
+- `bash` 负责流程、文件、进程、会话、请求调度
+- `awk` 负责 JSON/SSE 解析、字符串变换、文本抽取
 
 ## 核心原则
 
-- 先做单 agent
-- 工具循环要可预测
-- stdout 必须是结构化协议
+- 保持单 agent、单进程主循环
+- 机器协议优先，human 输出只是薄包装
 - session 是一等公民
 - context budget 是硬约束
-- 扩展能力尽量不改主循环
+- tool 边界必须可预测
+- 扩展能力尽量不破坏主循环
+- 优先减少重复，而不是追求“函数更少”
 
-## 系统概览
+## 运行时分层
 
 ```text
 stdin / args / env
         |
         v
 src/agent.sh
-├─ 配置和 provider 选择
-├─ session 管理
+├─ 配置与 CLI
+├─ session/context 管理
 ├─ prompt 组装
-├─ context 管理
 ├─ agent loop
-├─ tool 运行时
-├─ 权限门
-├─ stream-json 输出
-└─ SSE / API 适配器
+├─ tool runtime
+├─ API 请求
+└─ stream-json / human 输出
         |
         v
 src/awk/*
-├─ JSON 辅助函数
-├─ provider SSE 解析器
-├─ 消息格式转换
-└─ tool 格式转换
+├─ JSON helper
+├─ SSE parser
+├─ 格式转换
+├─ 文本抽取 / 规范化
+└─ tool 专用变换
 ```
 
-## 运行时分层
+### `bash` 负责什么
 
-### 1. 入口层
+- CLI 参数解析
+- provider/model 选择
+- session 初始化与恢复
+- context 文件、summary、todo 文件管理
+- prompt section 组装
+- tool 分发与文件/进程控制
+- API 请求
+- main loop
 
-负责：
+### `awk` 负责什么
 
-- 解析 CLI 参数
-- 读取环境变量
-- 选择 provider 和 model
-- 选择输出模式
+- JSON 字段提取
+- JSON string escape/unescape
+- `\uXXXX` 解码
+- SSE 事件解析
+- OpenAI/Claude 消息格式转换
+- `edit_file` / `todo_write` 等需要文本变换的 tool 逻辑
 
-### 2. Session 层
+## 当前核心能力
 
-负责：
+### 1. Session
 
-- 创建 session id
-- 恢复历史 session
-- 持久化事件历史
-- 列出 session
-
-Session 存储应该可以重放。
-也就是说，持久化记录最好是事件流，而不是只存最终文本。
-
-### 3. Context 层
-
-负责：
-
-- 根据运行时状态组装 prompt
-- 按稳定前缀 + 动态后缀的顺序拼接
-- 用轻量 section/tag 包住多行段落
-- 裁剪过长的历史消息
-- 控制 tool 输出长度
-- 必要时压缩旧上下文
-- 把被裁掉的内容整理成任务级快照，而不是简单流水账
-- `compact` 是独立入口，loop 内也会在超预算时自动触发同一套压缩逻辑
-- session 级待办清单单独保存在 `todo.md`，由 `todo_write` tool 显式维护
-
-只要 session 变长，这一层就是必需的。
-
-prompt 组装不要做成重型模板引擎。
-更合适的是少量占位符替换 + section 化拼接。
-稳定内容尽量前置，动态内容尽量后置，这样更接近 Claude Code 的缓存友好实践。
-
-skills 也是这一层的一部分。
-它们应该按名称从项目目录加载，作为独立 section 注入 prompt，而不是改写 session 存储或主循环。
-默认推荐路径是 `.claude/skills/<name>/SKILL.md`，也可以兼容 `skills/<name>/SKILL.md`。
-
-`summary.txt` 和 `todo.md` 不同。
-`summary.txt` 服务于 compact，是历史摘要。
-`todo.md` 服务于执行态任务跟踪，是当前 session 的待办清单。
-
-### 4. Agent Loop
-
-核心执行循环是：
+session 数据按当前项目目录归档：
 
 ```text
-调用模型 -> 解析流 -> 输出事件 -> 执行工具 -> 写回结果 -> 继续循环
+~/.bash-agent/projects/<project_key>/<session_id>.jsonl
+~/.bash-agent/projects/<project_key>/<session_id>.events.jsonl
+~/.bash-agent/projects/<project_key>/<session_id>.summary.txt
+~/.bash-agent/projects/<project_key>/<session_id>.todo.md
 ```
 
-这个循环应该简单、稳定、可预测。
+职责分工：
 
-### 5. Tool 层
+- `*.jsonl`
+  - 当前真正发给模型的消息窗口
+- `*.events.jsonl`
+  - session 内部事件日志
+- `*.summary.txt`
+  - compact 后留下的历史摘要
+- `*.todo.md`
+  - 当前 session 的待办清单，由 `todo_write` 维护
 
-当前核心工具：
+### 2. Context / compact
+
+compact 现在按 **context 实际大小** 触发，而不是按消息条数：
+
+- `--max-context` 表示字节预算
+- 支持 `100k` / `1m` 这类写法
+- 超预算后会从旧消息中裁剪
+- 但保留部分必须对齐到**完整 user turn 起点**
+
+这条规则很重要：
+
+- compact 不能把会话裁成孤立的 `tool_result`
+- 不能只剩 `assistant.tool_use` 而丢掉对应用户请求
+- 必须保留完整一轮消息的语义边界
+
+当前默认策略：
+
+- 总大小超预算时 compact
+- 保留最新的预算后缀
+- 但对齐到最近的完整 `user` 文本消息起点
+
+### 3. Prompt 组装
+
+system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
+
+当前顺序：
+
+1. `agent-identity`
+2. `rules`
+3. `todo-guidance`
+4. `instruction-files`
+5. `skill-index`
+6. `selected-skills`
+7. `context-summary`
+8. `current-todo`
+9. `instructions`
+
+实现策略：
+
+- `wrap_section()` 负责包裹 section
+- `append_section()` 负责按顺序累加
+- 稳定内容尽量前置
+- 动态内容尽量后置
+
+### 4. Skills
+
+skills 当前只读取项目目录下：
+
+```text
+.claude/skills/<name>/SKILL.md
+```
+
+策略分两层：
+
+- `skill-index`
+  - 默认扫描 `.claude/skills/*/SKILL.md`
+  - 只抽取简短摘要
+- `selected-skills`
+  - 只有显式 `--skill NAME` 时，才加载完整 `SKILL.md`
+
+`SKILL.md` 支持：
+
+- `${BASH_AGENT_SKILL_DIR}` 占位符
+
+也就是说，目录内其他脚本/模板文件是“按需引用”的，不会自动递归注入。
+
+### 5. Todo
+
+现在的设计是：
+
+- 使用内置 tool：`todo_write`
+- `todo.md` 是 session 级状态
+- 模型通过 tool 显式更新 checklist
+- host 只负责保存状态
+
+这种方式更接近 Claude Code 的做法，也更适合结构化维护 session 级待办状态。
+
+### 6. Tools
+
+当前传给模型的内置 tools：
 
 - `read_file`
 - `write_file`
 - `edit_file`
 - `bash`
+- `glob`
+- `grep`
+- `todo_write`
 
-这已经足够支撑一个最小编码 agent。
+设计原则：
 
-### 6. 输出层
+- 先做高频基础能力
+- tool 输入结构化
+- tool 输出尽量纯文本
+- `tool_result` 写回前先清理 ANSI 控制字符
 
-两种输出模式已经足够：
+`glob` / `grep` 当前是最小 `rg` 版：
 
-- 人类可读文本
-- `stream-json`
+- `glob`
+  - 用 `rg --files -g`
+- `grep`
+  - 用 `rg -n`
+- 没有 `rg` 就报错，不做复杂 fallback
 
-`stream-json` 是重点，因为它让这个内核可嵌入、可编排、可远程接入。
+## Provider 与请求构造
 
-建议把 `stream-json` 当作机器协议，而不是 UI 协议。
-session 持久化可以消费这个协议，但 session 数据本身不要和 context 混在一起。
+当前 provider：
 
-## Prompt 组装
+- `claude`
+- `openai`
 
-当前推荐的 prompt 顺序是：
+其中：
 
-1. agent identity
-2. core rules
-3. todo guidance
-4. skills
-5. stable context
-6. current todo
-7. task instructions
+- `claude`
+  - Anthropic Messages 兼容格式
+- `openai`
+  - Chat Completions 兼容格式
 
-实现上可以用少量 XML-like tag 来标记段落边界，例如：
+当前没有继续保留 `openai-responses`。
 
-```text
-<agent-identity>...</agent-identity>
-<rules>...</rules>
-<context-summary>...</context-summary>
-<current-todo>...</current-todo>
-<instructions>...</instructions>
-```
+请求构造策略：
 
-这里的重点是结构清晰，而不是完整 XML 语法。
+- source 中保留统一 `build_request()`
+- provider-specific builder 只做必要差异
+- 错误流通过 `http_stream.awk` 统一处理
 
-## 事件协议
+## 中间协议
 
-建议保留的事件类型：
+运行时内部和 `stream-json` 输出共用一套轻量事件边界。
 
-- `session_start`
+### 内部 line protocol
+
+内部 SSE 解析结果会先转成单行协议，例如：
+
+- `TEXT:...`
+- `TOOL_START:name:id`
+- `TOOL_INPUT:{...}`
+- `USAGE:{...}`
+- `STOP:...`
+- `ERROR:...`
+
+规则：
+
+- 文本类事件先编码成单行
+- 消费端再做反转义
+- 结构化内容尽量直接传 JSON object 文本
+
+当前已经统一的点：
+
+- `TOOL_INPUT` 走 JSON object
+- `USAGE` 也走 JSON object
+- `TEXT` 仍然走转义后的单行文本
+
+### `stream-json`
+
+`stream-json` 是对外机器协议。
+
+当前事件类型：
+
 - `text`
 - `tool_start`
 - `tool_input`
@@ -175,42 +262,114 @@ session 持久化可以消费这个协议，但 session 数据本身不要和 co
 - `stop`
 - `error`
 - `context_update`
-- `debug`
 
-## 扩展边界
+语义：
 
-这些能力最好放在 core 之外，除非以后证明它们变成了硬需求：
+- 每行一个 JSON 事件
+- 不混入 human 文本
+- 不把 session 内部事件直接混入 stdout
 
-- UI
-- TUI
-- web dashboard
-- 多 agent 编排
-- 重型插件管理器
-- 远程传输实现细节
+`usage` 当前字段：
 
-它们是适配器或上层能力，不是 agent 内核本身。
+- `input_tokens`
+- `output_tokens`
+- `cache_input_tokens`
 
-## 需要保持的小体积
+## 当前重要实现细节
 
+### JSON 转义
+
+`json_escape()` 现在已经收回 `awk/json.awk`：
+
+- 避免 bash 逐字节处理 UTF-8
+- 正确处理中文、多行、引号
+- 减少 `\u...` 错误转义问题
+
+### HTTP 错误
+
+`http_stream.awk` 现在会保留 `HTTP 4xx/5xx` 的 body：
+
+- 不再只输出 `HTTP 400`
+- 会透传错误体
+- 便于定位兼容层问题
+
+### `read_file`
+
+`read_file` 默认上限已收紧到 `30KB`：
+
+- 大文件更不容易直接把单轮请求顶爆
+- 如果文件更大，会返回截断提示
+
+## 当前代码边界判断
+
+### 应继续留在 `bash`
+
+- `build_system_prompt()`
+- session / compact 主流程
+- tool 调度
+- `curl` 调用
 - 主循环
-- tool 运行时
-- JSON 协议
-- session 存储
-- context budget 逻辑
 
-这些部分保持小，项目才会一直轻量。
+### 更适合继续留在 `awk`
 
-## 建议的模块边界
+- JSON 提取
+- Unicode 解码
+- SSE parser
+- `todo_write` 规范化
+- `edit_file` 内容替换
+- `skill`/plan 这类文本抽取逻辑
 
-- `src/agent.sh`
-  - CLI
-  - session
-  - prompt 组装
-  - loop
-  - tool 执行
-- `src/awk/json.awk`
-  - JSON 辅助函数
-- `src/awk/*_sse.awk`
-  - provider 流解析
-- `src/awk/convert_*.awk`
-  - 格式转换
+## 当前项目状态
+
+当前主线已经稳定：
+
+- session 持久化
+- compact
+- todo_write
+- skills
+- stream-json
+- source/dist build
+- 主要测试覆盖
+
+目前测试状态：
+
+- source 和 dist 都能跑通过测试
+
+## 后续优先级
+
+### P0
+
+- 保持 tool / compact / session 语义稳定
+- 继续修正 provider 兼容性问题
+- 继续减少重复序列化逻辑
+
+### P1
+
+- 补强 `glob` / `grep` 的真实使用覆盖
+- 继续审视 bash/awk 边界
+- 必要时增加轻量配置项，例如 context keep 百分比、read_file 上限
+
+### P2
+
+- 如果确实需要，再评估：
+  - skill tool 化
+  - 更丰富的搜索工具
+  - memory
+  - worktree / subagent
+
+## 不做什么
+
+这些不属于当前 core：
+
+- UI-first 设计
+- 重型 TUI
+- dashboard
+- 分布式 agent 平台
+- MCP/插件平台优先扩张
+- 复杂多代理编排
+
+核心优先级始终是：
+
+- 纯 bash
+- 0 额外运行时依赖
+- 功能完备前提下的精简与可维护性

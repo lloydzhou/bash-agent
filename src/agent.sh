@@ -790,6 +790,37 @@ tool_bash_exec() {
     printf '%s' "$output"
 }
 
+tool_glob() {
+    local input="$1"
+    local pattern path
+    pattern=$(extract_json_field "$input" "pattern")
+    path=$(extract_json_field "$input" "path")
+
+    [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
+    [[ -n "$path" ]] || path="."
+    [[ -d "$path" ]] || { echo "Error: directory not found: $path"; return 1; }
+    command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for glob"; return 1; }
+    rg --files "$path" -g "$pattern" 2>/dev/null || true
+}
+
+tool_grep() {
+    local input="$1"
+    local pattern path glob
+    pattern=$(extract_json_field "$input" "pattern")
+    path=$(extract_json_field "$input" "path")
+    glob=$(extract_json_field "$input" "glob")
+
+    [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
+    [[ -n "$path" ]] || path="."
+    [[ -e "$path" ]] || { echo "Error: path not found: $path"; return 1; }
+    command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for grep"; return 1; }
+    if [[ -n "$glob" ]]; then
+        rg -n --color never --glob "$glob" -- "$pattern" "$path" 2>/dev/null || true
+    else
+        rg -n --color never -- "$pattern" "$path" 2>/dev/null || true
+    fi
+}
+
 run_todo_write_awk() {
     local input="$1"
     printf '%s' "$input" | awk \
@@ -813,6 +844,8 @@ dispatch_tool() {
         write_file) tool_write_file "$input" ;;
         edit_file)  tool_edit_file "$input" ;;
         bash)       tool_bash_exec "$input" ;;
+        glob)       tool_glob "$input" ;;
+        grep)       tool_grep "$input" ;;
         todo_write) tool_todo_write "$input" ;;
         *)
             echo "Error: unknown tool: $name"
@@ -1030,9 +1063,9 @@ agent_loop() {
                         fi
                         human_last_char=$'\n'
                     fi
-                    local rest="${line#TOOL_START:}"
-                    cur_tool_name="${rest%%:*}"
-                    cur_tool_id="${rest#*:}"
+                    local start_json="${line#TOOL_START:}"
+                    cur_tool_name=$(extract_json_field "$start_json" "name")
+                    cur_tool_id=$(extract_json_field "$start_json" "id")
                     if is_stream_json_mode; then
                         emit_stream_event "{\"type\":\"tool_start\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\"}"
                     else

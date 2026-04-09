@@ -89,7 +89,7 @@ function parse_tool_calls(json,    pos, end, tc_json) {
 
         # If this is a new tool call (has id and name)
         if (tc_id != "" && name != "") {
-            printf "TOOL_START:%s:%s\n", name, tc_id
+            printf "TOOL_START:{\"name\":\"%s\",\"id\":\"%s\"}\n", name, tc_id
             fflush()
             tool_args[idx] = args
         } else if (args != "") {

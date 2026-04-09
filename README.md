@@ -87,7 +87,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 
 ## 内置工具
 
-- `read_file`：读取文件，默认最多 30KB
+- `read_file`：读取文件，默认最多 100KB
 - `write_file`：写文件，自动创建目录，默认最多 1MB
 - `edit_file`：按精确字符串替换编辑，默认只处理 1MB 以内文件
 - `bash`：执行命令，默认 600 秒超时，最多保留 50KB 输出
@@ -211,5 +211,3 @@ bash tests/test.sh
 ## 相关文档
 
 - [ARCHITECTURE.md](ARCHITECTURE.md)
-- [STREAM_JSON.md](STREAM_JSON.md)
-- [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)

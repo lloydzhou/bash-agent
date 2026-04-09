@@ -202,6 +202,62 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing read tool_result content')
             return
+        if b'GLOB_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_glob\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will search for matching files.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_glob_1\",\"name\":\"glob\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'pattern':'*.txt','path':'/tmp/bash-agent-glob-test'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'GLOB_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'alpha.txt' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_glob_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Glob complete.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing glob tool_result content')
+            return
+        if b'GREP_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_grep\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will search file contents.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_grep_1\",\"name\":\"grep\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'pattern':'needle','path':'/tmp/bash-agent-grep-test','glob':'*.txt'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'GREP_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'needle line' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_grep_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Grep complete.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing grep tool_result content')
+            return
         if b'EDIT_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -553,7 +609,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -q "TOOL_START:read_file" && echo "$output" | grep -q "TOOL_INPUT:" && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq 'TOOL_START:{"name":"read_file","id":"toolu_123"}' && echo "$output" | grep -q "TOOL_INPUT:" && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use"; ((PASS++)) || true
     else
         red "Claude tool_use"; echo "  Output: $output"; ((FAIL++)) || true
@@ -615,7 +671,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -q 'TOOL_START:bash:toolu_quoted' && echo "$output" | grep -Fq 'TOOL_INPUT:{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \"not found\""}' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq 'TOOL_START:{"name":"bash","id":"toolu_quoted"}' && echo "$output" | grep -Fq 'TOOL_INPUT:{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \"not found\""}' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use quoted command"; ((PASS++)) || true
     else
         red "Claude tool_use quoted command"; echo "  Output: $output"; ((FAIL++)) || true
@@ -956,9 +1012,43 @@ test_agent_read_file() {
     rm -f "$target_file"
 }
 
-# Test 19: Edit file end-to-end
+test_agent_glob() {
+    info "Test 19: Agent.sh glob"
+    local output target_dir
+    target_dir="/tmp/bash-agent-glob-test"
+    rm -rf "$target_dir"
+    mkdir -p "$target_dir"
+    printf 'a\n' > "$target_dir/alpha.txt"
+    printf 'b\n' > "$target_dir/beta.log"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'GLOB_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "Glob complete."; then
+        green "Agent glob"; ((PASS++)) || true
+    else
+        red "Agent glob"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+    rm -rf "$target_dir"
+}
+
+test_agent_grep() {
+    info "Test 20: Agent.sh grep"
+    local output target_dir
+    target_dir="/tmp/bash-agent-grep-test"
+    rm -rf "$target_dir"
+    mkdir -p "$target_dir"
+    printf 'needle line\n' > "$target_dir/alpha.txt"
+    printf 'other\n' > "$target_dir/beta.log"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'GREP_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "Grep complete."; then
+        green "Agent grep"; ((PASS++)) || true
+    else
+        red "Agent grep"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+    rm -rf "$target_dir"
+}
+
+# Test 21: Edit file end-to-end
 test_agent_edit_file() {
-    info "Test 19: Agent.sh edit_file"
+    info "Test 21: Agent.sh edit_file"
     local output target_file
     target_file="/tmp/bash-agent-edit-test.txt"
     printf 'prefix old-value suffix\n' > "$target_file"
@@ -972,7 +1062,7 @@ test_agent_edit_file() {
 }
 
 test_agent_edit_file_not_found() {
-    info "Test 20: Agent.sh edit_file missing old_string"
+    info "Test 22: Agent.sh edit_file missing old_string"
     local output target_file
     target_file="/tmp/bash-agent-edit-not-found.txt"
     printf 'prefix old-value suffix\n' > "$target_file"
@@ -986,7 +1076,7 @@ test_agent_edit_file_not_found() {
 }
 
 test_agent_edit_file_too_large() {
-    info "Test 21: Agent.sh edit_file file size guard"
+    info "Test 23: Agent.sh edit_file file size guard"
     local output target_file
     target_file="/tmp/bash-agent-edit-big.txt"
     head -c 1048577 /dev/zero | tr '\0' 'a' > "$target_file"
@@ -999,9 +1089,9 @@ test_agent_edit_file_too_large() {
     rm -f "$target_file"
 }
 
-# Test 22: Write file preserves newlines
+# Test 24: Write file preserves newlines
 test_agent_write_file_newlines() {
-    info "Test 22: Agent.sh write_file newline handling"
+    info "Test 24: Agent.sh write_file newline handling"
     local output target_file
     target_file="/tmp/bash-agent-write-test.txt"
     rm -f "$target_file"
@@ -1014,9 +1104,9 @@ test_agent_write_file_newlines() {
     rm -f "$target_file"
 }
 
-# Test 23: Bash tool preserves quoted command content
+# Test 25: Bash tool preserves quoted command content
 test_agent_bash_quotes() {
-    info "Test 23: Agent.sh bash tool quoted command"
+    info "Test 25: Agent.sh bash tool quoted command"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test -v 'BASH_QUOTE_MARKER' 2>&1) || true
     if echo "$output" | grep -q "hello" && ! echo "$output" | grep -q "no command provided"; then
@@ -1027,7 +1117,7 @@ test_agent_bash_quotes() {
 }
 
 test_agent_stream_tool_input() {
-    info "Test 24: Agent.sh stream-json tool input"
+    info "Test 26: Agent.sh stream-json tool input"
     local output
     output=$("$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_QUOTE_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"tool_input"' && \
@@ -1040,7 +1130,7 @@ test_agent_stream_tool_input() {
 }
 
 test_agent_stream_usage_event() {
-    info "Test 25: Agent.sh stream-json usage event"
+    info "Test 27: Agent.sh stream-json usage event"
     local output
     output=$("$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1) || true
     if echo "$output" | grep -q '"type":"usage"' && \
@@ -1141,6 +1231,8 @@ test_agent_skill_index
 test_agent_instruction_files
 test_agent_todo_state
 test_agent_read_file
+test_agent_glob
+test_agent_grep
 test_agent_edit_file
 test_agent_edit_file_not_found
 test_agent_edit_file_too_large

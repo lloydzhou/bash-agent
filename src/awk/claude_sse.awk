@@ -37,7 +37,7 @@ BEGIN {
             tool_name = extract_str(json, "name")
             tool_id = extract_str(json, "id")
             partial_json = ""
-            printf "TOOL_START:%s:%s\n", tool_name, tool_id
+            printf "TOOL_START:{\"name\":\"%s\",\"id\":\"%s\"}\n", tool_name, tool_id
             fflush()
         }
     }
