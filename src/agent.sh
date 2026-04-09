@@ -235,8 +235,9 @@ prompt_template_default() {
     cat <<'EOF'
 {{agent_identity_section}}
 {{core_rules_section}}
-{{skills_section}}
 {{instruction_files_section}}
+{{skill_index_section}}
+{{selected_skills_section}}
 {{stable_context_section}}
 {{recent_context_section}}
 {{task_instructions_section}}
@@ -255,45 +256,53 @@ emit_stream_event() {
 }
 
 build_system_prompt() {
-    local template agent_identity core_rules skills instruction_files stable_context recent_context task_instructions
-    local agent_identity_section core_rules_section skills_section instruction_files_section stable_context_section recent_context_section task_instructions_section
+    local template agent_identity core_rules instruction_files skill_index selected_skills stable_context recent_context task_instructions
+    local agent_identity_section core_rules_section instruction_files_section skill_index_section selected_skills_section stable_context_section recent_context_section task_instructions_section
     template=$(prompt_template_default)
     BASE_SYSTEM_PROMPT="$template"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
-    skills=$(build_skills_section)
     instruction_files=$(build_instruction_files_section)
+    skill_index=$(build_skill_index_section)
+    selected_skills=$(build_selected_skills_section)
     stable_context=$(build_stable_context_section)
     recent_context=$(build_recent_context_section)
     task_instructions=$(build_task_instructions_section)
     agent_identity_section=$(wrap_section "agent-identity" "$agent_identity")
     core_rules_section=$(wrap_section "rules" "$core_rules")
-    skills_section=$(wrap_section "skills" "$skills")
     instruction_files_section=$(wrap_section "instruction-files" "$instruction_files")
+    skill_index_section=$(wrap_section "skill-index" "$skill_index")
+    selected_skills_section=$(wrap_section "selected-skills" "$selected_skills")
     stable_context_section=$(wrap_section "context-summary" "$stable_context")
     recent_context_section=$(wrap_section "recent-messages" "$recent_context")
     task_instructions_section=$(wrap_section "instructions" "$task_instructions")
     render_template "$template" \
         "agent_identity_section" "$agent_identity_section" \
         "core_rules_section" "$core_rules_section" \
-        "skills_section" "$skills_section" \
         "instruction_files_section" "$instruction_files_section" \
+        "skill_index_section" "$skill_index_section" \
+        "selected_skills_section" "$selected_skills_section" \
         "stable_context_section" "$stable_context_section" \
         "recent_context_section" "$recent_context_section" \
         "task_instructions_section" "$task_instructions_section"
 }
 
-find_skill_file() {
-    local skill_name="$1" cwd base candidate
+find_skill_base_dir() {
+    local cwd
     cwd="${PWD:-$(pwd)}"
-    for base in "$cwd/.claude/skills" "$cwd/skills"; do
-        candidate="$base/$skill_name/SKILL.md"
-        if [[ -f "$candidate" ]]; then
-            printf '%s' "$candidate"
-            return 0
-        fi
-    done
+    if [[ -d "$cwd/.claude/skills" ]]; then
+        printf '%s' "$cwd/.claude/skills"
+        return 0
+    fi
     return 1
+}
+
+find_skill_file() {
+    local skill_name="$1" base candidate
+    base=$(find_skill_base_dir) || return 1
+    candidate="$base/$skill_name/SKILL.md"
+    [[ -f "$candidate" ]] || return 1
+    printf '%s' "$candidate"
 }
 
 load_skill_content() {
@@ -305,7 +314,53 @@ load_skill_content() {
     printf 'Base directory for this skill: %s\n\n%s' "$skill_dir" "$content"
 }
 
-build_skills_section() {
+extract_skill_summary() {
+    local skill_file="$1"
+    awk '
+    BEGIN {
+        heading = ""
+        summary = ""
+    }
+    /^#[[:space:]]+/ {
+        if (heading == "") {
+            heading = $0
+            sub(/^#[[:space:]]+/, "", heading)
+        }
+        next
+    }
+    /^[[:space:]]*$/ { next }
+    {
+        if (summary == "") {
+            summary = $0
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", summary)
+        }
+    }
+    END {
+        if (summary != "") print summary
+        else if (heading != "") print heading
+    }' "$skill_file"
+}
+
+build_skill_index_section() {
+    local base skill_file skill_name summary section=""
+    base=$(find_skill_base_dir) || { printf ''; return 0; }
+
+    for skill_file in "$base"/*/SKILL.md; do
+        [[ -f "$skill_file" ]] || continue
+        skill_name=$(basename "$(dirname "$skill_file")")
+        summary=$(extract_skill_summary "$skill_file")
+        if [[ -n "$summary" ]]; then
+            section+="- ${skill_name}: ${summary}"$'\n'
+        else
+            section+="- ${skill_name}"$'\n'
+        fi
+    done
+
+    section="${section%$'\n'}"
+    printf '%s' "$section"
+}
+
+build_selected_skills_section() {
     local section="" skill_name skill_content
 
     if [[ ${#SKILL_NAMES[@]} -eq 0 ]]; then
@@ -314,7 +369,7 @@ build_skills_section() {
     fi
 
     for skill_name in "${SKILL_NAMES[@]}"; do
-        skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md or skills/$skill_name/SKILL.md)"
+        skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md)"
         section+="$(wrap_named_section "skill" "$skill_name" "$skill_content")"$'\n'
     done
     section="${section%$'\n'}"

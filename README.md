@@ -134,13 +134,13 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 
 ## Skills
 
-技能文件按项目目录加载，默认查找顺序是：
+技能文件按项目目录加载，只查找：
 
 - `.claude/skills/<name>/SKILL.md`
-- `skills/<name>/SKILL.md`
 
-通过 `--skill NAME` 可以注入一个或多个技能，skills 会作为独立 section 插入 system prompt。
-`SKILL.md` 是入口文件，但注入时会附带 skill 根目录，并支持在内容里使用 `${BASH_AGENT_SKILL_DIR}` 引用同目录下的脚本、模板或其他资源文件。
+默认会加载一个轻量的 skill index，只包含 `.claude/skills/*/SKILL.md` 的简短摘要。
+通过 `--skill NAME` 可以额外注入一个或多个完整技能，selected skills 会作为独立 section 插入 system prompt。
+`SKILL.md` 是入口文件，但完整加载时会附带 skill 根目录，并支持在内容里使用 `${BASH_AGENT_SKILL_DIR}` 引用同目录下的脚本、模板或其他资源文件。
 
 ## Instruction Files
 

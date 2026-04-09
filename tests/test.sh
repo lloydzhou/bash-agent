@@ -122,6 +122,20 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        if b'SKILL_INDEX_MARKER' in body:
+            if path.startswith('/v1/messages'):
+                if b'test-skill-index: Skill index summary marker' in body and b'Selected-only skill marker' not in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_skill_index\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Skill index loaded.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'skill index missing or selected skill content leaked')
+            return
         if b'INSTRUCTION_FILE_MARKER' in body:
             if path.startswith('/v1/messages'):
                 if b'Global agent instruction marker' in body and b'Project agent instruction marker' in body:
@@ -634,8 +648,30 @@ EOF
     fi
 }
 
+test_agent_skill_index() {
+    info "Test 12: Agent.sh skill index"
+    local skill_dir skill_file output
+    skill_dir="$ROOT_DIR/.claude/skills/test-skill-index"
+    skill_file="$skill_dir/SKILL.md"
+    mkdir -p "$skill_dir"
+    cat > "$skill_file" <<'EOF'
+# test-skill-index
+
+Skill index summary marker
+
+Selected-only skill marker
+EOF
+    output=$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'SKILL_INDEX_MARKER' 2>&1) || true
+    rm -rf "$skill_dir"
+    if echo "$output" | grep -q "Skill index loaded."; then
+        green "Agent skill index"; ((PASS++)) || true
+    else
+        red "Agent skill index"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 test_agent_instruction_files() {
-    info "Test 12: Agent.sh instruction file injection"
+    info "Test 13: Agent.sh instruction file injection"
     local home_dir global_dir project_file output
     home_dir=$(mktemp -d)
     global_dir="$home_dir/.bash-agent"
@@ -657,9 +693,9 @@ EOF
     fi
 }
 
-# Test 12: Read file end-to-end
+# Test 14: Read file end-to-end
 test_agent_read_file() {
-    info "Test 13: Agent.sh read_file"
+    info "Test 14: Agent.sh read_file"
     local output target_file
     target_file="/tmp/bash-agent-read-test.txt"
     printf 'read-test-content\n' > "$target_file"
@@ -672,9 +708,9 @@ test_agent_read_file() {
     rm -f "$target_file"
 }
 
-# Test 13: Edit file end-to-end
+# Test 15: Edit file end-to-end
 test_agent_edit_file() {
-    info "Test 14: Agent.sh edit_file"
+    info "Test 15: Agent.sh edit_file"
     local output target_file
     target_file="/tmp/bash-agent-edit-test.txt"
     printf 'prefix old-value suffix\n' > "$target_file"
@@ -687,9 +723,9 @@ test_agent_edit_file() {
     rm -f "$target_file"
 }
 
-# Test 14: Write file preserves newlines
+# Test 16: Write file preserves newlines
 test_agent_write_file_newlines() {
-    info "Test 15: Agent.sh write_file newline handling"
+    info "Test 16: Agent.sh write_file newline handling"
     local output target_file
     target_file="/tmp/bash-agent-write-test.txt"
     rm -f "$target_file"
@@ -702,9 +738,9 @@ test_agent_write_file_newlines() {
     rm -f "$target_file"
 }
 
-# Test 15: Bash tool preserves quoted command content
+# Test 17: Bash tool preserves quoted command content
 test_agent_bash_quotes() {
-    info "Test 16: Agent.sh bash tool quoted command"
+    info "Test 17: Agent.sh bash tool quoted command"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test -v 'BASH_QUOTE_MARKER' 2>&1) || true
     if echo "$output" | grep -q "hello" && ! echo "$output" | grep -q "no command provided"; then
@@ -715,7 +751,7 @@ test_agent_bash_quotes() {
 }
 
 test_agent_tool_result_multiline_url() {
-    info "Test 17: Agent.sh tool_result multiline URL"
+    info "Test 18: Agent.sh tool_result multiline URL"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'TOOL_RESULT_URL_MARKER' 2>&1) || true
     if echo "$output" | grep -q "Final answer after tool result"; then
@@ -726,7 +762,7 @@ test_agent_tool_result_multiline_url() {
 }
 
 test_agent_tool_result_strips_ansi() {
-    info "Test 18: Agent.sh tool_result strips ANSI"
+    info "Test 19: Agent.sh tool_result strips ANSI"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'ANSI_TOOL_RESULT_MARKER' 2>&1) || true
     if echo "$output" | grep -q "ANSI output sanitized."; then
@@ -737,7 +773,7 @@ test_agent_tool_result_strips_ansi() {
 }
 
 test_agent_multiple_tool_calls() {
-    info "Test 19: Agent.sh multiple tool calls in one turn"
+    info "Test 20: Agent.sh multiple tool calls in one turn"
     local output target_file
     target_file="/tmp/bash-agent-multi-read.txt"
     printf 'multi-read-content\n' > "$target_file"
@@ -768,6 +804,7 @@ test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_compact
 test_agent_skill_injection
+test_agent_skill_index
 test_agent_instruction_files
 test_agent_read_file
 test_agent_edit_file
