@@ -153,7 +153,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will track the work and start with repository inspection.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_todo_write_1\",\"name\":\"todo_write\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_todo_write_1\",\"name\":\"TodoWrite\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'todos':[{'content':'inspect repository','status':'pending'},{'content':'run tests','status':'pending'},{'content':'fix the first failure','status':'pending'}]})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":3}}\n\n',
@@ -162,7 +162,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'TODO_WRITE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'OK: updated session todo list' in body:
+                if b'- [ ] inspect repository' in body and b'- [ ] run tests' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_todo_tool_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -172,7 +172,7 @@ class H(http.server.BaseHTTPRequestHandler):
                         'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                     ]: w.write(c.encode()); w.flush()
                 else:
-                    self.send_response(422); self.end_headers(); w.write(b'missing todo_write tool result content')
+                    self.send_response(422); self.end_headers(); w.write(b'missing TodoWrite tool result content')
             return
         if b'READ_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -181,7 +181,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will read the file now.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_read_1\",\"name\":\"read_file\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_read_1\",\"name\":\"Read\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-read-test.txt'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":3}}\n\n',
@@ -209,7 +209,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will search for matching files.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_glob_1\",\"name\":\"glob\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_glob_1\",\"name\":\"Glob\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'pattern':'*.txt','path':'/tmp/bash-agent-glob-test'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -228,7 +228,7 @@ class H(http.server.BaseHTTPRequestHandler):
                         'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                     ]: w.write(c.encode()); w.flush()
                 else:
-                    self.send_response(422); self.end_headers(); w.write(b'missing glob tool_result content')
+                    self.send_response(422); self.end_headers(); w.write(b'missing Glob tool_result content')
             return
         if b'GREP_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -237,7 +237,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will search file contents.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_grep_1\",\"name\":\"grep\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_grep_1\",\"name\":\"Grep\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'pattern':'needle','path':'/tmp/bash-agent-grep-test','glob':'*.txt'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -256,7 +256,7 @@ class H(http.server.BaseHTTPRequestHandler):
                         'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                     ]: w.write(c.encode()); w.flush()
                 else:
-                    self.send_response(422); self.end_headers(); w.write(b'missing grep tool_result content')
+                    self.send_response(422); self.end_headers(); w.write(b'missing Grep tool_result content')
             return
         if b'EDIT_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -265,7 +265,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will edit the file now.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_1\",\"name\":\"edit_file\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_1\",\"name\":\"Edit\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-edit-test.txt','old_string':'old-value','new_string':'new-value'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":3}}\n\n',
@@ -293,7 +293,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will edit the file now.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_nf\",\"name\":\"edit_file\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_nf\",\"name\":\"Edit\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-edit-not-found.txt','old_string':'missing-value','new_string':'new-value'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":3}}\n\n',
@@ -321,7 +321,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will edit the file now.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_big\",\"name\":\"edit_file\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_big\",\"name\":\"Edit\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-edit-big.txt','old_string':'tiny','new_string':'replaced'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -349,7 +349,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will write the file now.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_write_1\",\"name\":\"write_file\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_write_1\",\"name\":\"Write\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-write-test.txt','content':'line1\nline2\nline3'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -369,7 +369,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will write the unicode file now.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_write_unicode\",\"name\":\"write_file\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_write_unicode\",\"name\":\"Write\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-write-unicode.txt','content':'中文\nline2'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -411,7 +411,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Running quoted bash command.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bash_1\",\"name\":\"bash\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bash_1\",\"name\":\"Bash\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'echo ' + chr(34) + 'hello' + chr(34)})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":3}}\n\n',
@@ -431,7 +431,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Running URL-producing command.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_url_1\",\"name\":\"bash\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_url_1\",\"name\":\"Bash\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'echo Name: X.jpeg && echo URL: https://example.com/x.jpeg?foo=1&bar=two && echo Local: /tmp/X.jpeg'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -456,7 +456,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Running ANSI output command.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_ansi_1\",\"name\":\"bash\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_ansi_1\",\"name\":\"Bash\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'printf \"\\033[32mGREEN\\033[0m\\nplain\\n\"'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -484,10 +484,10 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Running two tools.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_multi_read\",\"name\":\"read_file\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_multi_read\",\"name\":\"Read\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-multi-read.txt'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_multi_bash\",\"name\":\"bash\",\"input\":{}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_multi_bash\",\"name\":\"Bash\",\"input\":{}}}\n\n',
                     'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':2,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'echo multi-bash-ok'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":2}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
@@ -594,7 +594,7 @@ event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
 event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_123","name":"read_file","input":{}}}
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_123","name":"Read","input":{}}}
 
 event: content_block_delta
 data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/etc/hostname\"}"}}
@@ -609,7 +609,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq 'TOOL_START:{"name":"read_file","id":"toolu_123"}' && echo "$output" | grep -q "TOOL_INPUT:" && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq 'TOOL_CALL:{"name":"Read","id":"toolu_123","input":{"path":"/etc/hostname"}}' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use"; ((PASS++)) || true
     else
         red "Claude tool_use"; echo "  Output: $output"; ((FAIL++)) || true
@@ -656,7 +656,7 @@ event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
 event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_quoted","name":"bash","input":{}}}
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_quoted","name":"Bash","input":{}}}
 
 event: content_block_delta
 data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"cd /tmp && ls generate.mjs 2>/dev/null || echo \\\"not found\\\"\"}"}}
@@ -671,7 +671,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq 'TOOL_START:{"name":"bash","id":"toolu_quoted"}' && echo "$output" | grep -Fq 'TOOL_INPUT:{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \"not found\""}' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq 'TOOL_CALL:{"name":"Bash","id":"toolu_quoted","input":{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \"not found\""}}' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use quoted command"; ((PASS++)) || true
     else
         red "Claude tool_use quoted command"; echo "  Output: $output"; ((FAIL++)) || true
@@ -696,7 +696,7 @@ event: content_block_stop
 data: {"type":"content_block_stop","index":0}
 
 event: content_block_start
-data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_unicode","name":"bash","input":{}}}
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_unicode","name":"Bash","input":{}}}
 
 event: content_block_delta
 data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"echo \u4e2d\u6587\"}"}}
@@ -711,7 +711,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -q "TEXT:中文" && echo "$output" | grep -Fq 'TOOL_INPUT:{"command":"echo 中文"}' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -q "TEXT:中文" && echo "$output" | grep -Fq 'TOOL_CALL:{"name":"Bash","id":"toolu_unicode","input":{"command":"echo 中文"}}' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude unicode parsing"; ((PASS++)) || true
     else
         red "Claude unicode parsing"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1116,16 +1116,16 @@ test_agent_bash_quotes() {
     fi
 }
 
-test_agent_stream_tool_input() {
-    info "Test 26: Agent.sh stream-json tool input"
+test_agent_stream_tool_call() {
+    info "Test 26: Agent.sh stream-json tool call"
     local output
     output=$("$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_QUOTE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q '"type":"tool_input"' && \
+    if echo "$output" | grep -q '"type":"tool_call"' && \
        echo "$output" | grep -Fq 'echo \"hello\"' && \
        echo "$output" | grep -q '"cache_input_tokens":3'; then
-        green "Agent stream-json tool input"; ((PASS++)) || true
+        green "Agent stream-json tool call"; ((PASS++)) || true
     else
-        red "Agent stream-json tool input"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent stream-json tool call"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -1238,7 +1238,7 @@ test_agent_edit_file_not_found
 test_agent_edit_file_too_large
 test_agent_write_file_newlines
 test_agent_bash_quotes
-test_agent_stream_tool_input
+test_agent_stream_tool_call
 test_agent_stream_usage_event
 test_agent_tool_result_multiline_url
 test_agent_tool_result_strips_ansi

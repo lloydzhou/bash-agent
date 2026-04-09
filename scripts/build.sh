@@ -194,6 +194,10 @@ content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('TOOLS_JSON_FILE=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
+content = content.replace(
+    'printf \'%s\' "$tool_call_json" | awk -v json_mode="extract_field_raw" -v json_field_key="input" -f "$AWK_DIR/json.awk"',
+    'printf \'%s\' "$tool_call_json" | awk -v json_mode="extract_field_raw" -v json_field_key="input" "${_AWK_JSON}"'
+)
 
 # --- Write output ---
 with open(output_path, 'w') as f:

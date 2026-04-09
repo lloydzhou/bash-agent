@@ -1,6 +1,6 @@
 # claude_sse.awk — Anthropic Claude SSE stream parser
 # Input: SSE lines (event:, data:)
-# Output: Unified protocol (TEXT:, TOOL_START:, TOOL_INPUT:, USAGE:, STOP:, ERROR:)
+# Output: Unified protocol (TEXT:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
 # Requires: awk -v verbose=true/false -f common.awk -f claude_sse.awk
 
 BEGIN {
@@ -37,8 +37,6 @@ BEGIN {
             tool_name = extract_str(json, "name")
             tool_id = extract_str(json, "id")
             partial_json = ""
-            printf "TOOL_START:{\"name\":\"%s\",\"id\":\"%s\"}\n", tool_name, tool_id
-            fflush()
         }
     }
     else if (event == "content_block_delta") {
@@ -58,10 +56,7 @@ BEGIN {
     }
     else if (event == "content_block_stop") {
         if (block_type == "tool") {
-            # Emit TOOL_INPUT as a JSON object text fragment, not a quoted JSON string.
-            # Downstream shell code should treat this as structured JSON and avoid
-            # decoding the whole payload a second time.
-            printf "TOOL_INPUT:%s\n", unescape_json_string(partial_json)
+            printf "TOOL_CALL:{\"name\":\"%s\",\"id\":\"%s\",\"input\":%s}\n", tool_name, tool_id, unescape_json_string(partial_json)
             fflush()
         }
         block_type = ""

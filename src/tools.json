@@ -1,7 +1,7 @@
 [
   {
-    "name": "read_file",
-    "description": "Read the contents of a file. Returns the file content as text.",
+    "name": "Read",
+    "description": "Read a file from the local filesystem.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -14,8 +14,8 @@
     }
   },
   {
-    "name": "write_file",
-    "description": "Write content to a file. Creates parent directories if needed.",
+    "name": "Write",
+    "description": "Write a file to the local filesystem.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -32,7 +32,7 @@
     }
   },
   {
-    "name": "edit_file",
+    "name": "Edit",
     "description": "Edit a file by replacing an exact string match with a new string.",
     "input_schema": {
       "type": "object",
@@ -54,7 +54,7 @@
     }
   },
   {
-    "name": "bash",
+    "name": "Bash",
     "description": "Execute a bash command. Returns stdout and stderr.",
     "input_schema": {
       "type": "object",
@@ -68,8 +68,8 @@
     }
   },
   {
-    "name": "glob",
-    "description": "Find files by glob pattern using rg --files.",
+    "name": "Glob",
+    "description": "Fast file pattern matching tool that works with any codebase size.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -86,8 +86,8 @@
     }
   },
   {
-    "name": "grep",
-    "description": "Search file contents using ripgrep and return matching lines.",
+    "name": "Grep",
+    "description": "A powerful search tool built on ripgrep.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -108,8 +108,8 @@
     }
   },
   {
-    "name": "todo_write",
-    "description": "Create or update the full session todo checklist for a complex multi-step task. Use proactively for non-trivial implementation, debugging, refactoring, or review work. Do not use for trivial single-step or purely informational requests. Keep the checklist short and concrete, and prefer exactly one in_progress item when actively working.",
+    "name": "TodoWrite",
+    "description": "Create and manage a structured task list for the current coding session. Use proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file work. Do not use for trivial single-step or purely informational requests.",
     "input_schema": {
       "type": "object",
       "properties": {

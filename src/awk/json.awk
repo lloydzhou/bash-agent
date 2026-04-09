@@ -332,4 +332,17 @@ BEGIN {
         }
         exit 0
     }
+    if (json_mode == "extract_field_raw") {
+        if (json_input == "") {
+            if ((getline json_input) < 0) json_input = ""
+        }
+        raw = extract_value(json_input, json_field_key)
+        if (raw == "") {
+            print ""
+            exit 0
+        }
+        gsub(/^[ \t]+|[ \t]+$/, "", raw)
+        print raw
+        exit 0
+    }
 }

@@ -75,14 +75,52 @@ log_tool() {
 
 log_tool_result() {
     local name="$1" output="$2"
-    printf '\033[33m[tool] %s result\033[0m\n' "$name" >&2
     if [[ -n "$output" ]]; then
-        printf '\n%s\n' "$output" >&2
+        printf '%s\n' "$output" >&2
     fi
 }
 
 log_verbose() {
     $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
+}
+
+tool_call_summary() {
+    local name="$1" input="$2" label="" value=""
+    case "$name" in
+        Read|Write)
+            value=$(extract_json_field "$input" "path")
+            [[ -n "$value" ]] && label="$value"
+            ;;
+        Edit)
+            value=$(extract_json_field "$input" "path")
+            [[ -n "$value" ]] && label="$value"
+            ;;
+        Glob)
+            value=$(extract_json_field "$input" "pattern")
+            [[ -n "$value" ]] && label="$value"
+            ;;
+        Grep)
+            value=$(extract_json_field "$input" "pattern")
+            [[ -n "$value" ]] && label="$value"
+            ;;
+        Bash)
+            value=$(extract_json_field "$input" "command")
+            if [[ -n "$value" ]]; then
+                value="${value//$'\n'/ }"
+                if (( ${#value} > 80 )); then
+                    value="${value:0:77}..."
+                fi
+                label="$value"
+            fi
+            ;;
+        TodoWrite)
+            ;;
+    esac
+    if [[ -n "$label" ]]; then
+        printf '%s(%s)' "$name" "$label"
+    else
+        printf '%s' "$name"
+    fi
 }
 
 run_with_timeout() {
@@ -217,7 +255,7 @@ build_system_prompt() {
     local agent_identity core_rules todo_guidance instruction_files skill_index selected_skills stable_context todo task_instructions
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
-    todo_guidance=$'- Use todo_write proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use todo_write for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use todo_write, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
+    todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
 
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
@@ -361,10 +399,9 @@ unescape_display_to_var() {
 
 # Extract a field value from JSON using awk
 extract_json_field() {
-    local json="$1" key="$2"
-    printf '%s' "$json" | awk \
+    printf '%s' "$1" | awk \
         -v json_mode="extract_field" \
-        -v json_field_key="$key" \
+        -v json_field_key="$2" \
         -f "$AWK_DIR/json.awk"
 }
 
@@ -711,7 +748,7 @@ generate_tool_defs() {
 # Section 5: Tool Implementations
 # ============================================================================
 
-tool_read_file() {
+tool_read() {
     local input="$1"
     local path size
     path=$(extract_json_field "$input" "path")
@@ -727,7 +764,7 @@ tool_read_file() {
     fi
 }
 
-tool_write_file() {
+tool_write() {
     local input="$1"
     local path content content_size
     path=$(extract_json_field "$input" "path")
@@ -745,7 +782,7 @@ tool_write_file() {
     echo "OK: wrote $(wc -c < "$path" 2>/dev/null || echo '?') bytes to $path"
 }
 
-tool_edit_file() {
+tool_edit() {
     local input="$1"
     local path tmp meta
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
@@ -769,7 +806,7 @@ tool_edit_file() {
     fi
 }
 
-tool_bash_exec() {
+tool_bash() {
     local input="$1"
     local cmd script_file
     cmd=$(extract_json_field "$input" "command")
@@ -828,25 +865,25 @@ run_todo_write_awk() {
         -f "$AWK_DIR/todo_write.awk"
 }
 
-tool_todo_write() {
+tool_todo() {
     local input="$1"
     local checklist
     checklist=$(run_todo_write_awk "$input") || return 1
     printf '%s\n' "$checklist" > "$TODO_FILE"
     session_append_line "$(build_todo_event_json "$checklist")"
-    echo "OK: updated session todo list"
+    printf '%s' "$checklist"
 }
 
 dispatch_tool() {
     local name="$1" input="$2"
     case "$name" in
-        read_file)  tool_read_file "$input" ;;
-        write_file) tool_write_file "$input" ;;
-        edit_file)  tool_edit_file "$input" ;;
-        bash)       tool_bash_exec "$input" ;;
-        glob)       tool_glob "$input" ;;
-        grep)       tool_grep "$input" ;;
-        todo_write) tool_todo_write "$input" ;;
+        Read)      tool_read "$input" ;;
+        Write)     tool_write "$input" ;;
+        Edit)      tool_edit "$input" ;;
+        Bash)      tool_bash "$input" ;;
+        Glob)      tool_glob "$input" ;;
+        Grep)      tool_grep "$input" ;;
+        TodoWrite) tool_todo "$input" ;;
         *)
             echo "Error: unknown tool: $name"
             return 1
@@ -1056,26 +1093,21 @@ agent_loop() {
                     fi
                     text+="$d"
                     ;;
-                TOOL_START:*)
+                TOOL_CALL:*)
                     if ! is_stream_json_mode; then
                         if [[ "$human_last_char" != $'\n' ]]; then
                             printf '\n'
                         fi
                         human_last_char=$'\n'
                     fi
-                    local start_json="${line#TOOL_START:}"
-                    cur_tool_name=$(extract_json_field "$start_json" "name")
-                    cur_tool_id=$(extract_json_field "$start_json" "id")
+                    local tool_call_json="${line#TOOL_CALL:}"
+                    cur_tool_name=$(extract_json_field "$tool_call_json" "name")
+                    cur_tool_id=$(extract_json_field "$tool_call_json" "id")
+                    input=$(printf '%s' "$tool_call_json" | awk -v json_mode="extract_field_raw" -v json_field_key="input" -f "$AWK_DIR/json.awk")
                     if is_stream_json_mode; then
-                        emit_stream_event "{\"type\":\"tool_start\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\"}"
+                        emit_stream_event "{\"type\":\"tool_call\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\",\"input\":$input}"
                     else
-                        log_tool "$cur_tool_name"
-                    fi
-                    ;;
-                TOOL_INPUT:*)
-                    input="${line#TOOL_INPUT:}"
-                    if is_stream_json_mode && [[ -n "$input" ]]; then
-                        emit_stream_event "{\"type\":\"tool_input\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\",\"input\":$input}"
+                        log_tool "$(tool_call_summary "$cur_tool_name" "$input")"
                     fi
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
                     ;;
@@ -1163,7 +1195,7 @@ execute_tool_calls() {
 
         # Print tool_result event in stream-json mode
         if is_stream_json_mode; then
-            if [[ "$name" == "todo_write" && $tool_rc -eq 0 && -s "$TODO_FILE" ]]; then
+            if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
                 emit_stream_event "$(build_todo_event_json "$(cat "$TODO_FILE")")"
             fi
             emit_stream_event "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$escaped\"}"

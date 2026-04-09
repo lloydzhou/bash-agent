@@ -1,6 +1,6 @@
 # openai_sse.awk — OpenAI Chat Completions SSE stream parser
 # Input: SSE lines (data:)
-# Output: Unified protocol (TEXT:, TOOL_START:, TOOL_INPUT:, USAGE:, STOP:, ERROR:)
+# Output: Unified protocol (TEXT:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
 # Requires: awk -f common.awk -f openai_sse.awk
 
 BEGIN {
@@ -89,8 +89,8 @@ function parse_tool_calls(json,    pos, end, tc_json) {
 
         # If this is a new tool call (has id and name)
         if (tc_id != "" && name != "") {
-            printf "TOOL_START:{\"name\":\"%s\",\"id\":\"%s\"}\n", name, tc_id
-            fflush()
+            tool_name[idx] = name
+            tool_id[idx] = tc_id
             tool_args[idx] = args
         } else if (args != "") {
             # Continuation of arguments
@@ -103,11 +103,10 @@ function parse_tool_calls(json,    pos, end, tc_json) {
 
         # OpenAI streams function.arguments as an escaped JSON string. Accumulate the
         # string fragments first, then decode that outer string once before emitting
-        # TOOL_INPUT as JSON object text.
-        # Check if arguments are complete (finish_reason = tool_calls or block end)
+        # TOOL_CALL as JSON object text.
         if (fr != "" || tc ~ /\}\]/) {
             if (idx in tool_args && tool_args[idx] != "") {
-                printf "TOOL_INPUT:%s\n", unescape_json_string(tool_args[idx])
+                printf "TOOL_CALL:{\"name\":\"%s\",\"id\":\"%s\",\"input\":%s}\n", tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx])
                 fflush()
                 tool_args[idx] = ""
             }

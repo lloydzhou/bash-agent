@@ -68,7 +68,7 @@ src/awk/*
 - `\uXXXX` 解码
 - SSE 事件解析
 - OpenAI/Claude 消息格式转换
-- `edit_file` / `todo_write` 等需要文本变换的 tool 逻辑
+- `Edit` / `TodoWrite` 等需要文本变换的 tool 逻辑
 
 ## 当前核心能力
 
@@ -92,7 +92,7 @@ session 数据按当前项目目录归档：
 - `*.summary.txt`
   - compact 后留下的历史摘要
 - `*.todo.md`
-  - 当前 session 的待办清单，由 `todo_write` 维护
+  - 当前 session 的待办清单，由 `TodoWrite` 维护
 
 ### 2. Context / compact
 
@@ -164,7 +164,7 @@ skills 当前只读取项目目录下：
 
 现在的设计是：
 
-- 使用内置 tool：`todo_write`
+- 使用内置 tool：`TodoWrite`
 - `todo.md` 是 session 级状态
 - 模型通过 tool 显式更新 checklist
 - host 只负责保存状态
@@ -175,13 +175,13 @@ skills 当前只读取项目目录下：
 
 当前传给模型的内置 tools：
 
-- `read_file`
-- `write_file`
-- `edit_file`
-- `bash`
-- `glob`
-- `grep`
-- `todo_write`
+- `Read`
+- `Write`
+- `Edit`
+- `Bash`
+- `Glob`
+- `Grep`
+- `TodoWrite`
 
 设计原则：
 
@@ -190,11 +190,11 @@ skills 当前只读取项目目录下：
 - tool 输出尽量纯文本
 - `tool_result` 写回前先清理 ANSI 控制字符
 
-`glob` / `grep` 当前是最小 `rg` 版：
+`Glob` / `Grep` 当前是最小 `rg` 版：
 
-- `glob`
+- `Glob`
   - 用 `rg --files -g`
-- `grep`
+- `Grep`
   - 用 `rg -n`
 - 没有 `rg` 就报错，不做复杂 fallback
 
@@ -229,8 +229,7 @@ skills 当前只读取项目目录下：
 内部 SSE 解析结果会先转成单行协议，例如：
 
 - `TEXT:...`
-- `TOOL_START:name:id`
-- `TOOL_INPUT:{...}`
+- `TOOL_CALL:{"name":"...","id":"...","input":{...}}`
 - `USAGE:{...}`
 - `STOP:...`
 - `ERROR:...`
@@ -243,7 +242,7 @@ skills 当前只读取项目目录下：
 
 当前已经统一的点：
 
-- `TOOL_INPUT` 走 JSON object
+- `TOOL_CALL` 走 JSON object
 - `USAGE` 也走 JSON object
 - `TEXT` 仍然走转义后的单行文本
 
@@ -254,8 +253,7 @@ skills 当前只读取项目目录下：
 当前事件类型：
 
 - `text`
-- `tool_start`
-- `tool_input`
+- `tool_call`
 - `todo_update`
 - `tool_result`
 - `usage`
@@ -293,11 +291,11 @@ skills 当前只读取项目目录下：
 - 会透传错误体
 - 便于定位兼容层问题
 
-### `read_file`
+### `Read`
 
-`read_file` 默认上限已收紧到 `30KB`：
+`Read` 默认上限当前是 `100KB`：
 
-- 大文件更不容易直接把单轮请求顶爆
+- 大文件仍然可能显著放大单轮请求体
 - 如果文件更大，会返回截断提示
 
 ## 当前代码边界判断
@@ -315,8 +313,8 @@ skills 当前只读取项目目录下：
 - JSON 提取
 - Unicode 解码
 - SSE parser
-- `todo_write` 规范化
-- `edit_file` 内容替换
+- `TodoWrite` 规范化
+- `Edit` 内容替换
 - `skill`/plan 这类文本抽取逻辑
 
 ## 当前项目状态
@@ -325,7 +323,7 @@ skills 当前只读取项目目录下：
 
 - session 持久化
 - compact
-- todo_write
+- TodoWrite
 - skills
 - stream-json
 - source/dist build
@@ -347,7 +345,8 @@ skills 当前只读取项目目录下：
 
 - 补强 `glob` / `grep` 的真实使用覆盖
 - 继续审视 bash/awk 边界
-- 必要时增加轻量配置项，例如 context keep 百分比、read_file 上限
+- 必要时增加轻量配置项，例如 context keep 百分比、Read 上限
+- 如果 provider 对输入大小更敏感，再考虑按模型侧限制进一步收紧 `Read`
 
 ### P2
 
