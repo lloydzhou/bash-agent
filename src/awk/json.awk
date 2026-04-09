@@ -247,6 +247,34 @@ function escape_protocol_text(s,    out, i, c) {
     return out
 }
 
+function escape_json_string(s,    out, i, c, code, hex) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\"") out = out "\\\""
+        else if (c == "\\") out = out "\\\\"
+        else if (c == "\b") out = out "\\b"
+        else if (c == "\f") out = out "\\f"
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else {
+            code = index(sprintf("%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c%c",
+                0, 1, 2, 3, 4, 5, 6, 7,
+                8, 9, 10, 11, 12, 13, 14, 15,
+                16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31), c) - 1
+            if (code >= 0) {
+                hex = sprintf("%04x", code)
+                out = out "\\u" hex
+            } else {
+                out = out c
+            }
+        }
+    }
+    return out
+}
+
 # Extract a JSON string value while preserving escape sequences.
 # Unlike extract_escaped(), this correctly handles sequences such as \\\".
 function extract_json_string(json, key,    pos, rest, i, c, result, bs) {
@@ -274,6 +302,19 @@ function extract_json_string(json, key,    pos, rest, i, c, result, bs) {
 
 # Extract a field value and strip surrounding quotes if it is a JSON string.
 BEGIN {
+    if (json_mode == "escape_string") {
+        if (json_input == "") {
+            if ((getline json_input) < 0) {
+                json_input = ""
+            } else {
+                while ((getline _line) > 0) {
+                    json_input = json_input "\n" _line
+                }
+            }
+        }
+        print escape_json_string(json_input)
+        exit 0
+    }
     if (json_mode == "extract_field") {
         if (json_input == "") {
             if ((getline json_input) < 0) json_input = ""

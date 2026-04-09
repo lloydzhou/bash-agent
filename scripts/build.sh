@@ -94,6 +94,7 @@ if idx != -1:
 
 # --- Replace each awk function to use variable concatenation ---
 functions = [
+    ("json_escape", "_AWK_JSON", "", ""),
     ("extract_json_field", "_AWK_JSON", "", ""),
     ("parse_http_stream", "", "_AWK_HTTP_STREAM", ""),
     ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
@@ -110,6 +111,13 @@ for func_name, json_var, specific_var, extra_args in functions:
             "extract_json_field() {\n"
             "    local json=\"$1\" key=\"$2\"\n"
             "    printf '%s' \"$json\" | awk -v json_mode=\"extract_field\" -v json_field_key=\"$key\" \"${_AWK_JSON}\"\n"
+            "}\n"
+        )
+    elif func_name == "json_escape":
+        replacement = (
+            "json_escape() {\n"
+            "    local input=\"${1:-}\"\n"
+            "    printf '%s' \"$input\" | awk -v json_mode=\"escape_string\" \"${_AWK_JSON}\"\n"
             "}\n"
         )
     elif func_name == "run_edit_file_awk":

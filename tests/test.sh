@@ -1060,6 +1060,17 @@ test_agent_write_file_unicode() {
     rm -f "$target_file"
 }
 
+test_json_escape_unicode_multiline() {
+    info "Test 30: json_escape unicode and multiline"
+    local output
+    output=$(printf '%s' $'第一行\n第二行 "quoted"' | awk -v json_mode=escape_string -f "$AWK_DIR/json.awk")
+    if [[ "$output" == '第一行\n第二行 \"quoted\"' ]]; then
+        green "json_escape unicode and multiline"; ((PASS++)) || true
+    else
+        red "json_escape unicode and multiline"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -1096,6 +1107,7 @@ test_agent_tool_result_multiline_url
 test_agent_tool_result_strips_ansi
 test_agent_multiple_tool_calls
 test_agent_write_file_unicode
+test_json_escape_unicode_multiline
 
 echo ""
 echo "=============================="

@@ -139,31 +139,10 @@ die() {
 }
 
 json_escape() {
-    local input="${1:-}" output="" i=0 len c ord escaped
-    len=${#input}
-    while (( i < len )); do
-        c="${input:i:1}"
-        case "$c" in
-            '"')  output+='\"' ;;
-            '\')  output+='\\' ;;
-            $'\b') output+='\b' ;;
-            $'\f') output+='\f' ;;
-            $'\n') output+='\n' ;;
-            $'\r') output+='\r' ;;
-            $'\t') output+='\t' ;;
-            *)
-                printf -v ord '%d' "'$c"
-                if (( ord < 32 )); then
-                    printf -v escaped '\\u%04x' "$ord"
-                    output+="$escaped"
-                else
-                    output+="$c"
-                fi
-                ;;
-        esac
-        (( i++ )) || true
-    done
-    printf '%s' "$output"
+    local input="${1:-}"
+    printf '%s' "$input" | awk \
+        -v json_mode="escape_string" \
+        -f "$AWK_DIR/json.awk"
 }
 
 strip_ansi() {
@@ -212,7 +191,7 @@ build_system_prompt() {
     local agent_identity core_rules todo_guidance instruction_files skill_index selected_skills stable_context todo task_instructions
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
-    todo_guidance=$'- Use todo_write for complex multi-step implementation, debugging, refactoring, or review tasks.\n- Do not use todo_write for trivial single-step or purely informational requests.\n- When you use todo_write, write the full updated checklist for the current session.\n- Keep the checklist short, actionable, and aligned with the current request.'
+    todo_guidance=$'- Use todo_write proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use todo_write for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use todo_write, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
 
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)

@@ -69,23 +69,23 @@
   },
   {
     "name": "todo_write",
-    "description": "Create or update the session todo checklist for a complex multi-step task.",
+    "description": "Create or update the full session todo checklist for a complex multi-step task. Use proactively for non-trivial implementation, debugging, refactoring, or review work. Do not use for trivial single-step or purely informational requests. Keep the checklist short and concrete, and prefer exactly one in_progress item when actively working.",
     "input_schema": {
       "type": "object",
       "properties": {
         "todos": {
           "type": "array",
-          "description": "The full updated todo list for the current session.",
+          "description": "The full updated todo list for the current session. Send the complete list each time, not a partial diff.",
           "items": {
             "type": "object",
             "properties": {
               "content": {
                 "type": "string",
-                "description": "A short actionable task description."
+                "description": "A short, concrete, actionable task description."
               },
               "status": {
                 "type": "string",
-                "description": "Task status: pending, in_progress, or completed."
+                "description": "Task status: pending, in_progress, or completed. Prefer exactly one in_progress item while actively working."
               }
             },
             "required": ["content", "status"]
