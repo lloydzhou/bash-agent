@@ -19,7 +19,6 @@ WRITE_FILE_MAX_BYTES=1048576
 EDIT_FILE_MAX_BYTES=1048576
 BASH_OUTPUT_MAX_BYTES=50000
 SYSTEM_PROMPT=""
-BASE_SYSTEM_PROMPT=""
 OUTPUT_FORMAT="human"
 VERBOSE=false
 API_KEY=""
@@ -39,7 +38,6 @@ SESSION_MODE=false
 SESSION_ID=""
 CONTINUE_SESSION=false
 SESSION_DIR=""
-PROJECT_KEY=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 TODO_FILE=""
@@ -81,6 +79,10 @@ log_tool_result() {
     if [[ -n "$output" ]]; then
         printf '\n%s\n' "$output" >&2
     fi
+}
+
+log_verbose() {
+    $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
 }
 
 run_with_timeout() {
@@ -129,10 +131,6 @@ run_with_timeout() {
     cat "$tmp_out"
     rm -f "$tmp_out"
     return "$rc"
-}
-
-log_verbose() {
-    $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
 }
 
 die() {
@@ -196,8 +194,7 @@ session_append_line() {
 }
 
 emit_stream_event() {
-    local line="$1"
-    printf '%s\n' "$line"
+    printf '%s\n' "$1"
 }
 
 build_system_prompt() {
@@ -222,7 +219,6 @@ build_system_prompt() {
     append_section output "current-plan" "$todo"
     append_section output "instructions" "$task_instructions"
 
-    BASE_SYSTEM_PROMPT="$output"
     printf '%s' "${output%$'\n'}"
 }
 
@@ -245,34 +241,12 @@ find_skill_file() {
 }
 
 load_skill_content() {
-    local skill_name="$1" skill_file="" skill_dir="" content=""
+    local skill_name="$1" skill_file skill_dir content
     skill_file=$(find_skill_file "$skill_name") || return 1
     skill_dir=$(dirname "$skill_file")
     content=$(cat "$skill_file") || return 1
     content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$skill_dir}"
     printf 'Base directory for this skill: %s\n\n%s' "$skill_dir" "$content"
-}
-
-extract_skill_summary() {
-    local skill_file="$1" line heading="" summary=""
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ -z "$heading" && "$line" =~ ^#[[:space:]]+ ]]; then
-            heading="${line#\# }"
-            heading="${heading#"${heading%%[![:space:]]*}"}"
-            heading="${heading%"${heading##*[![:space:]]}"}"
-            continue
-        fi
-        [[ -z "${line//[[:space:]]/}" ]] && continue
-        summary="$line"
-        summary="${summary#"${summary%%[![:space:]]*}"}"
-        summary="${summary%"${summary##*[![:space:]]}"}"
-        break
-    done < "$skill_file"
-    if [[ -n "$summary" ]]; then
-        printf '%s' "$summary"
-    else
-        printf '%s' "$heading"
-    fi
 }
 
 build_skill_index_section() {
@@ -282,7 +256,7 @@ build_skill_index_section() {
     for skill_file in "$base"/*/SKILL.md; do
         [[ -f "$skill_file" ]] || continue
         skill_name=$(basename "$(dirname "$skill_file")")
-        summary=$(extract_skill_summary "$skill_file")
+        summary=$(awk -f "$AWK_DIR/skill_summary.awk" "$skill_file")
         if [[ -n "$summary" ]]; then
             section+="- ${skill_name}: ${summary}"$'\n'
         else
@@ -328,7 +302,7 @@ find_instruction_file_in_dir() {
 }
 
 build_instruction_files_section() {
-    local section="" global_file="" project_file="" global_content="" project_content=""
+    local section="" global_file project_file global_content project_content
     global_file=$(find_instruction_file_in_dir "${HOME}/.bash-agent" 2>/dev/null || true)
     project_file=$(find_instruction_file_in_dir "${PWD:-$(pwd)}" 2>/dev/null || true)
 
@@ -507,8 +481,7 @@ get_project_key() {
 
 conv_init() {
     if [[ "$SESSION_MODE" == true ]]; then
-        PROJECT_KEY="$(get_project_key)"
-        SESSION_DIR="${HOME}/.bash-agent/projects/${PROJECT_KEY}"
+        SESSION_DIR="${HOME}/.bash-agent/projects/$(get_project_key)"
         mkdir -p "$SESSION_DIR"
 
         local session_base=""
@@ -594,19 +567,19 @@ context_append_summary() {
 }
 
 build_stable_context_section() {
-    local section=""
     if [[ -n "${CONTEXT_SUMMARY_FILE:-}" && -s "$CONTEXT_SUMMARY_FILE" ]]; then
-        section="$(cat "$CONTEXT_SUMMARY_FILE")"
+        cat "$CONTEXT_SUMMARY_FILE"
+        return 0
     fi
-    printf '%s' "$section"
+    printf ''
 }
 
 build_todo_section() {
-    local section=""
     if [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]]; then
-        section="$(cat "$TODO_FILE")"
+        cat "$TODO_FILE"
+        return 0
     fi
-    printf '%s' "$section"
+    printf ''
 }
 
 extract_current_plan_block() {
