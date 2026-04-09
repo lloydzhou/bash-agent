@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bash-agent — AI Agent in pure bash/awk
-# Supports: Anthropic Claude, OpenAI Chat, OpenAI Responses
+# Supports: Anthropic Claude, OpenAI Chat
 # No dependencies beyond: bash, curl, awk
 
 set -uo pipefail
@@ -14,6 +14,10 @@ MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
 TOOL_TIMEOUT_SECS=600
+READ_FILE_MAX_BYTES=100000
+WRITE_FILE_MAX_BYTES=1048576
+EDIT_FILE_MAX_BYTES=1048576
+BASH_OUTPUT_MAX_BYTES=50000
 SYSTEM_PROMPT=""
 BASE_SYSTEM_PROMPT=""
 OUTPUT_FORMAT="human"
@@ -73,7 +77,7 @@ log_tool_result() {
     local name="$1" output="$2"
     printf '\033[33m[tool] %s result\033[0m\n' "$name" >&2
     if [[ -n "$output" ]]; then
-        printf '%s\n' "$output" >&2
+        printf '\n%s\n' "$output" >&2
     fi
 }
 
@@ -315,30 +319,25 @@ load_skill_content() {
 }
 
 extract_skill_summary() {
-    local skill_file="$1"
-    awk '
-    BEGIN {
-        heading = ""
-        summary = ""
-    }
-    /^#[[:space:]]+/ {
-        if (heading == "") {
-            heading = $0
-            sub(/^#[[:space:]]+/, "", heading)
-        }
-        next
-    }
-    /^[[:space:]]*$/ { next }
-    {
-        if (summary == "") {
-            summary = $0
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", summary)
-        }
-    }
-    END {
-        if (summary != "") print summary
-        else if (heading != "") print heading
-    }' "$skill_file"
+    local skill_file="$1" line heading="" summary=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ -z "$heading" && "$line" =~ ^#[[:space:]]+ ]]; then
+            heading="${line#\# }"
+            heading="${heading#"${heading%%[![:space:]]*}"}"
+            heading="${heading%"${heading##*[![:space:]]}"}"
+            continue
+        fi
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        summary="$line"
+        summary="${summary#"${summary%%[![:space:]]*}"}"
+        summary="${summary%"${summary##*[![:space:]]}"}"
+        break
+    done < "$skill_file"
+    if [[ -n "$summary" ]]; then
+        printf '%s' "$summary"
+    else
+        printf '%s' "$heading"
+    fi
 }
 
 build_skill_index_section() {
@@ -448,44 +447,11 @@ unescape_display_to_var() {
 # Extract a field value from JSON using awk
 extract_json_field() {
     local json="$1" key="$2"
-    printf '%s' "$json" | awk -v key="\"$2\":" '
-    BEGIN { found = 0 }
-    {
-        idx = index($0, key)
-        if (idx == 0) { print ""; exit }
-        rest = substr($0, idx + length(key))
-        gsub(/^[ \t]+/, "", rest)
-        if (substr(rest, 1, 1) == "\"") {
-            rest = substr(rest, 2)
-            result = ""
-            i = 1
-            while (i <= length(rest)) {
-                c = substr(rest, i, 1)
-                if (c == "\\" && i < length(rest)) {
-                    result = result substr(rest, i, 2)
-                    i += 2
-                } else if (c == "\"") {
-                    break
-                } else {
-                    result = result c
-                    i++
-                }
-            }
-            printf "%s", result
-        } else {
-            result = ""
-            i = 1
-            while (i <= length(rest)) {
-                c = substr(rest, i, 1)
-                if (c == "," || c == "}" || c == "]" || c == "\n") break
-                result = result c
-                i++
-            }
-            gsub(/^[ \t]+|[ \t]+$/, "", result)
-            printf "%s", result
-        }
-        exit
-    }'
+    awk \
+        -v json_mode="extract_field" \
+        -v json_input="$json" \
+        -v json_field_key="$key" \
+        -f "$AWK_DIR/json.awk" </dev/null
 }
 
 cleanup() {
@@ -513,10 +479,16 @@ find_awk_dir() {
 get_project_key() {
     local cwd="${PWD:-$(pwd)}"
     cwd="$(cd "$cwd" && pwd -P)"
-    cwd="${cwd#/}"
-    cwd="${cwd//\//-}"
-    cwd="$(printf '%s' "$cwd" | awk '{ gsub(/[^A-Za-z0-9._-]/, "-"); gsub(/-+/, "-", $0); sub(/^-+/, "", $0); sub(/-+$/, "", $0); print }')"
-    printf -- '-%s' "$cwd"
+    printf '%s' "$cwd" | awk '
+    {
+        sub(/^\/+/, "", $0)
+        gsub(/\//, "-", $0)
+        gsub(/[^A-Za-z0-9._-]/, "-", $0)
+        gsub(/-+/, "-", $0)
+        sub(/^-+/, "", $0)
+        sub(/-+$/, "", $0)
+        print "-" $0
+    }'
 }
 
 # ============================================================================
@@ -829,7 +801,7 @@ TOOLDEFS
 
 tool_read_file() {
     local input="$1"
-    local path
+    local path size
     path=$(extract_json_field "$input" "path")
     path=$(json_unescape "$path")
 
@@ -837,23 +809,27 @@ tool_read_file() {
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
 
-    head -c 100000 "$path"
-    local size
+    head -c "$READ_FILE_MAX_BYTES" "$path"
     size=$(wc -c < "$path" 2>/dev/null || echo "0")
-    if (( size > 100000 )); then
+    if (( size > READ_FILE_MAX_BYTES )); then
         printf '\n[... truncated, file is %s bytes ...]' "$size"
     fi
 }
 
 tool_write_file() {
     local input="$1"
-    local path content
+    local path content content_size
     path=$(extract_json_field "$input" "path")
     content=$(extract_json_field "$input" "content")
     path=$(json_unescape "$path")
     content=$(json_unescape "$content")
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
+    content_size=$(printf '%s' "$content" | wc -c | awk '{print $1}')
+    if (( content_size > WRITE_FILE_MAX_BYTES )); then
+        echo "Error: content too large for write_file (${content_size} bytes > ${WRITE_FILE_MAX_BYTES} bytes)"
+        return 1
+    fi
 
     mkdir -p "$(dirname "$path")" 2>/dev/null
     printf '%s' "$content" > "$path"
@@ -862,32 +838,17 @@ tool_write_file() {
 
 tool_edit_file() {
     local input="$1"
-    local path old_str new_str
-    path=$(extract_json_field "$input" "path")
-    old_str=$(extract_json_field "$input" "old_string")
-    new_str=$(extract_json_field "$input" "new_string")
-    path=$(json_unescape "$path")
-    old_str=$(json_unescape "$old_str")
-    new_str=$(json_unescape "$new_str")
-
-    [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
-    [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
-    [[ -z "$old_str" ]] && { echo "Error: empty old_string"; return 1; }
-
-    if ! grep -qF "$old_str" "$path" 2>/dev/null; then
-        echo "Error: old_string not found in $path"
+    local path tmp meta
+    tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
+    meta=$(mktemp "${AGENT_TMPDIR}/edit.meta.XXXXXX")
+    if ! run_edit_file_awk "$input" "$EDIT_FILE_MAX_BYTES" "$meta" > "$tmp"; then
+        rm -f "$tmp"
+        rm -f "$meta"
         return 1
     fi
-
-    export _AGENT_OLD="$old_str" _AGENT_NEW="$new_str"
-    local tmp
-    tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
-    awk 'BEGIN{RS="\0"; ORS=""}
-         { old=ENVIRON["_AGENT_OLD"]; new=ENVIRON["_AGENT_NEW"]
-           i=index($0,old)
-           if(i==0){print; exit}
-           printf "%s%s%s", substr($0,1,i-1), new, substr($0,i+length(old))
-         }' "$path" > "$tmp"
+    path=$(cat "$meta" 2>/dev/null || true)
+    rm -f "$meta"
+    [[ -n "$path" ]] || { rm -f "$tmp"; echo "Error: no path provided"; return 1; }
 
     if (( $(wc -c < "$tmp") > 0 )); then
         mv "$tmp" "$path"
@@ -897,8 +858,6 @@ tool_edit_file() {
         echo "Error: edit produced empty result, reverted"
         return 1
     fi
-
-    unset _AGENT_OLD _AGENT_NEW
 }
 
 tool_bash_exec() {
@@ -916,8 +875,8 @@ tool_bash_exec() {
     output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file") || true
     rm -f "$script_file"
     local outlen=${#output}
-    if (( outlen > 50000 )); then
-        output="${output:0:50000}"
+    if (( outlen > BASH_OUTPUT_MAX_BYTES )); then
+        output="${output:0:BASH_OUTPUT_MAX_BYTES}"
         output+=$'\n[... truncated, output was '"$outlen"' bytes ...]'
     fi
     printf '%s' "$output"
@@ -995,35 +954,11 @@ build_openai_request() {
     printf '%s' "$body"
 }
 
-build_openai_responses_request() {
-    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
-    local msgs
-    msgs=$(printf '%s' "$messages" | convert_messages_to_openai)
-    if [[ -z "$system_prompt" ]]; then
-        system_prompt=$(build_system_prompt)
-    fi
-
-    local body
-    body="{\"model\":\"${MODEL}\",\"max_output_tokens\":${max_tokens},\"stream\":true"
-
-    [[ -n "$system_prompt" ]] && body+=",\"instructions\":\"$(json_escape "$system_prompt")\""
-
-    if [[ -n "$tools" ]]; then
-        local openai_tools
-        openai_tools=$(printf '%s' "$tools" | convert_tools_to_openai)
-        body+=",\"tools\":${openai_tools}"
-    fi
-
-    body+=",\"input\":${msgs}}"
-    printf '%s' "$body"
-}
-
 build_request() {
     local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
     case "$PROVIDER" in
         claude)            build_claude_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
         openai)            build_openai_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
-        openai-responses)  build_openai_responses_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
     esac
 }
 
@@ -1039,15 +974,24 @@ parse_openai_sse() {
     awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk"
 }
 
-parse_openai_responses_sse() {
-    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_responses.awk"
+parse_http_stream() {
+    awk -f "$AWK_DIR/http_stream.awk"
+}
+
+run_edit_file_awk() {
+    local input="$1" max_bytes="$2" meta_file="$3"
+    awk \
+        -v json_input="$input" \
+        -v max_bytes="$max_bytes" \
+        -v meta_file="$meta_file" \
+        -f "$AWK_DIR/json.awk" \
+        -f "$AWK_DIR/edit_file.awk"
 }
 
 parse_sse() {
     case "$PROVIDER" in
         claude)            parse_claude_sse ;;
         openai)            parse_openai_sse ;;
-        openai-responses)  parse_openai_responses_sse ;;
     esac
 }
 
@@ -1067,36 +1011,7 @@ _stream_curl() {
     curl -sS --no-buffer -D - \
         "${header_args[@]}" \
         -d "$body" \
-        "$API_URL" 2>&1 | awk '
-    BEGIN { http_code = ""; in_body = 0 }
-    {
-        # Strip trailing \r from each line (HTTP headers use \r\n)
-        sub(/\r$/, "")
-    }
-    /^curl: / {
-        printf "ERROR:%s\n", $0
-        exit 1
-    }
-    /^HTTP\// {
-        http_code = $2
-        next
-    }
-    /^[ \t]*$/ && !in_body {
-        if (http_code >= 400) {
-            printf "ERROR:HTTP %s\n", http_code
-            exit 1
-        }
-        in_body = 1
-        next
-    }
-    !in_body { next }
-    # Handle non-SSE JSON error responses (e.g., {"code":500,"msg":"..."})
-    in_body && /^{/ && /"code"/ && /"msg"/ {
-        printf "ERROR:API response body received\n"
-        exit 1
-    }
-    { print; fflush() }
-    '
+        "$API_URL" 2>&1 | parse_http_stream
 }
 
 call_claude_api() {
@@ -1114,19 +1029,11 @@ call_openai_api() {
         -H "Authorization: Bearer ${API_KEY}"
 }
 
-call_openai_responses_api() {
-    local body="$1"
-    _stream_curl "$body" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer ${API_KEY}"
-}
-
 call_api() {
     local body="$1"
     case "$PROVIDER" in
         claude)            call_claude_api "$body" ;;
         openai)            call_openai_api "$body" ;;
-        openai-responses)  call_openai_responses_api "$body" ;;
     esac
 }
 
@@ -1323,7 +1230,7 @@ Usage: agent.sh [options] [prompt]
        agent.sh compact [options]
 
 Options:
-  -p, --provider PROV     LLM provider: claude | openai | openai-responses
+  -p, --provider PROV     LLM provider: claude | openai
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
   --max-tokens N          Max output tokens (default: 4096)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
@@ -1438,7 +1345,7 @@ list_sessions() {
 }
 
 validate_config() {
-    [[ -z "$PROVIDER" ]] && die "No provider specified. Use -p claude|openai|openai-responses"
+    [[ -z "$PROVIDER" ]] && die "No provider specified. Use -p claude|openai"
 
     case "$PROVIDER" in
         claude)
@@ -1451,20 +1358,15 @@ validate_config() {
             : "${BASE_URL:=${LLM_BASE_URL:-${OPENAI_BASE_URL:-}}}"
             : "${MODEL:=gpt-4o}"
             ;;
-        openai-responses)
-            : "${API_KEY:=$OPENAI_API_KEY}"
-            : "${BASE_URL:=${LLM_BASE_URL:-${OPENAI_BASE_URL:-}}}"
-            : "${MODEL:=gpt-4o}"
-            ;;
         *)
-            die "Unknown provider: $PROVIDER (use claude|openai|openai-responses)"
+            die "Unknown provider: $PROVIDER (use claude|openai)"
             ;;
     esac
 
     if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
         case "$PROVIDER" in
             claude) die "No API key. Set ANTHROPIC_API_KEY or use --api-key" ;;
-            openai|openai-responses) die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
+            openai) die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
         esac
     fi
 }
@@ -1473,7 +1375,6 @@ setup_api_url() {
     case "$PROVIDER" in
         claude)            API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages" ;;
         openai)            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions" ;;
-        openai-responses)  API_URL="${BASE_URL:-https://api.openai.com/v1}/responses" ;;
     esac
 }
 

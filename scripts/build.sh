@@ -56,9 +56,10 @@ def find_function_end(content, start):
 # --- Read all awk files and prepare bash variables ---
 awk_files = {
     "json": ("json.awk", "_AWK_JSON"),
+    "http_stream": ("http_stream.awk", "_AWK_HTTP_STREAM"),
+    "edit_file": ("edit_file.awk", "_AWK_EDIT_FILE"),
     "claude_sse": ("claude_sse.awk", "_AWK_CLAUDE_SSE"),
     "openai_sse": ("openai_sse.awk", "_AWK_OPENAI_SSE"),
-    "openai_responses": ("openai_responses.awk", "_AWK_OPENAI_RESPONSES"),
     "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
     "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
 }
@@ -86,23 +87,45 @@ if idx != -1:
 
 # --- Replace each awk function to use variable concatenation ---
 functions = [
+    ("extract_json_field", "_AWK_JSON", "", '-v json_mode="extract_field" -v json_input="$json" -v json_field_key="$key"'),
+    ("parse_http_stream", "", "_AWK_HTTP_STREAM", ""),
+    ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v json_input="$input" -v max_bytes="$max_bytes" -v meta_file="$meta"'),
     ("parse_claude_sse", "_AWK_JSON", "_AWK_CLAUDE_SSE", r'-v verbose="${VERBOSE:-false}"'),
     ("parse_openai_sse", "_AWK_JSON", "_AWK_OPENAI_SSE", ""),
-    ("parse_openai_responses_sse", "_AWK_JSON", "_AWK_OPENAI_RESPONSES", ""),
     ("convert_messages_to_openai", "_AWK_JSON", "_AWK_CONVERT_MESSAGES", ""),
     ("convert_tools_to_openai", "_AWK_JSON", "_AWK_CONVERT_TOOLS", ""),
 ]
 
 for func_name, json_var, specific_var, extra_args in functions:
-    # Build: awk [-v ...] "${_AWK_JSON}
-    # ${_AWK_XXX}"
-    awk_call = '    awk '
-    if extra_args:
-        awk_call += extra_args + ' '
-    # Double-quoted string with embedded newline concatenates two variables
-    awk_call += '"${' + json_var + '}\n${' + specific_var + '}"'
+    if func_name == "extract_json_field":
+        replacement = (
+            "extract_json_field() {\n"
+            "    local json=\"$1\" key=\"$2\"\n"
+            "    awk -v json_mode=\"extract_field\" -v json_input=\"$json\" -v json_field_key=\"$key\" \"${_AWK_JSON}\"\n"
+            "}\n"
+        )
+    elif func_name == "run_edit_file_awk":
+        replacement = (
+            "run_edit_file_awk() {\n"
+            "    local input=\"$1\" max_bytes=\"$2\" meta_file=\"$3\"\n"
+            "    awk -v json_input=\"$input\" -v max_bytes=\"$max_bytes\" -v meta_file=\"$meta_file\" \"${_AWK_JSON}\n${_AWK_EDIT_FILE}\"\n"
+            "}\n"
+        )
+    else:
+        # Build: awk [-v ...] "${_AWK_JSON}
+        # ${_AWK_XXX}"
+        awk_call = '    awk '
+        if extra_args:
+            awk_call += extra_args + ' '
+        # Double-quoted string with embedded newline concatenates two variables
+        if json_var and specific_var:
+            awk_call += '"${' + json_var + '}\n${' + specific_var + '}"'
+        elif json_var:
+            awk_call += '"${' + json_var + '}"'
+        else:
+            awk_call += '"${' + specific_var + '}"'
 
-    replacement = func_name + "() {\n" + awk_call + "\n}\n"
+        replacement = func_name + "() {\n" + awk_call + "\n}\n"
 
     # Find and replace the original function
     pattern = func_name + "() {"

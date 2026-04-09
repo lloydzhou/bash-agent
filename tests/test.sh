@@ -73,16 +73,6 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
-            elif path.startswith('/v1/responses'):
-                for c in [
-                    'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Task focus: summarize compact test\"}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"\\nLatest request: compact session\"}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"\\nProgress: trimmed old context\"}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"\\nTool evidence: none\"}\n\n',
-                    'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_summary\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8}}}\n\n',
-                    'data: [DONE]\n\n',
-                ]: w.write(c.encode()); w.flush()
             return
         if b'Skill marker for tests' in body:
             if path.startswith('/v1/messages'):
@@ -111,14 +101,6 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: {\"id\":\"chatcmpl-skill\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello from skill-aware\"},\"finish_reason\":null}]}\n\n',
                     'data: {\"id\":\"chatcmpl-skill\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" mock server!\"},\"finish_reason\":null}]}\n\n',
                     'data: {\"id\":\"chatcmpl-skill\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
-                    'data: [DONE]\n\n',
-                ]: w.write(c.encode()); w.flush()
-            elif path.startswith('/v1/responses'):
-                for c in [
-                    'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello from skill-aware\"}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\" mock server!\"}\n\n',
-                    'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_skill\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8}}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
@@ -206,6 +188,62 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing edit tool_result content')
             return
+        if b'EDIT_FILE_NOT_FOUND_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_nf\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will edit the file now.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_nf\",\"name\":\"edit_file\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-edit-not-found.txt','old_string':'missing-value','new_string':'new-value'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'EDIT_FILE_NOT_FOUND_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'old_string not found' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_nf_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Edit not found handled.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing not-found tool_result content')
+            return
+        if b'EDIT_FILE_TOO_LARGE_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_big\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will edit the file now.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_big\",\"name\":\"edit_file\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-edit-big.txt','old_string':'tiny','new_string':'replaced'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'EDIT_FILE_TOO_LARGE_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'file too large for edit_file' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_big_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Edit size guard handled.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing size guard tool_result content')
+            return
         if b'WRITE_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -225,13 +263,6 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: {\"id\":\"chatcmpl-write\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
-            elif path.startswith('/v1/responses'):
-                for c in [
-                    'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"I will write the file now.\"}\n\n',
-                    'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_write\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8}}}\n\n',
-                    'data: [DONE]\n\n',
-                ]: w.write(c.encode()); w.flush()
             return
         if b'WRITE_FILE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
@@ -247,13 +278,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 for c in [
                     'data: {\"id\":\"chatcmpl-write-done\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"finish_reason\":null}]}\n\n',
                     'data: {\"id\":\"chatcmpl-write-done\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
-                    'data: [DONE]\n\n',
-                ]: w.write(c.encode()); w.flush()
-            elif path.startswith('/v1/responses'):
-                for c in [
-                    'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Done.\"}\n\n',
-                    'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_write_done\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
@@ -274,13 +298,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 for c in [
                     'data: {\"id\":\"chatcmpl-bash-quote\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Running quoted bash command.\"},\"finish_reason\":null}]}\n\n',
                     'data: {\"id\":\"chatcmpl-bash-quote\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
-                    'data: [DONE]\n\n',
-                ]: w.write(c.encode()); w.flush()
-            elif path.startswith('/v1/responses'):
-                for c in [
-                    'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
-                    'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Running quoted bash command.\"}\n\n',
-                    'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_bash_quote\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8}}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
@@ -383,14 +400,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 'data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello from\"},\"finish_reason\":null}]}\n\n',
                 'data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" OpenAI mock!\"},\"finish_reason\":null}]}\n\n',
                 'data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
-                'data: [DONE]\n\n',
-            ]: w.write(c.encode()); w.flush()
-        elif path.startswith('/v1/responses'):
-            for c in [
-                'data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n',
-                'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello from\"}\n\n',
-                'data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\" Responses mock!\"}\n\n',
-                'data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":8}}}\n\n',
                 'data: [DONE]\n\n',
             ]: w.write(c.encode()); w.flush()
         else:
@@ -536,30 +545,9 @@ SSE
     fi
 }
 
-# Test 5: OpenAI Responses SSE awk parser
-test_openai_responses_sse() {
-    info "Test 5: OpenAI Responses SSE awk parser"
-    local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_responses.awk" <<'SSE'
-data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}
-
-data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hello from"}
-
-data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":" Responses mock!"}
-
-data: {"type":"response.completed","response":{"id":"resp_test","status":"completed","usage":{"input_tokens":10,"output_tokens":8}}}
-SSE
-)
-    if echo "$output" | grep -q "TEXT:Hello from" && echo "$output" | grep -q "TEXT:.*Responses" && echo "$output" | grep -q "STOP:end_turn"; then
-        green "OpenAI Responses SSE parser"; ((PASS++)) || true
-    else
-        red "OpenAI Responses SSE parser"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-}
-
-# Test 6: Message format conversion
+# Test 5: Message format conversion
 test_convert_messages() {
-    info "Test 6: Message format conversion (Claude → OpenAI)"
+    info "Test 5: Message format conversion (Claude → OpenAI)"
     local output
     output=$(printf '%s' '[{"role":"user","content":"hello"}]' | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
     if echo "$output" | grep -q '"role":"user"' && echo "$output" | grep -q '"content":"hello"'; then
@@ -569,9 +557,9 @@ test_convert_messages() {
     fi
 }
 
-# Test 7: Tool format conversion
+# Test 6: Tool format conversion
 test_convert_tools() {
-    info "Test 7: Tool format conversion (Claude → OpenAI)"
+    info "Test 6: Tool format conversion (Claude → OpenAI)"
     local output
     output=$(printf '%s' '[{"name":"read_file","description":"Read file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]' | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
     if echo "$output" | grep -q '"type":"function"' && echo "$output" | grep -q '"parameters"'; then
@@ -581,9 +569,9 @@ test_convert_tools() {
     fi
 }
 
-# Test 8: Agent.sh end-to-end with mock (Claude provider)
+# Test 7: Agent.sh end-to-end with mock (Claude provider)
 test_agent_e2e_claude() {
-    info "Test 8: Agent.sh e2e (Claude mock)"
+    info "Test 7: Agent.sh e2e (Claude mock)"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1) || true
     if echo "$output" | grep -q "Hello from" && echo "$output" | grep -q "mock"; then
@@ -593,9 +581,9 @@ test_agent_e2e_claude() {
     fi
 }
 
-# Test 9: Agent.sh end-to-end with mock (OpenAI provider)
+# Test 8: Agent.sh end-to-end with mock (OpenAI provider)
 test_agent_e2e_openai() {
-    info "Test 9: Agent.sh e2e (OpenAI mock)"
+    info "Test 8: Agent.sh e2e (OpenAI mock)"
     local output
     output=$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1) || true
     if echo "$output" | grep -q "Hello from" && echo "$output" | grep -q "mock"; then
@@ -605,9 +593,9 @@ test_agent_e2e_openai() {
     fi
 }
 
-# Test 10: Compact subcommand
+# Test 9: Compact subcommand
 test_agent_compact() {
-    info "Test 10: Agent.sh compact subcommand"
+    info "Test 9: Agent.sh compact subcommand"
     local home_dir session_dir session_file summary_file output
     home_dir=$(mktemp -d)
     session_dir="$home_dir/.bash-agent/projects/$(project_key)"
@@ -626,9 +614,9 @@ test_agent_compact() {
     fi
 }
 
-# Test 11: Skill injection
+# Test 10: Skill injection
 test_agent_skill_injection() {
-    info "Test 11: Agent.sh skill injection"
+    info "Test 10: Agent.sh skill injection"
     local skill_dir skill_file output
     skill_dir="$ROOT_DIR/.claude/skills/test-skill"
     skill_file="$skill_dir/SKILL.md"
@@ -649,7 +637,7 @@ EOF
 }
 
 test_agent_skill_index() {
-    info "Test 12: Agent.sh skill index"
+    info "Test 11: Agent.sh skill index"
     local skill_dir skill_file output
     skill_dir="$ROOT_DIR/.claude/skills/test-skill-index"
     skill_file="$skill_dir/SKILL.md"
@@ -671,7 +659,7 @@ EOF
 }
 
 test_agent_instruction_files() {
-    info "Test 13: Agent.sh instruction file injection"
+    info "Test 12: Agent.sh instruction file injection"
     local home_dir global_dir project_file output
     home_dir=$(mktemp -d)
     global_dir="$home_dir/.bash-agent"
@@ -693,9 +681,9 @@ EOF
     fi
 }
 
-# Test 14: Read file end-to-end
+# Test 13: Read file end-to-end
 test_agent_read_file() {
-    info "Test 14: Agent.sh read_file"
+    info "Test 13: Agent.sh read_file"
     local output target_file
     target_file="/tmp/bash-agent-read-test.txt"
     printf 'read-test-content\n' > "$target_file"
@@ -708,9 +696,9 @@ test_agent_read_file() {
     rm -f "$target_file"
 }
 
-# Test 15: Edit file end-to-end
+# Test 14: Edit file end-to-end
 test_agent_edit_file() {
-    info "Test 15: Agent.sh edit_file"
+    info "Test 14: Agent.sh edit_file"
     local output target_file
     target_file="/tmp/bash-agent-edit-test.txt"
     printf 'prefix old-value suffix\n' > "$target_file"
@@ -723,9 +711,37 @@ test_agent_edit_file() {
     rm -f "$target_file"
 }
 
-# Test 16: Write file preserves newlines
+test_agent_edit_file_not_found() {
+    info "Test 15: Agent.sh edit_file missing old_string"
+    local output target_file
+    target_file="/tmp/bash-agent-edit-not-found.txt"
+    printf 'prefix old-value suffix\n' > "$target_file"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_FILE_NOT_FOUND_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "old_string not found" && grep -q 'old-value' "$target_file" && ! grep -q 'new-value' "$target_file"; then
+        green "Agent edit_file missing old_string"; ((PASS++)) || true
+    else
+        red "Agent edit_file missing old_string"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
+test_agent_edit_file_too_large() {
+    info "Test 16: Agent.sh edit_file file size guard"
+    local output target_file
+    target_file="/tmp/bash-agent-edit-big.txt"
+    head -c 1048577 /dev/zero | tr '\0' 'a' > "$target_file"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_FILE_TOO_LARGE_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "file too large for edit_file" && [[ $(wc -c < "$target_file") -gt 1048576 ]]; then
+        green "Agent edit_file file size guard"; ((PASS++)) || true
+    else
+        red "Agent edit_file file size guard"; echo "  Output: $output"; echo "  Size: $(wc -c < "$target_file")"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
+# Test 17: Write file preserves newlines
 test_agent_write_file_newlines() {
-    info "Test 16: Agent.sh write_file newline handling"
+    info "Test 17: Agent.sh write_file newline handling"
     local output target_file
     target_file="/tmp/bash-agent-write-test.txt"
     rm -f "$target_file"
@@ -738,9 +754,9 @@ test_agent_write_file_newlines() {
     rm -f "$target_file"
 }
 
-# Test 17: Bash tool preserves quoted command content
+# Test 18: Bash tool preserves quoted command content
 test_agent_bash_quotes() {
-    info "Test 17: Agent.sh bash tool quoted command"
+    info "Test 18: Agent.sh bash tool quoted command"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test -v 'BASH_QUOTE_MARKER' 2>&1) || true
     if echo "$output" | grep -q "hello" && ! echo "$output" | grep -q "no command provided"; then
@@ -751,7 +767,7 @@ test_agent_bash_quotes() {
 }
 
 test_agent_tool_result_multiline_url() {
-    info "Test 18: Agent.sh tool_result multiline URL"
+    info "Test 19: Agent.sh tool_result multiline URL"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'TOOL_RESULT_URL_MARKER' 2>&1) || true
     if echo "$output" | grep -q "Final answer after tool result"; then
@@ -762,7 +778,7 @@ test_agent_tool_result_multiline_url() {
 }
 
 test_agent_tool_result_strips_ansi() {
-    info "Test 19: Agent.sh tool_result strips ANSI"
+    info "Test 20: Agent.sh tool_result strips ANSI"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'ANSI_TOOL_RESULT_MARKER' 2>&1) || true
     if echo "$output" | grep -q "ANSI output sanitized."; then
@@ -773,7 +789,7 @@ test_agent_tool_result_strips_ansi() {
 }
 
 test_agent_multiple_tool_calls() {
-    info "Test 20: Agent.sh multiple tool calls in one turn"
+    info "Test 21: Agent.sh multiple tool calls in one turn"
     local output target_file
     target_file="/tmp/bash-agent-multi-read.txt"
     printf 'multi-read-content\n' > "$target_file"
@@ -797,7 +813,6 @@ test_claude_sse
 test_claude_tool_use
 test_claude_tool_use_quoted_command
 test_openai_sse
-test_openai_responses_sse
 test_convert_messages
 test_convert_tools
 test_agent_e2e_claude
@@ -808,6 +823,8 @@ test_agent_skill_index
 test_agent_instruction_files
 test_agent_read_file
 test_agent_edit_file
+test_agent_edit_file_not_found
+test_agent_edit_file_too_large
 test_agent_write_file_newlines
 test_agent_bash_quotes
 test_agent_tool_result_multiline_url

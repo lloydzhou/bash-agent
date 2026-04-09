@@ -1,0 +1,43 @@
+BEGIN {
+    RS = "\0"
+    ORS = ""
+
+    path = unescape_json_string(extract_json_string(json_input, "path"))
+    old = unescape_json_string(extract_json_string(json_input, "old_string"))
+    new = unescape_json_string(extract_json_string(json_input, "new_string"))
+
+    if (path == "") {
+        print "Error: no path provided" > "/dev/stderr"
+        exit 2
+    }
+    if (old == "") {
+        print "Error: empty old_string" > "/dev/stderr"
+        exit 2
+    }
+
+    rc = (getline data < path)
+    close(path)
+    if (rc < 0) {
+        print "Error: file not found: " path > "/dev/stderr"
+        exit 2
+    }
+
+    if (length(data) > max_bytes) {
+        print "Error: file too large for edit_file (" length(data) " bytes > " max_bytes " bytes)" > "/dev/stderr"
+        exit 2
+    }
+
+    i = index(data, old)
+    if (i == 0) {
+        print "Error: old_string not found in " path > "/dev/stderr"
+        exit 2
+    }
+
+    if (meta_file != "") {
+        print path > meta_file
+        close(meta_file)
+    }
+
+    printf "%s%s%s", substr(data, 1, i - 1), new, substr(data, i + length(old))
+    exit 0
+}

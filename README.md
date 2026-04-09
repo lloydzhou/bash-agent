@@ -14,21 +14,21 @@ src/
   agent.sh              # 主入口：请求构建、SSE 解析、agent loop、内置 tools
   awk/
     json.awk            # 轻量 JSON 辅助函数
+    http_stream.awk     # curl 输出的 HTTP 头/体拆分
+    edit_file.awk       # edit_file 的 JSON 解析与替换
     claude_sse.awk      # Claude SSE 解析器
     openai_sse.awk      # OpenAI Chat SSE 解析器
-    openai_responses.awk # OpenAI Responses SSE 解析器
     convert_messages.awk
     convert_tools.awk
 scripts/
   build.sh              # 生成 dist/agent.sh 的打包脚本
 tests/
-  mock-server.sh        # 本地 SSE mock 服务器
-  test.sh               # mock + e2e 测试
+  test.sh               # 内嵌 mock 的 e2e 测试
 ```
 
 ## 核心思路
 
-SSE 是逐行文本流，`awk` 很适合做流式解析。项目把 Claude / OpenAI Chat / OpenAI Responses 的流式输出统一成一套事件，再由 `agent.sh` 负责后续处理。
+SSE 是逐行文本流，`awk` 很适合做流式解析。项目把 Claude / OpenAI Chat 的流式输出统一成一套事件，再由 `agent.sh` 负责后续处理。
 
 统一事件示例：
 
@@ -59,9 +59,6 @@ STOP:end_turn
 # OpenAI Chat
 ./src/agent.sh -p openai -m gpt-4o "Say hello"
 
-# OpenAI Responses
-./src/agent.sh -p openai-responses -m gpt-4o "Say hello"
-
 # 机器输出
 ./src/agent.sh -p claude --output-format stream-json "Tell me a joke" | jq -c .
 
@@ -78,7 +75,6 @@ STOP:end_turn
 
 - `claude`
 - `openai`
-- `openai-responses`
 
 可以通过 `--base-url` 或环境变量接入第三方兼容服务，例如 Ollama、DeepSeek、BigModel 等。
 
@@ -91,21 +87,22 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 ## 内置工具
 
 - `read_file`：读取文件，默认最多 100KB
-- `write_file`：写文件，自动创建目录
-- `edit_file`：按精确字符串替换编辑
-- `bash`：执行命令，30 秒超时，最多保留 50KB 输出
+- `write_file`：写文件，自动创建目录，默认最多 1MB
+- `edit_file`：按精确字符串替换编辑，默认只处理 1MB 以内文件
+- `bash`：执行命令，默认 600 秒超时，最多保留 50KB 输出
 
 ## CLI 参数
 
 | 参数 | 说明 |
 | --- | --- |
-| `-p / --provider` | `claude` \| `openai` \| `openai-responses` |
+| `-p / --provider` | `claude` \| `openai` |
 | `-m / --model` | 模型名 |
 | `--max-tokens` | 最大输出 token |
 | `--system` | 系统提示词 |
 | `--skill NAME` | 从 `.claude/skills/NAME/SKILL.md` 加载技能 |
 | `--max-turns` | 最大 agent 循环次数 |
 | `--max-context` | context 消息上限 |
+| `--tool-timeout N` | tool 执行超时秒数，默认 600 |
 | `--api-key` | 手动指定 API key |
 | `--base-url` | 覆盖 API base URL |
 | `--output-format` | `human` \| `stream-json` |
@@ -195,21 +192,18 @@ export OPENAI_API_KEY="sk-..."
 ## 测试
 
 ```bash
-cd tests
-./mock-server.sh 8888 &
-./test.sh 8888
-kill %1
+bash tests/test.sh
 ```
 
 ## 当前状态
 
-- 已完成 Claude / OpenAI Chat / OpenAI Responses 的 SSE 解析
+- 已完成 Claude / OpenAI Chat 的 SSE 解析
 - 已完成消息格式和工具格式转换
 - 已完成 4 个内置 tools
 - 已支持 project-scoped session 存储
 - 已支持 `compact` 子命令与自动 compaction
 - 已支持 `--skill` skills 注入
-- 已通过 10 个 mock / e2e 测试
+- 已通过 21 个 mock / e2e 测试
 
 ## 相关文档
 

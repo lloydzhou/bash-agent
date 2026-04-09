@@ -186,3 +186,19 @@ function extract_json_string(json, key,    pos, rest, i, c, result, bs) {
 }
 
 # Extract a field value and strip surrounding quotes if it is a JSON string.
+BEGIN {
+    if (json_mode == "extract_field") {
+        raw = extract_value(json_input, json_field_key)
+        if (raw == "") {
+            print ""
+            exit 0
+        }
+        if (substr(raw, 1, 1) == "\"" && substr(raw, length(raw), 1) == "\"") {
+            print extract_json_string(json_input, json_field_key)
+        } else {
+            gsub(/^[ \t]+|[ \t]+$/, "", raw)
+            print raw
+        }
+        exit 0
+    }
+}
