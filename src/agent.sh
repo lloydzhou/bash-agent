@@ -21,7 +21,6 @@ BASH_OUTPUT_MAX_BYTES=50000
 SYSTEM_PROMPT=""
 BASE_SYSTEM_PROMPT=""
 OUTPUT_FORMAT="human"
-NO_STREAM=false
 VERBOSE=false
 API_KEY=""
 BASE_URL=""
@@ -158,41 +157,6 @@ json_escape() {
     printf '%s' "$output"
 }
 
-json_unescape() {
-    local input="${1:-}" output="" i=0 len c esc=0
-    len=${#input}
-    while (( i < len )); do
-        c="${input:i:1}"
-        if (( esc )); then
-            case "$c" in
-                '"') output+='"' ;;
-                '\') output+='\' ;;
-                /) output+='/' ;;
-                b) output+=$'\b' ;;
-                f) output+=$'\f' ;;
-                n) output+=$'\n' ;;
-                r) output+=$'\r' ;;
-                t) output+=$'\t' ;;
-                u)
-                    # Keep unknown unicode escapes literal; they are rare in tool inputs.
-                    output+='u'
-                    ;;
-                *) output+="$c" ;;
-            esac
-            esc=0
-        elif [[ "$c" == '\' ]]; then
-            esc=1
-        else
-            output+="$c"
-        fi
-        (( i++ )) || true
-    done
-    if (( esc )); then
-        output+='\\'
-    fi
-    printf '%s' "$output"
-}
-
 strip_ansi() {
     local input="$1"
     printf '%s' "$input" | awk '
@@ -246,7 +210,6 @@ prompt_template_default() {
 {{selected_skills_section}}
 {{stable_context_section}}
 {{todo_section}}
-{{recent_context_section}}
 {{task_instructions_section}}
 EOF
 }
@@ -259,12 +222,11 @@ session_append_line() {
 emit_stream_event() {
     local line="$1"
     printf '%s\n' "$line"
-    session_append_line "$line"
 }
 
 build_system_prompt() {
-    local template agent_identity core_rules instruction_files skill_index selected_skills stable_context todo recent_context task_instructions
-    local agent_identity_section core_rules_section instruction_files_section skill_index_section selected_skills_section stable_context_section todo_section recent_context_section task_instructions_section
+    local template agent_identity core_rules instruction_files skill_index selected_skills stable_context todo task_instructions
+    local agent_identity_section core_rules_section instruction_files_section skill_index_section selected_skills_section stable_context_section todo_section task_instructions_section
     template=$(prompt_template_default)
     BASE_SYSTEM_PROMPT="$template"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
@@ -274,7 +236,6 @@ build_system_prompt() {
     selected_skills=$(build_selected_skills_section)
     stable_context=$(build_stable_context_section)
     todo=$(build_todo_section)
-    recent_context=$(build_recent_context_section)
     task_instructions=$(build_task_instructions_section)
     agent_identity_section=$(wrap_section "agent-identity" "$agent_identity")
     core_rules_section=$(wrap_section "rules" "$core_rules")
@@ -283,7 +244,6 @@ build_system_prompt() {
     selected_skills_section=$(wrap_section "selected-skills" "$selected_skills")
     stable_context_section=$(wrap_section "context-summary" "$stable_context")
     todo_section=$(wrap_section "current-plan" "$todo")
-    recent_context_section=$(wrap_section "recent-messages" "$recent_context")
     task_instructions_section=$(wrap_section "instructions" "$task_instructions")
     render_template "$template" \
         "agent_identity_section" "$agent_identity_section" \
@@ -293,7 +253,6 @@ build_system_prompt() {
         "selected_skills_section" "$selected_skills_section" \
         "stable_context_section" "$stable_context_section" \
         "todo_section" "$todo_section" \
-        "recent_context_section" "$recent_context_section" \
         "task_instructions_section" "$task_instructions_section"
 }
 
@@ -474,11 +433,10 @@ unescape_display_to_var() {
 # Extract a field value from JSON using awk
 extract_json_field() {
     local json="$1" key="$2"
-    awk \
+    printf '%s' "$json" | awk \
         -v json_mode="extract_field" \
-        -v json_input="$json" \
         -v json_field_key="$key" \
-        -f "$AWK_DIR/json.awk" </dev/null
+        -f "$AWK_DIR/json.awk"
 }
 
 cleanup() {
@@ -552,11 +510,15 @@ conv_init() {
         SESSION_EVENT_FILE="${SESSION_DIR}/${session_base}.events.jsonl"
         CONTEXT_SUMMARY_FILE="${SESSION_DIR}/${session_base}.summary.txt"
         TODO_FILE="${SESSION_DIR}/${session_base}.todo.md"
+        local new_session=false
+        [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
         touch "$CONV_FILE"
         touch "$SESSION_EVENT_FILE"
         touch "$CONTEXT_SUMMARY_FILE"
         touch "$TODO_FILE"
-        session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$session_base")\"}"
+        if [[ "$new_session" == true ]]; then
+            session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$session_base")\"}"
+        fi
     else
         # Ephemeral: use tmpdir (cleaned on exit)
         CONV_FILE=$(mktemp "${AGENT_TMPDIR}/conv.XXXXXX")
@@ -675,14 +637,6 @@ strip_current_plan_block() {
             for (i = 1; i <= last; i++) print lines[i]
         }
     '
-}
-
-build_recent_context_section() {
-    local section=""
-    if [[ -s "$CONV_FILE" ]]; then
-        section+="$(tail -n "$MAX_CONTEXT_MESSAGES" "$CONV_FILE")"
-    fi
-    printf '%s' "$section"
 }
 
 build_task_instructions_section() {
@@ -887,7 +841,6 @@ tool_read_file() {
     local input="$1"
     local path size
     path=$(extract_json_field "$input" "path")
-    path=$(json_unescape "$path")
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
@@ -905,8 +858,6 @@ tool_write_file() {
     local path content content_size
     path=$(extract_json_field "$input" "path")
     content=$(extract_json_field "$input" "content")
-    path=$(json_unescape "$path")
-    content=$(json_unescape "$content")
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     content_size=$(printf '%s' "$content" | wc -c | awk '{print $1}')
@@ -948,7 +899,6 @@ tool_bash_exec() {
     local input="$1"
     local cmd script_file
     cmd=$(extract_json_field "$input" "command")
-    cmd=$(json_unescape "$cmd")
 
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
 
@@ -1375,7 +1325,6 @@ Options:
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
   --output-format FMT     Output format: human | stream-json
   --print                 Alias for --output-format stream-json
-  --no-stream             Disable streaming
   --session [NAME]        Use named session (persist conversation)
   --continue              Continue most recent session
   --list-sessions         List all saved sessions
@@ -1426,7 +1375,6 @@ parse_args() {
             --base-url)      BASE_URL="$2"; shift 2 ;;
             --output-format)  OUTPUT_FORMAT="$2"; shift 2 ;;
             --print)         OUTPUT_FORMAT="stream-json"; shift ;;
-            --no-stream)     NO_STREAM=true; shift ;;
             --session)
                 SESSION_MODE=true
                 if [[ $# -gt 1 && ! "$2" =~ ^- ]]; then
@@ -1521,8 +1469,7 @@ setup_api_url() {
 interactive_mode() {
     log_info "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)"
     while true; do
-        printf '\n\033[32m> \033[0m'
-        IFS= read -r user_input || break
+        IFS= read -e -r -p $'\033[32m> \033[0m' user_input || break
         [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
         [[ -z "$user_input" ]] && continue
         agent_loop "$user_input"

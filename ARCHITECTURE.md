@@ -145,7 +145,7 @@ session 持久化可以消费这个协议，但 session 数据本身不要和 co
 2. core rules
 3. skills
 4. stable context
-5. recent context
+5. current plan
 6. task instructions
 
 实现上可以用少量 XML-like tag 来标记段落边界，例如：
@@ -154,7 +154,7 @@ session 持久化可以消费这个协议，但 session 数据本身不要和 co
 <agent-identity>...</agent-identity>
 <rules>...</rules>
 <context-summary>...</context-summary>
-<recent-messages>...</recent-messages>
+<current-plan>...</current-plan>
 <instructions>...</instructions>
 ```
 

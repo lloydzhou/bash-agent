@@ -109,7 +109,6 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 | `--base-url` | 覆盖 API base URL |
 | `--output-format` | `human` \| `stream-json` |
 | `--print` | `--output-format stream-json` 的别名 |
-| `--no-stream` | 禁用流式 |
 | `--session [NAME]` | 使用/创建持久化会话 |
 | `--continue` | 继续最近一次会话 |
 | `--list-sessions` | 列出当前 project 下的会话 |

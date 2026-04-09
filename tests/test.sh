@@ -328,6 +328,31 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        if b'UNICODE_WRITE_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_write_unicode\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will write the unicode file now.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_write_unicode\",\"name\":\"write_file\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-write-unicode.txt','content':'中文\nline2'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'UNICODE_WRITE_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_write_unicode_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Done.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         if b'WRITE_FILE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -619,6 +644,46 @@ SSE
     fi
 }
 
+# Test 5: Claude SSE unicode parsing
+test_claude_sse_unicode() {
+    info "Test 5: Claude SSE unicode parsing"
+    local output
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_unicode","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\u4e2d\u6587"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_unicode","name":"bash","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"echo \u4e2d\u6587\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}
+
+event: message_stop
+data: {"type":"message_stop"}
+SSE
+)
+    if echo "$output" | grep -q "TEXT:中文" && echo "$output" | grep -Fq 'TOOL_INPUT:{"command":"echo 中文"}' && echo "$output" | grep -q "STOP:tool_use"; then
+        green "Claude unicode parsing"; ((PASS++)) || true
+    else
+        red "Claude unicode parsing"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 # Test 5: OpenAI SSE awk parser
 test_openai_sse() {
     info "Test 5: OpenAI SSE awk parser"
@@ -659,9 +724,30 @@ SSE
     fi
 }
 
-# Test 7: Message format conversion
+# Test 7: OpenAI SSE trims initial leading newlines
+test_openai_sse_leading_newline() {
+    info "Test 7: OpenAI SSE trims initial leading newlines"
+    local output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"\n\nHello"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12}}
+
+data: [DONE]
+SSE
+)
+    if echo "$output" | grep -q '^TEXT:Hello$' && echo "$output" | grep -q '^TEXT: world$' && ! echo "$output" | grep -q '^TEXT:\\n'; then
+        green "OpenAI trims initial leading newlines"; ((PASS++)) || true
+    else
+        red "OpenAI trims initial leading newlines"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
+# Test 8: Message format conversion
 test_convert_messages() {
-    info "Test 7: Message format conversion (Claude → OpenAI)"
+    info "Test 8: Message format conversion (Claude → OpenAI)"
     local output
     output=$(printf '%s' '[{"role":"user","content":"hello"}]' | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
     if echo "$output" | grep -q '"role":"user"' && echo "$output" | grep -q '"content":"hello"'; then
@@ -671,9 +757,9 @@ test_convert_messages() {
     fi
 }
 
-# Test 8: Tool format conversion
+# Test 9: Tool format conversion
 test_convert_tools() {
-    info "Test 8: Tool format conversion (Claude → OpenAI)"
+    info "Test 9: Tool format conversion (Claude → OpenAI)"
     local output
     output=$(printf '%s' '[{"name":"read_file","description":"Read file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]' | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
     if echo "$output" | grep -q '"type":"function"' && echo "$output" | grep -q '"parameters"'; then
@@ -799,11 +885,12 @@ EOF
 
 test_agent_plan_state() {
     info "Test 16: Agent.sh session plan state"
-    local home_dir project_dir output session_file todo_file
+    local home_dir project_dir output session_file todo_file event_file
     home_dir=$(mktemp -d)
     project_dir="$home_dir/.bash-agent/projects/$(project_key)"
     session_file="$project_dir/demo.jsonl"
     todo_file="$project_dir/demo.todo.md"
+    event_file="$project_dir/demo.events.jsonl"
 
     output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'PLAN_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"text"' && \
@@ -812,6 +899,8 @@ test_agent_plan_state() {
        grep -q "^Current plan:$" "$todo_file" && \
        grep -q "inspect files" "$todo_file" && \
        grep -q "run tests" "$todo_file" && \
+       [[ "$(grep -c '"type":"session_start"' "$event_file" 2>/dev/null || echo 0)" -eq 1 ]] && \
+       ! grep -q '"type":"plan_update"' "$event_file" && \
        ! grep -q "Current plan:" "$session_file"; then
         :
     else
@@ -995,6 +1084,20 @@ test_agent_multiple_tool_calls() {
     rm -f "$target_file"
 }
 
+test_agent_write_file_unicode() {
+    info "Test 29: Agent.sh write_file unicode"
+    local output target_file
+    target_file="/tmp/bash-agent-write-unicode.txt"
+    rm -f "$target_file"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'UNICODE_WRITE_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "Done." && [[ -f "$target_file" ]] && grep -q "中文" "$target_file" && grep -q "line2" "$target_file"; then
+        green "Agent write_file unicode"; ((PASS++)) || true
+    else
+        red "Agent write_file unicode"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -1006,8 +1109,10 @@ test_claude_sse
 test_claude_tool_use
 test_claude_usage_cache_tokens
 test_claude_tool_use_quoted_command
+test_claude_sse_unicode
 test_openai_sse
 test_openai_usage_cache_tokens
+test_openai_sse_leading_newline
 test_convert_messages
 test_convert_tools
 test_agent_e2e_claude
@@ -1029,6 +1134,7 @@ test_agent_stream_usage_event
 test_agent_tool_result_multiline_url
 test_agent_tool_result_strips_ansi
 test_agent_multiple_tool_calls
+test_agent_write_file_unicode
 
 echo ""
 echo "=============================="

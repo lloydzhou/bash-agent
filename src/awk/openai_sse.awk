@@ -10,6 +10,7 @@ BEGIN {
     input_tokens = 0
     output_tokens = 0
     cache_input_tokens = 0
+    saw_text = 0
 }
 
 /^:/ { next }
@@ -36,8 +37,16 @@ BEGIN {
     # Extract text content from delta
     content = extract_json_string(json, "content")
     if (content != "") {
-        printf "TEXT:%s\n", escape_protocol_text(unescape_json_string(content))
-        fflush()
+        content = unescape_json_string(content)
+        if (!saw_text) {
+            sub(/^\n+/, "", content)
+            sub(/^\r+/, "", content)
+        }
+        if (content != "") {
+            saw_text = 1
+            printf "TEXT:%s\n", escape_protocol_text(content)
+            fflush()
+        }
     }
 
     # Extract tool calls from delta

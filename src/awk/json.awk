@@ -134,10 +134,57 @@ function extract_value(json, key,    pos, rest, c, result, depth, in_str, i) {
 
 # Decode a JSON string value that already has surrounding quotes removed.
 # Handles common escapes used by tool inputs/arguments.
-function unescape_json_string(s,    out, i, c, esc) {
+function hex_digit_value(c,    lc) {
+    lc = tolower(c)
+    if (lc >= "0" && lc <= "9") return lc + 0
+    if (lc == "a") return 10
+    if (lc == "b") return 11
+    if (lc == "c") return 12
+    if (lc == "d") return 13
+    if (lc == "e") return 14
+    if (lc == "f") return 15
+    return -1
+}
+
+function hex_to_int(hex,    i, c, d, value) {
+    value = 0
+    for (i = 1; i <= length(hex); i++) {
+        c = substr(hex, i, 1)
+        d = hex_digit_value(c)
+        if (d < 0) return -1
+        value = value * 16 + d
+    }
+    return value
+}
+
+function utf8_from_codepoint(cp,    b1, b2, b3, b4, out) {
+    out = ""
+    if (cp <= 127) {
+        out = sprintf("%c", cp)
+    } else if (cp <= 2047) {
+        b1 = 192 + int(cp / 64)
+        b2 = 128 + (cp % 64)
+        out = sprintf("%c%c", b1, b2)
+    } else if (cp <= 65535) {
+        b1 = 224 + int(cp / 4096)
+        b2 = 128 + int((cp % 4096) / 64)
+        b3 = 128 + (cp % 64)
+        out = sprintf("%c%c%c", b1, b2, b3)
+    } else {
+        b1 = 240 + int(cp / 262144)
+        b2 = 128 + int((cp % 262144) / 4096)
+        b3 = 128 + int((cp % 4096) / 64)
+        b4 = 128 + (cp % 64)
+        out = sprintf("%c%c%c%c", b1, b2, b3, b4)
+    }
+    return out
+}
+
+function unescape_json_string(s,    out, i, c, esc, hex, cp, nexthex, lo) {
     out = ""
     esc = 0
-    for (i = 1; i <= length(s); i++) {
+    i = 1
+    while (i <= length(s)) {
         c = substr(s, i, 1)
         if (esc) {
             if (c == "b") out = out "\b"
@@ -148,13 +195,40 @@ function unescape_json_string(s,    out, i, c, esc) {
             else if (c == "\"") out = out "\""
             else if (c == "\\") out = out "\\"
             else if (c == "/") out = out "/"
-            else out = out c
+            else if (c == "u") {
+                if (i + 4 <= length(s)) {
+                    hex = substr(s, i + 1, 4)
+                    cp = hex_to_int(hex)
+                    if (cp >= 0) {
+                        if (cp >= 55296 && cp <= 56319 && i + 10 <= length(s) && substr(s, i + 5, 1) == "\\" && substr(s, i + 6, 1) == "u") {
+                            nexthex = substr(s, i + 7, 4)
+                            lo = hex_to_int(nexthex)
+                            if (lo >= 56320 && lo <= 57343) {
+                                out = out utf8_from_codepoint(65536 + ((cp - 55296) * 1024) + (lo - 56320))
+                                i += 11
+                                esc = 0
+                                continue
+                            }
+                        }
+                        if (cp >= 55296 && cp <= 57343) {
+                            out = out "\\" "u" hex
+                        } else {
+                            out = out utf8_from_codepoint(cp)
+                        }
+                        i += 5
+                        esc = 0
+                        continue
+                    }
+                }
+                out = out "\\" "u"
+            } else out = out c
             esc = 0
         } else if (c == "\\") {
             esc = 1
         } else {
             out = out c
         }
+        i++
     }
     if (esc) out = out "\\"
     return out
@@ -201,13 +275,16 @@ function extract_json_string(json, key,    pos, rest, i, c, result, bs) {
 # Extract a field value and strip surrounding quotes if it is a JSON string.
 BEGIN {
     if (json_mode == "extract_field") {
+        if (json_input == "") {
+            if ((getline json_input) < 0) json_input = ""
+        }
         raw = extract_value(json_input, json_field_key)
         if (raw == "") {
             print ""
             exit 0
         }
         if (substr(raw, 1, 1) == "\"" && substr(raw, length(raw), 1) == "\"") {
-            print extract_json_string(json_input, json_field_key)
+            print unescape_json_string(extract_json_string(json_input, json_field_key))
         } else {
             gsub(/^[ \t]+|[ \t]+$/, "", raw)
             print raw
