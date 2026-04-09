@@ -74,12 +74,27 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
-        if b'You are preparing a short execution plan' in body:
+        if b'You are initializing the current plan' in body:
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_init\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'Current plan:\n- [ ] inspect the repository\n- [ ] run the tests\n- [ ] fix the first failure'}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'- [ ] inspect the repository\n- [ ] run the tests\n- [ ] fix the first failure'}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'You are updating the current plan' in body:
+            if path.startswith('/v1/messages'):
+                if b'repo-ok' in body:
+                    plan_text = '- [x] inspect the repository\n- [ ] run the tests\n- [ ] fix the first failure'
+                else:
+                    plan_text = '- [ ] inspect the repository\n- [ ] run the tests\n- [ ] fix the first failure'
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_update\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':plan_text}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
@@ -145,7 +160,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'PLAN_PROMPT_MARKER' in body:
             if path.startswith('/v1/messages'):
-                if b'Current plan:' in body and b'inspect files' in body and b'run tests' in body:
+                if b'inspect the repository' in body and b'run the tests' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_prompt\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -156,17 +171,6 @@ class H(http.server.BaseHTTPRequestHandler):
                     ]: w.write(c.encode()); w.flush()
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing current plan in prompt')
-            return
-        if b'PLAN_MARKER' in body:
-            if path.startswith('/v1/messages'):
-                for c in [
-                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'Planning response.\n\nCurrent plan:\n- [ ] inspect files\n- [ ] run tests'}}) + '\n\n',
-                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n',
-                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
-                ]: w.write(c.encode()); w.flush()
             return
         if b'PLAN_INIT_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -184,7 +188,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'PLAN_INIT_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'repo-ok' in body and b'Current plan:' in body and b'inspect the repository' in body:
+                if b'repo-ok' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_tool_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -194,7 +198,7 @@ class H(http.server.BaseHTTPRequestHandler):
                         'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                     ]: w.write(c.encode()); w.flush()
                 else:
-                    self.send_response(422); self.end_headers(); w.write(b'missing initialized current plan in prompt')
+                    self.send_response(422); self.end_headers(); w.write(b'missing repo-ok tool result in plan init flow')
             return
         if b'READ_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -895,16 +899,16 @@ test_agent_plan_state() {
     todo_file="$project_dir/demo.todo.md"
     event_file="$project_dir/demo.events.jsonl"
 
-    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'PLAN_MARKER' 2>&1) || true
+    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" --print --plan-mode on -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures PLAN_INIT_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"text"' && \
        echo "$output" | grep -q '"type":"plan_update"' && \
+       [[ "$(printf '%s' "$output" | grep -c '"type":"plan_update"')" -ge 2 ]] && \
        [[ -f "$todo_file" ]] && \
-       grep -q "^Current plan:$" "$todo_file" && \
-       grep -q "inspect files" "$todo_file" && \
-       grep -q "run tests" "$todo_file" && \
+       grep -q "^- \\[x\\] inspect the repository$" "$todo_file" && \
+       grep -q "\[ \] run the tests" "$todo_file" && \
        [[ "$(grep -c '"type":"session_start"' "$event_file" 2>/dev/null || echo 0)" -eq 1 ]] && \
        ! grep -q '"type":"plan_update"' "$event_file" && \
-       ! grep -q "Current plan:" "$session_file"; then
+       ! grep -q "inspect the repository" "$session_file"; then
         :
     else
         red "Agent session plan state"; echo "  Output: $output"; echo "  Todo: $(cat "$todo_file" 2>/dev/null || true)"; echo "  Session: $(cat "$session_file" 2>/dev/null || true)"; ((FAIL++)) || { rm -rf "$home_dir"; return; }

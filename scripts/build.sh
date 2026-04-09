@@ -63,6 +63,7 @@ awk_files = {
     "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
     "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
+    "plan_checklist": ("plan_checklist.awk", "_AWK_PLAN_CHECKLIST"),
 }
 
 awk_bodies = {}
@@ -177,6 +178,7 @@ content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('TOOLS_JSON_FILE=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
+content = content.replace('printf \'%s\\n\' "$text" | awk -f "$AWK_DIR/plan_checklist.awk"', 'printf \'%s\\n\' "$text" | awk "${_AWK_PLAN_CHECKLIST}"')
 
 # --- Write output ---
 with open(output_path, 'w') as f:

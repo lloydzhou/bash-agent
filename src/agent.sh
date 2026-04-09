@@ -28,6 +28,7 @@ PLAN_MODE="auto"
 MAX_TURNS=20
 MAX_CONTEXT_MESSAGES=40
 MAX_CONTEXT_BUFFER_MESSAGES=4
+PLAN_UPDATE_TOOL_TURN_THRESHOLD=3
 INTERACTIVE=false
 COMMAND="chat"
 COMPACT_MODE=false
@@ -49,6 +50,7 @@ AGENT_TMPDIR=""
 API_URL=""
 AWK_DIR=""
 TOOLS_JSON_FILE=""
+EXEC_TOOL_RESULTS=""
 
 # Env defaults
 : "${ANTHROPIC_API_KEY:=}"
@@ -211,7 +213,7 @@ build_system_prompt() {
     local output=""
     local agent_identity core_rules instruction_files skill_index selected_skills stable_context todo task_instructions
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
-    core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- For multi-step work or any task that needs tools, keep a short current plan.\n- When a multi-step task starts, your first substantive reply must end with a block exactly starting with \"Current plan:\".\n- When the plan changes because a step completed, failed, or was replaced, append a revised final block exactly starting with \"Current plan:\".\n- Omit that block only when the plan is unchanged.'
+    core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- If a <current-plan> section is present, treat it as the active session plan maintained by the host.\n- Follow the current plan unless the latest user request clearly replaces it.\n- Do not emit \"Current plan:\" blocks in normal replies; the host updates plan state separately.\n- For simple tasks without tools or multiple steps, respond normally without creating extra planning text.'
 
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
@@ -342,25 +344,61 @@ Tool evidence:
 EOF
 }
 
-build_plan_system_prompt() {
+build_plan_init_system_prompt() {
     cat <<'EOF'
-You are preparing a short execution plan for a lightweight coding agent.
+You are initializing the current plan for a lightweight coding agent.
 
 Return only plain text.
 Do not call tools.
 Do not include analysis, markdown fences, or extra commentary.
+Return only a checklist.
+Return a short actionable checklist with 2 to 5 concrete steps.
+Use imperative phrasing.
+Do not use vague steps like "answer directly", "help the user", or "continue".
+If the task is simple, still return a minimal concrete checklist.
 
-If the task is simple and can be completed in a single direct response, return:
-Current plan:
-- [ ] answer directly
-
-If the task needs multiple steps or tools, return a short actionable checklist.
-
-Your output must end with a block exactly in this format:
-Current plan:
+Your output must contain only lines in exactly this format:
 - [ ] first step
 - [ ] second step
 EOF
+}
+
+build_plan_update_system_prompt() {
+    local current_plan="$1" current_plan_section
+    current_plan_section=$(wrap_section "current-plan" "$current_plan")
+    cat <<EOF
+You are updating the current plan for a lightweight coding agent.
+
+Return only plain text.
+Do not call tools.
+Do not include analysis, markdown fences, or extra commentary.
+Do not continue execution.
+Do not emit XML tags, tool calls, or command suggestions.
+Return only a revised checklist.
+
+Revise the existing plan so it matches the latest conversation state.
+- Mark completed steps with [x].
+- Keep remaining actionable steps with [ ].
+- Remove obsolete steps.
+- Add replacement steps only when needed.
+
+If the task is complete, return:
+- [x] task complete
+
+${current_plan_section}
+EOF
+}
+
+build_plan_update_prompt() {
+    local user_input="$1" assistant_text="$2" tool_results="$3"
+    local output="" user_section assistant_section tool_section
+    user_section=$(wrap_section "latest-user-request" "$user_input")
+    assistant_section=$(wrap_section "latest-assistant-reply" "$assistant_text")
+    tool_section=$(wrap_section "latest-tool-results" "$tool_results")
+    append_section output "latest-user-request" "$user_input"
+    append_section output "latest-assistant-reply" "$assistant_text"
+    append_section output "latest-tool-results" "$tool_results"
+    printf '%s' "${output%$'\n'}"
 }
 
 # Unescape JSON escape sequences for display
@@ -587,31 +625,6 @@ build_todo_section() {
     printf ''
 }
 
-extract_current_plan_block() {
-    local text="$1"
-    printf '%s\n' "$text" | awk '
-        BEGIN { capture = 0 }
-        /^Current plan:[[:space:]]*$/ { capture = 1 }
-        capture { print }
-    '
-}
-
-strip_current_plan_block() {
-    local text="$1"
-    printf '%s\n' "$text" | awk '
-        BEGIN { plan = 0 }
-        /^Current plan:[[:space:]]*$/ { plan = 1; exit }
-        { print }
-    ' | awk '
-        { lines[NR] = $0 }
-        END {
-            last = NR
-            while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
-            for (i = 1; i <= last; i++) print lines[i]
-        }
-    '
-}
-
 build_task_instructions_section() {
     printf '%s' "${SYSTEM_PROMPT:-}"
 }
@@ -631,6 +644,16 @@ should_init_plan() {
         auto) is_multi_step_prompt "$user_input" ;;
         *) return 1 ;;
     esac
+}
+
+should_update_plan() {
+    [[ "$PLAN_MODE" == "off" ]] && return 1
+    [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]]
+}
+
+normalize_plan_checklist() {
+    local text="$1"
+    printf '%s\n' "$text" | awk -f "$AWK_DIR/plan_checklist.awk"
 }
 
 build_compact_summary_prompt() {
@@ -994,7 +1017,7 @@ run_plan_init_call() {
     local user_input="$1"
     local messages body text line plan_text
     messages="[{\"role\":\"user\",\"content\":\"$(json_escape "$user_input")\"}]"
-    body=$(build_request "$messages" "" "$(build_plan_system_prompt)" "$SUMMARY_MAX_TOKENS")
+    body=$(build_request "$messages" "" "$(build_plan_init_system_prompt)" "$SUMMARY_MAX_TOKENS")
     log_verbose "Plan request body ($((${#body} / 1024))KB): ${body:0:200}..."
 
     text=""
@@ -1012,11 +1035,44 @@ run_plan_init_call() {
         esac
     done < <(call_api "$body" | parse_sse)
 
-    plan_text=$(extract_current_plan_block "$text")
-    [[ -n "$plan_text" ]] || return 1
+    plan_text=$(normalize_plan_checklist "$text") || return 1
     printf '%s\n' "$plan_text" > "$TODO_FILE"
     if is_stream_json_mode; then
         emit_stream_event "{\"type\":\"plan_update\",\"content\":\"$(json_escape "$plan_text")\"}"
+    fi
+}
+
+run_plan_update_call() {
+    local user_input="$1" assistant_text="$2" tool_results="$3"
+    local current_plan prompt messages body text line
+    current_plan=$(build_todo_section)
+    [[ -n "$current_plan" ]] || return 1
+    prompt=$(build_plan_update_prompt "$user_input" "$assistant_text" "$tool_results")
+    messages="[{\"role\":\"user\",\"content\":\"$(json_escape "$prompt")\"}]"
+    body=$(build_request "$messages" "" "$(build_plan_update_system_prompt "$current_plan")" "$SUMMARY_MAX_TOKENS")
+    log_verbose "Plan update request body ($((${#body} / 1024))KB): ${body:0:200}..."
+
+    text=""
+    while IFS= read -r line; do
+        case "$line" in
+            TEXT:*)
+                local t="${line#TEXT:}"
+                local d="$t"
+                unescape_display_to_var d "$d"
+                text+="$d"
+                ;;
+            ERROR:*)
+                die "${line#ERROR:}"
+                ;;
+        esac
+    done < <(call_api "$body" | parse_sse)
+
+    text=$(normalize_plan_checklist "$text") || { log_verbose "Ignoring invalid plan update output"; return 1; }
+    if [[ "$text" != "$current_plan" ]]; then
+        printf '%s\n' "$text" > "$TODO_FILE"
+        if is_stream_json_mode; then
+            emit_stream_event "{\"type\":\"plan_update\",\"content\":\"$(json_escape "$text")\"}"
+        fi
     fi
 }
 
@@ -1033,11 +1089,13 @@ agent_loop() {
 
     local turn=0
     local human_last_char=""
+    local consecutive_tool_turns=0
+    local pending_plan_tool_results=""
 
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
 
-        local text="" visible_text="" plan_text="" tool_calls="" stop=""
+        local text="" tool_calls="" stop=""
         local cur_tool_name="" cur_tool_id=""
 
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
@@ -1112,31 +1170,32 @@ agent_loop() {
             esac
         done < <(llm_call "$(conv_get_messages)")
 
-        visible_text="$text"
-        plan_text=$(extract_current_plan_block "$text")
-        if [[ -n "$plan_text" ]]; then
-            if [[ -n "${TODO_FILE:-}" ]]; then
-                printf '%s\n' "$plan_text" > "$TODO_FILE"
-            fi
-            if is_stream_json_mode; then
-                emit_stream_event "{\"type\":\"plan_update\",\"content\":\"$(json_escape "$plan_text")\"}"
-            fi
-            visible_text=$(strip_current_plan_block "$text")
-        fi
-
         # Record assistant response
-        conv_add_assistant "$visible_text" "$tool_calls"
+        conv_add_assistant "$text" "$tool_calls"
 
         case "$stop" in
             end_turn|stop|done)
+                if should_update_plan && [[ -n "$text" ]]; then
+                    run_plan_update_call "$user_input" "$text" "$pending_plan_tool_results" || true
+                fi
+                pending_plan_tool_results=""
+                consecutive_tool_turns=0
                 compact_context_window "auto" false || true
                 break
                 ;;
             tool_use|tool_calls)
                 # Execute tools and continue
                 local results=""
-                results=$(execute_tool_calls "$tool_calls")
+                execute_tool_calls "$tool_calls"
+                results="$EXEC_TOOL_RESULTS"
                 conv_add_tool_results "$results"
+                pending_plan_tool_results="$results"
+                (( consecutive_tool_turns++ )) || true
+                if should_update_plan && (( consecutive_tool_turns >= PLAN_UPDATE_TOOL_TURN_THRESHOLD )); then
+                    run_plan_update_call "$user_input" "$text" "$results" || true
+                    consecutive_tool_turns=0
+                    pending_plan_tool_results=""
+                fi
                 compact_context_window "auto" false || true
                 ;;
             max_tokens|length)
@@ -1156,7 +1215,8 @@ agent_loop() {
 }
 
 execute_tool_calls() {
-    local calls="$1" results=""
+    local calls="$1"
+    EXEC_TOOL_RESULTS=""
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         local name id input
@@ -1171,7 +1231,7 @@ execute_tool_calls() {
         # json_escape so newlines in output don't break the line-based format
         local escaped
         escaped=$(json_escape "$output")
-        results+="${id}"$'\t'"${escaped}"$'\n'
+        EXEC_TOOL_RESULTS+="${id}"$'\t'"${escaped}"$'\n'
 
         # Print tool_result event in stream-json mode
         if is_stream_json_mode; then
@@ -1180,7 +1240,6 @@ execute_tool_calls() {
             log_tool_result "$name" "$output"
         fi
     done <<< "$calls"
-    printf '%s' "$results"
 }
 
 # ============================================================================

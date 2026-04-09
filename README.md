@@ -130,7 +130,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 - `jsonl`：当前给模型看的 context 窗口
 - `events.jsonl`：完整事件日志
 - `summary.txt`：压缩后的稳定摘要
-- `todo.md`：session 级 planning state，只保存当前计划
+- `todo.md`：session 级 planning state，由宿主通过独立 planning call 维护，只保存当前计划
 
 ## Skills
 
