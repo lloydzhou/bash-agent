@@ -74,32 +74,6 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
-        if b'You are initializing the current plan' in body:
-            if path.startswith('/v1/messages'):
-                for c in [
-                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_init\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'- [ ] inspect the repository\n- [ ] run the tests\n- [ ] fix the first failure'}}) + '\n\n',
-                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
-                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
-                ]: w.write(c.encode()); w.flush()
-            return
-        if b'You are updating the current plan' in body:
-            if path.startswith('/v1/messages'):
-                if b'repo-ok' in body:
-                    plan_text = '- [x] inspect the repository\n- [ ] run the tests\n- [ ] fix the first failure'
-                else:
-                    plan_text = '- [ ] inspect the repository\n- [ ] run the tests\n- [ ] fix the first failure'
-                for c in [
-                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_update\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':plan_text}}) + '\n\n',
-                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
-                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
-                ]: w.write(c.encode()); w.flush()
-            return
         if b'Skill marker for tests' in body:
             if path.startswith('/v1/messages'):
                 if b'Skill path marker: ' in body and b'/helper.sh' in body:
@@ -158,47 +132,47 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing instruction file content in prompt')
             return
-        if b'PLAN_PROMPT_MARKER' in body:
+        if b'TODO_PROMPT_MARKER' in body:
             if path.startswith('/v1/messages'):
-                if b'inspect the repository' in body and b'run the tests' in body:
+                if b'- [ ] inspect repository' in body and b'- [ ] run tests' in body:
                     for c in [
-                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_prompt\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_todo_prompt\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Plan injected.\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Todo injected.\"}}\n\n',
                         'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                         'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
                         'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                     ]: w.write(c.encode()); w.flush()
                 else:
-                    self.send_response(422); self.end_headers(); w.write(b'missing current plan in prompt')
+                    self.send_response(422); self.end_headers(); w.write(b'missing current todo in prompt')
             return
-        if b'PLAN_INIT_MARKER' in body and b'"tool_result"' not in body:
+        if b'TODO_WRITE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
-                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_tool\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_todo_tool\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will inspect the repo first.\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will track the work and start with repository inspection.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_plan_init_bash\",\"name\":\"bash\",\"input\":{}}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'echo repo-ok'})}}) + '\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_todo_write_1\",\"name\":\"todo_write\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'todos':[{'content':'inspect repository','status':'pending'},{'content':'run tests','status':'pending'},{'content':'fix the first failure','status':'pending'}]})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":3}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
-        if b'PLAN_INIT_MARKER' in body and b'"tool_result"' in body:
+        if b'TODO_WRITE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'repo-ok' in body:
+                if b'OK: updated session todo list' in body:
                     for c in [
-                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_tool_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_todo_tool_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Plan init complete.\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Todo initialized.\"}}\n\n',
                         'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                         'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
                         'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                     ]: w.write(c.encode()); w.flush()
                 else:
-                    self.send_response(422); self.end_headers(); w.write(b'missing repo-ok tool result in plan init flow')
+                    self.send_response(422); self.end_headers(); w.write(b'missing todo_write tool result content')
             return
         if b'READ_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -890,8 +864,8 @@ EOF
     fi
 }
 
-test_agent_plan_state() {
-    info "Test 16: Agent.sh session plan state"
+test_agent_todo_state() {
+    info "Test 16: Agent.sh session todo state"
     local home_dir project_dir output session_file todo_file event_file
     home_dir=$(mktemp -d)
     project_dir="$home_dir/.bash-agent/projects/$(project_key)"
@@ -899,47 +873,28 @@ test_agent_plan_state() {
     todo_file="$project_dir/demo.todo.md"
     event_file="$project_dir/demo.events.jsonl"
 
-    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" --print --plan-mode on -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures PLAN_INIT_MARKER' 2>&1) || true
+    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"text"' && \
-       echo "$output" | grep -q '"type":"plan_update"' && \
-       [[ "$(printf '%s' "$output" | grep -c '"type":"plan_update"')" -ge 2 ]] && \
+       echo "$output" | grep -q '"type":"todo_update"' && \
        [[ -f "$todo_file" ]] && \
-       grep -q "^- \\[x\\] inspect the repository$" "$todo_file" && \
-       grep -q "\[ \] run the tests" "$todo_file" && \
+       grep -q "^- \\[ \\] inspect repository$" "$todo_file" && \
+       grep -q "^- \\[ \\] run tests$" "$todo_file" && \
        [[ "$(grep -c '"type":"session_start"' "$event_file" 2>/dev/null || echo 0)" -eq 1 ]] && \
-       ! grep -q '"type":"plan_update"' "$event_file" && \
-       ! grep -q "inspect the repository" "$session_file"; then
+       grep -q '"type":"todo_update"' "$event_file" && \
+       grep -q "inspect repository" "$session_file"; then
         :
     else
-        red "Agent session plan state"; echo "  Output: $output"; echo "  Todo: $(cat "$todo_file" 2>/dev/null || true)"; echo "  Session: $(cat "$session_file" 2>/dev/null || true)"; ((FAIL++)) || { rm -rf "$home_dir"; return; }
+        red "Agent session todo state"; echo "  Output: $output"; echo "  Todo: $(cat "$todo_file" 2>/dev/null || true)"; echo "  Session: $(cat "$session_file" 2>/dev/null || true)"; echo "  Events: $(cat "$event_file" 2>/dev/null || true)"; ((FAIL++)) || { rm -rf "$home_dir"; return; }
         rm -rf "$home_dir"
         return
     fi
 
-    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'PLAN_PROMPT_MARKER' 2>&1) || true
+    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'TODO_PROMPT_MARKER' 2>&1) || true
     rm -rf "$home_dir"
-    if echo "$output" | grep -q "Plan injected."; then
-        green "Agent session plan state"; ((PASS++)) || true
+    if echo "$output" | grep -q "Todo injected."; then
+        green "Agent session todo state"; ((PASS++)) || true
     else
-        red "Agent session plan state"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-}
-
-test_agent_plan_init_auto() {
-    info "Test 17: Agent.sh plan init auto mode"
-    local home_dir project_dir output todo_file
-    home_dir=$(mktemp -d)
-    project_dir="$home_dir/.bash-agent/projects/$(project_key)"
-    todo_file="$project_dir/demo.todo.md"
-
-    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures PLAN_INIT_MARKER' 2>&1) || true
-    rm -rf "$home_dir"
-    if echo "$output" | grep -q '"type":"plan_update"' && \
-       echo "$output" | grep -q 'Plan init complete.' && \
-       [[ "$output" == *'"type":"tool_start"'* ]]; then
-        green "Agent plan init auto mode"; ((PASS++)) || true
-    else
-        red "Agent plan init auto mode"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent session todo state"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -1128,8 +1083,7 @@ test_agent_compact
 test_agent_skill_injection
 test_agent_skill_index
 test_agent_instruction_files
-test_agent_plan_state
-test_agent_plan_init_auto
+test_agent_todo_state
 test_agent_read_file
 test_agent_edit_file
 test_agent_edit_file_not_found

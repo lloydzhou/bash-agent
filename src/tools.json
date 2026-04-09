@@ -66,5 +66,33 @@
       },
       "required": ["command"]
     }
+  },
+  {
+    "name": "todo_write",
+    "description": "Create or update the session todo checklist for a complex multi-step task.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "todos": {
+          "type": "array",
+          "description": "The full updated todo list for the current session.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": "A short actionable task description."
+              },
+              "status": {
+                "type": "string",
+                "description": "Task status: pending, in_progress, or completed."
+              }
+            },
+            "required": ["content", "status"]
+          }
+        }
+      },
+      "required": ["todos"]
+    }
   }
 ]

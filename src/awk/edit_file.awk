@@ -1,4 +1,8 @@
 BEGIN {
+    if (json_input == "") {
+        if ((getline json_input) < 0) json_input = ""
+    }
+
     RS = "\0"
     ORS = ""
 

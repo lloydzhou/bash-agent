@@ -63,7 +63,7 @@ awk_files = {
     "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
     "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
-    "plan_checklist": ("plan_checklist.awk", "_AWK_PLAN_CHECKLIST"),
+    "todo_write": ("todo_write.awk", "_AWK_TODO_WRITE"),
 }
 
 awk_bodies = {}
@@ -96,7 +96,8 @@ if idx != -1:
 functions = [
     ("extract_json_field", "_AWK_JSON", "", ""),
     ("parse_http_stream", "", "_AWK_HTTP_STREAM", ""),
-    ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v json_input="$input" -v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
+    ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
+    ("run_todo_write_awk", "_AWK_JSON", "_AWK_TODO_WRITE", ""),
     ("parse_sse", "_AWK_JSON", "", ""),
     ("convert_messages_to_openai", "_AWK_JSON", "_AWK_CONVERT_MESSAGES", ""),
     ("convert_tools_to_openai", "_AWK_JSON", "_AWK_CONVERT_TOOLS", ""),
@@ -115,7 +116,14 @@ for func_name, json_var, specific_var, extra_args in functions:
         replacement = (
             "run_edit_file_awk() {\n"
             "    local input=\"$1\" max_bytes=\"$2\" meta_file=\"$3\"\n"
-            "    awk -v json_input=\"$input\" -v max_bytes=\"$max_bytes\" -v meta_file=\"$meta_file\" \"${_AWK_JSON}\n${_AWK_EDIT_FILE}\"\n"
+            "    printf '%s' \"$input\" | awk -v max_bytes=\"$max_bytes\" -v meta_file=\"$meta_file\" \"${_AWK_JSON}\n${_AWK_EDIT_FILE}\"\n"
+            "}\n"
+        )
+    elif func_name == "run_todo_write_awk":
+        replacement = (
+            "run_todo_write_awk() {\n"
+            "    local input=\"$1\"\n"
+            "    printf '%s' \"$input\" | awk \"${_AWK_JSON}\n${_AWK_TODO_WRITE}\"\n"
             "}\n"
         )
     elif func_name == "parse_sse":
@@ -178,7 +186,6 @@ content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('TOOLS_JSON_FILE=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
-content = content.replace('printf \'%s\\n\' "$text" | awk -f "$AWK_DIR/plan_checklist.awk"', 'printf \'%s\\n\' "$text" | awk "${_AWK_PLAN_CHECKLIST}"')
 
 # --- Write output ---
 with open(output_path, 'w') as f:

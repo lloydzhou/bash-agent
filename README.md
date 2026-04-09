@@ -91,6 +91,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 - `write_file`：写文件，自动创建目录，默认最多 1MB
 - `edit_file`：按精确字符串替换编辑，默认只处理 1MB 以内文件
 - `bash`：执行命令，默认 600 秒超时，最多保留 50KB 输出
+- `todo_write`：为当前 session 写入结构化待办清单
 
 ## CLI 参数
 
@@ -101,7 +102,6 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 | `--max-tokens` | 最大输出 token |
 | `--system` | 系统提示词 |
 | `--skill NAME` | 从 `.claude/skills/NAME/SKILL.md` 加载技能 |
-| `--plan-mode MODE` | planning 模式：`auto` \| `on` \| `off` |
 | `--max-turns` | 最大 agent 循环次数 |
 | `--max-context` | context 消息上限 |
 | `--tool-timeout N` | tool 执行超时秒数，默认 600 |
@@ -130,7 +130,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 - `jsonl`：当前给模型看的 context 窗口
 - `events.jsonl`：完整事件日志
 - `summary.txt`：压缩后的稳定摘要
-- `todo.md`：session 级 planning state，由宿主通过独立 planning call 维护，只保存当前计划
+- `todo.md`：session 级待办清单，由 `todo_write` 工具维护
 
 ## Skills
 

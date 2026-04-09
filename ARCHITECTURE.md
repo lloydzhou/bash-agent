@@ -88,7 +88,7 @@ Session 存储应该可以重放。
 - 必要时压缩旧上下文
 - 把被裁掉的内容整理成任务级快照，而不是简单流水账
 - `compact` 是独立入口，loop 内也会在超预算时自动触发同一套压缩逻辑
-- session 级 planning state 单独保存在 `todo.md`，由正常对话轮次里的 `Current plan:` 更新
+- session 级待办清单单独保存在 `todo.md`，由 `todo_write` tool 显式维护
 
 只要 session 变长，这一层就是必需的。
 
@@ -102,7 +102,7 @@ skills 也是这一层的一部分。
 
 `summary.txt` 和 `todo.md` 不同。
 `summary.txt` 服务于 compact，是历史摘要。
-`todo.md` 服务于 planning，是当前 session 的执行计划。
+`todo.md` 服务于执行态任务跟踪，是当前 session 的待办清单。
 
 ### 4. Agent Loop
 
@@ -143,10 +143,11 @@ session 持久化可以消费这个协议，但 session 数据本身不要和 co
 
 1. agent identity
 2. core rules
-3. skills
-4. stable context
-5. current plan
-6. task instructions
+3. todo guidance
+4. skills
+5. stable context
+6. current todo
+7. task instructions
 
 实现上可以用少量 XML-like tag 来标记段落边界，例如：
 
@@ -154,7 +155,7 @@ session 持久化可以消费这个协议，但 session 数据本身不要和 co
 <agent-identity>...</agent-identity>
 <rules>...</rules>
 <context-summary>...</context-summary>
-<current-plan>...</current-plan>
+<current-todo>...</current-todo>
 <instructions>...</instructions>
 ```
 
@@ -168,6 +169,7 @@ session 持久化可以消费这个协议，但 session 数据本身不要和 co
 - `text`
 - `tool_start`
 - `tool_input`
+- `todo_update`
 - `tool_result`
 - `usage`
 - `stop`

@@ -41,6 +41,7 @@
 - `text`
 - `tool_start`
 - `tool_input`
+- `todo_update`
 - `tool_result`
 - `usage`
 - `stop`
@@ -85,7 +86,18 @@
 字段：
 
 - `type`: `"tool_input"`
-- `content`: 工具输入
+- `name`: 工具名
+- `id`: tool call id
+- `input`: 工具输入对象
+
+### `todo_update`
+
+`todo_write` 工具成功更新当前 session 的待办清单时输出。
+
+字段：
+
+- `type`: `"todo_update"`
+- `content`: 更新后的完整 checklist 文本
 
 ### `tool_result`
 
@@ -106,6 +118,7 @@
 - `type`: `"usage"`
 - `input_tokens`: 输入 token
 - `output_tokens`: 输出 token
+- `cache_input_tokens`: 命中的缓存输入 token
 
 ### `stop`
 
@@ -155,11 +168,12 @@
 
 1. `session_start`
 2. `text` / `tool_start` / `tool_input`
-3. `tool_result`
-4. `usage`
-5. `stop`
-6. `context_update`
-7. `error`
+3. `todo_update`
+4. `tool_result`
+5. `usage`
+6. `stop`
+7. `context_update`
+8. `error`
 
 注意：
 
@@ -202,4 +216,3 @@
 - 直接重命名现有字段
 - 改变已有事件的基本语义
 - 把 human 输出塞回 stream-json
-
