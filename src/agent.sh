@@ -139,17 +139,27 @@ die() {
 }
 
 json_escape() {
-    local input="${1:-}" output="" i=0 len c
+    local input="${1:-}" output="" i=0 len c ord escaped
     len=${#input}
     while (( i < len )); do
         c="${input:i:1}"
         case "$c" in
             '"')  output+='\"' ;;
             '\')  output+='\\' ;;
+            $'\b') output+='\b' ;;
+            $'\f') output+='\f' ;;
             $'\n') output+='\n' ;;
             $'\r') output+='\r' ;;
             $'\t') output+='\t' ;;
-            *)    output+="$c" ;;
+            *)
+                printf -v ord '%d' "'$c"
+                if (( ord < 32 )); then
+                    printf -v escaped '\\u%04x' "$ord"
+                    output+="$escaped"
+                else
+                    output+="$c"
+                fi
+                ;;
         esac
         (( i++ )) || true
     done
@@ -183,9 +193,9 @@ wrap_section() {
 }
 
 append_section() {
-    local __outvar="$1" tag="$2" content="$3"
+    local __outvar="$1" tag="$2" content="$3" name="${4:-}"
     [[ -n "$content" ]] || return 0
-    printf -v "$__outvar" '%s%s%s\n' "${!__outvar}" "$(wrap_section "$tag" "$content")" ""
+    printf -v "$__outvar" '%s%s%s\n' "${!__outvar}" "$(wrap_section "$tag" "$content" "$name")" ""
 }
 
 session_append_line() {
@@ -250,26 +260,23 @@ load_skill_content() {
 }
 
 build_skill_index_section() {
-    local base skill_file skill_name summary section=""
+    local base skill_file skill_name summary output=""
     base=$(find_skill_base_dir) || { printf ''; return 0; }
 
     for skill_file in "$base"/*/SKILL.md; do
         [[ -f "$skill_file" ]] || continue
         skill_name=$(basename "$(dirname "$skill_file")")
         summary=$(awk -f "$AWK_DIR/skill_summary.awk" "$skill_file")
-        if [[ -n "$summary" ]]; then
-            section+="- ${skill_name}: ${summary}"$'\n'
-        else
-            section+="- ${skill_name}"$'\n'
-        fi
+        output+="- ${skill_name}"
+        [[ -n "$summary" ]] && output+=": ${summary}"
+        output+=$'\n'
     done
 
-    section="${section%$'\n'}"
-    printf '%s' "$section"
+    printf '%s' "${output%$'\n'}"
 }
 
 build_selected_skills_section() {
-    local section="" skill_name skill_content
+    local output="" skill_name skill_content
 
     if [[ ${#SKILL_NAMES[@]} -eq 0 ]]; then
         printf ''
@@ -278,10 +285,9 @@ build_selected_skills_section() {
 
     for skill_name in "${SKILL_NAMES[@]}"; do
         skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md)"
-        section+="$(wrap_section "skill" "$skill_content" "$skill_name")"$'\n'
+        append_section output "skill" "$skill_content" "$skill_name"
     done
-    section="${section%$'\n'}"
-    printf '%s' "$section"
+    printf '%s' "${output%$'\n'}"
 }
 
 find_instruction_file_in_dir() {
@@ -302,22 +308,21 @@ find_instruction_file_in_dir() {
 }
 
 build_instruction_files_section() {
-    local section="" global_file project_file global_content project_content
+    local output="" global_file project_file global_content project_content
     global_file=$(find_instruction_file_in_dir "${HOME}/.bash-agent" 2>/dev/null || true)
     project_file=$(find_instruction_file_in_dir "${PWD:-$(pwd)}" 2>/dev/null || true)
 
     if [[ -n "$global_file" ]]; then
         global_content=$(cat "$global_file") || return 1
-        section+="$(wrap_section "instruction-file" "$global_content" "global")"$'\n'
+        append_section output "instruction-file" "$global_content" "global"
     fi
 
     if [[ -n "$project_file" ]]; then
         project_content=$(cat "$project_file") || return 1
-        section+="$(wrap_section "instruction-file" "$project_content" "project")"$'\n'
+        append_section output "instruction-file" "$project_content" "project"
     fi
 
-    section="${section%$'\n'}"
-    printf '%s' "$section"
+    printf '%s' "${output%$'\n'}"
 }
 
 build_compact_system_prompt() {
@@ -717,10 +722,7 @@ generate_tool_defs() {
         tools_file="$script_dir/tools.json"
     fi
     [[ -f "$tools_file" ]] || die "Cannot find tools.json: $tools_file"
-    local tmp
-    tmp=$(mktemp "${AGENT_TMPDIR}/tools.XXXXXX")
-    cat "$tools_file" > "$tmp"
-    printf '%s' "$tmp"
+    printf '%s' "$tools_file"
 }
 
 # ============================================================================
