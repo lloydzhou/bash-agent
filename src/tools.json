@@ -1,0 +1,70 @@
+[
+  {
+    "name": "read_file",
+    "description": "Read the contents of a file. Returns the file content as text.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to read"
+        }
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "write_file",
+    "description": "Write content to a file. Creates parent directories if needed.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to write"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write to the file"
+        }
+      },
+      "required": ["path", "content"]
+    }
+  },
+  {
+    "name": "edit_file",
+    "description": "Edit a file by replacing an exact string match with a new string.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to edit"
+        },
+        "old_string": {
+          "type": "string",
+          "description": "The exact text to find and replace"
+        },
+        "new_string": {
+          "type": "string",
+          "description": "The replacement text"
+        }
+      },
+      "required": ["path", "old_string", "new_string"]
+    }
+  },
+  {
+    "name": "bash",
+    "description": "Execute a bash command. Returns stdout and stderr.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to execute"
+        }
+      },
+      "required": ["command"]
+    }
+  }
+]

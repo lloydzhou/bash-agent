@@ -50,6 +50,7 @@ TOOL_DEF_FILE=""
 AGENT_TMPDIR=""
 API_URL=""
 AWK_DIR=""
+TOOLS_JSON_FILE=""
 
 # Env defaults
 : "${ANTHROPIC_API_KEY:=}"
@@ -170,48 +171,23 @@ is_stream_json_mode() {
     [[ "$OUTPUT_FORMAT" == "stream-json" ]]
 }
 
-render_template() {
-    local template="$1"
-    shift
-    local key value
-    while [[ $# -gt 0 ]]; do
-        key="$1"
-        value="$2"
-        shift 2
-        template="${template//\{\{$key\}\}/$value}"
-    done
-    printf '%s' "$template"
-}
-
 wrap_section() {
-    local tag="$1" content="$2"
+    local tag="$1" content="$2" name="${3:-}"
     if [[ -z "$content" ]]; then
         printf ''
         return 0
     fi
-    printf '<%s>\n%s\n</%s>' "$tag" "$content" "$tag"
-}
-
-wrap_named_section() {
-    local tag="$1" name="$2" content="$3"
-    if [[ -z "$content" ]]; then
-        printf ''
-        return 0
+    if [[ -n "$name" ]]; then
+        printf '<%s name="%s">\n%s\n</%s>' "$tag" "$(json_escape "$name")" "$content" "$tag"
+    else
+        printf '<%s>\n%s\n</%s>' "$tag" "$content" "$tag"
     fi
-    printf '<%s name="%s">\n%s\n</%s>' "$tag" "$(json_escape "$name")" "$content" "$tag"
 }
 
-prompt_template_default() {
-    cat <<'EOF'
-{{agent_identity_section}}
-{{core_rules_section}}
-{{instruction_files_section}}
-{{skill_index_section}}
-{{selected_skills_section}}
-{{stable_context_section}}
-{{todo_section}}
-{{task_instructions_section}}
-EOF
+append_section() {
+    local __outvar="$1" tag="$2" content="$3"
+    [[ -n "$content" ]] || return 0
+    printf -v "$__outvar" '%s%s%s\n' "${!__outvar}" "$(wrap_section "$tag" "$content")" ""
 }
 
 session_append_line() {
@@ -225,35 +201,29 @@ emit_stream_event() {
 }
 
 build_system_prompt() {
-    local template agent_identity core_rules instruction_files skill_index selected_skills stable_context todo task_instructions
-    local agent_identity_section core_rules_section instruction_files_section skill_index_section selected_skills_section stable_context_section todo_section task_instructions_section
-    template=$(prompt_template_default)
-    BASE_SYSTEM_PROMPT="$template"
+    local output=""
+    local agent_identity core_rules instruction_files skill_index selected_skills stable_context todo task_instructions
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- For multi-step work or any task that needs tools, keep a short current plan.\n- When a multi-step task starts, your first substantive reply must end with a block exactly starting with \"Current plan:\".\n- When the plan changes because a step completed, failed, or was replaced, append a revised final block exactly starting with \"Current plan:\".\n- Omit that block only when the plan is unchanged.'
+
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
     selected_skills=$(build_selected_skills_section)
     stable_context=$(build_stable_context_section)
     todo=$(build_todo_section)
     task_instructions=$(build_task_instructions_section)
-    agent_identity_section=$(wrap_section "agent-identity" "$agent_identity")
-    core_rules_section=$(wrap_section "rules" "$core_rules")
-    instruction_files_section=$(wrap_section "instruction-files" "$instruction_files")
-    skill_index_section=$(wrap_section "skill-index" "$skill_index")
-    selected_skills_section=$(wrap_section "selected-skills" "$selected_skills")
-    stable_context_section=$(wrap_section "context-summary" "$stable_context")
-    todo_section=$(wrap_section "current-plan" "$todo")
-    task_instructions_section=$(wrap_section "instructions" "$task_instructions")
-    render_template "$template" \
-        "agent_identity_section" "$agent_identity_section" \
-        "core_rules_section" "$core_rules_section" \
-        "instruction_files_section" "$instruction_files_section" \
-        "skill_index_section" "$skill_index_section" \
-        "selected_skills_section" "$selected_skills_section" \
-        "stable_context_section" "$stable_context_section" \
-        "todo_section" "$todo_section" \
-        "task_instructions_section" "$task_instructions_section"
+
+    append_section output "agent-identity" "$agent_identity"
+    append_section output "rules" "$core_rules"
+    append_section output "instruction-files" "$instruction_files"
+    append_section output "skill-index" "$skill_index"
+    append_section output "selected-skills" "$selected_skills"
+    append_section output "context-summary" "$stable_context"
+    append_section output "current-plan" "$todo"
+    append_section output "instructions" "$task_instructions"
+
+    BASE_SYSTEM_PROMPT="$output"
+    printf '%s' "${output%$'\n'}"
 }
 
 find_skill_base_dir() {
@@ -334,7 +304,7 @@ build_selected_skills_section() {
 
     for skill_name in "${SKILL_NAMES[@]}"; do
         skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md)"
-        section+="$(wrap_named_section "skill" "$skill_name" "$skill_content")"$'\n'
+        section+="$(wrap_section "skill" "$skill_content" "$skill_name")"$'\n'
     done
     section="${section%$'\n'}"
     printf '%s' "$section"
@@ -357,25 +327,19 @@ find_instruction_file_in_dir() {
     return 1
 }
 
-load_instruction_file_content() {
-    local scope="$1" file="$2" content=""
-    content=$(cat "$file") || return 1
-    printf 'Source: %s\nPath: %s\n\n%s' "$scope" "$file" "$content"
-}
-
 build_instruction_files_section() {
     local section="" global_file="" project_file="" global_content="" project_content=""
     global_file=$(find_instruction_file_in_dir "${HOME}/.bash-agent" 2>/dev/null || true)
     project_file=$(find_instruction_file_in_dir "${PWD:-$(pwd)}" 2>/dev/null || true)
 
     if [[ -n "$global_file" ]]; then
-        global_content=$(load_instruction_file_content "global" "$global_file") || return 1
-        section+="$(wrap_named_section "instruction-file" "global" "$global_content")"$'\n'
+        global_content=$(cat "$global_file") || return 1
+        section+="$(wrap_section "instruction-file" "$global_content" "global")"$'\n'
     fi
 
     if [[ -n "$project_file" ]]; then
-        project_content=$(load_instruction_file_content "project" "$project_file") || return 1
-        section+="$(wrap_named_section "instruction-file" "project" "$project_content")"$'\n'
+        project_content=$(cat "$project_file") || return 1
+        section+="$(wrap_section "instruction-file" "$project_content" "project")"$'\n'
     fi
 
     section="${section%$'\n'}"
@@ -437,6 +401,67 @@ extract_json_field() {
         -v json_mode="extract_field" \
         -v json_field_key="$key" \
         -f "$AWK_DIR/json.awk"
+}
+
+build_tool_calls_json() {
+    local calls="$1"
+    local tool_json="[" first=true
+    while IFS= read -r tc; do
+        [[ -z "$tc" ]] && continue
+        local name id input
+        IFS=$'\t' read -r name id input <<< "$tc"
+        $first || tool_json+=","
+        first=false
+        tool_json+="{\"name\":\"$(json_escape "$name")\",\"id\":\"$(json_escape "$id")\",\"input\":${input}}"
+    done <<< "$calls"
+    tool_json+="]"
+    printf '%s' "$tool_json"
+}
+
+build_assistant_content_json() {
+    local text="$1" calls="$2"
+    local content="[" first=true
+
+    if [[ -n "$text" ]]; then
+        content+="{\"type\":\"text\",\"text\":\"$(json_escape "$text")\"}"
+        first=false
+    fi
+
+    while IFS= read -r tc; do
+        [[ -z "$tc" ]] && continue
+        local name id input
+        IFS=$'\t' read -r name id input <<< "$tc"
+        $first || content+=","
+        first=false
+        content+="{\"type\":\"tool_use\",\"id\":\"$(json_escape "$id")\",\"name\":\"$(json_escape "$name")\",\"input\":${input}}"
+    done <<< "$calls"
+
+    content+="]"
+    printf '%s' "$content"
+}
+
+build_tool_results_content_json() {
+    local results="$1"
+    local content="[" first=true
+
+    while IFS= read -r tr; do
+        [[ -z "$tr" ]] && continue
+        local tid result
+        IFS=$'\t' read -r tid result <<< "$tr"
+        $first || content+=","
+        first=false
+        content+="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"${result}\"}"
+    done <<< "$results"
+
+    content+="]"
+    printf '%s' "$content"
+}
+
+build_tool_result_event_json() {
+    local tid="$1" result="$2"
+    printf '{"type":"tool_result","tool_use_id":"%s","content":"%s"}' \
+        "$(json_escape "$tid")" \
+        "$result"
 }
 
 cleanup() {
@@ -536,42 +561,16 @@ conv_add_user() {
 
 conv_add_assistant() {
     local text="$1" calls="$2"
-    local content="[" first=true
-
-    if [[ -n "$text" ]]; then
-        content+="{\"type\":\"text\",\"text\":\"$(json_escape "$text")\"}"
-        first=false
-    fi
-
-    while IFS= read -r tc; do
-        [[ -z "$tc" ]] && continue
-        local name id input
-        IFS=$'\t' read -r name id input <<< "$tc"
-        $first || content+=","
-        first=false
-        content+="{\"type\":\"tool_use\",\"id\":\"$(json_escape "$id")\",\"name\":\"$(json_escape "$name")\",\"input\":${input}}"
-    done <<< "$calls"
-
-    content+="]"
+    local content
+    content=$(build_assistant_content_json "$text" "$calls")
     printf '{"role":"assistant","content":%s}\n' "$content" >> "$CONV_FILE"
     session_log_assistant "$text" "$calls"
 }
 
 conv_add_tool_results() {
     local results="$1"
-    local content="["
-    local first=true
-
-    while IFS= read -r tr; do
-        [[ -z "$tr" ]] && continue
-        local tid result
-        IFS=$'\t' read -r tid result <<< "$tr"
-        $first || content+=","
-        first=false
-        content+="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"${result}\"}"
-    done <<< "$results"
-
-    content+="]"
+    local content
+    content=$(build_tool_results_content_json "$results")
     printf '{"role":"user","content":%s}\n' "$content" >> "$CONV_FILE"
     session_log_tool_results "$results"
 }
@@ -585,10 +584,6 @@ conv_get_messages() {
         result+="$msg"
     done < "$CONV_FILE"
     printf '%s]' "$result"
-}
-
-conv_trim() {
-    compact_context_window "auto" false
 }
 
 context_append_summary() {
@@ -640,15 +635,7 @@ strip_current_plan_block() {
 }
 
 build_task_instructions_section() {
-    local section=""
-    if [[ -n "$SYSTEM_PROMPT" ]]; then
-        section="$SYSTEM_PROMPT"
-    fi
-    printf '%s' "$section"
-}
-
-todo_exists() {
-    [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]]
+    printf '%s' "${SYSTEM_PROMPT:-}"
 }
 
 is_multi_step_prompt() {
@@ -659,7 +646,7 @@ is_multi_step_prompt() {
 
 should_init_plan() {
     local user_input="$1"
-    todo_exists && return 1
+    [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]] && return 1
     case "$PLAN_MODE" in
         on) return 0 ;;
         off) return 1 ;;
@@ -680,7 +667,7 @@ EOF
 }
 
 compact_context_window() {
-    local trigger="$1" force="${2:-false}" total keep drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response summary_text
+    local trigger="$1" force="${2:-false}" total keep drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
 
     total=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
     local threshold=$MAX_CONTEXT_MESSAGES
@@ -727,16 +714,8 @@ compact_context_window() {
 session_log_assistant() {
     local text="$1" calls="$2"
     local payload="{\"type\":\"assistant_message\",\"text\":\"$(json_escape "$text")\""
-    local tool_json="[" first=true
-    while IFS= read -r tc; do
-        [[ -z "$tc" ]] && continue
-        local name id input
-        IFS=$'\t' read -r name id input <<< "$tc"
-        $first || tool_json+=","
-        first=false
-        tool_json+="{\"name\":\"$(json_escape "$name")\",\"id\":\"$(json_escape "$id")\",\"input\":$input}"
-    done <<< "$calls"
-    tool_json+="]"
+    local tool_json
+    tool_json=$(build_tool_calls_json "$calls")
     payload+=",\"tool_calls\":${tool_json}}"
     session_append_line "$payload"
 }
@@ -747,7 +726,7 @@ session_log_tool_results() {
         [[ -z "$tr" ]] && continue
         local tid result
         IFS=$'\t' read -r tid result <<< "$tr"
-        session_append_line "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"${result}\"}"
+        session_append_line "$(build_tool_result_event_json "$tid" "$result")"
     done <<< "$results"
 }
 
@@ -756,80 +735,18 @@ session_log_tool_results() {
 # ============================================================================
 
 generate_tool_defs() {
+    local tools_file
+    if [[ -n "${TOOLS_JSON_FILE:-}" ]]; then
+        tools_file="$TOOLS_JSON_FILE"
+    else
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        tools_file="$script_dir/tools.json"
+    fi
+    [[ -f "$tools_file" ]] || die "Cannot find tools.json: $tools_file"
     local tmp
     tmp=$(mktemp "${AGENT_TMPDIR}/tools.XXXXXX")
-    cat > "$tmp" <<'TOOLDEFS'
-[
-  {
-    "name": "read_file",
-    "description": "Read the contents of a file. Returns the file content as text.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "Path to the file to read"
-        }
-      },
-      "required": ["path"]
-    }
-  },
-  {
-    "name": "write_file",
-    "description": "Write content to a file. Creates parent directories if needed.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "Path to the file to write"
-        },
-        "content": {
-          "type": "string",
-          "description": "Content to write to the file"
-        }
-      },
-      "required": ["path", "content"]
-    }
-  },
-  {
-    "name": "edit_file",
-    "description": "Edit a file by replacing an exact string match with a new string.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "path": {
-          "type": "string",
-          "description": "Path to the file to edit"
-        },
-        "old_string": {
-          "type": "string",
-          "description": "The exact text to find and replace"
-        },
-        "new_string": {
-          "type": "string",
-          "description": "The replacement text"
-        }
-      },
-      "required": ["path", "old_string", "new_string"]
-    }
-  },
-  {
-    "name": "bash",
-    "description": "Execute a bash command. Returns stdout and stderr.",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "command": {
-          "type": "string",
-          "description": "The bash command to execute"
-        }
-      },
-      "required": ["command"]
-    }
-  }
-]
-TOOLDEFS
+    cat "$tools_file" > "$tmp"
     printf '%s' "$tmp"
 }
 
@@ -1000,14 +917,6 @@ build_request() {
 # Section 8: SSE Parsers (call awk/*.awk)
 # ============================================================================
 
-parse_claude_sse() {
-    awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk"
-}
-
-parse_openai_sse() {
-    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk"
-}
-
 parse_http_stream() {
     awk -f "$AWK_DIR/http_stream.awk"
 }
@@ -1024,8 +933,8 @@ run_edit_file_awk() {
 
 parse_sse() {
     case "$PROVIDER" in
-        claude)            parse_claude_sse ;;
-        openai)            parse_openai_sse ;;
+        claude) awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" ;;
+        openai) awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk" ;;
     esac
 }
 
@@ -1048,26 +957,20 @@ _stream_curl() {
         "$API_URL" 2>&1 | parse_http_stream
 }
 
-call_claude_api() {
-    local body="$1"
-    _stream_curl "$body" \
-        -H "Content-Type: application/json" \
-        -H "x-api-key: ${API_KEY}" \
-        -H "anthropic-version: 2023-06-01"
-}
-
-call_openai_api() {
-    local body="$1"
-    _stream_curl "$body" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer ${API_KEY}"
-}
-
 call_api() {
     local body="$1"
     case "$PROVIDER" in
-        claude)            call_claude_api "$body" ;;
-        openai)            call_openai_api "$body" ;;
+        claude)
+            _stream_curl "$body" \
+                -H "Content-Type: application/json" \
+                -H "x-api-key: ${API_KEY}" \
+                -H "anthropic-version: 2023-06-01"
+            ;;
+        openai)
+            _stream_curl "$body" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer ${API_KEY}"
+            ;;
     esac
 }
 
@@ -1097,7 +1000,10 @@ run_summary_call() {
     while IFS= read -r line; do
         case "$line" in
             TEXT:*)
-                text+="${line#TEXT:}"
+                local t="${line#TEXT:}"
+                local d="$t"
+                unescape_display_to_var d "$d"
+                text+="$d"
                 ;;
             ERROR:*)
                 die "${line#ERROR:}"

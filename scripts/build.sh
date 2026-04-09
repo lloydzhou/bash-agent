@@ -74,10 +74,15 @@ for key, (filename, varname) in awk_files.items():
     escaped = body.replace("'", "'\\''")
     awk_bodies[key] = escaped
 
+tools_json_path = os.path.join(os.path.dirname(agent_src), "tools.json")
+with open(tools_json_path) as f:
+    tools_json_raw = f.read().strip()
+
 # --- Insert bash variables after config section ---
 var_block = ""
 for key, (filename, varname) in awk_files.items():
     var_block += "\n" + varname + "='" + awk_bodies[key] + "'\n"
+var_block += "\n_TOOLS_JSON='" + tools_json_raw.replace("'", "'\\''") + "'\n"
 
 # Insert after the PROMPT="" line (end of config section)
 marker = 'PROMPT=""\n'
@@ -87,13 +92,13 @@ if idx != -1:
 
 # --- Replace each awk function to use variable concatenation ---
 functions = [
-    ("extract_json_field", "_AWK_JSON", "", '-v json_mode="extract_field" -v json_input="$json" -v json_field_key="$key"'),
+    ("extract_json_field", "_AWK_JSON", "", ""),
     ("parse_http_stream", "", "_AWK_HTTP_STREAM", ""),
-    ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v json_input="$input" -v max_bytes="$max_bytes" -v meta_file="$meta"'),
-    ("parse_claude_sse", "_AWK_JSON", "_AWK_CLAUDE_SSE", r'-v verbose="${VERBOSE:-false}"'),
-    ("parse_openai_sse", "_AWK_JSON", "_AWK_OPENAI_SSE", ""),
+    ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v json_input="$input" -v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
+    ("parse_sse", "_AWK_JSON", "", ""),
     ("convert_messages_to_openai", "_AWK_JSON", "_AWK_CONVERT_MESSAGES", ""),
     ("convert_tools_to_openai", "_AWK_JSON", "_AWK_CONVERT_TOOLS", ""),
+    ("generate_tool_defs", "", "", ""),
 ]
 
 for func_name, json_var, specific_var, extra_args in functions:
@@ -101,7 +106,7 @@ for func_name, json_var, specific_var, extra_args in functions:
         replacement = (
             "extract_json_field() {\n"
             "    local json=\"$1\" key=\"$2\"\n"
-            "    awk -v json_mode=\"extract_field\" -v json_input=\"$json\" -v json_field_key=\"$key\" \"${_AWK_JSON}\"\n"
+            "    printf '%s' \"$json\" | awk -v json_mode=\"extract_field\" -v json_field_key=\"$key\" \"${_AWK_JSON}\"\n"
             "}\n"
         )
     elif func_name == "run_edit_file_awk":
@@ -109,6 +114,24 @@ for func_name, json_var, specific_var, extra_args in functions:
             "run_edit_file_awk() {\n"
             "    local input=\"$1\" max_bytes=\"$2\" meta_file=\"$3\"\n"
             "    awk -v json_input=\"$input\" -v max_bytes=\"$max_bytes\" -v meta_file=\"$meta_file\" \"${_AWK_JSON}\n${_AWK_EDIT_FILE}\"\n"
+            "}\n"
+        )
+    elif func_name == "parse_sse":
+        replacement = (
+            "parse_sse() {\n"
+            "    case \"$PROVIDER\" in\n"
+            "        claude) awk -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_CLAUDE_SSE}\" ;;\n"
+            "        openai) awk \"${_AWK_JSON}\n${_AWK_OPENAI_SSE}\" ;;\n"
+            "    esac\n"
+            "}\n"
+        )
+    elif func_name == "generate_tool_defs":
+        replacement = (
+            "generate_tool_defs() {\n"
+            "    local tmp\n"
+            "    tmp=$(mktemp \"${AGENT_TMPDIR}/tools.XXXXXX\")\n"
+            "    printf '%s\\n' \"$_TOOLS_JSON\" > \"$tmp\"\n"
+            "    printf '%s' \"$tmp\"\n"
             "}\n"
         )
     else:
@@ -151,6 +174,7 @@ if idx != -1:
 
 content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
+content = content.replace('TOOLS_JSON_FILE=""\n', "")
 
 # --- Write output ---
 with open(output_path, 'w') as f:

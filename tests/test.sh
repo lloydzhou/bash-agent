@@ -17,7 +17,7 @@ done
 BASE="http://localhost:$PORT"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-AGENT="$ROOT_DIR/src/agent.sh"
+AGENT="${AGENT:-$ROOT_DIR/src/agent.sh}"
 AWK_DIR="$ROOT_DIR/src/awk"
 PASS=0
 FAIL=0
@@ -56,20 +56,20 @@ class H(http.server.BaseHTTPRequestHandler):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_summary\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Task focus: summarize compact test\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\nLatest request: compact session\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\nProgress: trimmed old context\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"\\nTool evidence: none\"}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'Task focus: summarize compact test'}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'\nLatest request: compact session'}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'\nProgress: trimmed old context'}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'\nTool evidence: none'}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
             elif path.startswith('/v1/chat/completions'):
                 for c in [
-                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Task focus: summarize compact test\"},\"finish_reason\":null}]}\n\n',
-                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\nLatest request: compact session\"},\"finish_reason\":null}]}\n\n',
-                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\nProgress: trimmed old context\"},\"finish_reason\":null}]}\n\n',
-                    'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\nTool evidence: none\"},\"finish_reason\":null}]}\n\n',
+                    'data: ' + json.dumps({'id':'chatcmpl-summary','object':'chat.completion.chunk','created':1234567890,'model':'gpt-4o','choices':[{'index':0,'delta':{'role':'assistant','content':'Task focus: summarize compact test'},'finish_reason':None}]}) + '\n\n',
+                    'data: ' + json.dumps({'id':'chatcmpl-summary','object':'chat.completion.chunk','created':1234567890,'model':'gpt-4o','choices':[{'index':0,'delta':{'content':'\nLatest request: compact session'},'finish_reason':None}]}) + '\n\n',
+                    'data: ' + json.dumps({'id':'chatcmpl-summary','object':'chat.completion.chunk','created':1234567890,'model':'gpt-4o','choices':[{'index':0,'delta':{'content':'\nProgress: trimmed old context'},'finish_reason':None}]}) + '\n\n',
+                    'data: ' + json.dumps({'id':'chatcmpl-summary','object':'chat.completion.chunk','created':1234567890,'model':'gpt-4o','choices':[{'index':0,'delta':{'content':'\nTool evidence: none'},'finish_reason':None}]}) + '\n\n',
                     'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
@@ -809,6 +809,9 @@ test_agent_compact() {
     output=$(HOME="$home_dir" "$AGENT" compact -p claude --base-url "$BASE/v1" --api-key test --session demo 2>&1) || true
     if echo "$output" | grep -q "Context compacted" && \
        grep -q "Task focus: summarize compact test" "$summary_file" && \
+       grep -q "^Latest request: compact session$" "$summary_file" && \
+       grep -q "^Progress: trimmed old context$" "$summary_file" && \
+       grep -q "^Tool evidence: none$" "$summary_file" && \
        [[ "$(wc -l < "$session_file")" -eq 4 ]]; then
         green "Agent compact subcommand"; ((PASS++)) || true
     else
