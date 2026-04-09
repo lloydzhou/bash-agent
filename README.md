@@ -1,52 +1,51 @@
 # bash-agent
 
-A minimal AI coding agent runtime built with `bash` and `awk`.
+[English README](README.en.md)
 
-It is designed to stay small at runtime while still exposing the core pieces an agent needs:
+一个使用 `bash` 和 `awk` 构建的极简 AI coding agent runtime。
 
-- streaming model I/O
-- structured tool calls
-- session persistence
-- context compaction
-- machine-friendly event output
+它不是一个完整平台，而是一个尽量小、边界清晰、可以真正执行工作的 agent core。目标是：
 
-`bash-agent` is not trying to be a full platform. It is a compact agent core that can run in a terminal or be embedded behind another client.
+- 运行时依赖尽量少
+- 协议边界明确
+- 状态可预测
+- 在终端里可直接使用
+- 也可以作为上层客户端后面的执行内核
 
-## Why This Exists
+## 项目定位
 
-Most agent runtimes grow by adding layers:
+大多数 agent runtime 会逐渐叠加这些层：
 
-- SDKs
-- background services
-- state stores
-- protocol adapters
-- orchestration frameworks
+- SDK
+- 后台服务
+- 状态存储
+- 协议适配器
+- 编排框架
 
-This project takes the opposite path:
+`bash-agent` 反过来做：
 
-- `bash` handles orchestration, files, processes, HTTP calls, and session lifecycle
-- `awk` handles JSON/SSE parsing, text extraction, normalization, and small protocol transforms
+- `bash` 负责流程编排、文件、进程、HTTP 请求、session 生命周期
+- `awk` 负责 JSON/SSE 解析、文本抽取、规范化和轻量协议转换
 
-The goal is not “few files at any cost”. The goal is:
+重点不是“文件越少越好”，而是：
 
-- minimal runtime dependencies
-- clear protocol boundaries
-- predictable state
-- enough functionality to do real work
+- 功能完备前提下尽量精简
+- 字符串解析和变换收敛到 `awk`
+- orchestration 保持在 `bash`
 
-## Current Capabilities
+## 当前能力
 
-- Providers:
+- Provider：
   - `claude`
-  - `openai` chat-completions compatible APIs
-- Output modes:
+  - `openai` chat-completions 兼容接口
+- 输出模式：
   - `human`
   - `stream-json`
-- Session state:
-  - persisted per project and per session
-  - resumable
-  - compactable
-- Built-in tools:
+- Session：
+  - 按项目、按 session 持久化
+  - 支持恢复
+  - 支持 compact
+- 内置工具：
   - `Read`
   - `Write`
   - `Edit`
@@ -54,53 +53,53 @@ The goal is not “few files at any cost”. The goal is:
   - `Glob`
   - `Grep`
   - `TodoWrite`
-- Prompt layers:
+- Prompt 分层：
   - instruction files
   - skill index
   - selected skills
   - compact summary
   - current todo
 
-## Quick Start
+## 快速开始
 
 ```bash
-# Claude-compatible endpoint
+# Claude 兼容接口
 export ANTHROPIC_API_KEY="sk-ant-..."
 ./src/agent.sh -p claude -m claude-sonnet-4-20250514 "say hello"
 
-# OpenAI chat-completions compatible endpoint
+# OpenAI chat-completions 兼容接口
 export OPENAI_API_KEY="sk-..."
 ./src/agent.sh -p openai -m gpt-4o "say hello"
 
-# Interactive mode
+# 交互模式
 ./src/agent.sh -p openai -m gpt-4o -i
 
-# Machine-readable stream output
+# 结构化事件输出
 ./src/agent.sh -p claude --print "scan this repo"
 ```
 
-Third-party compatible endpoints are supported through `--base-url` or environment variables:
+也支持第三方兼容端点：
 
 ```bash
 OPENAI_BASE_URL=http://localhost:11434/v1 \
 ./src/agent.sh -p openai -m llama3 "hello"
 ```
 
-## Example Workflows
+## 常见用法
 
-### Human Mode
+### 普通终端模式
 
 ```bash
 ./src/agent.sh -p openai -m gpt-4o "run the tests and summarize failures"
 ```
 
-### Stream JSON
+### `stream-json`
 
 ```bash
 ./src/agent.sh -p claude --output-format stream-json "inspect this repository" | jq -c .
 ```
 
-### Persistent Session
+### 持久化 session
 
 ```bash
 ./src/agent.sh --session demo "run the tests"
@@ -108,86 +107,86 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 ./src/agent.sh --continue "what changed so far?"
 ```
 
-### Skills
+### 使用 skills
 
 ```bash
 ./src/agent.sh --skill shell-safety "inspect /tmp safely"
 ```
 
-## CLI
+## CLI 参数
 
-| Flag | Description |
+| 参数 | 说明 |
 | --- | --- |
-| `-p, --provider` | `claude` or `openai` |
-| `-m, --model` | model name |
-| `--base-url` | override API base URL |
-| `--api-key` | override API key |
-| `--system` | additional system prompt text |
-| `--skill NAME` | load `.claude/skills/NAME/SKILL.md` |
-| `--max-tokens` | max output tokens |
-| `--max-turns` | max agent loop turns |
-| `--max-context` | context size budget, supports `100k`, `1m`, `1g` |
-| `--tool-timeout N` | tool timeout in seconds |
-| `--session [NAME]` | create/use a persistent session |
-| `--continue` | continue the latest session in the current project |
-| `--list-sessions` | list sessions for the current project |
-| `--output-format` | `human` or `stream-json` |
-| `--print` | alias for `--output-format stream-json` |
-| `-i, --interactive` | interactive mode |
-| `-v, --verbose` | verbose logging |
-| `compact` | compact the current session |
+| `-p, --provider` | `claude` 或 `openai` |
+| `-m, --model` | 模型名 |
+| `--base-url` | 覆盖 API base URL |
+| `--api-key` | 覆盖 API key |
+| `--system` | 追加 system prompt 文本 |
+| `--skill NAME` | 加载 `.claude/skills/NAME/SKILL.md` |
+| `--max-tokens` | 最大输出 token |
+| `--max-turns` | 最大 agent loop turn 数 |
+| `--max-context` | context 大小预算，支持 `100k`、`1m`、`1g` |
+| `--tool-timeout N` | tool 超时时间，单位秒 |
+| `--session [NAME]` | 创建或使用持久化 session |
+| `--continue` | 继续当前项目下最近一次 session |
+| `--list-sessions` | 列出当前项目的 session |
+| `--output-format` | `human` 或 `stream-json` |
+| `--print` | `--output-format stream-json` 的别名 |
+| `-i, --interactive` | 交互模式 |
+| `-v, --verbose` | 输出详细日志 |
+| `compact` | 对当前 session 执行 compact |
 
-## Built-in Tools
+## 内置工具
 
 ### `Read`
 
-- reads file content as text
-- default cap: `100KB`
-- returns truncated content when the file is larger
+- 读取文本文件内容
+- 默认上限：`100KB`
+- 超过上限时返回截断结果
 
 ### `Write`
 
-- writes file content
-- creates parent directories when needed
-- default cap: `1MB`
+- 写入文件内容
+- 必要时自动创建父目录
+- 默认上限：`1MB`
 
 ### `Edit`
 
-- exact string replacement
-- intended for precise edits, including multi-line replacements
-- file size limit: `1MB`
+- 精确字符串替换
+- 支持多行替换
+- 文件大小上限：`1MB`
 
 ### `Bash`
 
-- runs shell commands
-- default timeout: `600s`
-- captures and truncates large output
+- 执行 shell 命令
+- 默认超时：`600s`
+- 大输出会被截断
 
 ### `Glob`
 
-- file discovery using `rg --files -g`
-- requires `rg`
+- 基于 `rg --files -g` 做文件匹配
+- 依赖 `rg`
 
 ### `Grep`
 
-- content search using `rg -n`
-- requires `rg`
+- 基于 `rg -n` 做内容搜索
+- 依赖 `rg`
 
 ### `TodoWrite`
 
-- writes the session todo checklist
-- intended for complex multi-step tasks
-- stores checklist state in `*.todo.md`
+- 维护当前 session 的 todo checklist
+- 面向复杂多步任务
+- 状态保存在 `*.todo.md`
 
-## Sessions and State
+## Session 与状态文件
 
-State is stored per project under:
+状态按项目保存到：
 
 ```text
 ~/.bash-agent/projects/<project_key>/
 ```
 
-Per-session files:
+每个 session 的主要文件：
 
 ```text
 <session_id>.jsonl
@@ -196,67 +195,70 @@ Per-session files:
 <session_id>.todo.md
 ```
 
-Meaning:
+含义：
 
-- `jsonl`: current conversation window actually sent to the model
-- `events.jsonl`: internal session event log
-- `summary.txt`: compacted history summary
-- `todo.md`: current session todo checklist
+- `jsonl`：真正发给模型的当前会话窗口
+- `events.jsonl`：内部 session 事件日志
+- `summary.txt`：compact 后的历史摘要
+- `todo.md`：当前 session 的 todo 状态
 
-Without `--session`, conversation state is temporary and cleaned up when the process exits.
+如果不传 `--session`，会话状态只在当前进程内临时存在，退出后清理。
 
-## Context Compaction
+## Context Compact
 
-Compaction is based on actual context size, not message count.
+compact 依据真实 context 大小，而不是消息条数。
 
-- `--max-context` is a byte budget
-- accepts values like `100k`, `1m`, `100000`
-- when over budget, old messages are compacted into `summary.txt`
-- retained history is aligned to a full user-turn boundary
+- `--max-context` 表示字节预算
+- 支持：
+  - `100k`
+  - `1m`
+  - `100000`
+- 超预算时，旧消息会被压缩写入 `summary.txt`
+- 保留窗口会对齐到完整 user turn 边界
 
-This avoids invalid tails such as:
+这样可以避免保留出非法尾部，例如：
 
-- orphaned `tool_result`
-- preserved `assistant.tool_use` without the corresponding user turn
+- 孤立的 `tool_result`
+- 保留了 `assistant.tool_use`，却丢掉对应 user turn
 
 ## Skills
 
-Skills are loaded only from:
+skills 只从这里加载：
 
 ```text
 .claude/skills/<name>/SKILL.md
 ```
 
-The runtime uses two layers:
+运行时分两层：
 
 1. `skill-index`
-   - lightweight summaries from `.claude/skills/*/SKILL.md`
+   - 从 `.claude/skills/*/SKILL.md` 提取轻量摘要
 2. `selected-skills`
-   - full `SKILL.md` content only when `--skill NAME` is specified
+   - 只有显式传 `--skill NAME` 时才注入完整 `SKILL.md`
 
-During full skill loading, `${BASH_AGENT_SKILL_DIR}` is available for referencing sibling scripts or templates.
+完整 skill 加载时，可使用 `${BASH_AGENT_SKILL_DIR}` 引用同目录脚本或模板。
 
 ## Instruction Files
 
-The runtime supports generic instruction file naming while remaining compatible with `CLAUDE.md`.
+支持通用 instruction file 命名，同时兼容 `CLAUDE.md`。
 
-Per scope, it loads the highest-priority file from:
+每个作用域按优先级只加载一个：
 
 1. `AGENTS.md`
 2. `AGENT.md`
 3. `CLAUDE.md`
 4. `.claude/CLAUDE.md`
 
-Scopes:
+作用域：
 
-- global: `~/.bash-agent/`
-- project: current working directory
+- 全局：`~/.bash-agent/`
+- 项目：当前工作目录
 
-These are injected into the stable prompt prefix.
+这些内容会进入稳定 prompt 前缀。
 
-## Event Protocol
+## 事件协议
 
-Internally, SSE output is normalized into a lightweight line protocol:
+内部会先把 SSE 归一化成一层轻量 line protocol：
 
 ```text
 TEXT:Hello
@@ -265,7 +267,7 @@ USAGE:{"input_tokens":25,"output_tokens":42,"cache_input_tokens":8}
 STOP:end_turn
 ```
 
-`stream-json` exposes machine-readable events such as:
+对外的 `stream-json` 会输出这些结构化事件：
 
 - `text`
 - `tool_call`
@@ -276,14 +278,14 @@ STOP:end_turn
 - `error`
 - `context_update`
 
-Example:
+示例：
 
 ```json
 {"type":"tool_call","name":"Bash","id":"call_123","input":{"command":"pwd"}}
 {"type":"usage","input_tokens":25,"output_tokens":42,"cache_input_tokens":8}
 ```
 
-## Repository Layout
+## 仓库结构
 
 ```text
 src/
@@ -305,36 +307,35 @@ dist/
   agent.sh
 ```
 
-## Development
+## 开发
 
-Run tests:
+运行测试：
 
 ```bash
 bash tests/test.sh
 ```
 
-Build single-file distribution:
+构建单文件发行版：
 
 ```bash
 bash scripts/build.sh
 ```
 
-Run tests against the built artifact:
+对构建产物跑测试：
 
 ```bash
 AGENT=./dist/agent.sh bash tests/test.sh
 ```
 
-## Status
+## 当前状态
 
-Current status:
+- compact 已按真实 context 大小处理，不再按消息条数
+- session 状态按项目隔离
+- tool 协议已经结构化，适合机器消费
+- `TodoWrite` 已替代之前 host-driven 的 planning 实验
+- source 和 dist 都能通过完整测试
 
-- compact uses real context size, not message count
-- session state is project-scoped
-- tool protocol is structured and machine-readable
-- `TodoWrite` replaced earlier host-driven planning experiments
-- source and dist builds both pass the test suite
+## 文档
 
-## Documentation
-
+- [README.en.md](README.en.md) English
 - [ARCHITECTURE.md](ARCHITECTURE.md)
