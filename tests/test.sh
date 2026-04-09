@@ -1135,6 +1135,7 @@ test_convert_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_compact
+test_agent_compact_preserves_turn_boundary
 test_agent_skill_injection
 test_agent_skill_index
 test_agent_instruction_files
