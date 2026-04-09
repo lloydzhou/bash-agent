@@ -723,9 +723,21 @@ SSE
     fi
 }
 
+# Test 8: HTTP stream preserves error body
+test_http_stream_error_body() {
+    info "Test 8: HTTP stream preserves error body"
+    local output
+    output=$(printf 'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{"error":{"message":"bad request detail"}}\n' | awk -f "$AWK_DIR/http_stream.awk")
+    if echo "$output" | grep -q '^ERROR:HTTP 400 BODY:' && echo "$output" | grep -q 'bad request detail'; then
+        green "HTTP stream error body"; ((PASS++)) || true
+    else
+        red "HTTP stream error body"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 # Test 8: Message format conversion
 test_convert_messages() {
-    info "Test 8: Message format conversion (Claude → OpenAI)"
+    info "Test 9: Message format conversion (Claude → OpenAI)"
     local output
     output=$(printf '%s' '[{"role":"user","content":"hello"}]' | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
     if echo "$output" | grep -q '"role":"user"' && echo "$output" | grep -q '"content":"hello"'; then
@@ -774,7 +786,7 @@ test_agent_e2e_openai() {
 # Test 12: Compact subcommand
 test_agent_compact() {
     info "Test 12: Agent.sh compact subcommand"
-    local home_dir session_dir session_file summary_file output
+    local home_dir session_dir session_file summary_file output remaining_bytes remaining_lines
     home_dir=$(mktemp -d)
     session_dir="$home_dir/.bash-agent/projects/$(project_key)"
     mkdir -p "$session_dir"
@@ -784,16 +796,47 @@ test_agent_compact() {
     for i in $(seq 1 45); do
         printf '{"role":"user","content":"message %s"}\n' "$i" >> "$session_file"
     done
-    output=$(HOME="$home_dir" "$AGENT" compact -p claude --base-url "$BASE/v1" --api-key test --session demo 2>&1) || true
+    output=$(HOME="$home_dir" "$AGENT" compact -p claude --base-url "$BASE/v1" --api-key test --session demo --max-context 200 2>&1) || true
+    remaining_bytes=$(wc -c < "$session_file")
+    remaining_lines=$(wc -l < "$session_file")
     if echo "$output" | grep -q "Context compacted" && \
        grep -q "Task focus: summarize compact test" "$summary_file" && \
        grep -q "^Latest request: compact session$" "$summary_file" && \
        grep -q "^Progress: trimmed old context$" "$summary_file" && \
        grep -q "^Tool evidence: none$" "$summary_file" && \
-       [[ "$(wc -l < "$session_file")" -eq 4 ]]; then
+       (( remaining_lines > 0 )) && \
+       (( remaining_lines < 45 )) && \
+       (( remaining_bytes <= 80 )); then
         green "Agent compact subcommand"; ((PASS++)) || true
     else
-        red "Agent compact subcommand"; echo "  Output: $output"; echo "  Session lines: $(wc -l < "$session_file")"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || true)"; ((FAIL++)) || true
+        red "Agent compact subcommand"; echo "  Output: $output"; echo "  Session lines: $remaining_lines"; echo "  Session bytes: $remaining_bytes"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+}
+
+test_agent_compact_preserves_turn_boundary() {
+    info "Test 13: Agent.sh compact preserves turn boundary"
+    local home_dir session_dir session_file output first_line remaining_lines
+    home_dir=$(mktemp -d)
+    session_dir="$home_dir/.bash-agent/projects/$(project_key)"
+    mkdir -p "$session_dir"
+    session_file="$session_dir/demo.jsonl"
+    cat > "$session_file" <<'EOF'
+{"role":"user","content":"turn one request"}
+{"role":"assistant","content":[{"type":"text","text":"first turn assistant step"}]}
+{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"tool output from first turn"}]}
+{"role":"assistant","content":[{"type":"text","text":"first turn done"}]}
+{"role":"user","content":"turn two request"}
+{"role":"assistant","content":[{"type":"text","text":"second turn done"}]}
+EOF
+    output=$(HOME="$home_dir" "$AGENT" compact -p claude --base-url "$BASE/v1" --api-key test --session demo --max-context 180 2>&1) || true
+    first_line=$(sed -n '1p' "$session_file")
+    remaining_lines=$(wc -l < "$session_file")
+    if echo "$output" | grep -q "Context compacted" && \
+       [[ "$first_line" == '{"role":"user","content":"turn two request"}' || "$first_line" == '{"role":"user","content":"turn one request"}' ]] && \
+       (( remaining_lines < 6 )); then
+        green "Agent compact preserves turn boundary"; ((PASS++)) || true
+    else
+        red "Agent compact preserves turn boundary"; echo "  Output: $output"; echo "  First line: $first_line"; echo "  Remaining lines: $remaining_lines"; ((FAIL++)) || true
     fi
 }
 
@@ -1086,6 +1129,7 @@ test_claude_sse_unicode
 test_openai_sse
 test_openai_usage_cache_tokens
 test_openai_sse_leading_newline
+test_http_stream_error_body
 test_convert_messages
 test_convert_tools
 test_agent_e2e_claude

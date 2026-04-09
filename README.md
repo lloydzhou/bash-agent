@@ -87,7 +87,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 
 ## 内置工具
 
-- `read_file`：读取文件，默认最多 100KB
+- `read_file`：读取文件，默认最多 30KB
 - `write_file`：写文件，自动创建目录，默认最多 1MB
 - `edit_file`：按精确字符串替换编辑，默认只处理 1MB 以内文件
 - `bash`：执行命令，默认 600 秒超时，最多保留 50KB 输出
@@ -103,7 +103,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 ./src/agent.sh -p openai -m llama3 "He
 | `--system` | 系统提示词 |
 | `--skill NAME` | 从 `.claude/skills/NAME/SKILL.md` 加载技能 |
 | `--max-turns` | 最大 agent 循环次数 |
-| `--max-context` | context 消息上限 |
+| `--max-context` | context 大小上限，超过后按字节预算 compact，支持 `100k` / `1m` |
 | `--tool-timeout N` | tool 执行超时秒数，默认 600 |
 | `--api-key` | 手动指定 API key |
 | `--base-url` | 覆盖 API base URL |

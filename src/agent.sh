@@ -14,7 +14,7 @@ MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
 TOOL_TIMEOUT_SECS=600
-READ_FILE_MAX_BYTES=100000
+READ_FILE_MAX_BYTES=5000
 WRITE_FILE_MAX_BYTES=1048576
 EDIT_FILE_MAX_BYTES=1048576
 BASH_OUTPUT_MAX_BYTES=50000
@@ -25,8 +25,8 @@ API_KEY=""
 BASE_URL=""
 PROMPT=""
 MAX_TURNS=20
-MAX_CONTEXT_MESSAGES=40
-MAX_CONTEXT_BUFFER_MESSAGES=4
+MAX_CONTEXT_BYTES=100000
+MAX_CONTEXT_KEEP_PCT=25
 INTERACTIVE=false
 COMMAND="chat"
 COMPACT_MODE=false
@@ -136,6 +136,32 @@ run_with_timeout() {
 die() {
     log_error "$@"
     exit 1
+}
+
+parse_size_bytes() {
+    local raw="${1:-}" lower num
+    lower=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
+    case "$lower" in
+        *k)
+            num="${lower%k}"
+            [[ "$num" =~ ^[0-9]+$ ]] || return 1
+            printf '%s' $(( num * 1000 ))
+            ;;
+        *m)
+            num="${lower%m}"
+            [[ "$num" =~ ^[0-9]+$ ]] || return 1
+            printf '%s' $(( num * 1000 * 1000 ))
+            ;;
+        *g)
+            num="${lower%g}"
+            [[ "$num" =~ ^[0-9]+$ ]] || return 1
+            printf '%s' $(( num * 1000 * 1000 * 1000 ))
+            ;;
+        *)
+            [[ "$lower" =~ ^[0-9]+$ ]] || return 1
+            printf '%s' "$lower"
+            ;;
+    esac
 }
 
 json_escape() {
@@ -568,20 +594,53 @@ EOF
 }
 
 compact_context_window() {
-    local trigger="$1" force="${2:-false}" total keep drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
+    local trigger="$1" force="${2:-false}" total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
+    local threshold=$MAX_CONTEXT_BYTES
+    local target_keep_bytes=$(( MAX_CONTEXT_BYTES * MAX_CONTEXT_KEEP_PCT / 100 ))
 
-    total=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-    local threshold=$MAX_CONTEXT_MESSAGES
-    local target_keep=$MAX_CONTEXT_BUFFER_MESSAGES
-    (( target_keep < 1 )) && target_keep=1
+    total_bytes=$(wc -c < "$CONV_FILE" 2>/dev/null || echo 0)
+    total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+    (( target_keep_bytes < 1 )) && target_keep_bytes=1
 
-    if ! $force && (( total <= threshold )); then
+    if ! $force && (( total_bytes <= threshold )); then
         return 1
     fi
 
-    keep=$target_keep
-    (( total > keep )) || keep=$total
-    drop=$(( total - keep ))
+    keep_lines=$(awk -v target_bytes="$target_keep_bytes" '
+        {
+            sizes[NR] = length($0) + 1
+            turn_start[NR] = ($0 ~ /^\{"role":"user","content":"/)
+        }
+        END {
+            keep = 0
+            bytes = 0
+            for (i = NR; i >= 1; i--) {
+                if (keep > 0 && bytes + sizes[i] > target_bytes) break
+                bytes += sizes[i]
+                keep++
+            }
+            if (keep == 0 && NR > 0) keep = 1
+
+            start = NR - keep + 1
+            adjusted = start
+            while (adjusted <= NR && !turn_start[adjusted]) {
+                adjusted++
+            }
+
+            if (adjusted <= NR) {
+                start = adjusted
+            } else {
+                while (start > 1 && !turn_start[start]) {
+                    start--
+                }
+            }
+
+            print NR - start + 1
+        }
+    ' "$CONV_FILE")
+    [[ -n "$keep_lines" ]] || keep_lines=0
+    (( total_lines > keep_lines )) || keep_lines=$total_lines
+    drop=$(( total_lines - keep_lines ))
     [[ $drop -gt 0 ]] || return 1
 
     tmp_dropped=$(mktemp "${AGENT_TMPDIR}/dropped.XXXXXX")
@@ -597,9 +656,9 @@ compact_context_window() {
     summary_response=$(run_summary_call "$summary_request")
     context_append_summary "$summary_response"
 
-    if (( keep < total )); then
+    if (( keep_lines < total_lines )); then
         tmp=$(mktemp "${AGENT_TMPDIR}/conv_trim.XXXXXX")
-        tail -n "$keep" "$CONV_FILE" > "$tmp"
+        tail -n "$keep_lines" "$CONV_FILE" > "$tmp"
         mv "$tmp" "$CONV_FILE"
     fi
 
@@ -1098,7 +1157,7 @@ Options:
   --system PROMPT         System prompt for the agent
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md
   --max-turns N           Max agent turns (default: 20)
-  --max-context N         Max stored context messages (default: 40)
+  --max-context N         Max stored context bytes before compact (default: 100000; supports k/m/g)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
   --output-format FMT     Output format: human | stream-json
@@ -1147,7 +1206,10 @@ parse_args() {
             --system)        SYSTEM_PROMPT="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
-            --max-context)   MAX_CONTEXT_MESSAGES="$2"; shift 2 ;;
+            --max-context)
+                MAX_CONTEXT_BYTES=$(parse_size_bytes "$2") || die "Invalid --max-context value: $2"
+                shift 2
+                ;;
             --api-key)       API_KEY="$2"; shift 2 ;;
             --base-url)      BASE_URL="$2"; shift 2 ;;
             --output-format)  OUTPUT_FORMAT="$2"; shift 2 ;;

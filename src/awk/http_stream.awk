@@ -3,6 +3,7 @@
 BEGIN {
     http_code = ""
     in_body = 0
+    body = ""
 }
 
 {
@@ -20,23 +21,29 @@ BEGIN {
 }
 
 /^[ \t]*$/ && !in_body {
-    if (http_code >= 400) {
-        printf "ERROR:HTTP %s\n", http_code
-        exit 1
-    }
     in_body = 1
     next
 }
 
 !in_body { next }
 
-# Handle non-SSE JSON error responses (e.g., {"code":500,"msg":"..."})
-in_body && /^{/ && /"code"/ && /"msg"/ {
-    printf "ERROR:API response body received\n"
-    exit 1
+in_body && http_code >= 400 {
+    if (body != "") body = body "\n"
+    body = body $0
+    next
 }
 
 {
     print
     fflush()
+}
+
+END {
+    if (http_code >= 400) {
+        if (body == "") body = "(empty)"
+        gsub(/\r/, "", body)
+        printf "ERROR:HTTP %s BODY:%s\n", http_code, body
+        fflush()
+        exit 1
+    }
 }
