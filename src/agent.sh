@@ -299,7 +299,7 @@ load_skill_content() {
     local skill_name="$1" skill_file skill_dir content
     skill_file=$(find_skill_file "$skill_name") || return 1
     skill_dir=$(dirname "$skill_file")
-    content=$(cat "$skill_file") || return 1
+    content=$(<"$skill_file") || return 1
     content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$skill_dir}"
     printf 'Base directory for this skill: %s\n\n%s' "$skill_dir" "$content"
 }
@@ -358,12 +358,12 @@ build_instruction_files_section() {
     project_file=$(find_instruction_file_in_dir "${PWD:-$(pwd)}" 2>/dev/null || true)
 
     if [[ -n "$global_file" ]]; then
-        global_content=$(cat "$global_file") || return 1
+        global_content=$(<"$global_file") || return 1
         append_section output "instruction-file" "$global_content" "global"
     fi
 
     if [[ -n "$project_file" ]]; then
-        project_content=$(cat "$project_file") || return 1
+        project_content=$(<"$project_file") || return 1
         append_section output "instruction-file" "$project_content" "project"
     fi
 
@@ -523,7 +523,7 @@ conv_init() {
             session_base="$SESSION_ID"
         elif [[ "$CONTINUE_SESSION" == true ]]; then
             # Continue most recent session
-            CONV_FILE=$(ls -t "${SESSION_DIR}"/*.jsonl 2>/dev/null | grep -v '\.events\.jsonl$' | grep -v '\.summary\.txt$' | head -1)
+            CONV_FILE=$(ls -t "${SESSION_DIR}"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$' | head -1)
             if [[ -n "$CONV_FILE" ]]; then
                 session_base="$(basename "$CONV_FILE" .jsonl)"
             elif [[ "$COMPACT_MODE" == true ]]; then
@@ -682,10 +682,10 @@ compact_context_window() {
 
     tmp_dropped=$(mktemp "${AGENT_TMPDIR}/dropped.XXXXXX")
     head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
-    dropped_messages=$(cat "$tmp_dropped")
+    dropped_messages=$(<"$tmp_dropped")
     current_summary=""
     if [[ -n "${CONTEXT_SUMMARY_FILE:-}" && -s "$CONTEXT_SUMMARY_FILE" ]]; then
-        current_summary=$(cat "$CONTEXT_SUMMARY_FILE")
+        current_summary=$(<"$CONTEXT_SUMMARY_FILE")
     fi
 
     prompt=$(build_compact_summary_prompt "$current_summary" "$dropped_messages")
@@ -771,7 +771,8 @@ tool_write() {
     content=$(extract_json_field "$input" "content")
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
-    content_size=$(printf '%s' "$content" | wc -c | awk '{print $1}')
+    content_size=$(printf '%s' "$content" | wc -c)
+    content_size=${content_size//[[:space:]]/}
     if (( content_size > WRITE_FILE_MAX_BYTES )); then
         echo "Error: content too large for write_file (${content_size} bytes > ${WRITE_FILE_MAX_BYTES} bytes)"
         return 1
@@ -792,7 +793,7 @@ tool_edit() {
         rm -f "$meta"
         return 1
     fi
-    path=$(cat "$meta" 2>/dev/null || true)
+    path=$(<"$meta")
     rm -f "$meta"
     [[ -n "$path" ]] || { rm -f "$tmp"; echo "Error: no path provided"; return 1; }
 
@@ -1024,7 +1025,7 @@ call_api() {
 llm_call() {
     local messages="$1"
     local tools
-    tools=$(cat "$TOOL_DEF_FILE")
+    tools=$(<"$TOOL_DEF_FILE")
 
     local body
     body=$(build_request "$messages" "$tools")
@@ -1316,7 +1317,7 @@ list_sessions() {
         return
     fi
     local files
-    files=$(ls -t "$dir"/*.jsonl 2>/dev/null | grep -v '\.events\.jsonl$' | grep -v '\.summary\.txt$')
+    files=$(ls -t "$dir"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$')
     if [[ -z "$files" ]]; then
         echo "No sessions found."
         return
