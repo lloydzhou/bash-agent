@@ -21,17 +21,18 @@ function convert_assistant_msg(json,    role, content_val, text_parts, tool_part
         n = split_top_level_objects(content_val, blocks)
         for (i = 1; i <= n; i++) {
             block = blocks[i]
-            if (block ~ /"type" *: *"text"/ || block ~ /"type":"text"/) {
+            btype = extract_str(block, "type")
+            if (btype == "text") {
                 t = extract_value(block, "text")
                 # Strip surrounding quotes
                 if (substr(t, 1, 1) == "\"") t = substr(t, 2, length(t) - 2)
                 text_parts = text_parts unescape_json_string(t)
-            } else if (block ~ /"type" *: *"tool_use"/ || block ~ /"type":"tool_use"/) {
+            } else if (btype == "tool_use") {
                 tid = extract_str(block, "id")
                 tname = extract_str(block, "name")
                 tinput = extract_value(block, "input")
                 # OpenAI wants arguments as a string
-                tool_parts = tool_parts "{\"id\":\"" tid "\",\"type\":\"function\",\"function\":{\"name\":\"" tname "\",\"arguments\":\"" escape_for_json_string(tinput) "\"}},"
+                tool_parts = tool_parts "{\"id\":\"" tid "\",\"type\":\"function\",\"function\":{\"name\":\"" tname "\",\"arguments\":\"" escape_json_string(tinput) "\"}},"
             }
         }
     } else {
@@ -69,7 +70,7 @@ function convert_tool_result_msg(json,    content_val, n, i, block, tid, result_
         n = split_top_level_objects(content_val, blocks)
         for (i = 1; i <= n; i++) {
             block = blocks[i]
-            if (block ~ /"type" *: *"tool_result"/ || block ~ /"type":"tool_result"/) {
+            if (extract_str(block, "type") == "tool_result") {
                 tid = extract_str(block, "tool_use_id")
                 result_content = extract_value(block, "content")
                 # Strip quotes if string
@@ -77,7 +78,7 @@ function convert_tool_result_msg(json,    content_val, n, i, block, tid, result_
                     result_content = unescape_json_string(substr(result_content, 2, length(result_content) - 2))
                 }
                 if (msgs != "") msgs = msgs ","
-                msgs = msgs "{\"role\":\"tool\",\"tool_call_id\":\"" tid "\",\"content\":\"" escape_for_json_string(result_content) "\"}"
+                msgs = msgs "{\"role\":\"tool\",\"tool_call_id\":\"" tid "\",\"content\":\"" escape_json_string(result_content) "\"}"
             }
         }
     }
@@ -88,20 +89,6 @@ function convert_tool_result_msg(json,    content_val, n, i, block, tid, result_
 function is_content_array(json,    content_val) {
     content_val = extract_value(json, "content")
     return (substr(content_val, 1, 1) == "[")
-}
-
-function escape_for_json_string(s,    t, i, c) {
-    t = ""
-    for (i = 1; i <= length(s); i++) {
-        c = substr(s, i, 1)
-        if (c == "\"") t = t "\\\""
-        else if (c == "\\") t = t "\\\\"
-        else if (c == "\n") t = t "\\n"
-        else if (c == "\t") t = t "\\t"
-        else if (c == "\r") t = t "\\r"
-        else t = t c
-    }
-    return t
 }
 
 # Accumulate all lines into one string

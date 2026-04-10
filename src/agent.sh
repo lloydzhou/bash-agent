@@ -662,7 +662,7 @@ build_stable_context_section() {
 
 build_todo_section() {
     if [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]]; then
-        cat "$TODO_FILE"
+        printf '%s' "$(<"$TODO_FILE")"
         return 0
     fi
     printf ''
