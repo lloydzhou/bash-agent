@@ -291,9 +291,14 @@ src/
   tools.json
   awk/
     json.awk
+    json_cli.awk
+    protocol.awk
+    todo_protocol.awk
     http_stream.awk
     claude_sse.awk
     openai_sse.awk
+    convert_messages.awk
+    convert_tools.awk
     edit_file.awk
     skill_summary.awk
 scripts/

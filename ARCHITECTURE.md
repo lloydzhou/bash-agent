@@ -43,10 +43,11 @@ src/agent.sh
         |
         v
 src/awk/*
-├─ JSON helper
+├─ JSON helper library
+├─ JSON helper CLI entrypoints
 ├─ SSE parser
 ├─ 格式转换
-├─ 文本抽取 / 规范化
+├─ 协议 flatten / 文本抽取
 └─ tool 专用变换
 ```
 
@@ -66,6 +67,7 @@ src/awk/*
 - JSON 字段提取
 - JSON string escape/unescape
 - `\uXXXX` 解码
+- 轻量 tokenizer-style value reader
 - SSE 事件解析
 - OpenAI/Claude 消息格式转换
 - `Edit` / `TodoWrite` 等需要文本变换的 tool 逻辑
@@ -276,7 +278,7 @@ skills 当前只读取项目目录下：
 
 ### JSON 转义
 
-`json_escape()` 现在已经收回 `awk/json.awk`：
+`json_escape()` 现在已经收回 `awk/json.awk` / `awk/json_cli.awk`：
 
 - 避免 bash 逐字节处理 UTF-8
 - 正确处理中文、多行、引号
@@ -312,7 +314,8 @@ skills 当前只读取项目目录下：
 - JSON 提取
 - Unicode 解码
 - SSE parser
-- `TodoWrite` 规范化由 `json.awk` 直接完成
+- `protocol.awk` 负责中间协议 flatten
+- `todo_protocol.awk` 负责 `TodoWrite` 规范化
 - `Edit` 内容替换
 - `skill`/plan 这类文本抽取逻辑
 
