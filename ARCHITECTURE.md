@@ -229,8 +229,8 @@ skills 当前只读取项目目录下：
 内部 SSE 解析结果会先转成单行协议，例如：
 
 - `TEXT:...`
-- `TOOL_CALL:{"name":"...","id":"...","input":{...}}`
-- `USAGE:{...}`
+- `TOOL_CALL:<tool>\t<id>\t<raw_input_json>\t<flat args...>`
+- `USAGE:<input_tokens>\t<output_tokens>\t<cache_input_tokens>`
 - `STOP:...`
 - `ERROR:...`
 
@@ -238,12 +238,11 @@ skills 当前只读取项目目录下：
 
 - 文本类事件先编码成单行
 - 消费端再做反转义
-- 结构化内容尽量直接传 JSON object 文本
 
 当前已经统一的点：
 
-- `TOOL_CALL` 走 JSON object
-- `USAGE` 也走 JSON object
+- `TOOL_CALL` 保留原始 input JSON，同时由 awk 展平出 tool-specific args
+- `USAGE` 走固定顺序的 typed fields
 - `TEXT` 仍然走转义后的单行文本
 
 ### `stream-json`

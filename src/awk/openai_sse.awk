@@ -20,7 +20,7 @@ BEGIN {
 
 /^data: \[DONE\]/ {
     if (stop_reason == "") stop_reason = "done"
-    printf "USAGE:{\"input_tokens\":%d,\"output_tokens\":%d,\"cache_input_tokens\":%d}\n", input_tokens, output_tokens, cache_input_tokens
+    printf "USAGE:%d\t%d\t%d\n", input_tokens, output_tokens, cache_input_tokens
     fflush()
     printf "STOP:%s\n", stop_reason
     fflush()
@@ -106,7 +106,7 @@ function parse_tool_calls(json,    pos, end, tc_json) {
         # TOOL_CALL as JSON object text.
         if (fr != "" || tc ~ /\}\]/) {
             if (idx in tool_args && tool_args[idx] != "") {
-                printf "TOOL_CALL:{\"name\":\"%s\",\"id\":\"%s\",\"input\":%s}\n", tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx])
+                emit_tool_call_record(tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx]))
                 fflush()
                 tool_args[idx] = ""
             }

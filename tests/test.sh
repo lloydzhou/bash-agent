@@ -609,7 +609,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq 'TOOL_CALL:{"name":"Read","id":"toolu_123","input":{"path":"/etc/hostname"}}' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:Read\ttoolu_123\t{"path":"/etc/hostname"}\t/etc/hostname' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use"; ((PASS++)) || true
     else
         red "Claude tool_use"; echo "  Output: $output"; ((FAIL++)) || true
@@ -640,7 +640,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -q 'USAGE:{"input_tokens":10,"output_tokens":7,"cache_input_tokens":4}' && echo "$output" | grep -q "STOP:end_turn"; then
+    if echo "$output" | grep -q $'USAGE:10\t7\t4' && echo "$output" | grep -q "STOP:end_turn"; then
         green "Claude usage cache tokens"; ((PASS++)) || true
     else
         red "Claude usage cache tokens"; echo "  Output: $output"; ((FAIL++)) || true
@@ -671,7 +671,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq 'TOOL_CALL:{"name":"Bash","id":"toolu_quoted","input":{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \"not found\""}}' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_quoted\t{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \\\\"not found\\\\""}\tcd /tmp && ls generate.mjs 2>/dev/null || echo "not found"' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use quoted command"; ((PASS++)) || true
     else
         red "Claude tool_use quoted command"; echo "  Output: $output"; ((FAIL++)) || true
@@ -711,7 +711,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -q "TEXT:中文" && echo "$output" | grep -Fq 'TOOL_CALL:{"name":"Bash","id":"toolu_unicode","input":{"command":"echo 中文"}}' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -q "TEXT:中文" && echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_unicode\t{"command":"echo 中文"}\techo 中文' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude unicode parsing"; ((PASS++)) || true
     else
         red "Claude unicode parsing"; echo "  Output: $output"; ((FAIL++)) || true
@@ -751,7 +751,7 @@ data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":12345678
 data: [DONE]
 SSE
 )
-    if echo "$output" | grep -q 'USAGE:{"input_tokens":10,"output_tokens":12,"cache_input_tokens":5}' && echo "$output" | grep -q "STOP:stop"; then
+    if echo "$output" | grep -q $'USAGE:10\t12\t5' && echo "$output" | grep -q "STOP:stop"; then
         green "OpenAI usage cache tokens"; ((PASS++)) || true
     else
         red "OpenAI usage cache tokens"; echo "  Output: $output"; ((FAIL++)) || true

@@ -262,8 +262,8 @@ skills 只从这里加载：
 
 ```text
 TEXT:Hello
-TOOL_CALL:{"name":"Bash","id":"call_123","input":{"command":"pwd"}}
-USAGE:{"input_tokens":25,"output_tokens":42,"cache_input_tokens":8}
+TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tpwd
+USAGE:25\t42\t8
 STOP:end_turn
 ```
 
@@ -332,7 +332,7 @@ AGENT=./dist/agent.sh bash tests/test.sh
 - compact 已按真实 context 大小处理，不再按消息条数
 - session 状态按项目隔离
 - tool 协议已经结构化，适合机器消费
-- `TodoWrite` 已替代之前 host-driven 的 planning 实验
+- `TodoWrite` 负责维护 session 级 todo 状态
 - source 和 dist 都能通过完整测试
 
 ## 文档

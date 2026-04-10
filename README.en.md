@@ -260,8 +260,8 @@ Internally, SSE output is normalized into a lightweight line protocol:
 
 ```text
 TEXT:Hello
-TOOL_CALL:{"name":"Bash","id":"call_123","input":{"command":"pwd"}}
-USAGE:{"input_tokens":25,"output_tokens":42,"cache_input_tokens":8}
+TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tpwd
+USAGE:25\t42\t8
 STOP:end_turn
 ```
 
@@ -332,7 +332,7 @@ Current status:
 - compact uses real context size, not message count
 - session state is project-scoped
 - tool protocol is structured and machine-readable
-- `TodoWrite` replaced earlier host-driven planning experiments
+- `TodoWrite` maintains session-scoped todo state
 - source and dist builds both pass the test suite
 
 ## Documentation

@@ -85,26 +85,26 @@ log_verbose() {
 }
 
 tool_call_summary() {
-    local name="$1" input="$2" label="" value=""
+    local name="$1" arg1="${2:-}" label="" value=""
     case "$name" in
         Read|Write)
-            value=$(extract_json_field "$input" "path")
+            value="$arg1"
             [[ -n "$value" ]] && label="$value"
             ;;
         Edit)
-            value=$(extract_json_field "$input" "path")
+            value="$arg1"
             [[ -n "$value" ]] && label="$value"
             ;;
         Glob)
-            value=$(extract_json_field "$input" "pattern")
+            value="$arg1"
             [[ -n "$value" ]] && label="$value"
             ;;
         Grep)
-            value=$(extract_json_field "$input" "pattern")
+            value="$arg1"
             [[ -n "$value" ]] && label="$value"
             ;;
         Bash)
-            value=$(extract_json_field "$input" "command")
+            value="$arg1"
             if [[ -n "$value" ]]; then
                 value="${value//$'\n'/ }"
                 if (( ${#value} > 80 )); then
@@ -121,6 +121,39 @@ tool_call_summary() {
     else
         printf '%s' "$name"
     fi
+}
+
+escape_protocol_text() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+}
+
+parse_tool_call_fields() {
+    local payload="$1" __namevar="$2" __idvar="$3" __inputvar="$4" __arg1var="$5" __arg2var="$6" __arg3var="$7"
+    local name="" id="" input_value="" arg1_value="" arg2_value="" arg3_value=""
+    IFS=$'\t' read -r name id input_value arg1_value arg2_value arg3_value <<< "$payload"
+    unescape_display_to_var input_value "$input_value"
+    unescape_display_to_var arg1_value "$arg1_value"
+    unescape_display_to_var arg2_value "$arg2_value"
+    unescape_display_to_var arg3_value "$arg3_value"
+    printf -v "$__namevar" '%s' "$name"
+    printf -v "$__idvar" '%s' "$id"
+    printf -v "$__inputvar" '%s' "$input_value"
+    printf -v "$__arg1var" '%s' "$arg1_value"
+    printf -v "$__arg2var" '%s' "$arg2_value"
+    printf -v "$__arg3var" '%s' "$arg3_value"
+}
+
+parse_usage_fields() {
+    local payload="$1" __inputvar="$2" __outputvar="$3" __cachevar="$4"
+    local input_value="" output_value="" cache_value=""
+    IFS=$'\t' read -r input_value output_value cache_value <<< "$payload"
+    printf -v "$__inputvar" '%s' "${input_value:-0}"
+    printf -v "$__outputvar" '%s' "${output_value:-0}"
+    printf -v "$__cachevar" '%s' "${cache_value:-0}"
 }
 
 run_with_timeout() {
@@ -389,12 +422,12 @@ EOF
 
 # Unescape JSON escape sequences for display
 unescape_display_to_var() {
-    local __outvar="$1" input="$2"
-    input="${input//\\n/$'\n'}"
-    input="${input//\\t/$'\t'}"
-    input="${input//\\\"/\"}"
-    input="${input//\\\\/\\}"
-    printf -v "$__outvar" '%s' "$input"
+    local __outvar="$1" value="$2"
+    value="${value//\\n/$'\n'}"
+    value="${value//\\t/$'\t'}"
+    value="${value//\\\"/\"}"
+    value="${value//\\\\/\\}"
+    printf -v "$__outvar" '%s' "$value"
 }
 
 # Extract a field value from JSON using awk
@@ -410,8 +443,9 @@ build_tool_calls_json() {
     local tool_json="[" first=true
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input
-        IFS=$'\t' read -r name id input <<< "$tc"
+        local name id input_escaped input
+        IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
+        unescape_display_to_var input "$input_escaped"
         $first || tool_json+=","
         first=false
         tool_json+="{\"name\":\"$(json_escape "$name")\",\"id\":\"$(json_escape "$id")\",\"input\":${input}}"
@@ -431,8 +465,9 @@ build_assistant_content_json() {
 
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input
-        IFS=$'\t' read -r name id input <<< "$tc"
+        local name id input_escaped input
+        IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
+        unescape_display_to_var input "$input_escaped"
         $first || content+=","
         first=false
         content+="{\"type\":\"tool_use\",\"id\":\"$(json_escape "$id")\",\"name\":\"$(json_escape "$name")\",\"input\":${input}}"
@@ -749,9 +784,8 @@ generate_tool_defs() {
 # ============================================================================
 
 tool_read() {
-    local input="$1"
-    local path size
-    path=$(extract_json_field "$input" "path")
+    local path="$1"
+    local size
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
@@ -765,10 +799,7 @@ tool_read() {
 }
 
 tool_write() {
-    local input="$1"
-    local path content content_size
-    path=$(extract_json_field "$input" "path")
-    content=$(extract_json_field "$input" "content")
+    local path="$1" content="$2" content_size
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     content_size=$(printf '%s' "$content" | wc -c)
@@ -784,8 +815,12 @@ tool_write() {
 }
 
 tool_edit() {
-    local input="$1"
-    local path tmp meta
+    local path="$1" old_string="$2" new_string="$3"
+    local input tmp meta
+    input=$(printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
+        "$(json_escape "$path")" \
+        "$(json_escape "$old_string")" \
+        "$(json_escape "$new_string")")
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
     meta=$(mktemp "${AGENT_TMPDIR}/edit.meta.XXXXXX")
     if ! run_edit_file_awk "$input" "$EDIT_FILE_MAX_BYTES" "$meta" > "$tmp"; then
@@ -808,9 +843,7 @@ tool_edit() {
 }
 
 tool_bash() {
-    local input="$1"
-    local cmd script_file
-    cmd=$(extract_json_field "$input" "command")
+    local cmd="$1" script_file
 
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
 
@@ -829,10 +862,7 @@ tool_bash() {
 }
 
 tool_glob() {
-    local input="$1"
-    local pattern path
-    pattern=$(extract_json_field "$input" "pattern")
-    path=$(extract_json_field "$input" "path")
+    local pattern="$1" path="$2"
 
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
@@ -842,11 +872,7 @@ tool_glob() {
 }
 
 tool_grep() {
-    local input="$1"
-    local pattern path glob
-    pattern=$(extract_json_field "$input" "pattern")
-    path=$(extract_json_field "$input" "path")
-    glob=$(extract_json_field "$input" "glob")
+    local pattern="$1" path="$2" glob="$3"
 
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
@@ -867,8 +893,9 @@ run_todo_write_awk() {
 }
 
 tool_todo() {
-    local input="$1"
-    local checklist
+    local todos="$1"
+    local input checklist
+    input=$(printf '{"todos":%s}' "$todos")
     checklist=$(run_todo_write_awk "$input") || return 1
     printf '%s\n' "$checklist" > "$TODO_FILE"
     session_append_line "$(build_todo_event_json "$checklist")"
@@ -876,15 +903,15 @@ tool_todo() {
 }
 
 dispatch_tool() {
-    local name="$1" input="$2"
+    local name="$1" arg1="${2:-}" arg2="${3:-}" arg3="${4:-}"
     case "$name" in
-        Read)      tool_read "$input" ;;
-        Write)     tool_write "$input" ;;
-        Edit)      tool_edit "$input" ;;
-        Bash)      tool_bash "$input" ;;
-        Glob)      tool_glob "$input" ;;
-        Grep)      tool_grep "$input" ;;
-        TodoWrite) tool_todo "$input" ;;
+        Read)      tool_read "$arg1" ;;
+        Write)     tool_write "$arg1" "$arg2" ;;
+        Edit)      tool_edit "$arg1" "$arg2" "$arg3" ;;
+        Bash)      tool_bash "$arg1" ;;
+        Glob)      tool_glob "$arg1" "$arg2" ;;
+        Grep)      tool_grep "$arg1" "$arg2" "$arg3" ;;
+        TodoWrite) tool_todo "$arg1" ;;
         *)
             echo "Error: unknown tool: $name"
             return 1
@@ -1074,7 +1101,7 @@ agent_loop() {
         (( turn++ )) || true
 
         local text="" tool_calls="" stop=""
-        local cur_tool_name="" cur_tool_id=""
+        local cur_tool_name="" cur_tool_id="" input=""
 
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
         while IFS= read -r line; do
@@ -1101,24 +1128,20 @@ agent_loop() {
                         fi
                         human_last_char=$'\n'
                     fi
-                    local tool_call_json="${line#TOOL_CALL:}"
-                    cur_tool_name=$(extract_json_field "$tool_call_json" "name")
-                    cur_tool_id=$(extract_json_field "$tool_call_json" "id")
-                    input=$(printf '%s' "$tool_call_json" | awk -v json_mode="extract_field_raw" -v json_field_key="input" -f "$AWK_DIR/json.awk")
+                    local tool_call_payload="${line#TOOL_CALL:}"
+                    local arg1="" arg2="" arg3=""
+                    parse_tool_call_fields "$tool_call_payload" cur_tool_name cur_tool_id input arg1 arg2 arg3
                     if is_stream_json_mode; then
                         emit_stream_event "{\"type\":\"tool_call\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\",\"input\":$input}"
                     else
-                        log_tool "$(tool_call_summary "$cur_tool_name" "$input")"
+                        log_tool "$(tool_call_summary "$cur_tool_name" "$arg1")"
                     fi
-                    tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
+                    tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"$(escape_protocol_text "$input")"$'\t'"$(escape_protocol_text "$arg1")"$'\t'"$(escape_protocol_text "$arg2")"$'\t'"$(escape_protocol_text "$arg3")"$'\n'
                     ;;
                 USAGE:*)
                     if is_stream_json_mode; then
-                        local usage="${line#USAGE:}"
                         local input_tokens output_tokens cache_input_tokens
-                        input_tokens=$(extract_json_field "$usage" "input_tokens")
-                        output_tokens=$(extract_json_field "$usage" "output_tokens")
-                        cache_input_tokens=$(extract_json_field "$usage" "cache_input_tokens")
+                        parse_usage_fields "${line#USAGE:}" input_tokens output_tokens cache_input_tokens
                         emit_stream_event "{\"type\":\"usage\",\"input_tokens\":${input_tokens:-0},\"output_tokens\":${output_tokens:-0},\"cache_input_tokens\":${cache_input_tokens:-0}}"
                     fi
                     ;;
@@ -1180,10 +1203,14 @@ execute_tool_calls() {
     EXEC_TOOL_RESULTS=""
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input
-        IFS=$'\t' read -r name id input <<< "$tc"
+        local name id input_escaped arg1_escaped arg2_escaped arg3_escaped input arg1 arg2 arg3
+        IFS=$'\t' read -r name id input_escaped arg1_escaped arg2_escaped arg3_escaped <<< "$tc"
+        unescape_display_to_var input "$input_escaped"
+        unescape_display_to_var arg1 "$arg1_escaped"
+        unescape_display_to_var arg2 "$arg2_escaped"
+        unescape_display_to_var arg3 "$arg3_escaped"
         local output
-        output=$(dispatch_tool "$name" "$input" 2>&1)
+        output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?
         output=$(strip_ansi "$output")
         if (( tool_rc != 0 )); then
@@ -1197,7 +1224,7 @@ execute_tool_calls() {
         # Print tool_result event in stream-json mode
         if is_stream_json_mode; then
             if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
-                emit_stream_event "$(build_todo_event_json "$(cat "$TODO_FILE")")"
+                emit_stream_event "$(build_todo_event_json "$(<"$TODO_FILE")")"
             fi
             emit_stream_event "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$escaped\"}"
         else

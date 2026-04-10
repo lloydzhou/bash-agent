@@ -56,7 +56,7 @@ BEGIN {
     }
     else if (event == "content_block_stop") {
         if (block_type == "tool") {
-            printf "TOOL_CALL:{\"name\":\"%s\",\"id\":\"%s\",\"input\":%s}\n", tool_name, tool_id, unescape_json_string(partial_json)
+            emit_tool_call_record(tool_name, tool_id, unescape_json_string(partial_json))
             fflush()
         }
         block_type = ""
@@ -81,7 +81,7 @@ BEGIN {
         if (crt != "") cache_input_tokens = crt
     }
     else if (event == "message_stop") {
-        printf "USAGE:{\"input_tokens\":%d,\"output_tokens\":%d,\"cache_input_tokens\":%d}\n", input_tokens, output_tokens, cache_input_tokens
+        printf "USAGE:%d\t%d\t%d\n", input_tokens, output_tokens, cache_input_tokens
         fflush()
         printf "STOP:%s\n", stop_reason
         fflush()
