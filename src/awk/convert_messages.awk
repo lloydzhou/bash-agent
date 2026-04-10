@@ -84,14 +84,10 @@ function convert_tool_result_msg(json,    content_val, n, i, block, tid, result_
     return msgs
 }
 
-# Check if a string has balanced braces/brackets (for content array detection)
-function is_content_array(json,    pos, content_val) {
-    pos = find_key(json, "content")
-    if (pos == 0) return 0
-    content_val = substr(json, pos)
-    # Check if content starts with [
-    if (substr(content_val, 1, 1) == "[") return 1
-    return 0
+# Check whether content is a JSON array.
+function is_content_array(json,    content_val) {
+    content_val = extract_value(json, "content")
+    return (substr(content_val, 1, 1) == "[")
 }
 
 function escape_for_json_string(s,    t, i, c) {

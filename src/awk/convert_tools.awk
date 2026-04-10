@@ -12,7 +12,7 @@ END {
     inner = line
     gsub(/^\[/, "", inner)
     gsub(/\]$/, "", inner)
-    n = split_top_level_objects(inner, tool_defs)
+    n = split_top_level_objects("[" inner "]", tool_defs)
     result = "["
     for (i = 1; i <= n; i++) {
         td = tool_defs[i]

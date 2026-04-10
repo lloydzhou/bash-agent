@@ -34,14 +34,14 @@ BEGIN {
             block_type = "text"
         } else if (json ~ /"type" *: *"tool_use"/ || json ~ /"type":"tool_use"/) {
             block_type = "tool"
-            tool_name = extract_str(json, "name")
-            tool_id = extract_str(json, "id")
+            tool_name = extract_str(json, "name", 1)
+            tool_id = extract_str(json, "id", 1)
             partial_json = ""
         }
     }
     else if (event == "content_block_delta") {
         if (block_type == "text") {
-            text = unescape_json_string(extract_json_string(json, "text"))
+            text = extract_str(json, "text", 1)
             if (text != "") {
                 printf "TEXT:%s\n", escape_protocol_text(text)
                 fflush()
@@ -51,7 +51,7 @@ BEGIN {
             # Claude streams tool input as partial_json, which is itself a JSON string
             # embedded inside the outer SSE JSON payload. Accumulate the escaped string
             # fragments here and decode that outer string exactly once at block stop.
-            partial_json = partial_json extract_json_string(json, "partial_json")
+            partial_json = partial_json extract_json_string(json, "partial_json", 1)
         }
     }
     else if (event == "content_block_stop") {
@@ -62,15 +62,15 @@ BEGIN {
         block_type = ""
     }
     else if (event == "message_delta") {
-        sr = extract_str(json, "stop_reason")
+        sr = extract_str(json, "stop_reason", 1)
         if (sr != "") stop_reason = sr
         # Extract usage (both input and output tokens may appear here)
-        it = extract_num(json, "input_tokens")
+        it = extract_num(json, "input_tokens", 1)
         if (it != "") input_tokens = it
-        ot = extract_num(json, "output_tokens")
+        ot = extract_num(json, "output_tokens", 1)
         if (ot != "") output_tokens = ot
-        crt = extract_num(json, "cache_read_input_tokens")
-        if (crt == "") crt = extract_num(json, "cache_creation_input_tokens")
+        crt = extract_num(json, "cache_read_input_tokens", 1)
+        if (crt == "") crt = extract_num(json, "cache_creation_input_tokens", 1)
         if (crt != "") cache_input_tokens = crt
     }
     else if (event == "message_start") {
@@ -87,7 +87,7 @@ BEGIN {
         fflush()
     }
     else if (event == "error") {
-        msg = extract_str(json, "message")
+        msg = extract_str(json, "message", 1)
         printf "ERROR:%s\n", msg
         fflush()
     }
@@ -95,21 +95,7 @@ BEGIN {
     next
 }
 
-# Extract number from nested JSON (same as extract_num, kept for clarity)
-function extract_num_from_nested(json, key,    pos, rest, i, c, result) {
-    pos = find_key(json, key)
-    if (pos == 0) return ""
-    rest = substr(json, pos)
-    result = ""
-    i = 1
-    while (i <= length(rest)) {
-        c = substr(rest, i, 1)
-        if (c >= "0" && c <= "9") {
-            result = result c
-            i++
-        } else {
-            break
-        }
-    }
-    return result
+# Extract number from nested JSON (kept for call-site clarity)
+function extract_num_from_nested(json, key) {
+    return extract_num(json, key, 1)
 }

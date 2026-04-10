@@ -1243,11 +1243,31 @@ test_agent_write_file_unicode() {
 test_json_escape_unicode_multiline() {
     info "Test 30: json_escape unicode and multiline"
     local output
-    output=$(printf '%s' $'第一行\n第二行 "quoted"' | awk -v json_mode=escape_string -f "$AWK_DIR/json.awk")
+    output=$(printf '%s' $'第一行\n第二行 "quoted"' | awk -v json_mode=escape_string -f "$AWK_DIR/json.awk" -f "$AWK_DIR/json_cli.awk")
     if [[ "$output" == '第一行\n第二行 \"quoted\"' ]]; then
         green "json_escape unicode and multiline"; ((PASS++)) || true
     else
         red "json_escape unicode and multiline"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
+test_json_extract_top_level_member() {
+    info "Test 31: json top-level member extraction"
+    local output awk_prog
+    awk_prog="$(mktemp "${TMPDIR:-/tmp}/bash-agent-json-test.XXXXXX.awk")"
+    cat > "$awk_prog" <<'AWK'
+BEGIN {
+    json = "{\"nested\":{\"content\":\"wrong\"},\"content\":\"right\",\"num\":42}"
+    print extract_str(json, "content")
+    print extract_num(json, "num")
+}
+AWK
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$awk_prog")
+    rm -f "$awk_prog"
+    if [[ "$output" == $'right\n42' ]]; then
+        green "json top-level member extraction"; ((PASS++)) || true
+    else
+        red "json top-level member extraction"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -1294,6 +1314,7 @@ test_agent_tool_result_strips_ansi
 test_agent_multiple_tool_calls
 test_agent_write_file_unicode
 test_json_escape_unicode_multiline
+test_json_extract_top_level_member
 
 echo ""
 echo "=============================="

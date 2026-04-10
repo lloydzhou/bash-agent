@@ -268,7 +268,8 @@ json_escape() {
     local input="${1:-}"
     printf '%s' "$input" | awk \
         -v json_mode="escape_string" \
-        -f "$AWK_DIR/json.awk"
+        -f "$AWK_DIR/json.awk" \
+        -f "$AWK_DIR/json_cli.awk"
 }
 
 strip_ansi() {

@@ -14,7 +14,7 @@ function escape_protocol_text(s,    out, i, c) {
 }
 
 function extract_input_string(json, key) {
-    return unescape_json_string(extract_json_string(json, key))
+    return extract_str(json, key)
 }
 
 function decode_json_scalar(raw) {

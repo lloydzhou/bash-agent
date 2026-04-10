@@ -31,11 +31,11 @@ BEGIN {
     json = substr($0, 7)
 
     # Extract finish_reason
-    fr = extract_str(json, "finish_reason")
+    fr = extract_str(json, "finish_reason", 1)
     if (fr != "" && fr != "null") stop_reason = fr
 
     # Extract text content from delta
-    content = extract_json_string(json, "content")
+    content = extract_json_string(json, "content", 1)
     if (content != "") {
         content = unescape_json_string(content)
         if (!saw_text) {
@@ -56,12 +56,12 @@ BEGIN {
     }
 
     # Extract usage if present
-    pt = extract_num(json, "prompt_tokens")
+    pt = extract_num(json, "prompt_tokens", 1)
     if (pt != "") input_tokens = pt
-    ct = extract_num(json, "completion_tokens")
+    ct = extract_num(json, "completion_tokens", 1)
     if (ct != "") output_tokens = ct
-    crt = extract_num(json, "cached_tokens")
-    if (crt == "") crt = extract_num(json, "cache_read_input_tokens")
+    crt = extract_num(json, "cached_tokens", 1)
+    if (crt == "") crt = extract_num(json, "cache_read_input_tokens", 1)
     if (crt != "") cache_input_tokens = crt
 
     next

@@ -6,9 +6,9 @@ BEGIN {
     RS = "\0"
     ORS = ""
 
-    path = unescape_json_string(extract_json_string(json_input, "path"))
-    old = unescape_json_string(extract_json_string(json_input, "old_string"))
-    new = unescape_json_string(extract_json_string(json_input, "new_string"))
+    path = extract_str(json_input, "path")
+    old = extract_str(json_input, "old_string")
+    new = extract_str(json_input, "new_string")
 
     if (path == "") {
         print "Error: no path provided" > "/dev/stderr"

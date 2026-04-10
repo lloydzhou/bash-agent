@@ -58,6 +58,7 @@ def find_function_end(content, start):
 # --- Read all awk files and prepare bash variables ---
 awk_files = {
     "json": ("json.awk", "_AWK_JSON"),
+    "json_cli": ("json_cli.awk", "_AWK_JSON_CLI"),
     "protocol": ("protocol.awk", "_AWK_PROTOCOL"),
     "todo_protocol": ("todo_protocol.awk", "_AWK_TODO_PROTOCOL"),
     "http_stream": ("http_stream.awk", "_AWK_HTTP_STREAM"),
@@ -111,7 +112,7 @@ for func_name, json_var, specific_var, extra_args in functions:
         replacement = (
             "json_escape() {\n"
             "    local input=\"${1:-}\"\n"
-            "    printf '%s' \"$input\" | awk -v json_mode=\"escape_string\" \"${_AWK_JSON}\"\n"
+            "    printf '%s' \"$input\" | awk -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
             "}\n"
         )
     elif func_name == "run_edit_file_awk":
@@ -181,11 +182,6 @@ content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('TOOLS_JSON_FILE=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
-content = content.replace(
-    'printf \'%s\' "$tool_call_json" | awk -v json_mode="extract_field_raw" -v json_field_key="input" -f "$AWK_DIR/json.awk"',
-    'printf \'%s\' "$tool_call_json" | awk -v json_mode="extract_field_raw" -v json_field_key="input" "${_AWK_JSON}"'
-)
-
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)
