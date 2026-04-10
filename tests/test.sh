@@ -927,6 +927,22 @@ EOF
     fi
 }
 
+test_agent_compact_noop_without_provider() {
+    info "Test 13b: Agent.sh compact no-op without provider config"
+    local home_dir session_dir session_file output
+    home_dir=$(mktemp -d)
+    session_dir="$home_dir/.bash-agent/projects/$(project_key)"
+    mkdir -p "$session_dir"
+    session_file="$session_dir/demo.jsonl"
+    printf '{"role":"user","content":"small message"}\n' > "$session_file"
+    output=$(HOME="$home_dir" "$AGENT" compact --session demo --max-context 1m 2>&1) || true
+    if echo "$output" | grep -q "Context is within budget; no compaction needed."; then
+        green "Agent compact no-op without provider config"; ((PASS++)) || true
+    else
+        red "Agent compact no-op without provider config"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 # Test 13: Skill injection
 test_agent_skill_injection() {
     info "Test 13: Agent.sh skill injection"
@@ -1258,6 +1274,7 @@ test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_compact
 test_agent_compact_preserves_turn_boundary
+test_agent_compact_noop_without_provider
 test_agent_skill_injection
 test_agent_skill_index
 test_agent_instruction_files

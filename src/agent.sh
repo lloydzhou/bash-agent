@@ -92,7 +92,7 @@ tool_call_arg() {
         field_name="${fields[i]}"
         field_value="${fields[i+1]}"
         if [[ "$field_name" == "$key" ]]; then
-            unescape_display_to_var field_value "$field_value"
+            unescape_protocol_to_var field_value "$field_value"
             printf -v "$__outvar" '%s' "$field_value"
             return 0
         fi
@@ -101,27 +101,38 @@ tool_call_arg() {
     return 1
 }
 
+tool_param_keys() {
+    local name="$1" __outvar="$2" keys=""
+    case "$name" in
+        Read)      keys="path" ;;
+        Write)     keys="path content" ;;
+        Edit)      keys="path old_string new_string" ;;
+        Bash)      keys="command" ;;
+        Glob)      keys="pattern path" ;;
+        Grep)      keys="pattern path glob" ;;
+        TodoWrite) keys="checklist summary" ;;
+    esac
+    printf -v "$__outvar" '%s' "$keys"
+}
+
 tool_call_summary() {
-    local name="$1" payload="${2:-}" label="" value=""
+    local name="$1" payload="${2:-}" label="" value="" summary_key=""
     case "$name" in
         Read|Write)
-            tool_call_arg "$payload" "path" value || true
-            [[ -n "$value" ]] && label="$value"
+            summary_key="path"
             ;;
         Edit)
-            tool_call_arg "$payload" "path" value || true
-            [[ -n "$value" ]] && label="$value"
+            summary_key="path"
             ;;
         Glob)
-            tool_call_arg "$payload" "pattern" value || true
-            [[ -n "$value" ]] && label="$value"
+            summary_key="pattern"
             ;;
         Grep)
-            tool_call_arg "$payload" "pattern" value || true
-            [[ -n "$value" ]] && label="$value"
+            summary_key="pattern"
             ;;
         Bash)
-            tool_call_arg "$payload" "command" value || true
+            summary_key="command"
+            tool_call_arg "$payload" "$summary_key" value || true
             if [[ -n "$value" ]]; then
                 value="${value//$'\n'/ }"
                 if (( ${#value} > 80 )); then
@@ -131,10 +142,13 @@ tool_call_summary() {
             fi
             ;;
         TodoWrite)
-            tool_call_arg "$payload" "summary" value || true
-            [[ -n "$value" ]] && label="$value"
+            summary_key="summary"
             ;;
     esac
+    if [[ -n "$summary_key" && -z "$label" ]]; then
+        tool_call_arg "$payload" "$summary_key" value || true
+        [[ -n "$value" ]] && label="$value"
+    fi
     if [[ -n "$label" ]]; then
         printf '%s(%s)' "$name" "$label"
     else
@@ -146,6 +160,7 @@ escape_protocol_text() {
     local value="$1"
     value="${value//\\/\\\\}"
     value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
     value="${value//$'\t'/\\t}"
     printf '%s' "$value"
 }
@@ -154,7 +169,7 @@ parse_tool_call_record() {
     local payload="$1" __namevar="$2" __idvar="$3" __inputvar="$4" __kvvar="$5"
     local name="" id="" input_value="" kv_value=""
     IFS=$'\t' read -r name id input_value kv_value <<< "$payload"
-    unescape_display_to_var input_value "$input_value"
+    unescape_protocol_to_var input_value "$input_value"
     printf -v "$__namevar" '%s' "$name"
     printf -v "$__idvar" '%s' "$id"
     printf -v "$__inputvar" '%s' "$input_value"
@@ -428,13 +443,15 @@ Tool evidence:
 EOF
 }
 
-# Unescape JSON escape sequences for display
-unescape_display_to_var() {
-    local __outvar="$1" value="$2"
+# Unescape the single-line protocol escaping used between awk and bash.
+unescape_protocol_to_var() {
+    local __outvar="$1" value="$2" backslash_placeholder=$'\001'
+    value="${value//\\\\/$backslash_placeholder}"
     value="${value//\\n/$'\n'}"
+    value="${value//\\r/$'\r'}"
     value="${value//\\t/$'\t'}"
     value="${value//\\\"/\"}"
-    value="${value//\\\\/\\}"
+    value="${value//$backslash_placeholder/\\}"
     printf -v "$__outvar" '%s' "$value"
 }
 
@@ -445,7 +462,7 @@ build_tool_calls_json() {
         [[ -z "$tc" ]] && continue
         local name id input_escaped input
         IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
-        unescape_display_to_var input "$input_escaped"
+        unescape_protocol_to_var input "$input_escaped"
         $first || tool_json+=","
         first=false
         tool_json+="{\"name\":\"$(json_escape "$name")\",\"id\":\"$(json_escape "$id")\",\"input\":${input}}"
@@ -467,7 +484,7 @@ build_assistant_content_json() {
         [[ -z "$tc" ]] && continue
         local name id input_escaped input
         IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
-        unescape_display_to_var input "$input_escaped"
+        unescape_protocol_to_var input "$input_escaped"
         $first || content+=","
         first=false
         content+="{\"type\":\"tool_use\",\"id\":\"$(json_escape "$id")\",\"name\":\"$(json_escape "$name")\",\"input\":${input}}"
@@ -724,6 +741,10 @@ compact_context_window() {
     fi
 
     prompt=$(build_compact_summary_prompt "$current_summary" "$dropped_messages")
+    if [[ -z "${API_URL:-}" ]]; then
+        validate_config
+        setup_api_url
+    fi
     summary_request="[{\"role\":\"user\",\"content\":\"$(json_escape "$prompt")\"}]"
     summary_response=$(run_summary_call "$summary_request")
     context_append_summary "$summary_response"
@@ -1063,7 +1084,7 @@ run_summary_call() {
             TEXT:*)
                 local t="${line#TEXT:}"
                 local d="$t"
-                unescape_display_to_var d "$d"
+                unescape_protocol_to_var d "$d"
                 text+="$d"
                 ;;
             ERROR:*)
@@ -1100,7 +1121,7 @@ agent_loop() {
                 TEXT:*)
                     t="${line#TEXT:}"
                     local d="$t"
-                    unescape_display_to_var d "$d"
+                    unescape_protocol_to_var d "$d"
                     if is_stream_json_mode; then
                         emit_stream_event "{\"type\":\"text\",\"content\":\"$(json_escape "$d")\"}"
                     else
@@ -1195,37 +1216,22 @@ execute_tool_calls() {
         [[ -z "$tc" ]] && continue
         local name id input_escaped kv_escaped input kv arg1="" arg2="" arg3=""
         IFS=$'\t' read -r name id input_escaped kv_escaped <<< "$tc"
-        unescape_display_to_var input "$input_escaped"
+        unescape_protocol_to_var input "$input_escaped"
         kv="$kv_escaped"
-        case "$name" in
-            Read)
-                tool_call_arg "$kv" "path" arg1 || true
-                ;;
-            Write)
-                tool_call_arg "$kv" "path" arg1 || true
-                tool_call_arg "$kv" "content" arg2 || true
-                ;;
-            Edit)
-                tool_call_arg "$kv" "path" arg1 || true
-                tool_call_arg "$kv" "old_string" arg2 || true
-                tool_call_arg "$kv" "new_string" arg3 || true
-                ;;
-            Bash)
-                tool_call_arg "$kv" "command" arg1 || true
-                ;;
-            Glob)
-                tool_call_arg "$kv" "pattern" arg1 || true
-                tool_call_arg "$kv" "path" arg2 || true
-                ;;
-            Grep)
-                tool_call_arg "$kv" "pattern" arg1 || true
-                tool_call_arg "$kv" "path" arg2 || true
-                tool_call_arg "$kv" "glob" arg3 || true
-                ;;
-            TodoWrite)
-                tool_call_arg "$kv" "checklist" arg1 || true
-                ;;
-        esac
+        local param_key_string="" param_keys=() idx param_value=""
+        tool_param_keys "$name" param_key_string
+        if [[ -n "$param_key_string" ]]; then
+            IFS=' ' read -r -a param_keys <<< "$param_key_string"
+            for idx in "${!param_keys[@]}"; do
+                param_value=""
+                tool_call_arg "$kv" "${param_keys[idx]}" param_value || true
+                case "$idx" in
+                    0) arg1="$param_value" ;;
+                    1) arg2="$param_value" ;;
+                    2) arg3="$param_value" ;;
+                esac
+            done
+        fi
         local output
         output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?
@@ -1267,7 +1273,7 @@ Options:
   --system PROMPT         System prompt for the agent
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md
   --max-turns N           Max agent turns (default: 20)
-  --max-context N         Max stored context bytes before compact (default: 100000; supports k/m/g)
+  --max-context N         Max stored context bytes before compact (default: 200000; supports k/m/g)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
   --output-format FMT     Output format: human | stream-json
@@ -1423,9 +1429,6 @@ interactive_mode() {
 main() {
     parse_args "$@"
 
-    validate_config
-    setup_api_url
-
     if [[ "$COMMAND" == "compact" && "$SESSION_MODE" != true && "$CONTINUE_SESSION" != true && -z "$SESSION_ID" ]]; then
         SESSION_MODE=true
         CONTINUE_SESSION=true
@@ -1446,6 +1449,13 @@ main() {
                 log_info "Context is within budget; no compaction needed."
             fi
         fi
+    else
+        validate_config
+        setup_api_url
+    fi
+
+    if [[ "$COMMAND" == "compact" ]]; then
+        :
     elif [[ "$INTERACTIVE" == true ]]; then
         TOOL_DEF_FILE=$(generate_tool_defs)
         interactive_mode

@@ -29,15 +29,17 @@ output_path = sys.argv[3]
 with open(agent_src) as f:
     content = f.read()
 
-def strip_comments(text):
-    """Strip leading comment lines from awk source."""
-    lines = text.split("\n")
-    stripped = []
-    for line in lines:
-        if line.startswith("#") and not stripped:
+def minify_awk_source(text):
+    """Remove comment-only and empty lines from awk source for dist embedding."""
+    out = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
             continue
-        stripped.append(line)
-    return "\n".join(stripped).strip()
+        if stripped.startswith("#"):
+            continue
+        out.append(line.rstrip())
+    return "\n".join(out).strip()
 
 def find_function_end(content, start):
     """Find the matching closing brace for a function starting at `start`."""
@@ -72,7 +74,7 @@ for key, (filename, varname) in awk_files.items():
     path = os.path.join(awk_dir, filename)
     with open(path) as f:
         raw = f.read()
-    body = strip_comments(raw)
+    body = minify_awk_source(raw)
     # Escape single quotes for bash single-quoted assignment
     escaped = body.replace("'", "'\\''")
     awk_bodies[key] = escaped

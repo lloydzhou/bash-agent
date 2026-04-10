@@ -287,6 +287,36 @@ function extract_json_string(json, key,    pos, rest, i, c, result, bs) {
     return result
 }
 
+# Split a JSON array into its top-level object elements.
+function split_top_level_objects(arr, blocks,    depth, in_str, i, c, count, start) {
+    count = 0
+    depth = 0
+    in_str = 0
+    start = 0
+    for (i = 1; i <= length(arr); i++) {
+        c = substr(arr, i, 1)
+        if (c == "\\" && in_str) {
+            i++
+            continue
+        }
+        if (c == "\"") in_str = !in_str
+        if (in_str) continue
+        if (c == "{") {
+            if (depth == 0) start = i
+            depth++
+        }
+        if (c == "}") {
+            depth--
+            if (depth == 0 && start > 0) {
+                count++
+                blocks[count] = substr(arr, start, i - start + 1)
+                start = 0
+            }
+        }
+    }
+    return count
+}
+
 # Extract a field value and strip surrounding quotes if it is a JSON string.
 BEGIN {
     if (json_mode == "escape_string") {

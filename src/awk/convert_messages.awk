@@ -18,14 +18,14 @@ function convert_assistant_msg(json,    role, content_val, text_parts, tool_part
     # Parse content array: [{...},{...}]
     if (substr(content_val, 1, 1) == "[") {
         # Split content array into blocks
-        n = split_content_blocks(content_val, blocks)
+        n = split_top_level_objects(content_val, blocks)
         for (i = 1; i <= n; i++) {
             block = blocks[i]
             if (block ~ /"type" *: *"text"/ || block ~ /"type":"text"/) {
                 t = extract_value(block, "text")
                 # Strip surrounding quotes
                 if (substr(t, 1, 1) == "\"") t = substr(t, 2, length(t) - 2)
-                text_parts = text_parts unescape_json(t)
+                text_parts = text_parts unescape_json_string(t)
             } else if (block ~ /"type" *: *"tool_use"/ || block ~ /"type":"tool_use"/) {
                 tid = extract_str(block, "id")
                 tname = extract_str(block, "name")
@@ -37,10 +37,7 @@ function convert_assistant_msg(json,    role, content_val, text_parts, tool_part
     } else {
         # Simple string content
         if (substr(content_val, 1, 1) == "\"") {
-            text_parts = substr(content_val, 2, length(content_val) - 2)
-            gsub(/\\n/, "\n", text_parts)
-            gsub(/\\t/, "\t", text_parts)
-            gsub(/\\\"/, "\"", text_parts)
+            text_parts = unescape_json_string(substr(content_val, 2, length(content_val) - 2))
         } else {
             text_parts = content_val
         }
@@ -69,7 +66,7 @@ function convert_tool_result_msg(json,    content_val, n, i, block, tid, result_
     content_val = extract_value(json, "content")
     msgs = ""
     if (substr(content_val, 1, 1) == "[") {
-        n = split_content_blocks(content_val, blocks)
+        n = split_top_level_objects(content_val, blocks)
         for (i = 1; i <= n; i++) {
             block = blocks[i]
             if (block ~ /"type" *: *"tool_result"/ || block ~ /"type":"tool_result"/) {
@@ -77,8 +74,7 @@ function convert_tool_result_msg(json,    content_val, n, i, block, tid, result_
                 result_content = extract_value(block, "content")
                 # Strip quotes if string
                 if (substr(result_content, 1, 1) == "\"") {
-                    result_content = substr(result_content, 2, length(result_content) - 2)
-                    result_content = unescape_json(result_content)
+                    result_content = unescape_json_string(substr(result_content, 2, length(result_content) - 2))
                 }
                 if (msgs != "") msgs = msgs ","
                 msgs = msgs "{\"role\":\"tool\",\"tool_call_id\":\"" tid "\",\"content\":\"" escape_for_json_string(result_content) "\"}"
@@ -96,43 +92,6 @@ function is_content_array(json,    pos, content_val) {
     # Check if content starts with [
     if (substr(content_val, 1, 1) == "[") return 1
     return 0
-}
-
-# Split a JSON array into its top-level elements
-function split_content_blocks(arr, blocks,    depth, in_str, i, c, count, start) {
-    count = 0
-    depth = 0
-    in_str = 0
-    start = 0
-    for (i = 1; i <= length(arr); i++) {
-        c = substr(arr, i, 1)
-        if (c == "\\" && in_str) { i++; continue }
-        if (c == "\"") in_str = !in_str
-        if (in_str) continue
-        if (c == "{") {
-            if (depth == 0) start = i
-            depth++
-        }
-        if (c == "}") {
-            depth--
-            if (depth == 0 && start > 0) {
-                count++
-                blocks[count] = substr(arr, start, i - start + 1)
-                start = 0
-            }
-        }
-    }
-    return count
-}
-
-function unescape_json(s,    t) {
-    t = s
-    gsub(/\\n/, "\n", t)
-    gsub(/\\t/, "\t", t)
-    gsub(/\\r/, "\r", t)
-    gsub(/\\\"/, "\"", t)
-    gsub(/\\\\/, "\\", t)
-    return t
 }
 
 function escape_for_json_string(s,    t, i, c) {
@@ -158,7 +117,7 @@ END {
     gsub(/^\[/, "", inner)
     gsub(/\]$/, "", inner)
 
-    n = split_content_blocks("[" inner "]", msgs)
+    n = split_top_level_objects("[" inner "]", msgs)
 
     result = "["
     for (i = 1; i <= n; i++) {
