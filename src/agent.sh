@@ -101,50 +101,55 @@ tool_call_arg() {
     return 1
 }
 
-tool_param_keys() {
-    local name="$1" __outvar="$2" keys=""
+tool_metadata() {
+    local name="$1" __keys_outvar="$2" __summary_outvar="$3" keys="" summary_key=""
     case "$name" in
-        Read)      keys="path" ;;
-        Write)     keys="path content" ;;
-        Edit)      keys="path old_string new_string" ;;
-        Bash)      keys="command" ;;
-        Glob)      keys="pattern path" ;;
-        Grep)      keys="pattern path glob" ;;
-        TodoWrite) keys="checklist summary" ;;
-    esac
-    printf -v "$__outvar" '%s' "$keys"
-}
-
-tool_call_summary() {
-    local name="$1" payload="${2:-}" label="" value="" summary_key=""
-    case "$name" in
-        Read|Write)
+        Read)
+            keys="path"
+            summary_key="path"
+            ;;
+        Write)
+            keys="path content"
             summary_key="path"
             ;;
         Edit)
+            keys="path old_string new_string"
             summary_key="path"
             ;;
+        Bash)
+            keys="command"
+            summary_key="command"
+            ;;
         Glob)
+            keys="pattern path"
             summary_key="pattern"
             ;;
         Grep)
+            keys="pattern path glob"
             summary_key="pattern"
             ;;
-        Bash)
-            summary_key="command"
-            tool_call_arg "$payload" "$summary_key" value || true
-            if [[ -n "$value" ]]; then
-                value="${value//$'\n'/ }"
-                if (( ${#value} > 80 )); then
-                    value="${value:0:77}..."
-                fi
-                label="$value"
-            fi
-            ;;
         TodoWrite)
+            keys="checklist summary"
             summary_key="summary"
             ;;
     esac
+    printf -v "$__keys_outvar" '%s' "$keys"
+    printf -v "$__summary_outvar" '%s' "$summary_key"
+}
+
+tool_call_summary() {
+    local name="$1" payload="${2:-}" label="" value="" summary_key="" _
+    tool_metadata "$name" _ summary_key
+    if [[ "$name" == "Bash" && -n "$summary_key" ]]; then
+        tool_call_arg "$payload" "$summary_key" value || true
+        if [[ -n "$value" ]]; then
+            value="${value//$'\n'/ }"
+            if (( ${#value} > 80 )); then
+                value="${value:0:77}..."
+            fi
+            label="$value"
+        fi
+    fi
     if [[ -n "$summary_key" && -z "$label" ]]; then
         tool_call_arg "$payload" "$summary_key" value || true
         [[ -n "$value" ]] && label="$value"
@@ -1219,8 +1224,8 @@ execute_tool_calls() {
         IFS=$'\t' read -r name id input_escaped kv_escaped <<< "$tc"
         unescape_protocol_to_var input "$input_escaped"
         kv="$kv_escaped"
-        local param_key_string="" param_keys=() idx param_value=""
-        tool_param_keys "$name" param_key_string
+        local param_key_string="" summary_key="" param_keys=() idx param_value=""
+        tool_metadata "$name" param_key_string summary_key
         if [[ -n "$param_key_string" ]]; then
             IFS=' ' read -r -a param_keys <<< "$param_key_string"
             for idx in "${!param_keys[@]}"; do
