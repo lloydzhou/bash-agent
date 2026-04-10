@@ -70,13 +70,13 @@ log_info() {
 }
 
 log_tool() {
-    printf '\033[33m[tool] %s\033[0m\n' "$*" >&2
+    printf '\033[33m[tool] %s\033[0m\n' "$*"
 }
 
 log_tool_result() {
     local name="$1" output="$2"
     if [[ -n "$output" ]]; then
-        printf '%s\n' "$output" >&2
+        printf '%s\n' "$output"
     fi
 }
 
