@@ -1,7 +1,7 @@
 # claude_sse.awk — Anthropic Claude SSE stream parser
 # Input: SSE lines (event:, data:)
 # Output: Unified protocol (TEXT:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
-# Requires: awk -v verbose=true/false -f common.awk -f claude_sse.awk
+# Requires: awk -v verbose=true/false -f json.awk -f protocol.awk -f todo_protocol.awk -f claude_sse.awk
 
 BEGIN {
     event = ""

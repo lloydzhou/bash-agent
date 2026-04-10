@@ -260,7 +260,7 @@ Internally, SSE output is normalized into a lightweight line protocol:
 
 ```text
 TEXT:Hello
-TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tpwd
+TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tcommand\tpwd
 USAGE:25\t42\t8
 STOP:end_turn
 ```
@@ -295,7 +295,6 @@ src/
     claude_sse.awk
     openai_sse.awk
     edit_file.awk
-    todo_write.awk
     skill_summary.awk
 scripts/
   build.sh

@@ -56,6 +56,8 @@ def find_function_end(content, start):
 # --- Read all awk files and prepare bash variables ---
 awk_files = {
     "json": ("json.awk", "_AWK_JSON"),
+    "protocol": ("protocol.awk", "_AWK_PROTOCOL"),
+    "todo_protocol": ("todo_protocol.awk", "_AWK_TODO_PROTOCOL"),
     "http_stream": ("http_stream.awk", "_AWK_HTTP_STREAM"),
     "edit_file": ("edit_file.awk", "_AWK_EDIT_FILE"),
     "claude_sse": ("claude_sse.awk", "_AWK_CLAUDE_SSE"),
@@ -63,7 +65,6 @@ awk_files = {
     "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
     "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
-    "todo_write": ("todo_write.awk", "_AWK_TODO_WRITE"),
 }
 
 awk_bodies = {}
@@ -95,10 +96,8 @@ if idx != -1:
 # --- Replace each awk function to use variable concatenation ---
 functions = [
     ("json_escape", "_AWK_JSON", "", ""),
-    ("extract_json_field", "_AWK_JSON", "", ""),
     ("parse_http_stream", "", "_AWK_HTTP_STREAM", ""),
     ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
-    ("run_todo_write_awk", "_AWK_JSON", "_AWK_TODO_WRITE", ""),
     ("parse_sse", "_AWK_JSON", "", ""),
     ("convert_messages_to_openai", "_AWK_JSON", "_AWK_CONVERT_MESSAGES", ""),
     ("convert_tools_to_openai", "_AWK_JSON", "_AWK_CONVERT_TOOLS", ""),
@@ -106,14 +105,7 @@ functions = [
 ]
 
 for func_name, json_var, specific_var, extra_args in functions:
-    if func_name == "extract_json_field":
-        replacement = (
-            "extract_json_field() {\n"
-            "    local json=\"$1\" key=\"$2\"\n"
-            "    printf '%s' \"$json\" | awk -v json_mode=\"extract_field\" -v json_field_key=\"$key\" \"${_AWK_JSON}\"\n"
-            "}\n"
-        )
-    elif func_name == "json_escape":
+    if func_name == "json_escape":
         replacement = (
             "json_escape() {\n"
             "    local input=\"${1:-}\"\n"
@@ -127,19 +119,12 @@ for func_name, json_var, specific_var, extra_args in functions:
             "    printf '%s' \"$input\" | awk -v max_bytes=\"$max_bytes\" -v meta_file=\"$meta_file\" \"${_AWK_JSON}\n${_AWK_EDIT_FILE}\"\n"
             "}\n"
         )
-    elif func_name == "run_todo_write_awk":
-        replacement = (
-            "run_todo_write_awk() {\n"
-            "    local input=\"$1\"\n"
-            "    printf '%s' \"$input\" | awk \"${_AWK_JSON}\n${_AWK_TODO_WRITE}\"\n"
-            "}\n"
-        )
     elif func_name == "parse_sse":
         replacement = (
             "parse_sse() {\n"
             "    case \"$PROVIDER\" in\n"
-            "        claude) awk -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_CLAUDE_SSE}\" ;;\n"
-            "        openai) awk \"${_AWK_JSON}\n${_AWK_OPENAI_SSE}\" ;;\n"
+            "        claude) awk -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}\" ;;\n"
+            "        openai) awk \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_OPENAI_SSE}\" ;;\n"
             "    esac\n"
             "}\n"
         )

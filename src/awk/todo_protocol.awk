@@ -1,13 +1,14 @@
-# Normalize todo_write input into a markdown checklist.
-# Expects json_input to be the raw tool input object.
+# todo_protocol.awk — TodoWrite-specific protocol formatting helpers.
 
-function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, out, bs, in_progress_count) {
+function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, out, bs) {
     out = ""
     depth = 0
     in_str = 0
     bs = 0
     item = ""
-    in_progress_count = 0
+    todo_completed_count = 0
+    todo_total_count = 0
+    todo_in_progress_count = 0
 
     for (i = 2; i <= length(arr) - 1; i++) {
         c = substr(arr, i, 1)
@@ -49,7 +50,9 @@ function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, o
                     print "Error: invalid todo status: " status > "/dev/stderr"
                     exit 1
                 }
-                if (status == "in_progress") in_progress_count++
+                todo_total_count++
+                if (status == "completed") todo_completed_count++
+                if (status == "in_progress") todo_in_progress_count++
                 out = out "- [" ((status == "completed") ? "x" : " ") "] " content "\n"
                 item = ""
             }
@@ -59,7 +62,7 @@ function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, o
         if (depth > 0) item = item c
     }
 
-    if (in_progress_count > 1) {
+    if (todo_in_progress_count > 1) {
         print "Error: todo_write allows at most one in_progress item" > "/dev/stderr"
         exit 1
     }
@@ -68,15 +71,13 @@ function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, o
     return out
 }
 
-BEGIN {
-    if (json_input == "") {
-        if ((getline json_input) < 0) json_input = ""
+function emit_tool_call_record(name, id, input_json,    todos, checklist, summary) {
+    if (name != "TodoWrite") {
+        protocol_emit_tool_call_record(name, id, input_json)
+        return
     }
-    todos = extract_value(json_input, "todos")
-    if (todos == "" || substr(todos, 1, 1) != "[") {
-        print "Error: todos array is required" > "/dev/stderr"
-        exit 1
-    }
-    print parse_todos_array(todos)
-    exit 0
+    todos = extract_value(input_json, "todos")
+    checklist = escape_protocol_text(parse_todos_array(todos))
+    summary = escape_protocol_text(sprintf("(%d/%d)", todo_completed_count, todo_total_count))
+    printf "TOOL_CALL:%s\t%s\t%s\tchecklist\t%s\tsummary\t%s\n", name, id, escape_protocol_text(input_json), checklist, summary
 }

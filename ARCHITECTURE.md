@@ -229,7 +229,7 @@ skills 当前只读取项目目录下：
 内部 SSE 解析结果会先转成单行协议，例如：
 
 - `TEXT:...`
-- `TOOL_CALL:<tool>\t<id>\t<raw_input_json>\t<flat args...>`
+- `TOOL_CALL:<tool>\t<id>\t<raw_input_json>\t<key>\t<value>...`
 - `USAGE:<input_tokens>\t<output_tokens>\t<cache_input_tokens>`
 - `STOP:...`
 - `ERROR:...`
@@ -312,7 +312,7 @@ skills 当前只读取项目目录下：
 - JSON 提取
 - Unicode 解码
 - SSE parser
-- `TodoWrite` 规范化
+- `TodoWrite` 规范化由 `json.awk` 直接完成
 - `Edit` 内容替换
 - `skill`/plan 这类文本抽取逻辑
 

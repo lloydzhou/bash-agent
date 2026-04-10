@@ -84,27 +84,44 @@ log_verbose() {
     $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
 }
 
+tool_call_arg() {
+    local payload="$1" key="$2" __outvar="$3"
+    local fields=() i field_name field_value
+    IFS=$'\t' read -r -a fields <<< "$payload"
+    for (( i = 0; i + 1 < ${#fields[@]}; i += 2 )); do
+        field_name="${fields[i]}"
+        field_value="${fields[i+1]}"
+        if [[ "$field_name" == "$key" ]]; then
+            unescape_display_to_var field_value "$field_value"
+            printf -v "$__outvar" '%s' "$field_value"
+            return 0
+        fi
+    done
+    printf -v "$__outvar" '%s' ""
+    return 1
+}
+
 tool_call_summary() {
-    local name="$1" arg1="${2:-}" label="" value=""
+    local name="$1" payload="${2:-}" label="" value=""
     case "$name" in
         Read|Write)
-            value="$arg1"
+            tool_call_arg "$payload" "path" value || true
             [[ -n "$value" ]] && label="$value"
             ;;
         Edit)
-            value="$arg1"
+            tool_call_arg "$payload" "path" value || true
             [[ -n "$value" ]] && label="$value"
             ;;
         Glob)
-            value="$arg1"
+            tool_call_arg "$payload" "pattern" value || true
             [[ -n "$value" ]] && label="$value"
             ;;
         Grep)
-            value="$arg1"
+            tool_call_arg "$payload" "pattern" value || true
             [[ -n "$value" ]] && label="$value"
             ;;
         Bash)
-            value="$arg1"
+            tool_call_arg "$payload" "command" value || true
             if [[ -n "$value" ]]; then
                 value="${value//$'\n'/ }"
                 if (( ${#value} > 80 )); then
@@ -114,6 +131,8 @@ tool_call_summary() {
             fi
             ;;
         TodoWrite)
+            tool_call_arg "$payload" "summary" value || true
+            [[ -n "$value" ]] && label="$value"
             ;;
     esac
     if [[ -n "$label" ]]; then
@@ -131,20 +150,15 @@ escape_protocol_text() {
     printf '%s' "$value"
 }
 
-parse_tool_call_fields() {
-    local payload="$1" __namevar="$2" __idvar="$3" __inputvar="$4" __arg1var="$5" __arg2var="$6" __arg3var="$7"
-    local name="" id="" input_value="" arg1_value="" arg2_value="" arg3_value=""
-    IFS=$'\t' read -r name id input_value arg1_value arg2_value arg3_value <<< "$payload"
+parse_tool_call_record() {
+    local payload="$1" __namevar="$2" __idvar="$3" __inputvar="$4" __kvvar="$5"
+    local name="" id="" input_value="" kv_value=""
+    IFS=$'\t' read -r name id input_value kv_value <<< "$payload"
     unescape_display_to_var input_value "$input_value"
-    unescape_display_to_var arg1_value "$arg1_value"
-    unescape_display_to_var arg2_value "$arg2_value"
-    unescape_display_to_var arg3_value "$arg3_value"
     printf -v "$__namevar" '%s' "$name"
     printf -v "$__idvar" '%s' "$id"
     printf -v "$__inputvar" '%s' "$input_value"
-    printf -v "$__arg1var" '%s' "$arg1_value"
-    printf -v "$__arg2var" '%s' "$arg2_value"
-    printf -v "$__arg3var" '%s' "$arg3_value"
+    printf -v "$__kvvar" '%s' "$kv_value"
 }
 
 parse_usage_fields() {
@@ -320,17 +334,11 @@ find_skill_base_dir() {
     return 1
 }
 
-find_skill_file() {
-    local skill_name="$1" base candidate
-    base=$(find_skill_base_dir) || return 1
-    candidate="$base/$skill_name/SKILL.md"
-    [[ -f "$candidate" ]] || return 1
-    printf '%s' "$candidate"
-}
-
 load_skill_content() {
-    local skill_name="$1" skill_file skill_dir content
-    skill_file=$(find_skill_file "$skill_name") || return 1
+    local skill_name="$1" base skill_file skill_dir content
+    base=$(find_skill_base_dir) || return 1
+    skill_file="$base/$skill_name/SKILL.md"
+    [[ -f "$skill_file" ]] || return 1
     skill_dir=$(dirname "$skill_file")
     content=$(<"$skill_file") || return 1
     content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$skill_dir}"
@@ -428,14 +436,6 @@ unescape_display_to_var() {
     value="${value//\\\"/\"}"
     value="${value//\\\\/\\}"
     printf -v "$__outvar" '%s' "$value"
-}
-
-# Extract a field value from JSON using awk
-extract_json_field() {
-    printf '%s' "$1" | awk \
-        -v json_mode="extract_field" \
-        -v json_field_key="$2" \
-        -f "$AWK_DIR/json.awk"
 }
 
 build_tool_calls_json() {
@@ -885,18 +885,8 @@ tool_grep() {
     fi
 }
 
-run_todo_write_awk() {
-    local input="$1"
-    printf '%s' "$input" | awk \
-        -f "$AWK_DIR/json.awk" \
-        -f "$AWK_DIR/todo_write.awk"
-}
-
 tool_todo() {
-    local todos="$1"
-    local input checklist
-    input=$(printf '{"todos":%s}' "$todos")
-    checklist=$(run_todo_write_awk "$input") || return 1
+    local checklist="$1"
     printf '%s\n' "$checklist" > "$TODO_FILE"
     session_append_line "$(build_todo_event_json "$checklist")"
     printf '%s' "$checklist"
@@ -1004,8 +994,8 @@ run_edit_file_awk() {
 
 parse_sse() {
     case "$PROVIDER" in
-        claude) awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" ;;
-        openai) awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk" ;;
+        claude) awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" ;;
+        openai) awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" ;;
     esac
 }
 
@@ -1129,14 +1119,14 @@ agent_loop() {
                         human_last_char=$'\n'
                     fi
                     local tool_call_payload="${line#TOOL_CALL:}"
-                    local arg1="" arg2="" arg3=""
-                    parse_tool_call_fields "$tool_call_payload" cur_tool_name cur_tool_id input arg1 arg2 arg3
+                    local tool_kv=""
+                    parse_tool_call_record "$tool_call_payload" cur_tool_name cur_tool_id input tool_kv
                     if is_stream_json_mode; then
                         emit_stream_event "{\"type\":\"tool_call\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\",\"input\":$input}"
                     else
-                        log_tool "$(tool_call_summary "$cur_tool_name" "$arg1")"
+                        log_tool "$(tool_call_summary "$cur_tool_name" "$tool_kv")"
                     fi
-                    tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"$(escape_protocol_text "$input")"$'\t'"$(escape_protocol_text "$arg1")"$'\t'"$(escape_protocol_text "$arg2")"$'\t'"$(escape_protocol_text "$arg3")"$'\n'
+                    tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"$(escape_protocol_text "$input")"$'\t'"${tool_kv}"$'\n'
                     ;;
                 USAGE:*)
                     if is_stream_json_mode; then
@@ -1203,12 +1193,39 @@ execute_tool_calls() {
     EXEC_TOOL_RESULTS=""
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input_escaped arg1_escaped arg2_escaped arg3_escaped input arg1 arg2 arg3
-        IFS=$'\t' read -r name id input_escaped arg1_escaped arg2_escaped arg3_escaped <<< "$tc"
+        local name id input_escaped kv_escaped input kv arg1="" arg2="" arg3=""
+        IFS=$'\t' read -r name id input_escaped kv_escaped <<< "$tc"
         unescape_display_to_var input "$input_escaped"
-        unescape_display_to_var arg1 "$arg1_escaped"
-        unescape_display_to_var arg2 "$arg2_escaped"
-        unescape_display_to_var arg3 "$arg3_escaped"
+        kv="$kv_escaped"
+        case "$name" in
+            Read)
+                tool_call_arg "$kv" "path" arg1 || true
+                ;;
+            Write)
+                tool_call_arg "$kv" "path" arg1 || true
+                tool_call_arg "$kv" "content" arg2 || true
+                ;;
+            Edit)
+                tool_call_arg "$kv" "path" arg1 || true
+                tool_call_arg "$kv" "old_string" arg2 || true
+                tool_call_arg "$kv" "new_string" arg3 || true
+                ;;
+            Bash)
+                tool_call_arg "$kv" "command" arg1 || true
+                ;;
+            Glob)
+                tool_call_arg "$kv" "pattern" arg1 || true
+                tool_call_arg "$kv" "path" arg2 || true
+                ;;
+            Grep)
+                tool_call_arg "$kv" "pattern" arg1 || true
+                tool_call_arg "$kv" "path" arg2 || true
+                tool_call_arg "$kv" "glob" arg3 || true
+                ;;
+            TodoWrite)
+                tool_call_arg "$kv" "checklist" arg1 || true
+                ;;
+        esac
         local output
         output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?

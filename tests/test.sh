@@ -555,7 +555,7 @@ stop_mock() {
 test_claude_sse() {
     info "Test 1: Claude SSE awk parser"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -589,7 +589,7 @@ SSE
 test_claude_tool_use() {
     info "Test 2: Claude SSE tool_use parsing"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -609,10 +609,41 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq $'TOOL_CALL:Read\ttoolu_123\t{"path":"/etc/hostname"}\t/etc/hostname' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:Read\ttoolu_123\t{"path":"/etc/hostname"}\tpath\t/etc/hostname' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use"; ((PASS++)) || true
     else
         red "Claude tool_use"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
+# Test 2b: Claude SSE TodoWrite parsing
+test_claude_todowrite_tool_use() {
+    info "Test 2b: Claude SSE TodoWrite parsing"
+    local output
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+event: message_start
+data: {"type":"message_start","message":{"id":"msg_todo","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_todo","name":"TodoWrite","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"todos\":[{\"content\":\"inspect repository\",\"status\":\"completed\"},{\"content\":\"run tests\",\"status\":\"pending\"}]}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}
+
+event: message_stop
+data: {"type":"message_stop"}
+SSE
+)
+    if echo "$output" | grep -Fq $'TOOL_CALL:TodoWrite\ttoolu_todo\t{"todos":[{"content":"inspect repository","status":"completed"},{"content":"run tests","status":"pending"}]}\tchecklist\t- [x] inspect repository\\n- [ ] run tests\tsummary\t(1/2)' && echo "$output" | grep -q "STOP:tool_use"; then
+        green "Claude TodoWrite tool_use"; ((PASS++)) || true
+    else
+        red "Claude TodoWrite tool_use"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -620,7 +651,7 @@ SSE
 test_claude_usage_cache_tokens() {
     info "Test 3: Claude SSE usage cache tokens"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_cache","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":2,"cache_read_input_tokens":4}}}
 
@@ -651,7 +682,7 @@ SSE
 test_claude_tool_use_quoted_command() {
     info "Test 4: Claude SSE tool_use quoted command"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -671,7 +702,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_quoted\t{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \\\\"not found\\\\""}\tcd /tmp && ls generate.mjs 2>/dev/null || echo "not found"' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_quoted\t{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \\\\"not found\\\\""}\tcommand\tcd /tmp && ls generate.mjs 2>/dev/null || echo "not found"' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use quoted command"; ((PASS++)) || true
     else
         red "Claude tool_use quoted command"; echo "  Output: $output"; ((FAIL++)) || true
@@ -682,7 +713,7 @@ SSE
 test_claude_sse_unicode() {
     info "Test 5: Claude SSE unicode parsing"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_unicode","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -711,7 +742,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -q "TEXT:中文" && echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_unicode\t{"command":"echo 中文"}\techo 中文' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -q "TEXT:中文" && echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_unicode\t{"command":"echo 中文"}\tcommand\techo 中文' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude unicode parsing"; ((PASS++)) || true
     else
         red "Claude unicode parsing"; echo "  Output: $output"; ((FAIL++)) || true
@@ -722,7 +753,7 @@ SSE
 test_openai_sse() {
     info "Test 5: OpenAI SSE awk parser"
     local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello from"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" OpenAI mock!"},"finish_reason":null}]}
@@ -743,7 +774,7 @@ SSE
 test_openai_usage_cache_tokens() {
     info "Test 6: OpenAI SSE usage cache tokens"
     local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Cache usage"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":5}}}
@@ -762,7 +793,7 @@ SSE
 test_openai_sse_leading_newline() {
     info "Test 7: OpenAI SSE trims initial leading newlines"
     local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
 data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"\n\nHello"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
@@ -1213,6 +1244,7 @@ fi
 
 test_claude_sse
 test_claude_tool_use
+test_claude_todowrite_tool_use
 test_claude_usage_cache_tokens
 test_claude_tool_use_quoted_command
 test_claude_sse_unicode

@@ -1,7 +1,7 @@
 # openai_sse.awk — OpenAI Chat Completions SSE stream parser
 # Input: SSE lines (data:)
 # Output: Unified protocol (TEXT:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
-# Requires: awk -f common.awk -f openai_sse.awk
+# Requires: awk -f json.awk -f protocol.awk -f todo_protocol.awk -f openai_sse.awk
 
 BEGIN {
     stop_reason = ""

@@ -234,56 +234,6 @@ function unescape_json_string(s,    out, i, c, esc, hex, cp, nexthex, lo) {
     return out
 }
 
-function escape_protocol_text(s,    out, i, c) {
-    out = ""
-    for (i = 1; i <= length(s); i++) {
-        c = substr(s, i, 1)
-        if (c == "\\") out = out "\\\\"
-        else if (c == "\n") out = out "\\n"
-        else if (c == "\r") out = out "\\r"
-        else if (c == "\t") out = out "\\t"
-        else out = out c
-    }
-    return out
-}
-
-function extract_input_string(json, key) {
-    return unescape_json_string(extract_json_string(json, key))
-}
-
-function emit_tool_call_record(name, id, input_json,    path, content, olds, news, cmd, pattern, pth, glob, todos) {
-    if (name == "Read") {
-        path = escape_protocol_text(extract_input_string(input_json, "path"))
-        printf "TOOL_CALL:%s\t%s\t%s\t%s\n", name, id, escape_protocol_text(input_json), path
-    } else if (name == "Write") {
-        path = escape_protocol_text(extract_input_string(input_json, "path"))
-        content = escape_protocol_text(extract_input_string(input_json, "content"))
-        printf "TOOL_CALL:%s\t%s\t%s\t%s\t%s\n", name, id, escape_protocol_text(input_json), path, content
-    } else if (name == "Edit") {
-        path = escape_protocol_text(extract_input_string(input_json, "path"))
-        olds = escape_protocol_text(extract_input_string(input_json, "old_string"))
-        news = escape_protocol_text(extract_input_string(input_json, "new_string"))
-        printf "TOOL_CALL:%s\t%s\t%s\t%s\t%s\t%s\n", name, id, escape_protocol_text(input_json), path, olds, news
-    } else if (name == "Bash") {
-        cmd = escape_protocol_text(extract_input_string(input_json, "command"))
-        printf "TOOL_CALL:%s\t%s\t%s\t%s\n", name, id, escape_protocol_text(input_json), cmd
-    } else if (name == "Glob") {
-        pattern = escape_protocol_text(extract_input_string(input_json, "pattern"))
-        pth = escape_protocol_text(extract_input_string(input_json, "path"))
-        printf "TOOL_CALL:%s\t%s\t%s\t%s\t%s\n", name, id, escape_protocol_text(input_json), pattern, pth
-    } else if (name == "Grep") {
-        pattern = escape_protocol_text(extract_input_string(input_json, "pattern"))
-        pth = escape_protocol_text(extract_input_string(input_json, "path"))
-        glob = escape_protocol_text(extract_input_string(input_json, "glob"))
-        printf "TOOL_CALL:%s\t%s\t%s\t%s\t%s\t%s\n", name, id, escape_protocol_text(input_json), pattern, pth, glob
-    } else if (name == "TodoWrite") {
-        todos = extract_value(input_json, "todos")
-        printf "TOOL_CALL:%s\t%s\t%s\t%s\n", name, id, escape_protocol_text(input_json), escape_protocol_text(todos)
-    } else {
-        printf "TOOL_CALL:%s\t%s\t%s\n", name, id, escape_protocol_text(input_json)
-    }
-}
-
 function escape_json_string(s,    out, i, c, code, hex) {
     out = ""
     for (i = 1; i <= length(s); i++) {
