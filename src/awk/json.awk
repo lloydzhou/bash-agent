@@ -299,3 +299,29 @@ function split_top_level_objects(arr, blocks,    i, c, count, raw) {
     }
     return count
 }
+
+# Split a JSON object into its top-level members.
+# Populates keys[count] and raw_values[count] with the decoded member name
+# and raw JSON value text respectively.
+function split_top_level_members(obj, keys, raw_values,    count, i, raw_key, key_pos, raw) {
+    count = 0
+    if (substr(obj, 1, 1) != "{") return 0
+    i = 2
+    while (i < length(obj)) {
+        i = json_skip_ws(obj, i)
+        while (i < length(obj) && substr(obj, i, 1) == ",") i = json_skip_ws(obj, i + 1)
+        if (i >= length(obj) || substr(obj, i, 1) == "}") break
+        if (substr(obj, i, 1) != "\"") break
+        raw_key = json_read_string_token(obj, i)
+        key_pos = JSON_VALUE_END
+        i = json_skip_ws(obj, key_pos + 1)
+        if (substr(obj, i, 1) != ":") break
+        i = json_skip_ws(obj, i + 1)
+        raw = json_read_raw_value(obj, i)
+        count++
+        keys[count] = unescape_json_string(substr(raw_key, 2, length(raw_key) - 2))
+        raw_values[count] = raw
+        i = JSON_VALUE_END + 1
+    }
+    return count
+}

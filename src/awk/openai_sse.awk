@@ -7,6 +7,7 @@ BEGIN {
     stop_reason = ""
     # Track tool calls: index -> {id, name, arguments}
     tc_count = 0
+    tc_max_index = -1
     input_tokens = 0
     output_tokens = 0
     cache_input_tokens = 0
@@ -19,6 +20,7 @@ BEGIN {
 /^ERROR:/ { print; fflush(); next }
 
 /^data: \[DONE\]/ {
+    emit_pending_tool_calls()
     if (stop_reason == "") stop_reason = "done"
     printf "USAGE:%d\t%d\t%d\n", input_tokens, output_tokens, cache_input_tokens
     fflush()
@@ -50,10 +52,10 @@ BEGIN {
     }
 
     # Extract tool calls from delta
-    # Format: "tool_calls":[{"index":0,"id":"call_xxx","type":"function","function":{"name":"func","arguments":"{...}"}}]
-    if (json ~ /"tool_calls"/) {
+    if (extract_value(json, "tool_calls", 1) != "") {
         parse_tool_calls(json)
     }
+    if (fr == "tool_calls") emit_pending_tool_calls()
 
     # Extract usage if present
     pt = extract_num(json, "prompt_tokens", 1)
@@ -67,25 +69,19 @@ BEGIN {
     next
 }
 
-function parse_tool_calls(json,    pos, end, tc_json) {
-    # Find "tool_calls":[ and extract the array content
-    pos = index(json, "\"tool_calls\":[")
-    if (pos == 0) return
-
-    # Simple extraction: find each tool call object
-    # We look for "index" markers
-    gsub(/\},\{/, "}\n{", json)
-    split(json, parts, "\n")
-
-    for (p = 1; p <= length(parts); p++) {
-        tc = parts[p]
-
-        if (tc !~ /"index"/) continue
-
+function parse_tool_calls(json,    arr, count, p, tc, idx, tc_id, func_raw, name, args) {
+    arr = extract_value(json, "tool_calls", 1)
+    if (arr == "" || substr(arr, 1, 1) != "[") return
+    count = split_top_level_objects(arr, OPENAI_TOOL_CALLS)
+    for (p = 1; p <= count; p++) {
+        tc = OPENAI_TOOL_CALLS[p]
         idx = extract_num(tc, "index")
+        if (idx == "") continue
+        if ((idx + 0) > tc_max_index) tc_max_index = idx + 0
         tc_id = extract_str(tc, "id")
-        name = extract_str(tc, "name")
-        args = extract_json_string(tc, "arguments")
+        func_raw = extract_value(tc, "function")
+        name = extract_str(func_raw, "name")
+        args = extract_json_string(func_raw, "arguments")
 
         # If this is a new tool call (has id and name)
         if (tc_id != "" && name != "") {
@@ -100,16 +96,14 @@ function parse_tool_calls(json,    pos, end, tc_json) {
                 tool_args[idx] = args
             }
         }
+    }
+}
 
-        # OpenAI streams function.arguments as an escaped JSON string. Accumulate the
-        # string fragments first, then decode that outer string once before emitting
-        # TOOL_CALL as JSON object text.
-        if (fr != "" || tc ~ /\}\]/) {
-            if (idx in tool_args && tool_args[idx] != "") {
-                emit_tool_call_record(tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx]))
-                fflush()
-                tool_args[idx] = ""
-            }
-        }
+function emit_pending_tool_calls(    idx) {
+    for (idx = 0; idx <= tc_max_index; idx++) {
+        if (tool_args[idx] == "") continue
+        emit_tool_call_record(tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx]))
+        fflush()
+        tool_args[idx] = ""
     }
 }

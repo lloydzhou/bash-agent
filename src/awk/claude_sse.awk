@@ -30,12 +30,14 @@ BEGIN {
     if (verbose == "true") printf "[sse-debug] event=[%s] data=[%.200s]\n", event, json > "/dev/stderr"
 
     if (event == "content_block_start") {
-        if (json ~ /"type" *: *"text"/ || json ~ /"type":"text"/) {
+        block_json = extract_value(json, "content_block")
+        block_kind = extract_str(block_json, "type")
+        if (block_kind == "text") {
             block_type = "text"
-        } else if (json ~ /"type" *: *"tool_use"/ || json ~ /"type":"tool_use"/) {
+        } else if (block_kind == "tool_use") {
             block_type = "tool"
-            tool_name = extract_str(json, "name", 1)
-            tool_id = extract_str(json, "id", 1)
+            tool_name = extract_str(block_json, "name")
+            tool_id = extract_str(block_json, "id")
             partial_json = ""
         }
     }

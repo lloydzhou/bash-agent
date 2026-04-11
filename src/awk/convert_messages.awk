@@ -47,7 +47,7 @@ function convert_assistant_msg(json,    role, content_val, text_parts, tool_part
     # Build OpenAI message
     result_msg = "{\"role\":\"assistant\""
     if (text_parts != "") {
-        result_msg = result_msg ",\"content\":\"" escape_for_json_string(text_parts) "\""
+        result_msg = result_msg ",\"content\":\"" escape_json_string(text_parts) "\""
     } else {
         result_msg = result_msg ",\"content\":null"
     }
@@ -91,6 +91,16 @@ function is_content_array(json,    content_val) {
     return (substr(content_val, 1, 1) == "[")
 }
 
+function content_has_block_type(content_val, want_type,    n, i, block) {
+    if (substr(content_val, 1, 1) != "[") return 0
+    n = split_top_level_objects(content_val, blocks)
+    for (i = 1; i <= n; i++) {
+        block = blocks[i]
+        if (extract_str(block, "type") == want_type) return 1
+    }
+    return 0
+}
+
 # Accumulate all lines into one string
 { line = line $0 }
 
@@ -113,11 +123,11 @@ END {
 
         if (role == "assistant" && is_content_array(msg)) {
             content_val = extract_value(msg, "content")
-            if (content_val ~ /"tool_use"/) has_tool_content = 1
+            if (content_has_block_type(content_val, "tool_use")) has_tool_content = 1
         }
         if (role == "user" && is_content_array(msg)) {
             content_val = extract_value(msg, "content")
-            if (content_val ~ /"tool_result"/) has_tool_result = 1
+            if (content_has_block_type(content_val, "tool_result")) has_tool_result = 1
         }
 
         if (i > 1) result = result ","

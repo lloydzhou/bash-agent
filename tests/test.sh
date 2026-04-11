@@ -810,6 +810,27 @@ SSE
     fi
 }
 
+test_openai_sse_tool_calls() {
+    info "Test 7b: OpenAI SSE tool_calls parser"
+    local output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_openai_1","type":"function","function":{"name":"Write","arguments":"{\"path\":\"/tmp/test.txt\""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"content\":\"AbC\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":12}}
+
+data: [DONE]
+SSE
+)
+    if echo "$output" | grep -Fq $'TOOL_CALL:Write\tcall_openai_1\t{"path":"/tmp/test.txt","content":"AbC"}\tpath\t/tmp/test.txt\tcontent\tAbC' && \
+       echo "$output" | grep -q '^STOP:tool_calls$'; then
+        green "OpenAI SSE tool_calls parser"; ((PASS++)) || true
+    else
+        red "OpenAI SSE tool_calls parser"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 # Test 8: HTTP stream preserves error body
 test_http_stream_error_body() {
     info "Test 8: HTTP stream preserves error body"
@@ -1288,6 +1309,7 @@ test_claude_sse_unicode
 test_openai_sse
 test_openai_usage_cache_tokens
 test_openai_sse_leading_newline
+test_openai_sse_tool_calls
 test_http_stream_error_body
 test_convert_messages
 test_convert_tools
