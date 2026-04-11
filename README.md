@@ -121,7 +121,6 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 | `-m, --model` | 模型名 |
 | `--base-url` | 覆盖 API base URL |
 | `--api-key` | 覆盖 API key |
-| `--system` | 追加 system prompt 文本 |
 | `--skill NAME` | 加载 `.claude/skills/NAME/SKILL.md` |
 | `--max-tokens` | 最大输出 token |
 | `--max-turns` | 最大 agent loop turn 数 |

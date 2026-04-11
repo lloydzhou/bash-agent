@@ -122,7 +122,6 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 | `-m, --model` | model name |
 | `--base-url` | override API base URL |
 | `--api-key` | override API key |
-| `--system` | additional system prompt text |
 | `--skill NAME` | load `.claude/skills/NAME/SKILL.md` |
 | `--max-tokens` | max output tokens |
 | `--max-turns` | max agent loop turns |

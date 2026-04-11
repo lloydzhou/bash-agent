@@ -6,9 +6,8 @@
 set -uo pipefail
 
 # ============================================================================
-# Section 1: Configuration & Defaults
+# Section 1: User Options
 # ============================================================================
-
 PROVIDER=""
 MODEL=""
 MAX_TOKENS=4096
@@ -18,7 +17,6 @@ READ_FILE_MAX_BYTES=100000
 WRITE_FILE_MAX_BYTES=1048576
 EDIT_FILE_MAX_BYTES=1048576
 BASH_OUTPUT_MAX_BYTES=50000
-SYSTEM_PROMPT=""
 OUTPUT_FORMAT="human"
 VERBOSE=false
 API_KEY=""
@@ -27,37 +25,40 @@ PROMPT=""
 MAX_TURNS=20
 MAX_CONTEXT_BYTES=200000
 MAX_CONTEXT_KEEP_PCT=25
-INTERACTIVE=false
-COMMAND="chat"
-COMPACT_MODE=false
 declare -a SKILL_NAMES=()
 
-# Session
+# ============================================================================
+# Section 2: Runtime Mode & Session State
+# ============================================================================
+INTERACTIVE=false
+COMMAND="chat"
 SESSION_MODE=false
 SESSION_ID=""
 CONTINUE_SESSION=false
-SESSION_DIR=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 TODO_FILE=""
 
-# Internal
+# ============================================================================
+# Section 3: Internal Runtime State
+# ============================================================================
 CONV_FILE=""
 TOOL_DEF_FILE=""
 AGENT_TMPDIR=""
 API_URL=""
 AWK_DIR=""
-TOOLS_JSON_FILE=""
 EXEC_TOOL_RESULTS=""
 
-# Env defaults
+# ============================================================================
+# Section 4: Environment Defaults
+# ============================================================================
 : "${ANTHROPIC_API_KEY:=}"
 : "${OPENAI_API_KEY:=}"
 : "${ANTHROPIC_BASE_URL:=}"
 : "${OPENAI_BASE_URL:=}"
 
 # ============================================================================
-# Section 2: Utility Functions
+# Section 5: Utility Functions
 # ============================================================================
 
 log_error() {
@@ -319,7 +320,7 @@ emit_stream_event() {
 
 build_system_prompt() {
     local output=""
-    local agent_identity core_rules todo_guidance instruction_files skill_index selected_skills stable_context todo task_instructions
+    local agent_identity core_rules todo_guidance instruction_files skill_index selected_skills stable_context todo
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
@@ -329,7 +330,6 @@ build_system_prompt() {
     selected_skills=$(build_selected_skills_section)
     stable_context=$(build_stable_context_section)
     todo=$(build_todo_section)
-    task_instructions=$(build_task_instructions_section)
 
     append_section output "agent-identity" "$agent_identity"
     append_section output "rules" "$core_rules"
@@ -339,7 +339,6 @@ build_system_prompt() {
     append_section output "selected-skills" "$selected_skills"
     append_section output "context-summary" "$stable_context"
     append_section output "current-todo" "$todo"
-    append_section output "instructions" "$task_instructions"
 
     printf '%s' "${output%$'\n'}"
 }
@@ -571,8 +570,9 @@ get_project_key() {
 
 conv_init() {
     if [[ "$SESSION_MODE" == true ]]; then
-        SESSION_DIR="${HOME}/.bash-agent/projects/$(get_project_key)"
-        mkdir -p "$SESSION_DIR"
+        local session_dir
+        session_dir="${HOME}/.bash-agent/projects/$(get_project_key)"
+        mkdir -p "$session_dir"
 
         local session_base=""
         if [[ -n "$SESSION_ID" ]]; then
@@ -580,10 +580,10 @@ conv_init() {
             session_base="$SESSION_ID"
         elif [[ "$CONTINUE_SESSION" == true ]]; then
             # Continue most recent session
-            CONV_FILE=$(ls -t "${SESSION_DIR}"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$' | head -1)
+            CONV_FILE=$(ls -t "${session_dir}"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$' | head -1)
             if [[ -n "$CONV_FILE" ]]; then
                 session_base="$(basename "$CONV_FILE" .jsonl)"
-            elif [[ "$COMPACT_MODE" == true ]]; then
+            elif [[ "$COMMAND" == "compact" ]]; then
                 die "No existing session found to compact. Use --session NAME or run a session first."
             else
                 session_base="$(date +%Y%m%d-%H%M%S)"
@@ -594,10 +594,10 @@ conv_init() {
         fi
 
         [[ -z "$session_base" ]] && session_base="$(date +%Y%m%d-%H%M%S)"
-        CONV_FILE="${SESSION_DIR}/${session_base}.jsonl"
-        SESSION_EVENT_FILE="${SESSION_DIR}/${session_base}.events.jsonl"
-        CONTEXT_SUMMARY_FILE="${SESSION_DIR}/${session_base}.summary.txt"
-        TODO_FILE="${SESSION_DIR}/${session_base}.todo.md"
+        CONV_FILE="${session_dir}/${session_base}.jsonl"
+        SESSION_EVENT_FILE="${session_dir}/${session_base}.events.jsonl"
+        CONTEXT_SUMMARY_FILE="${session_dir}/${session_base}.summary.txt"
+        TODO_FILE="${session_dir}/${session_base}.todo.md"
         local new_session=false
         [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
         touch "$CONV_FILE"
@@ -670,10 +670,6 @@ build_todo_section() {
         return 0
     fi
     printf ''
-}
-
-build_task_instructions_section() {
-    printf '%s' "${SYSTEM_PROMPT:-}"
 }
 
 build_compact_summary_prompt() {
@@ -789,24 +785,19 @@ session_log_tool_results() {
 }
 
 # ============================================================================
-# Section 4: Tool Definitions (auto-generated JSON)
+# Section 6: Tool Definitions (auto-generated JSON)
 # ============================================================================
 
 generate_tool_defs() {
-    local tools_file
-    if [[ -n "${TOOLS_JSON_FILE:-}" ]]; then
-        tools_file="$TOOLS_JSON_FILE"
-    else
-        local script_dir
-        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        tools_file="$script_dir/tools.json"
-    fi
+    local tools_file script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    tools_file="$script_dir/tools.json"
     [[ -f "$tools_file" ]] || die "Cannot find tools.json: $tools_file"
     printf '%s' "$tools_file"
 }
 
 # ============================================================================
-# Section 5: Tool Implementations
+# Section 7: Tool Implementations
 # ============================================================================
 
 tool_read() {
@@ -1275,7 +1266,6 @@ Options:
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
   --max-tokens N          Max output tokens (default: 4096)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
-  --system PROMPT         System prompt for the agent
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md
   --max-turns N           Max agent turns (default: 20)
   --max-context N         Max stored context bytes before compact (default: 200000; supports k/m/g)
@@ -1313,7 +1303,6 @@ EOF
 parse_args() {
     if [[ $# -gt 0 && "$1" == "compact" ]]; then
         COMMAND="compact"
-        COMPACT_MODE=true
         shift
     fi
 
@@ -1323,7 +1312,6 @@ parse_args() {
             -m|--model)      MODEL="$2"; shift 2 ;;
             --max-tokens)    MAX_TOKENS="$2"; shift 2 ;;
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
-            --system)        SYSTEM_PROMPT="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
             --max-context)
@@ -1436,7 +1424,6 @@ main() {
     if [[ "$COMMAND" == "compact" && "$SESSION_MODE" != true && "$CONTINUE_SESSION" != true && -z "$SESSION_ID" ]]; then
         SESSION_MODE=true
         CONTINUE_SESSION=true
-        COMPACT_MODE=true
     fi
 
     AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent.XXXXXX")

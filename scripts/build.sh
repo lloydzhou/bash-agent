@@ -180,7 +180,6 @@ if idx != -1:
 
 content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
-content = content.replace('TOOLS_JSON_FILE=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
 # --- Write output ---
 with open(output_path, 'w') as f:
