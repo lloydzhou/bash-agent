@@ -8,6 +8,7 @@
 
 - `bash-agent`：当前稳定主线，`bash + awk`
 - `goagent`：Go port，内部使用 struct/channel，但保持相同的 agent loop、tool/event/session 语义
+- `rustagent`：Rust port，保持相同语义，使用 Rust 原生 JSON/SSE/dispatch
 
 它不是一个完整平台，而是一个尽量小、边界清晰、可以真正执行工作的 agent core。目标是：
 
@@ -107,16 +108,43 @@ Go 版本本地构建并安装：
 mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go build -o ~/.local/bin/goagent ./cmd/goagent
 ```
 
+Rust 版本本地构建并安装（release）：
+
+```bash
+cargo -C rust build --release && cp rust/target/release/rustagent ~/.local/bin/rustagent
+```
+
 也可以直接下载预构建产物：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/goagent -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
 ```
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/rustagent -o ~/.local/bin/rustagent && chmod +x ~/.local/bin/rustagent
+```
+
 Go 版本 help：
 
 ```bash
 goagent -h
+```
+
+Rust 版本 help：
+
+```bash
+rustagent -h
+```
+
+Rust 版 `-i` 模式支持：
+
+- history
+- 上下箭头
+
+history 文件保存在：
+
+```text
+~/.bash-agent/rustagent.history
 ```
 
 也支持第三方兼容端点：

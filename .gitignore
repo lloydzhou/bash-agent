@@ -1,6 +1,8 @@
 .claude
 /go/.gocache/
 /go/.gomodcache/
+/rust/target/
 dist/*
 !dist/agent.sh
 !dist/goagent
+!dist/rustagent

@@ -1,0 +1,138 @@
+[
+  {
+    "name": "Read",
+    "description": "Read a file from the local filesystem.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to read"
+        }
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "Write",
+    "description": "Write a file to the local filesystem.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to write"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write to the file"
+        }
+      },
+      "required": ["path", "content"]
+    }
+  },
+  {
+    "name": "Edit",
+    "description": "Edit a file by replacing an exact string match with a new string.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to edit"
+        },
+        "old_string": {
+          "type": "string",
+          "description": "The exact text to find and replace"
+        },
+        "new_string": {
+          "type": "string",
+          "description": "The replacement text"
+        }
+      },
+      "required": ["path", "old_string", "new_string"]
+    }
+  },
+  {
+    "name": "Bash",
+    "description": "Execute a bash command. Returns stdout and stderr.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to execute"
+        }
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "Glob",
+    "description": "Fast file pattern matching tool that works with any codebase size.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern, for example **/*.sh"
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional directory to search from. Defaults to ."
+        }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "Grep",
+    "description": "A powerful search tool built on ripgrep.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Text or regex pattern to search for"
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional file or directory to search. Defaults to ."
+        },
+        "glob": {
+          "type": "string",
+          "description": "Optional file glob filter, for example *.sh"
+        }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "TodoWrite",
+    "description": "Create and manage a structured task list for the current coding session. Use proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file work. Do not use for trivial single-step or purely informational requests.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "todos": {
+          "type": "array",
+          "description": "The full updated todo list for the current session. Send the complete list each time, not a partial diff.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": "A short, concrete, actionable task description."
+              },
+              "status": {
+                "type": "string",
+                "description": "Task status: pending, in_progress, or completed. Prefer exactly one in_progress item while actively working."
+              }
+            },
+            "required": ["content", "status"]
+          }
+        }
+      },
+      "required": ["todos"]
+    }
+  }
+]

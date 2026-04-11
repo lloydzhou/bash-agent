@@ -6,6 +6,7 @@ This repository contains two aligned implementations:
 
 - `bash-agent`: the current stable `bash + awk` runtime
 - `goagent`: a Go port that keeps the same agent loop / tool / session semantics while using native Go structs and channels internally
+- `rustagent`: a Rust port with the same behavior model using native Rust JSON/SSE/dispatch
 
 It is designed to stay small at runtime while still exposing the core pieces an agent needs:
 
@@ -108,16 +109,43 @@ Build and install the Go port locally:
 mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go build -o ~/.local/bin/goagent ./cmd/goagent
 ```
 
+Build and install the Rust port locally (release):
+
+```bash
+cargo -C rust build --release && cp rust/target/release/rustagent ~/.local/bin/rustagent
+```
+
 Or download the built artifact directly:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/goagent -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
 ```
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/rustagent -o ~/.local/bin/rustagent && chmod +x ~/.local/bin/rustagent
+```
+
 Go port help:
 
 ```bash
 goagent -h
+```
+
+Rust port help:
+
+```bash
+rustagent -h
+```
+
+Rust interactive mode supports:
+
+- history
+- arrow-key navigation
+
+History is stored in:
+
+```text
+~/.bash-agent/rustagent.history
 ```
 
 Third-party compatible endpoints are supported through `--base-url` or environment variables:
