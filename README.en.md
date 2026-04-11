@@ -141,20 +141,20 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 ### `Read`
 
 - reads file content as text
-- default cap: `100KB`
+- default result cap: `50KB`
 - returns truncated content when the file is larger
 
 ### `Write`
 
 - writes file content
 - creates parent directories when needed
-- default cap: `1MB`
+- default write cap: `1MB`
 
 ### `Edit`
 
 - exact string replacement
 - intended for precise edits, including multi-line replacements
-- file size limit: `1MB`
+- default write cap: `1MB`
 
 ### `Bash`
 

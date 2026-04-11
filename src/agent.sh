@@ -13,10 +13,8 @@ MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
 TOOL_TIMEOUT_SECS=600
-READ_FILE_MAX_BYTES=100000
-WRITE_FILE_MAX_BYTES=1048576
-EDIT_FILE_MAX_BYTES=1048576
-BASH_OUTPUT_MAX_BYTES=50000
+TOOL_RESULT_MAX_BYTES=50000
+FILE_WRITE_MAX_BYTES=1048576
 OUTPUT_FORMAT="human"
 VERBOSE=false
 API_KEY=""
@@ -808,9 +806,9 @@ tool_read() {
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
 
-    head -c "$READ_FILE_MAX_BYTES" "$path"
+    head -c "$TOOL_RESULT_MAX_BYTES" "$path"
     size=$(wc -c < "$path" 2>/dev/null || echo "0")
-    if (( size > READ_FILE_MAX_BYTES )); then
+    if (( size > TOOL_RESULT_MAX_BYTES )); then
         printf '\n[... truncated, file is %s bytes ...]' "$size"
     fi
 }
@@ -821,8 +819,8 @@ tool_write() {
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     content_size=$(printf '%s' "$content" | wc -c)
     content_size=${content_size//[[:space:]]/}
-    if (( content_size > WRITE_FILE_MAX_BYTES )); then
-        echo "Error: content too large for write_file (${content_size} bytes > ${WRITE_FILE_MAX_BYTES} bytes)"
+    if (( content_size > FILE_WRITE_MAX_BYTES )); then
+        echo "Error: content too large for write_file (${content_size} bytes > ${FILE_WRITE_MAX_BYTES} bytes)"
         return 1
     fi
 
@@ -840,7 +838,7 @@ tool_edit() {
         "$(json_escape "$new_string")")
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
     meta=$(mktemp "${AGENT_TMPDIR}/edit.meta.XXXXXX")
-    if ! run_edit_file_awk "$input" "$EDIT_FILE_MAX_BYTES" "$meta" > "$tmp"; then
+    if ! run_edit_file_awk "$input" "$FILE_WRITE_MAX_BYTES" "$meta" > "$tmp"; then
         rm -f "$tmp"
         rm -f "$meta"
         return 1
@@ -871,8 +869,8 @@ tool_bash() {
     output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file") || true
     rm -f "$script_file"
     local outlen=${#output}
-    if (( outlen > BASH_OUTPUT_MAX_BYTES )); then
-        output="${output:0:BASH_OUTPUT_MAX_BYTES}"
+    if (( outlen > TOOL_RESULT_MAX_BYTES )); then
+        output="${output:0:TOOL_RESULT_MAX_BYTES}"
         output+=$'\n[... truncated, output was '"$outlen"' bytes ...]'
     fi
     printf '%s' "$output"
