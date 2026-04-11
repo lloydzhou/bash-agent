@@ -71,13 +71,6 @@ log_tool() {
     printf '\033[33m[tool] %s\033[0m\n' "$*"
 }
 
-log_tool_result() {
-    local name="$1" output="$2"
-    if [[ -n "$output" ]]; then
-        printf '%s\n' "$output"
-    fi
-}
-
 log_verbose() {
     $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
 }
@@ -341,6 +334,15 @@ build_system_prompt() {
     printf '%s' "${output%$'\n'}"
 }
 
+read_optional_file() {
+    local path="$1"
+    if [[ -n "$path" && -s "$path" ]]; then
+        printf '%s' "$(<"$path")"
+        return 0
+    fi
+    printf ''
+}
+
 find_skill_base_dir() {
     local cwd
     cwd="${PWD:-$(pwd)}"
@@ -428,7 +430,7 @@ build_instruction_files_section() {
     printf '%s' "${output%$'\n'}"
 }
 
-build_compact_system_prompt() {
+build_compact_summary_system_prompt() {
     cat <<'EOF'
 You are compressing conversation context for a lightweight coding agent.
 
@@ -457,17 +459,41 @@ unescape_protocol_to_var() {
     printf -v "$__outvar" '%s' "$value"
 }
 
+build_tool_call_json_object() {
+    local name="$1" id="$2" input_escaped="$3" type="${4:-tool_use}"
+    local input
+    unescape_protocol_to_var input "$input_escaped"
+    if [[ "$type" == "tool_use" ]]; then
+        printf '{"type":"tool_use","id":"%s","name":"%s","input":%s}' \
+            "$(json_escape "$id")" \
+            "$(json_escape "$name")" \
+            "$input"
+    else
+        printf '{"name":"%s","id":"%s","input":%s}' \
+            "$(json_escape "$name")" \
+            "$(json_escape "$id")" \
+            "$input"
+    fi
+}
+
+build_tool_result_json_object() {
+    local tid="$1" result="$2" type="${3:-tool_result}"
+    printf '{"type":"%s","tool_use_id":"%s","content":"%s"}' \
+        "$(json_escape "$type")" \
+        "$(json_escape "$tid")" \
+        "$result"
+}
+
 build_tool_calls_json() {
     local calls="$1"
     local tool_json="[" first=true
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input_escaped input
+        local name id input_escaped
         IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
-        unescape_protocol_to_var input "$input_escaped"
         $first || tool_json+=","
         first=false
-        tool_json+="{\"name\":\"$(json_escape "$name")\",\"id\":\"$(json_escape "$id")\",\"input\":${input}}"
+        tool_json+="$(build_tool_call_json_object "$name" "$id" "$input_escaped" "tool_call")"
     done <<< "$calls"
     tool_json+="]"
     printf '%s' "$tool_json"
@@ -484,12 +510,11 @@ build_assistant_content_json() {
 
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input_escaped input
+        local name id input_escaped
         IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
-        unescape_protocol_to_var input "$input_escaped"
         $first || content+=","
         first=false
-        content+="{\"type\":\"tool_use\",\"id\":\"$(json_escape "$id")\",\"name\":\"$(json_escape "$name")\",\"input\":${input}}"
+        content+="$(build_tool_call_json_object "$name" "$id" "$input_escaped")"
     done <<< "$calls"
 
     content+="]"
@@ -506,7 +531,7 @@ build_tool_results_content_json() {
         IFS=$'\t' read -r tid result <<< "$tr"
         $first || content+=","
         first=false
-        content+="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$tid")\",\"content\":\"${result}\"}"
+        content+="$(build_tool_result_json_object "$tid" "$result")"
     done <<< "$results"
 
     content+="]"
@@ -515,9 +540,7 @@ build_tool_results_content_json() {
 
 build_tool_result_event_json() {
     local tid="$1" result="$2"
-    printf '{"type":"tool_result","tool_use_id":"%s","content":"%s"}' \
-        "$(json_escape "$tid")" \
-        "$result"
+    build_tool_result_json_object "$tid" "$result"
 }
 
 build_todo_event_json() {
@@ -655,22 +678,14 @@ context_append_summary() {
 }
 
 build_stable_context_section() {
-    if [[ -n "${CONTEXT_SUMMARY_FILE:-}" && -s "$CONTEXT_SUMMARY_FILE" ]]; then
-        cat "$CONTEXT_SUMMARY_FILE"
-        return 0
-    fi
-    printf ''
+    read_optional_file "${CONTEXT_SUMMARY_FILE:-}"
 }
 
 build_todo_section() {
-    if [[ -n "${TODO_FILE:-}" && -s "$TODO_FILE" ]]; then
-        printf '%s' "$(<"$TODO_FILE")"
-        return 0
-    fi
-    printf ''
+    read_optional_file "${TODO_FILE:-}"
 }
 
-build_compact_summary_prompt() {
+build_compact_summary_user_prompt() {
     local current_summary="$1" dropped_messages="$2" summary_section dropped_section
     summary_section=$(wrap_section "current-summary" "$current_summary")
     dropped_section=$(wrap_section "dropped-messages" "$dropped_messages")
@@ -681,20 +696,9 @@ ${dropped_section}
 EOF
 }
 
-compact_context_window() {
-    local trigger="$1" force="${2:-false}" total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
-    local threshold=$MAX_CONTEXT_BYTES
-    local target_keep_bytes=$(( MAX_CONTEXT_BYTES * MAX_CONTEXT_KEEP_PCT / 100 ))
-
-    total_bytes=$(wc -c < "$CONV_FILE" 2>/dev/null || echo 0)
-    total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-    (( target_keep_bytes < 1 )) && target_keep_bytes=1
-
-    if ! $force && (( total_bytes <= threshold )); then
-        return 1
-    fi
-
-    keep_lines=$(awk -v target_bytes="$target_keep_bytes" '
+compact_keep_lines() {
+    local target_keep_bytes="$1"
+    awk -v target_bytes="$target_keep_bytes" '
         {
             sizes[NR] = length($0) + 1
             turn_start[NR] = ($0 ~ /^\{"role":"user","content":"/)
@@ -725,7 +729,23 @@ compact_context_window() {
 
             print NR - start + 1
         }
-    ' "$CONV_FILE")
+    ' "$CONV_FILE"
+}
+
+compact_context_window() {
+    local trigger="$1" force="${2:-false}" total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
+    local threshold=$MAX_CONTEXT_BYTES
+    local target_keep_bytes=$(( MAX_CONTEXT_BYTES * MAX_CONTEXT_KEEP_PCT / 100 ))
+
+    total_bytes=$(wc -c < "$CONV_FILE" 2>/dev/null || echo 0)
+    total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+    (( target_keep_bytes < 1 )) && target_keep_bytes=1
+
+    if ! $force && (( total_bytes <= threshold )); then
+        return 1
+    fi
+
+    keep_lines=$(compact_keep_lines "$target_keep_bytes")
     [[ -n "$keep_lines" ]] || keep_lines=0
     (( total_lines > keep_lines )) || keep_lines=$total_lines
     drop=$(( total_lines - keep_lines ))
@@ -739,8 +759,8 @@ compact_context_window() {
         current_summary=$(<"$CONTEXT_SUMMARY_FILE")
     fi
 
-    prompt=$(build_compact_summary_prompt "$current_summary" "$dropped_messages")
-    if [[ -z "${API_URL:-}" ]]; then
+    prompt=$(build_compact_summary_user_prompt "$current_summary" "$dropped_messages")
+    if [[ "$trigger" == "manual" && -z "${API_URL:-}" ]]; then
         validate_config
         setup_api_url
     fi
@@ -786,7 +806,7 @@ session_log_tool_results() {
 # Section 6: Tool Definitions (auto-generated JSON)
 # ============================================================================
 
-generate_tool_defs() {
+get_tool_defs_file() {
     local tools_file script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     tools_file="$script_dir/tools.json"
@@ -1069,7 +1089,7 @@ llm_call() {
 run_summary_call() {
     local messages="$1"
     local body text line
-    body=$(build_request "$messages" "" "$(build_compact_system_prompt)" "$SUMMARY_MAX_TOKENS")
+    body=$(build_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS")
     log_verbose "Summary request body ($((${#body} / 1024))KB): ${body:0:200}..."
 
     text=""
@@ -1245,7 +1265,9 @@ execute_tool_calls() {
             fi
             emit_stream_event "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$escaped\"}"
         else
-            log_tool_result "$name" "$output"
+            if [[ -n "$output" ]]; then
+                printf '%s\n' "$output"
+            fi
         fi
     done <<< "$calls"
 }
@@ -1446,13 +1468,13 @@ main() {
     if [[ "$COMMAND" == "compact" ]]; then
         :
     elif [[ "$INTERACTIVE" == true ]]; then
-        TOOL_DEF_FILE=$(generate_tool_defs)
+        TOOL_DEF_FILE=$(get_tool_defs_file)
         interactive_mode
     elif [[ -n "$PROMPT" ]]; then
-        TOOL_DEF_FILE=$(generate_tool_defs)
+        TOOL_DEF_FILE=$(get_tool_defs_file)
         agent_loop "$PROMPT"
     elif [[ ! -t 0 ]]; then
-        TOOL_DEF_FILE=$(generate_tool_defs)
+        TOOL_DEF_FILE=$(get_tool_defs_file)
         local input
         input=$(cat)
         agent_loop "$input"
