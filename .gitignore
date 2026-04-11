@@ -1,3 +1,6 @@
 .claude
+/go/.gocache/
+/go/.gomodcache/
 dist/*
 !dist/agent.sh
+!dist/goagent

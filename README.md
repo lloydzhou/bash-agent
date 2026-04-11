@@ -2,7 +2,12 @@
 
 [English README](README.en.md)
 
-一个使用 `bash` 和 `awk` 构建的极简 AI coding agent runtime。
+一个极简 AI coding agent runtime。
+
+仓库中同时包含一个正在对齐行为的 Go 版本：
+
+- `bash-agent`：当前稳定主线，`bash + awk`
+- `goagent`：Go port，内部使用 struct/channel，但保持相同的 agent loop、tool/event/session 语义
 
 它不是一个完整平台，而是一个尽量小、边界清晰、可以真正执行工作的 agent core。目标是：
 
@@ -22,10 +27,19 @@
 - 协议适配器
 - 编排框架
 
-`bash-agent` 反过来做：
+`bash-agent` 主线反过来做：
 
 - `bash` 负责流程编排、文件、进程、HTTP 请求、session 生命周期
 - `awk` 负责 JSON/SSE 解析、文本抽取、规范化和轻量协议转换
+
+`goagent` 则保留同样的行为模型，但把：
+
+- JSON/SSE 解析
+- 内部事件流
+- tool dispatch
+- session/compact 流程
+
+改成 Go 原生实现。
 
 重点不是“文件越少越好”，而是：
 
@@ -87,6 +101,24 @@ export OPENAI_API_KEY="sk-..."
 curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/agent.sh -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
+Go 版本本地构建并安装：
+
+```bash
+mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go build -o ~/.local/bin/goagent ./cmd/goagent
+```
+
+也可以直接下载预构建产物：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/goagent -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
+```
+
+Go 版本 help：
+
+```bash
+goagent -h
+```
+
 也支持第三方兼容端点：
 
 ```bash
@@ -100,6 +132,26 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 
 ```bash
 ./src/agent.sh -p openai -m gpt-4o "run the tests and summarize failures"
+```
+
+### Go 版本
+
+```bash
+goagent "run the tests and summarize failures"
+goagent --print "inspect this repository"
+goagent --session demo "run the tests"
+goagent -i
+```
+
+Go 版 `-i` 模式支持：
+
+- history
+- 上下箭头
+
+history 文件保存在：
+
+```text
+~/.bash-agent/goagent.history
 ```
 
 ### `stream-json`
@@ -317,6 +369,25 @@ tests/
   test.sh
 dist/
   agent.sh
+  goagent
+go/
+  cmd/
+    goagent/
+  internal/
+    app/
+    assets/
+    config/
+    conversation/
+    httpclient/
+    prompt/
+    protocol/
+    provider/
+    safety/
+    session/
+    sse/
+    tools/
+  go.mod
+  go.sum
 ```
 
 ## 开发
@@ -339,6 +410,18 @@ bash scripts/build.sh
 AGENT=./dist/agent.sh bash tests/test.sh
 ```
 
+运行 Go 测试：
+
+```bash
+mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go test ./...
+```
+
+构建 Go 版本：
+
+```bash
+mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go build -o ../dist/goagent ./cmd/goagent
+```
+
 ## 当前状态
 
 - compact 已按真实 context 大小处理，不再按消息条数
@@ -346,6 +429,7 @@ AGENT=./dist/agent.sh bash tests/test.sh
 - tool 协议已经结构化，适合机器消费
 - `TodoWrite` 负责维护 session 级 todo 状态
 - source 和 dist 都能通过完整测试
+- Go 版可以编译运行，并保留当前主线的 agent loop / tool / session / compact 语义
 
 ## 文档
 

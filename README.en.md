@@ -1,6 +1,11 @@
 # bash-agent
 
-A minimal AI coding agent runtime built with `bash` and `awk`.
+A minimal AI coding agent runtime.
+
+This repository contains two aligned implementations:
+
+- `bash-agent`: the current stable `bash + awk` runtime
+- `goagent`: a Go port that keeps the same agent loop / tool / session semantics while using native Go structs and channels internally
 
 It is designed to stay small at runtime while still exposing the core pieces an agent needs:
 
@@ -22,10 +27,19 @@ Most agent runtimes grow by adding layers:
 - protocol adapters
 - orchestration frameworks
 
-This project takes the opposite path:
+The `bash-agent` line takes the opposite path:
 
 - `bash` handles orchestration, files, processes, HTTP calls, and session lifecycle
 - `awk` handles JSON/SSE parsing, text extraction, normalization, and small protocol transforms
+
+The `goagent` line keeps the same behavior model, but rewrites:
+
+- JSON/SSE parsing
+- internal event flow
+- tool dispatch
+- session/compact flow
+
+in native Go.
 
 The goal is not “few files at any cost”. The goal is:
 
@@ -88,6 +102,24 @@ export OPENAI_API_KEY="sk-..."
 curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/agent.sh -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
+Build and install the Go port locally:
+
+```bash
+mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go build -o ~/.local/bin/goagent ./cmd/goagent
+```
+
+Or download the built artifact directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/goagent -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
+```
+
+Go port help:
+
+```bash
+goagent -h
+```
+
 Third-party compatible endpoints are supported through `--base-url` or environment variables:
 
 ```bash
@@ -121,6 +153,26 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 
 ```bash
 ./src/agent.sh --skill shell-safety "inspect /tmp safely"
+```
+
+### Go Port
+
+```bash
+goagent "run the tests and summarize failures"
+goagent --print "inspect this repository"
+goagent --session demo "run the tests"
+goagent -i
+```
+
+The Go interactive mode supports:
+
+- history
+- arrow-key navigation
+
+History is stored in:
+
+```text
+~/.bash-agent/goagent.history
 ```
 
 ## CLI
@@ -315,6 +367,25 @@ tests/
   test.sh
 dist/
   agent.sh
+  goagent
+go/
+  cmd/
+    goagent/
+  internal/
+    app/
+    assets/
+    config/
+    conversation/
+    httpclient/
+    prompt/
+    protocol/
+    provider/
+    safety/
+    session/
+    sse/
+    tools/
+  go.mod
+  go.sum
 ```
 
 ## Development
@@ -337,6 +408,18 @@ Run tests against the built artifact:
 AGENT=./dist/agent.sh bash tests/test.sh
 ```
 
+Run Go tests:
+
+```bash
+mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go test ./...
+```
+
+Build the Go binary:
+
+```bash
+mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(pwd)/go/.gomodcache go -C go build -o ../dist/goagent ./cmd/goagent
+```
+
 ## Status
 
 Current status:
@@ -346,6 +429,7 @@ Current status:
 - tool protocol is structured and machine-readable
 - `TodoWrite` maintains session-scoped todo state
 - source and dist builds both pass the test suite
+- the Go port builds successfully and preserves the main agent loop / tool / session / compact semantics
 
 ## Documentation
 
