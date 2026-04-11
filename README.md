@@ -81,14 +81,7 @@ export OPENAI_API_KEY="sk-..."
 ## 安装
 
 ```bash
-mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/agent.sh -o ~/.local/bin/bash-agent && \
-chmod +x ~/.local/bin/bash-agent
-```
-
-如果 `~/.local/bin` 还没有加入 `PATH`：
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/agent.sh -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
 也支持第三方兼容端点：
