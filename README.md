@@ -63,19 +63,19 @@
 ## 快速开始
 
 ```bash
-# Claude 兼容接口
+# 默认 provider 是 claude
 export ANTHROPIC_API_KEY="sk-ant-..."
-./src/agent.sh -p claude -m claude-sonnet-4-20250514 "say hello"
+./src/agent.sh -m claude-sonnet-4-20250514 "say hello"
 
 # OpenAI chat-completions 兼容接口
 export OPENAI_API_KEY="sk-..."
 ./src/agent.sh -p openai -m gpt-4o "say hello"
 
 # 交互模式
-./src/agent.sh -p openai -m gpt-4o -i
+./src/agent.sh -i
 
 # 结构化事件输出
-./src/agent.sh -p claude --print "scan this repo"
+./src/agent.sh --print "scan this repo"
 ```
 
 ## 安装
@@ -130,7 +130,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 
 | 参数 | 说明 |
 | --- | --- |
-| `-p, --provider` | `claude` 或 `openai` |
+| `-p, --provider` | `claude` 或 `openai`，默认 `claude` |
 | `-m, --model` | 模型名 |
 | `--base-url` | 覆盖 API base URL |
 | `--api-key` | 覆盖 API key |

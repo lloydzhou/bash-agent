@@ -8,7 +8,7 @@ set -uo pipefail
 # ============================================================================
 # Section 1: User Options
 # ============================================================================
-PROVIDER=""
+PROVIDER="claude"
 MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
@@ -2322,7 +2322,7 @@ Usage: agent.sh [options] [prompt]
        agent.sh compact [options]
 
 Options:
-  -p, --provider PROV     LLM provider: claude | openai
+  -p, --provider PROV     LLM provider: claude | openai (default: claude)
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
   --max-tokens N          Max output tokens (default: 4096)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
@@ -2348,7 +2348,7 @@ Environment:
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
-  ./agent.sh -p openai -m gpt-4o "List files in /tmp"
+  ./agent.sh -m claude-sonnet-4-20250514 "List files in /tmp"
   ./agent.sh --session code-review "Analyze this code"
   ./agent.sh --skill shell-safety "List files in /tmp"
   ./agent.sh --continue "What did we discuss?"
@@ -2434,8 +2434,6 @@ list_sessions() {
 }
 
 validate_config() {
-    [[ -z "$PROVIDER" ]] && die "No provider specified. Use -p claude|openai"
-
     case "$PROVIDER" in
         claude)
             : "${API_KEY:=$ANTHROPIC_API_KEY}"

@@ -64,19 +64,19 @@ The goal is not “few files at any cost”. The goal is:
 ## Quick Start
 
 ```bash
-# Claude-compatible endpoint
+# Default provider is claude
 export ANTHROPIC_API_KEY="sk-ant-..."
-./src/agent.sh -p claude -m claude-sonnet-4-20250514 "say hello"
+./src/agent.sh -m claude-sonnet-4-20250514 "say hello"
 
 # OpenAI chat-completions compatible endpoint
 export OPENAI_API_KEY="sk-..."
 ./src/agent.sh -p openai -m gpt-4o "say hello"
 
 # Interactive mode
-./src/agent.sh -p openai -m gpt-4o -i
+./src/agent.sh -i
 
 # Machine-readable stream output
-./src/agent.sh -p claude --print "scan this repo"
+./src/agent.sh --print "scan this repo"
 ```
 
 ## Install
@@ -131,7 +131,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 \
 
 | Flag | Description |
 | --- | --- |
-| `-p, --provider` | `claude` or `openai` |
+| `-p, --provider` | `claude` or `openai` (default: `claude`) |
 | `-m, --model` | model name |
 | `--base-url` | override API base URL |
 | `--api-key` | override API key |
