@@ -202,6 +202,34 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing read tool_result content')
             return
+        if b'LONG_READ_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_read_long\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will read the file now.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_read_long_1\",\"name\":\"Read\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-read-long.txt'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'LONG_READ_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'READ-LONG-HEAD' in body and b'READ-LONG-TAIL' in body and b'omitted, original result was' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_read_long_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Long read complete.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing long read compacted tool_result content')
+            return
         if b'GLOB_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -423,6 +451,34 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: {\"id\":\"chatcmpl-bash-quote\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
+            return
+        if b'LONG_BASH_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_bash_long\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Running long bash command.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bash_long_1\",\"name\":\"Bash\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'echo BASH-LONG-HEAD; yes middle | head -n 12000; echo BASH-LONG-TAIL'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'LONG_BASH_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'BASH-LONG-HEAD' in body and b'BASH-LONG-TAIL' in body and b'omitted, original result was' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_bash_long_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Long bash complete.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing long bash compacted tool_result content')
             return
         if b'TOOL_RESULT_URL_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -1081,6 +1137,27 @@ test_agent_read_file() {
     rm -f "$target_file"
 }
 
+test_agent_read_file_long_result() {
+    info "Test 18b: Agent.sh read_file long result formatting"
+    local output target_file
+    target_file="/tmp/bash-agent-read-long.txt"
+    {
+        printf 'READ-LONG-HEAD\n'
+        yes middle | head -n 12000
+        printf 'READ-LONG-TAIL\n'
+    } > "$target_file"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'LONG_READ_MARKER' 2>&1) || true
+    if [[ "$output" == *"Long read complete."* ]] && \
+       [[ "$output" == *"READ-LONG-HEAD"* ]] && \
+       [[ "$output" == *"READ-LONG-TAIL"* ]] && \
+       [[ "$output" == *"omitted, original result was"* ]]; then
+        green "Agent read_file long result formatting"; ((PASS++)) || true
+    else
+        red "Agent read_file long result formatting"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
 test_agent_glob() {
     info "Test 19: Agent.sh glob"
     local output target_dir
@@ -1182,6 +1259,20 @@ test_agent_bash_quotes() {
         green "Agent bash quoted command"; ((PASS++)) || true
     else
         red "Agent bash quoted command"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
+test_agent_bash_long_result() {
+    info "Test 25b: Agent.sh bash long result formatting"
+    local output
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'LONG_BASH_MARKER' 2>&1) || true
+    if [[ "$output" == *"Long bash complete."* ]] && \
+       [[ "$output" == *"BASH-LONG-HEAD"* ]] && \
+       [[ "$output" == *"BASH-LONG-TAIL"* ]] && \
+       [[ "$output" == *"omitted, original result was"* ]]; then
+        green "Agent bash long result formatting"; ((PASS++)) || true
+    else
+        red "Agent bash long result formatting"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -1323,6 +1414,7 @@ test_agent_skill_index
 test_agent_instruction_files
 test_agent_todo_state
 test_agent_read_file
+test_agent_read_file_long_result
 test_agent_glob
 test_agent_grep
 test_agent_edit_file
@@ -1330,6 +1422,7 @@ test_agent_edit_file_not_found
 test_agent_edit_file_too_large
 test_agent_write_file_newlines
 test_agent_bash_quotes
+test_agent_bash_long_result
 test_agent_stream_tool_call
 test_agent_stream_usage_event
 test_agent_tool_result_multiline_url

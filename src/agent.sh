@@ -277,6 +277,33 @@ strip_ansi() {
     }'
 }
 
+format_tool_result() {
+    local output="$1"
+    local size marker marker_bytes available head_chars tail_chars
+
+    size=$(printf '%s' "$output" | wc -c)
+    size=${size//[[:space:]]/}
+    if (( size <= TOOL_RESULT_MAX_BYTES )); then
+        printf '%s' "$output"
+        return 0
+    fi
+
+    marker=$'\n[... omitted, original result was '"$size"$' bytes ...]\n'
+    marker_bytes=$(printf '%s' "$marker" | wc -c)
+    marker_bytes=${marker_bytes//[[:space:]]/}
+    available=$(( TOOL_RESULT_MAX_BYTES - marker_bytes ))
+    if (( available < 2 )); then
+        printf '%s' "${output:0:TOOL_RESULT_MAX_BYTES}"
+        return 0
+    fi
+
+    head_chars=$(( available / 2 ))
+    tail_chars=$(( available - head_chars ))
+    printf '%s' "${output:0:head_chars}"
+    printf '%s' "$marker"
+    printf '%s' "${output: -tail_chars}"
+}
+
 is_stream_json_mode() {
     [[ "$OUTPUT_FORMAT" == "stream-json" ]]
 }
@@ -820,17 +847,12 @@ get_tool_defs_file() {
 
 tool_read() {
     local path="$1"
-    local size
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
 
-    head -c "$TOOL_RESULT_MAX_BYTES" "$path"
-    size=$(wc -c < "$path" 2>/dev/null || echo "0")
-    if (( size > TOOL_RESULT_MAX_BYTES )); then
-        printf '\n[... truncated, file is %s bytes ...]' "$size"
-    fi
+    cat "$path"
 }
 
 tool_write() {
@@ -888,11 +910,6 @@ tool_bash() {
     chmod 700 "$script_file" 2>/dev/null || true
     output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file") || true
     rm -f "$script_file"
-    local outlen=${#output}
-    if (( outlen > TOOL_RESULT_MAX_BYTES )); then
-        output="${output:0:TOOL_RESULT_MAX_BYTES}"
-        output+=$'\n[... truncated, output was '"$outlen"' bytes ...]'
-    fi
     printf '%s' "$output"
 }
 
@@ -1253,6 +1270,7 @@ execute_tool_calls() {
         if (( tool_rc != 0 )); then
             output="Error: tool execution failed: $output"
         fi
+        output=$(format_tool_result "$output")
         # json_escape so newlines in output don't break the line-based format
         local escaped
         escaped=$(json_escape "$output")
