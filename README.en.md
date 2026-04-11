@@ -75,6 +75,9 @@ export OPENAI_API_KEY="sk-..."
 # Interactive mode
 ./src/agent.sh -i
 
+# No arguments also enters interactive mode
+./src/agent.sh
+
 # Machine-readable stream output
 ./src/agent.sh --print "scan this repo"
 ```

@@ -1534,7 +1534,8 @@ main() {
         input=$(cat)
         agent_loop "$input"
     else
-        usage
+        TOOL_DEF_FILE=$(get_tool_defs_file)
+        interactive_mode
     fi
 }
 

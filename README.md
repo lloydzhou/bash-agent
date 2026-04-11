@@ -74,6 +74,9 @@ export OPENAI_API_KEY="sk-..."
 # 交互模式
 ./src/agent.sh -i
 
+# 不带参数也会进入交互模式
+./src/agent.sh
+
 # 结构化事件输出
 ./src/agent.sh --print "scan this repo"
 ```
