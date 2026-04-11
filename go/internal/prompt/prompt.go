@@ -130,29 +130,36 @@ func (b Builder) buildInstructionFilesSection() (string, error) {
 }
 
 func (b Builder) buildSkillIndexSection() (string, error) {
-	base := findSkillBaseDir(b.Cwd)
-	if base == "" {
+	bases := findSkillBaseDirs(b.Cwd, b.Home)
+	if len(bases) == 0 {
 		return "", nil
 	}
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return "", err
-	}
+	seen := map[string]struct{}{}
 	var lines []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		skillFile := filepath.Join(base, entry.Name(), "SKILL.md")
-		data, err := os.ReadFile(skillFile)
+	for _, base := range bases {
+		entries, err := os.ReadDir(base)
 		if err != nil {
-			continue
+			return "", err
 		}
-		summary := extractSkillSummary(string(data))
-		if summary != "" {
-			lines = append(lines, fmt.Sprintf("- %s: %s", entry.Name(), summary))
-		} else {
-			lines = append(lines, "- "+entry.Name())
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			if _, ok := seen[entry.Name()]; ok {
+				continue
+			}
+			skillFile := filepath.Join(base, entry.Name(), "SKILL.md")
+			data, err := os.ReadFile(skillFile)
+			if err != nil {
+				continue
+			}
+			seen[entry.Name()] = struct{}{}
+			summary := extractSkillSummary(string(data))
+			if summary != "" {
+				lines = append(lines, fmt.Sprintf("- %s: %s", entry.Name(), summary))
+			} else {
+				lines = append(lines, "- "+entry.Name())
+			}
 		}
 	}
 	return strings.Join(lines, "\n"), nil
@@ -162,16 +169,19 @@ func (b Builder) buildSelectedSkillsSection() (string, error) {
 	if len(b.Skills) == 0 {
 		return "", nil
 	}
-	base := findSkillBaseDir(b.Cwd)
-	if base == "" {
+	bases := findSkillBaseDirs(b.Cwd, b.Home)
+	if len(bases) == 0 {
 		return "", nil
 	}
 	var sections []string
 	for _, skill := range b.Skills {
-		skillFile := filepath.Join(base, skill, "SKILL.md")
+		skillFile := findSkillFile(bases, skill)
+		if skillFile == "" {
+			return "", fmt.Errorf("skill not found: %s (expected .claude/skills/%s/SKILL.md or ~/.claude/skills/%s/SKILL.md)", skill, skill, skill)
+		}
 		data, err := os.ReadFile(skillFile)
 		if err != nil {
-			return "", fmt.Errorf("skill not found: %s", skill)
+			return "", err
 		}
 		content := strings.ReplaceAll(string(data), "${BASH_AGENT_SKILL_DIR}", filepath.Dir(skillFile))
 		full := fmt.Sprintf("Base directory for this skill: %s\n\n%s", filepath.Dir(skillFile), content)
@@ -180,10 +190,27 @@ func (b Builder) buildSelectedSkillsSection() (string, error) {
 	return strings.Join(sections, "\n"), nil
 }
 
-func findSkillBaseDir(cwd string) string {
-	path := filepath.Join(cwd, ".claude", "skills")
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		return path
+func findSkillBaseDirs(cwd, home string) []string {
+	dirs := []string{}
+	project := filepath.Join(cwd, ".claude", "skills")
+	if info, err := os.Stat(project); err == nil && info.IsDir() {
+		dirs = append(dirs, project)
+	}
+	if home != "" {
+		global := filepath.Join(home, ".claude", "skills")
+		if info, err := os.Stat(global); err == nil && info.IsDir() {
+			dirs = append(dirs, global)
+		}
+	}
+	return dirs
+}
+
+func findSkillFile(bases []string, skill string) string {
+	for _, base := range bases {
+		path := filepath.Join(base, skill, "SKILL.md")
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
 	}
 	return ""
 }

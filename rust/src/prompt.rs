@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -72,27 +73,33 @@ impl Builder {
     }
 
     fn build_skill_index_section(&self) -> Result<Option<String>> {
-        let Some(base) = find_skill_base_dir(&self.cwd) else {
+        let bases = find_skill_base_dirs(&self.cwd, &self.home);
+        if bases.is_empty() {
             return Ok(None);
-        };
+        }
+        let mut seen = HashSet::new();
         let mut lines = Vec::new();
-        for entry in fs::read_dir(base)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let skill_file = entry.path().join("SKILL.md");
-            let Ok(data) = fs::read_to_string(skill_file) else {
-                continue;
-            };
-            let summary = extract_skill_summary(&data);
-            if summary.is_empty() {
-                lines.push(format!("- {}", entry.file_name().to_string_lossy()));
-            } else {
-                lines.push(format!(
-                    "- {}: {summary}",
-                    entry.file_name().to_string_lossy()
-                ));
+        for base in bases {
+            for entry in fs::read_dir(base)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if seen.contains(&name) {
+                    continue;
+                }
+                let skill_file = entry.path().join("SKILL.md");
+                let Ok(data) = fs::read_to_string(skill_file) else {
+                    continue;
+                };
+                seen.insert(name.clone());
+                let summary = extract_skill_summary(&data);
+                if summary.is_empty() {
+                    lines.push(format!("- {name}"));
+                } else {
+                    lines.push(format!("- {name}: {summary}"));
+                }
             }
         }
         if lines.is_empty() {
@@ -106,12 +113,17 @@ impl Builder {
         if self.skills.is_empty() {
             return Ok(None);
         }
-        let Some(base) = find_skill_base_dir(&self.cwd) else {
+        let bases = find_skill_base_dirs(&self.cwd, &self.home);
+        if bases.is_empty() {
             return Ok(None);
-        };
+        }
         let mut sections = Vec::new();
         for skill in &self.skills {
-            let skill_file = base.join(skill).join("SKILL.md");
+            let Some(skill_file) = find_skill_file(&bases, skill) else {
+                return Err(anyhow::anyhow!(
+                    "skill not found: {skill} (expected .claude/skills/{skill}/SKILL.md or ~/.claude/skills/{skill}/SKILL.md)"
+                ));
+            };
             let content = fs::read_to_string(&skill_file)?;
             let full = format!(
                 "Base directory for this skill: {}\n\n{}",
@@ -186,9 +198,27 @@ fn read_optional_file(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn find_skill_base_dir(cwd: &Path) -> Option<PathBuf> {
-    let p = cwd.join(".claude/skills");
-    if p.is_dir() { Some(p) } else { None }
+fn find_skill_base_dirs(cwd: &Path, home: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let project = cwd.join(".claude/skills");
+    if project.is_dir() {
+        out.push(project);
+    }
+    let global = home.join(".claude/skills");
+    if global.is_dir() {
+        out.push(global);
+    }
+    out
+}
+
+fn find_skill_file(bases: &[PathBuf], skill: &str) -> Option<PathBuf> {
+    for base in bases {
+        let path = base.join(skill).join("SKILL.md");
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn find_instruction_file_in_dir(dir: &Path) -> Option<PathBuf> {

@@ -403,39 +403,50 @@ read_optional_file() {
     printf ''
 }
 
-find_skill_base_dir() {
-    local cwd
+find_skill_base_dirs() {
+    local cwd home
     cwd="${PWD:-$(pwd)}"
+    home="${HOME:-}"
     if [[ -d "$cwd/.claude/skills" ]]; then
-        printf '%s' "$cwd/.claude/skills"
-        return 0
+        printf '%s\n' "$cwd/.claude/skills"
     fi
-    return 1
+    if [[ -n "$home" && -d "$home/.claude/skills" ]]; then
+        printf '%s\n' "$home/.claude/skills"
+    fi
 }
 
 load_skill_content() {
     local skill_name="$1" base skill_file skill_dir content
-    base=$(find_skill_base_dir) || return 1
-    skill_file="$base/$skill_name/SKILL.md"
-    [[ -f "$skill_file" ]] || return 1
-    skill_dir=$(dirname "$skill_file")
-    content=$(<"$skill_file") || return 1
-    content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$skill_dir}"
-    printf 'Base directory for this skill: %s\n\n%s' "$skill_dir" "$content"
+    while IFS= read -r base; do
+        [[ -n "$base" ]] || continue
+        skill_file="$base/$skill_name/SKILL.md"
+        [[ -f "$skill_file" ]] || continue
+        skill_dir=$(dirname "$skill_file")
+        content=$(<"$skill_file") || return 1
+        content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$skill_dir}"
+        printf 'Base directory for this skill: %s\n\n%s' "$skill_dir" "$content"
+        return 0
+    done < <(find_skill_base_dirs)
+    return 1
 }
 
 build_skill_index_section() {
-    local base skill_file skill_name summary output=""
-    base=$(find_skill_base_dir) || { printf ''; return 0; }
-
-    for skill_file in "$base"/*/SKILL.md; do
-        [[ -f "$skill_file" ]] || continue
-        skill_name=$(basename "$(dirname "$skill_file")")
-        summary=$(awk -f "$AWK_DIR/skill_summary.awk" "$skill_file")
-        output+="- ${skill_name}"
-        [[ -n "$summary" ]] && output+=": ${summary}"
-        output+=$'\n'
-    done
+    local base skill_file skill_name summary output="" seen=$'\n'
+    while IFS= read -r base; do
+        [[ -n "$base" ]] || continue
+        for skill_file in "$base"/*/SKILL.md; do
+            [[ -f "$skill_file" ]] || continue
+            skill_name=$(basename "$(dirname "$skill_file")")
+            if [[ "$seen" == *$'\n'"$skill_name"$'\n'* ]]; then
+                continue
+            fi
+            seen+="$skill_name"$'\n'
+            summary=$(awk -f "$AWK_DIR/skill_summary.awk" "$skill_file")
+            output+="- ${skill_name}"
+            [[ -n "$summary" ]] && output+=": ${summary}"
+            output+=$'\n'
+        done
+    done < <(find_skill_base_dirs)
 
     printf '%s' "${output%$'\n'}"
 }
@@ -449,7 +460,7 @@ build_selected_skills_section() {
     fi
 
     for skill_name in "${SKILL_NAMES[@]}"; do
-        skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md)"
+        skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md or ~/.claude/skills/$skill_name/SKILL.md)"
         append_section output "skill" "$skill_content" "$skill_name"
     done
     printf '%s' "${output%$'\n'}"
@@ -1343,7 +1354,7 @@ Options:
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
   --max-tokens N          Max output tokens (default: 4096)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
-  --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md
+  --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
   --max-turns N           Max agent turns (default: 20)
   --max-context N         Max stored context bytes before compact (default: 200000; supports k/m/g)
   --api-key KEY           API key (default from env)
