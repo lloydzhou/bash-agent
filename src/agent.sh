@@ -102,39 +102,39 @@ tool_call_arg() {
 }
 
 tool_metadata() {
-    local name="$1" __keys_outvar="$2" __summary_outvar="$3" keys="" summary_key=""
+    local name="$1" __keys_outvar="$2" __summary_outvar="$3" meta_keys="" meta_summary_key=""
     case "$name" in
         Read)
-            keys="path"
-            summary_key="path"
+            meta_keys="path"
+            meta_summary_key="path"
             ;;
         Write)
-            keys="path content"
-            summary_key="path"
+            meta_keys="path content"
+            meta_summary_key="path"
             ;;
         Edit)
-            keys="path old_string new_string"
-            summary_key="path"
+            meta_keys="path old_string new_string"
+            meta_summary_key="path"
             ;;
         Bash)
-            keys="command"
-            summary_key="command"
+            meta_keys="command"
+            meta_summary_key="command"
             ;;
         Glob)
-            keys="pattern path"
-            summary_key="pattern"
+            meta_keys="pattern path"
+            meta_summary_key="pattern"
             ;;
         Grep)
-            keys="pattern path glob"
-            summary_key="pattern"
+            meta_keys="pattern path glob"
+            meta_summary_key="pattern"
             ;;
         TodoWrite)
-            keys="checklist summary"
-            summary_key="summary"
+            meta_keys="checklist summary"
+            meta_summary_key="summary"
             ;;
     esac
-    printf -v "$__keys_outvar" '%s' "$keys"
-    printf -v "$__summary_outvar" '%s' "$summary_key"
+    printf -v "$__keys_outvar" '%s' "$meta_keys"
+    printf -v "$__summary_outvar" '%s' "$meta_summary_key"
 }
 
 tool_call_summary() {

@@ -640,7 +640,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq $'TOOL_CALL:TodoWrite\ttoolu_todo\t{"todos":[{"content":"inspect repository","status":"completed"},{"content":"run tests","status":"pending"}]}\tchecklist\t- [x] inspect repository\\n- [ ] run tests\tsummary\t(1/2)' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:TodoWrite\ttoolu_todo\t{"todos":[{"content":"inspect repository","status":"completed"},{"content":"run tests","status":"pending"}]}\tchecklist\t- [x] inspect repository\\n- [ ] run tests\tsummary\t1/2' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude TodoWrite tool_use"; ((PASS++)) || true
     else
         red "Claude TodoWrite tool_use"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1012,7 +1012,7 @@ EOF
 
 test_agent_todo_state() {
     info "Test 16: Agent.sh session todo state"
-    local home_dir project_dir output session_file todo_file event_file
+    local home_dir project_dir output session_file todo_file event_file human_home
     home_dir=$(mktemp -d)
     project_dir="$home_dir/.bash-agent/projects/$(project_key)"
     session_file="$project_dir/demo.jsonl"
@@ -1035,9 +1035,10 @@ test_agent_todo_state() {
         return
     fi
 
-    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'TODO_PROMPT_MARKER' 2>&1) || true
-    rm -rf "$home_dir"
-    if echo "$output" | grep -q "Todo injected."; then
+    human_home=$(mktemp -d)
+    output=$(cd "$ROOT_DIR" && HOME="$human_home" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
+    rm -rf "$home_dir" "$human_home"
+    if echo "$output" | grep -Fq "[tool] TodoWrite(0/3)" && echo "$output" | grep -q "Todo initialized."; then
         green "Agent session todo state"; ((PASS++)) || true
     else
         red "Agent session todo state"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1051,7 +1052,7 @@ test_agent_read_file() {
     target_file="/tmp/bash-agent-read-test.txt"
     printf 'read-test-content\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'READ_FILE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "Read complete."; then
+    if echo "$output" | grep -Fq "[tool] Read(/tmp/bash-agent-read-test.txt)" && echo "$output" | grep -q "Read complete."; then
         green "Agent read_file"; ((PASS++)) || true
     else
         red "Agent read_file"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1156,7 +1157,7 @@ test_agent_bash_quotes() {
     info "Test 25: Agent.sh bash tool quoted command"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test -v 'BASH_QUOTE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "hello" && ! echo "$output" | grep -q "no command provided"; then
+    if echo "$output" | grep -Fq '[tool] Bash(echo "hello")' && echo "$output" | grep -q "hello" && ! echo "$output" | grep -q "no command provided"; then
         green "Agent bash quoted command"; ((PASS++)) || true
     else
         red "Agent bash quoted command"; echo "  Output: $output"; ((FAIL++)) || true

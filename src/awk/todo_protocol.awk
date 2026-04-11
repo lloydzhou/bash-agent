@@ -78,6 +78,6 @@ function emit_tool_call_record(name, id, input_json,    todos, checklist, summar
     }
     todos = extract_value(input_json, "todos")
     checklist = escape_protocol_text(parse_todos_array(todos))
-    summary = escape_protocol_text(sprintf("(%d/%d)", todo_completed_count, todo_total_count))
+    summary = escape_protocol_text(sprintf("%d/%d", todo_completed_count, todo_total_count))
     printf "TOOL_CALL:%s\t%s\t%s\tchecklist\t%s\tsummary\t%s\n", name, id, escape_protocol_text(input_json), checklist, summary
 }
