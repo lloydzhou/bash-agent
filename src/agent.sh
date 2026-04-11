@@ -53,7 +53,6 @@ EXEC_TOOL_RESULTS=""
 # Env defaults
 : "${ANTHROPIC_API_KEY:=}"
 : "${OPENAI_API_KEY:=}"
-: "${LLM_BASE_URL:=}"
 : "${ANTHROPIC_BASE_URL:=}"
 : "${OPENAI_BASE_URL:=}"
 
@@ -1294,7 +1293,6 @@ Options:
 Environment:
   ANTHROPIC_API_KEY       API key for Claude
   OPENAI_API_KEY          API key for OpenAI
-  LLM_BASE_URL            Default base URL override
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
 
@@ -1393,12 +1391,12 @@ validate_config() {
     case "$PROVIDER" in
         claude)
             : "${API_KEY:=$ANTHROPIC_API_KEY}"
-            : "${BASE_URL:=${LLM_BASE_URL:-${ANTHROPIC_BASE_URL:-}}}"
+            : "${BASE_URL:=${ANTHROPIC_BASE_URL:-}}"
             : "${MODEL:=claude-sonnet-4-20250514}"
             ;;
         openai)
             : "${API_KEY:=$OPENAI_API_KEY}"
-            : "${BASE_URL:=${LLM_BASE_URL:-${OPENAI_BASE_URL:-}}}"
+            : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
             : "${MODEL:=gpt-4o}"
             ;;
         *)
