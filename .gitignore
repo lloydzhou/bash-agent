@@ -1,2 +1,3 @@
 .claude
-dist/
+dist/*
+!dist/agent.sh

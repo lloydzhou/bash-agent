@@ -20,6 +20,995 @@ VERBOSE=false
 API_KEY=""
 BASE_URL=""
 PROMPT=""
+
+_AWK_JSON='function json_trim(s) {
+    gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", s)
+    return s
+}
+function json_skip_ws(text, pos,    c) {
+    while (pos <= length(text)) {
+        c = substr(text, pos, 1)
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") pos++
+        else break
+    }
+    return pos
+}
+function json_read_string_token(text, pos,    c, i, bs, raw) {
+    raw = "\""
+    bs = 0
+    for (i = pos + 1; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        raw = raw c
+        if (c == "\"" && !bs) {
+            JSON_VALUE_END = i
+            return raw
+        }
+        if (c == "\\" && !bs) bs = 1
+        else bs = 0
+    }
+    JSON_VALUE_END = length(text)
+    return raw
+}
+function json_read_raw_value(text, pos,    c, i, depth, in_str, bs, raw) {
+    raw = ""
+    c = substr(text, pos, 1)
+    if (c == "\"") {
+        return json_read_string_token(text, pos)
+    }
+    if (c == "{" || c == "[") {
+        depth = 0
+        in_str = 0
+        bs = 0
+        for (i = pos; i <= length(text); i++) {
+            c = substr(text, i, 1)
+            raw = raw c
+            if (in_str) {
+                if (c == "\\" && !bs) {
+                    bs = 1
+                } else {
+                    if (c == "\"" && !bs) in_str = 0
+                    bs = 0
+                }
+                continue
+            }
+            if (c == "\"") {
+                in_str = 1
+                continue
+            }
+            if (c == "{" || c == "[") depth++
+            else if (c == "}" || c == "]") {
+                depth--
+                if (depth == 0) {
+                    JSON_VALUE_END = i
+                    return raw
+                }
+            }
+        }
+        JSON_VALUE_END = length(text)
+        return raw
+    }
+    for (i = pos; i <= length(text); i++) {
+        c = substr(text, i, 1)
+        if (c == "," || c == "}" || c == "]") {
+            JSON_VALUE_END = i - 1
+            return json_trim(raw)
+        }
+        raw = raw c
+    }
+    JSON_VALUE_END = length(text)
+    return json_trim(raw)
+}
+function json_scan_member_raw(json, key, nested,    i, c, raw_key, raw_value, key_pos, j, depth) {
+    depth = 0
+    for (i = 1; i <= length(json); i++) {
+        c = substr(json, i, 1)
+        if (c == "{" || c == "[") {
+            depth++
+            continue
+        }
+        if (c == "}" || c == "]") {
+            depth--
+            continue
+        }
+        if (c != "\"") continue
+        raw_key = json_read_string_token(json, i)
+        key_pos = JSON_VALUE_END
+        if (key_pos > length(json)) return ""
+        j = json_skip_ws(json, key_pos + 1)
+        if (substr(json, j, 1) != ":") {
+            i = key_pos
+            continue
+        }
+        if ((!nested && depth != 1) || (nested && depth < 1) || unescape_json_string(substr(raw_key, 2, length(raw_key) - 2)) != key) {
+            i = key_pos
+            continue
+        }
+        j = json_skip_ws(json, j + 1)
+        raw_value = json_read_raw_value(json, j)
+        return raw_value
+    }
+    return ""
+}
+function json_get_raw(json, key, nested) {
+    return json_scan_member_raw(json, key, nested)
+}
+function extract_json_string(json, key, nested,    raw) {
+    raw = json_get_raw(json, key, nested)
+    if (raw == "" || substr(raw, 1, 1) != "\"" || substr(raw, length(raw), 1) != "\"") return ""
+    return substr(raw, 2, length(raw) - 2)
+}
+function extract_str(json, key, nested) {
+    return unescape_json_string(extract_json_string(json, key, nested))
+}
+function extract_num(json, key, nested,    raw) {
+    raw = json_trim(json_get_raw(json, key, nested))
+    if (raw ~ /^-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$/) return raw
+    return ""
+}
+function extract_value(json, key, nested) {
+    return json_get_raw(json, key, nested)
+}
+function hex_digit_value(c,    lc) {
+    lc = tolower(c)
+    if (lc >= "0" && lc <= "9") return lc + 0
+    if (lc == "a") return 10
+    if (lc == "b") return 11
+    if (lc == "c") return 12
+    if (lc == "d") return 13
+    if (lc == "e") return 14
+    if (lc == "f") return 15
+    return -1
+}
+function hex_to_int(hex,    i, c, d, value) {
+    value = 0
+    for (i = 1; i <= length(hex); i++) {
+        c = substr(hex, i, 1)
+        d = hex_digit_value(c)
+        if (d < 0) return -1
+        value = value * 16 + d
+    }
+    return value
+}
+function utf8_from_codepoint(cp,    b1, b2, b3, b4, out) {
+    out = ""
+    if (cp <= 127) {
+        out = sprintf("%c", cp)
+    } else if (cp <= 2047) {
+        b1 = 192 + int(cp / 64)
+        b2 = 128 + (cp % 64)
+        out = sprintf("%c%c", b1, b2)
+    } else if (cp <= 65535) {
+        b1 = 224 + int(cp / 4096)
+        b2 = 128 + int((cp % 4096) / 64)
+        b3 = 128 + (cp % 64)
+        out = sprintf("%c%c%c", b1, b2, b3)
+    } else {
+        b1 = 240 + int(cp / 262144)
+        b2 = 128 + int((cp % 262144) / 4096)
+        b3 = 128 + int((cp % 4096) / 64)
+        b4 = 128 + (cp % 64)
+        out = sprintf("%c%c%c%c", b1, b2, b3, b4)
+    }
+    return out
+}
+function json_control_code(c,    i) {
+    if (JSON_CTRL_CHARS == "") {
+        for (i = 1; i <= 31; i++) JSON_CTRL_CHARS = JSON_CTRL_CHARS sprintf("%c", i)
+    }
+    return index(JSON_CTRL_CHARS, c)
+}
+function unescape_json_string(s,    out, i, c, esc, hex, cp, nexthex, lo) {
+    out = ""
+    esc = 0
+    i = 1
+    while (i <= length(s)) {
+        c = substr(s, i, 1)
+        if (esc) {
+            if (c == "b") out = out "\b"
+            else if (c == "f") out = out "\f"
+            else if (c == "n") out = out "\n"
+            else if (c == "r") out = out "\r"
+            else if (c == "t") out = out "\t"
+            else if (c == "\"") out = out "\""
+            else if (c == "\\") out = out "\\"
+            else if (c == "/") out = out "/"
+            else if (c == "u") {
+                if (i + 4 <= length(s)) {
+                    hex = substr(s, i + 1, 4)
+                    cp = hex_to_int(hex)
+                    if (cp >= 0) {
+                        if (cp >= 55296 && cp <= 56319 && i + 10 <= length(s) && substr(s, i + 5, 1) == "\\" && substr(s, i + 6, 1) == "u") {
+                            nexthex = substr(s, i + 7, 4)
+                            lo = hex_to_int(nexthex)
+                            if (lo >= 56320 && lo <= 57343) {
+                                out = out utf8_from_codepoint(65536 + ((cp - 55296) * 1024) + (lo - 56320))
+                                i += 11
+                                esc = 0
+                                continue
+                            }
+                        }
+                        if (cp >= 55296 && cp <= 57343) {
+                            out = out "\\" "u" hex
+                        } else {
+                            out = out utf8_from_codepoint(cp)
+                        }
+                        i += 5
+                        esc = 0
+                        continue
+                    }
+                }
+                out = out "\\" "u"
+            } else out = out c
+            esc = 0
+        } else if (c == "\\") {
+            esc = 1
+        } else {
+            out = out c
+        }
+        i++
+    }
+    if (esc) out = out "\\"
+    return out
+}
+function escape_json_string(s,    out, i, c, code, hex) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\"") out = out "\\\""
+        else if (c == "\\") out = out "\\\\"
+        else if (c == "\b") out = out "\\b"
+        else if (c == "\f") out = out "\\f"
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else if ((code = json_control_code(c)) > 0) {
+            hex = sprintf("%04x", code)
+            out = out "\\u" hex
+        } else out = out c
+    }
+    return out
+}
+function split_top_level_objects(arr, blocks,    i, c, count, raw) {
+    count = 0
+    if (substr(arr, 1, 1) != "[") return 0
+    i = 2
+    while (i < length(arr)) {
+        i = json_skip_ws(arr, i)
+        while (i < length(arr) && substr(arr, i, 1) == ",") i = json_skip_ws(arr, i + 1)
+        if (i >= length(arr) || substr(arr, i, 1) == "]") break
+        raw = json_read_raw_value(arr, i)
+        if (substr(raw, 1, 1) == "{") {
+            count++
+            blocks[count] = raw
+        }
+        i = JSON_VALUE_END + 1
+    }
+    return count
+}
+function split_top_level_members(obj, keys, raw_values,    count, i, raw_key, key_pos, raw) {
+    count = 0
+    if (substr(obj, 1, 1) != "{") return 0
+    i = 2
+    while (i < length(obj)) {
+        i = json_skip_ws(obj, i)
+        while (i < length(obj) && substr(obj, i, 1) == ",") i = json_skip_ws(obj, i + 1)
+        if (i >= length(obj) || substr(obj, i, 1) == "}") break
+        if (substr(obj, i, 1) != "\"") break
+        raw_key = json_read_string_token(obj, i)
+        key_pos = JSON_VALUE_END
+        i = json_skip_ws(obj, key_pos + 1)
+        if (substr(obj, i, 1) != ":") break
+        i = json_skip_ws(obj, i + 1)
+        raw = json_read_raw_value(obj, i)
+        count++
+        keys[count] = unescape_json_string(substr(raw_key, 2, length(raw_key) - 2))
+        raw_values[count] = raw
+        i = JSON_VALUE_END + 1
+    }
+    return count
+}'
+
+_AWK_JSON_CLI='BEGIN {
+    if (json_mode == "escape_string") {
+        if (json_input == "") {
+            if ((getline json_input) < 0) {
+                json_input = ""
+            } else {
+                while ((getline _line) > 0) {
+                    json_input = json_input "\n" _line
+                }
+            }
+        }
+        print escape_json_string(json_input)
+        exit 0
+    }
+    if (json_mode == "extract_field") {
+        if (json_input == "") {
+            if ((getline json_input) < 0) json_input = ""
+        }
+        raw = extract_value(json_input, json_field_key)
+        if (raw == "") {
+            print ""
+            exit 0
+        }
+        if (substr(raw, 1, 1) == "\"" && substr(raw, length(raw), 1) == "\"") {
+            print unescape_json_string(substr(raw, 2, length(raw) - 2))
+        } else {
+            print json_trim(raw)
+        }
+        exit 0
+    }
+    if (json_mode == "extract_field_raw") {
+        if (json_input == "") {
+            if ((getline json_input) < 0) json_input = ""
+        }
+        raw = extract_value(json_input, json_field_key)
+        if (raw == "") {
+            print ""
+            exit 0
+        }
+        print json_trim(raw)
+        exit 0
+    }
+}'
+
+_AWK_PROTOCOL='function escape_protocol_text(s,    out, i, c) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") out = out "\\\\"
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else out = out c
+    }
+    return out
+}
+function extract_input_string(json, key) {
+    return extract_str(json, key)
+}
+function decode_json_scalar(raw) {
+    if (substr(raw, 1, 1) == "\"" && substr(raw, length(raw), 1) == "\"") {
+        return unescape_json_string(substr(raw, 2, length(raw) - 2))
+    }
+    gsub(/^[ \t]+|[ \t]+$/, "", raw)
+    return raw
+}
+function append_protocol_kv(out, key, value) {
+    return out "\t" escape_protocol_text(key) "\t" escape_protocol_text(value)
+}
+function flatten_object_fields(obj,    out, count, i) {
+    out = ""
+    count = split_top_level_members(obj, PROTOCOL_KEYS, PROTOCOL_RAW_VALUES)
+    for (i = 1; i <= count; i++) {
+        out = append_protocol_kv(out, PROTOCOL_KEYS[i], decode_json_scalar(PROTOCOL_RAW_VALUES[i]))
+    }
+    return out
+}
+function protocol_emit_tool_call_record(name, id, input_json,    out) {
+    out = flatten_object_fields(input_json)
+    printf "TOOL_CALL:%s\t%s\t%s%s\n", name, id, escape_protocol_text(input_json), out
+}'
+
+_AWK_TODO_PROTOCOL='function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, out, bs) {
+    out = ""
+    depth = 0
+    in_str = 0
+    bs = 0
+    item = ""
+    todo_completed_count = 0
+    todo_total_count = 0
+    todo_in_progress_count = 0
+    for (i = 2; i <= length(arr) - 1; i++) {
+        c = substr(arr, i, 1)
+        if (in_str) {
+            item = item c
+            if (c == "\\" && !bs) {
+                bs = 1
+            } else {
+                if (c == "\"" && !bs) in_str = 0
+                bs = 0
+            }
+            continue
+        }
+        if (c == "\"") {
+            in_str = 1
+            item = item c
+            continue
+        }
+        if (c == "{") {
+            depth++
+            item = item c
+            continue
+        }
+        if (c == "}") {
+            depth--
+            item = item c
+            if (depth == 0) {
+                content = extract_str(item, "content")
+                status = extract_str(item, "status")
+                if (content == "") {
+                    print "Error: todo item content is required" > "/dev/stderr"
+                    exit 1
+                }
+                if (status != "pending" && status != "in_progress" && status != "completed") {
+                    print "Error: invalid todo status: " status > "/dev/stderr"
+                    exit 1
+                }
+                todo_total_count++
+                if (status == "completed") todo_completed_count++
+                if (status == "in_progress") todo_in_progress_count++
+                out = out "- [" ((status == "completed") ? "x" : " ") "] " content "\n"
+                item = ""
+            }
+            continue
+        }
+        if (depth > 0) item = item c
+    }
+    if (todo_in_progress_count > 1) {
+        print "Error: todo_write allows at most one in_progress item" > "/dev/stderr"
+        exit 1
+    }
+    sub(/\n$/, "", out)
+    return out
+}
+function emit_tool_call_record(name, id, input_json,    todos, checklist, summary) {
+    if (name != "TodoWrite") {
+        protocol_emit_tool_call_record(name, id, input_json)
+        return
+    }
+    todos = extract_value(input_json, "todos")
+    checklist = escape_protocol_text(parse_todos_array(todos))
+    summary = escape_protocol_text(sprintf("%d/%d", todo_completed_count, todo_total_count))
+    printf "TOOL_CALL:%s\t%s\t%s\tchecklist\t%s\tsummary\t%s\n", name, id, escape_protocol_text(input_json), checklist, summary
+}'
+
+_AWK_HTTP_STREAM='BEGIN {
+    http_code = ""
+    in_body = 0
+    body = ""
+}
+{
+    sub(/\r$/, "")
+}
+/^curl: / {
+    printf "ERROR:%s\n", $0
+    exit 1
+}
+/^HTTP\// {
+    http_code = $2
+    next
+}
+/^[ \t]*$/ && !in_body {
+    in_body = 1
+    next
+}
+!in_body { next }
+in_body && http_code >= 400 {
+    if (body != "") body = body "\n"
+    body = body $0
+    next
+}
+{
+    print
+    fflush()
+}
+END {
+    if (http_code >= 400) {
+        if (body == "") body = "(empty)"
+        gsub(/\r/, "", body)
+        printf "ERROR:HTTP %s BODY:%s\n", http_code, body
+        fflush()
+        exit 1
+    }
+}'
+
+_AWK_EDIT_FILE='BEGIN {
+    if (json_input == "") {
+        if ((getline json_input) < 0) json_input = ""
+    }
+    RS = "\0"
+    ORS = ""
+    path = extract_str(json_input, "path")
+    old = extract_str(json_input, "old_string")
+    new = extract_str(json_input, "new_string")
+    if (path == "") {
+        print "Error: no path provided" > "/dev/stderr"
+        exit 2
+    }
+    if (old == "") {
+        print "Error: empty old_string" > "/dev/stderr"
+        exit 2
+    }
+    rc = (getline data < path)
+    close(path)
+    if (rc < 0) {
+        print "Error: file not found: " path > "/dev/stderr"
+        exit 2
+    }
+    if (length(data) > max_bytes) {
+        print "Error: file too large for edit_file (" length(data) " bytes > " max_bytes " bytes)" > "/dev/stderr"
+        exit 2
+    }
+    i = index(data, old)
+    if (i == 0) {
+        print "Error: old_string not found in " path > "/dev/stderr"
+        exit 2
+    }
+    if (meta_file != "") {
+        print path > meta_file
+        close(meta_file)
+    }
+    printf "%s%s%s", substr(data, 1, i - 1), new, substr(data, i + length(old))
+    exit 0
+}'
+
+_AWK_CLAUDE_SSE='BEGIN {
+    event = ""
+    block_type = ""
+    tool_name = ""
+    tool_id = ""
+    partial_json = ""
+    stop_reason = ""
+    input_tokens = 0
+    output_tokens = 0
+    cache_input_tokens = 0
+}
+/^:/ { next }
+/^ERROR:/ { print; fflush(); next }
+/^event: / {
+    event = substr($0, 8)
+    next
+}
+/^data: / {
+    json = substr($0, 7)
+    if (verbose == "true") printf "[sse-debug] event=[%s] data=[%.200s]\n", event, json > "/dev/stderr"
+    if (event == "content_block_start") {
+        block_json = extract_value(json, "content_block")
+        block_kind = extract_str(block_json, "type")
+        if (block_kind == "text") {
+            block_type = "text"
+        } else if (block_kind == "tool_use") {
+            block_type = "tool"
+            tool_name = extract_str(block_json, "name")
+            tool_id = extract_str(block_json, "id")
+            partial_json = ""
+        }
+    }
+    else if (event == "content_block_delta") {
+        if (block_type == "text") {
+            text = extract_str(json, "text", 1)
+            if (text != "") {
+                printf "TEXT:%s\n", escape_protocol_text(text)
+                fflush()
+            }
+        }
+        else if (block_type == "tool") {
+            partial_json = partial_json extract_json_string(json, "partial_json", 1)
+        }
+    }
+    else if (event == "content_block_stop") {
+        if (block_type == "tool") {
+            emit_tool_call_record(tool_name, tool_id, unescape_json_string(partial_json))
+            fflush()
+        }
+        block_type = ""
+    }
+    else if (event == "message_delta") {
+        sr = extract_str(json, "stop_reason", 1)
+        if (sr != "") stop_reason = sr
+        it = extract_num(json, "input_tokens", 1)
+        if (it != "") input_tokens = it
+        ot = extract_num(json, "output_tokens", 1)
+        if (ot != "") output_tokens = ot
+        crt = extract_num(json, "cache_read_input_tokens", 1)
+        if (crt == "") crt = extract_num(json, "cache_creation_input_tokens", 1)
+        if (crt != "") cache_input_tokens = crt
+    }
+    else if (event == "message_start") {
+        it = extract_num_from_nested(json, "input_tokens")
+        if (it != "") input_tokens = it
+        crt = extract_num_from_nested(json, "cache_read_input_tokens")
+        if (crt == "") crt = extract_num_from_nested(json, "cache_creation_input_tokens")
+        if (crt != "") cache_input_tokens = crt
+    }
+    else if (event == "message_stop") {
+        printf "USAGE:%d\t%d\t%d\n", input_tokens, output_tokens, cache_input_tokens
+        fflush()
+        printf "STOP:%s\n", stop_reason
+        fflush()
+    }
+    else if (event == "error") {
+        msg = extract_str(json, "message", 1)
+        printf "ERROR:%s\n", msg
+        fflush()
+    }
+    next
+}
+function extract_num_from_nested(json, key) {
+    return extract_num(json, key, 1)
+}'
+
+_AWK_OPENAI_SSE='BEGIN {
+    stop_reason = ""
+    tc_count = 0
+    tc_max_index = -1
+    input_tokens = 0
+    output_tokens = 0
+    cache_input_tokens = 0
+    saw_text = 0
+}
+/^:/ { next }
+/^ERROR:/ { print; fflush(); next }
+/^data: \[DONE\]/ {
+    emit_pending_tool_calls()
+    if (stop_reason == "") stop_reason = "done"
+    printf "USAGE:%d\t%d\t%d\n", input_tokens, output_tokens, cache_input_tokens
+    fflush()
+    printf "STOP:%s\n", stop_reason
+    fflush()
+    next
+}
+/^data: / {
+    json = substr($0, 7)
+    fr = extract_str(json, "finish_reason", 1)
+    if (fr != "" && fr != "null") stop_reason = fr
+    content = extract_json_string(json, "content", 1)
+    if (content != "") {
+        content = unescape_json_string(content)
+        if (!saw_text) {
+            sub(/^\n+/, "", content)
+            sub(/^\r+/, "", content)
+        }
+        if (content != "") {
+            saw_text = 1
+            printf "TEXT:%s\n", escape_protocol_text(content)
+            fflush()
+        }
+    }
+    if (extract_value(json, "tool_calls", 1) != "") {
+        parse_tool_calls(json)
+    }
+    if (fr == "tool_calls") emit_pending_tool_calls()
+    pt = extract_num(json, "prompt_tokens", 1)
+    if (pt != "") input_tokens = pt
+    ct = extract_num(json, "completion_tokens", 1)
+    if (ct != "") output_tokens = ct
+    crt = extract_num(json, "cached_tokens", 1)
+    if (crt == "") crt = extract_num(json, "cache_read_input_tokens", 1)
+    if (crt != "") cache_input_tokens = crt
+    next
+}
+function parse_tool_calls(json,    arr, count, p, tc, idx, tc_id, func_raw, name, args) {
+    arr = extract_value(json, "tool_calls", 1)
+    if (arr == "" || substr(arr, 1, 1) != "[") return
+    count = split_top_level_objects(arr, OPENAI_TOOL_CALLS)
+    for (p = 1; p <= count; p++) {
+        tc = OPENAI_TOOL_CALLS[p]
+        idx = extract_num(tc, "index")
+        if (idx == "") continue
+        if ((idx + 0) > tc_max_index) tc_max_index = idx + 0
+        tc_id = extract_str(tc, "id")
+        func_raw = extract_value(tc, "function")
+        name = extract_str(func_raw, "name")
+        args = extract_json_string(func_raw, "arguments")
+        if (tc_id != "" && name != "") {
+            tool_name[idx] = name
+            tool_id[idx] = tc_id
+            tool_args[idx] = args
+        } else if (args != "") {
+            if (idx in tool_args) {
+                tool_args[idx] = tool_args[idx] args
+            } else {
+                tool_args[idx] = args
+            }
+        }
+    }
+}
+function emit_pending_tool_calls(    idx) {
+    for (idx = 0; idx <= tc_max_index; idx++) {
+        if (tool_args[idx] == "") continue
+        emit_tool_call_record(tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx]))
+        fflush()
+        tool_args[idx] = ""
+    }
+}'
+
+_AWK_CONVERT_MESSAGES='function convert_assistant_msg(json,    role, content_val, text_parts, tool_parts, n, i, block, btype, t, tid, tname, tinput) {
+    role = extract_str(json, "role")
+    content_val = extract_value(json, "content")
+    text_parts = ""
+    tool_parts = ""
+    n = 0
+    if (substr(content_val, 1, 1) == "[") {
+        n = split_top_level_objects(content_val, blocks)
+        for (i = 1; i <= n; i++) {
+            block = blocks[i]
+            btype = extract_str(block, "type")
+            if (btype == "text") {
+                t = extract_value(block, "text")
+                if (substr(t, 1, 1) == "\"") t = substr(t, 2, length(t) - 2)
+                text_parts = text_parts unescape_json_string(t)
+            } else if (btype == "tool_use") {
+                tid = extract_str(block, "id")
+                tname = extract_str(block, "name")
+                tinput = extract_value(block, "input")
+                tool_parts = tool_parts "{\"id\":\"" tid "\",\"type\":\"function\",\"function\":{\"name\":\"" tname "\",\"arguments\":\"" escape_json_string(tinput) "\"}},"
+            }
+        }
+    } else {
+        if (substr(content_val, 1, 1) == "\"") {
+            text_parts = unescape_json_string(substr(content_val, 2, length(content_val) - 2))
+        } else {
+            text_parts = content_val
+        }
+    }
+    result_msg = "{\"role\":\"assistant\""
+    if (text_parts != "") {
+        result_msg = result_msg ",\"content\":\"" escape_json_string(text_parts) "\""
+    } else {
+        result_msg = result_msg ",\"content\":null"
+    }
+    if (tool_parts != "") {
+        tool_parts = substr(tool_parts, 1, length(tool_parts) - 1)
+        result_msg = result_msg ",\"tool_calls\":[" tool_parts "]"
+    }
+    result_msg = result_msg "}"
+    return result_msg
+}
+function convert_tool_result_msg(json,    content_val, n, i, block, tid, result_content, msgs) {
+    content_val = extract_value(json, "content")
+    msgs = ""
+    if (substr(content_val, 1, 1) == "[") {
+        n = split_top_level_objects(content_val, blocks)
+        for (i = 1; i <= n; i++) {
+            block = blocks[i]
+            if (extract_str(block, "type") == "tool_result") {
+                tid = extract_str(block, "tool_use_id")
+                result_content = extract_value(block, "content")
+                if (substr(result_content, 1, 1) == "\"") {
+                    result_content = unescape_json_string(substr(result_content, 2, length(result_content) - 2))
+                }
+                if (msgs != "") msgs = msgs ","
+                msgs = msgs "{\"role\":\"tool\",\"tool_call_id\":\"" tid "\",\"content\":\"" escape_json_string(result_content) "\"}"
+            }
+        }
+    }
+    return msgs
+}
+function is_content_array(json,    content_val) {
+    content_val = extract_value(json, "content")
+    return (substr(content_val, 1, 1) == "[")
+}
+function content_has_block_type(content_val, want_type,    n, i, block) {
+    if (substr(content_val, 1, 1) != "[") return 0
+    n = split_top_level_objects(content_val, blocks)
+    for (i = 1; i <= n; i++) {
+        block = blocks[i]
+        if (extract_str(block, "type") == want_type) return 1
+    }
+    return 0
+}
+{ line = line $0 }
+END {
+    inner = line
+    gsub(/^\[/, "", inner)
+    gsub(/\]$/, "", inner)
+    n = split_top_level_objects("[" inner "]", msgs)
+    result = "["
+    for (i = 1; i <= n; i++) {
+        msg = msgs[i]
+        role = extract_str(msg, "role")
+        has_tool_content = 0
+        has_tool_result = 0
+        if (role == "assistant" && is_content_array(msg)) {
+            content_val = extract_value(msg, "content")
+            if (content_has_block_type(content_val, "tool_use")) has_tool_content = 1
+        }
+        if (role == "user" && is_content_array(msg)) {
+            content_val = extract_value(msg, "content")
+            if (content_has_block_type(content_val, "tool_result")) has_tool_result = 1
+        }
+        if (i > 1) result = result ","
+        if (has_tool_content) {
+            result = result convert_assistant_msg(msg)
+        } else if (has_tool_result) {
+            result = result convert_tool_result_msg(msg)
+        } else {
+            result = result msg
+        }
+    }
+    result = result "]"
+    printf "%s", result
+}'
+
+_AWK_CONVERT_TOOLS='{ line = line $0 }
+END {
+    inner = line
+    gsub(/^\[/, "", inner)
+    gsub(/\]$/, "", inner)
+    n = split_top_level_objects("[" inner "]", tool_defs)
+    result = "["
+    for (i = 1; i <= n; i++) {
+        td = tool_defs[i]
+        if (td ~ /"type" *: *"function"/ || td ~ /"type":"function"/) {
+            if (i > 1) result = result ","
+            result = result td
+            continue
+        }
+        name = extract_str(td, "name")
+        desc = extract_str(td, "description")
+        params = extract_value(td, "input_schema")
+        if (params == "") params = extract_value(td, "parameters")
+        if (params == "") params = "{}"
+        if (i > 1) result = result ","
+        result = result "{\"type\":\"function\",\"function\":{\"name\":\"" name "\",\"description\":\"" desc "\",\"parameters\":" params "}}"
+    }
+    result = result "]"
+    printf "%s", result
+}'
+
+_AWK_SKILL_SUMMARY='BEGIN {
+    heading = ""
+    summary = ""
+}
+{
+    line = $0
+    if (heading == "" && line ~ /^#[[:space:]]+/) {
+        sub(/^#[[:space:]]+/, "", line)
+        heading = line
+        next
+    }
+    if (line ~ /^[[:space:]]*$/) next
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+    if (line != "") {
+        summary = line
+        exit
+    }
+}
+END {
+    if (summary != "") print summary
+    else if (heading != "") print heading
+}'
+
+_TOOLS_JSON='[
+  {
+    "name": "Read",
+    "description": "Read a file from the local filesystem.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to read"
+        }
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "Write",
+    "description": "Write a file to the local filesystem.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to write"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content to write to the file"
+        }
+      },
+      "required": ["path", "content"]
+    }
+  },
+  {
+    "name": "Edit",
+    "description": "Edit a file by replacing an exact string match with a new string.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to the file to edit"
+        },
+        "old_string": {
+          "type": "string",
+          "description": "The exact text to find and replace"
+        },
+        "new_string": {
+          "type": "string",
+          "description": "The replacement text"
+        }
+      },
+      "required": ["path", "old_string", "new_string"]
+    }
+  },
+  {
+    "name": "Bash",
+    "description": "Execute a bash command. Returns stdout and stderr.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The bash command to execute"
+        }
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "Glob",
+    "description": "Fast file pattern matching tool that works with any codebase size.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Glob pattern, for example **/*.sh"
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional directory to search from. Defaults to ."
+        }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "Grep",
+    "description": "A powerful search tool built on ripgrep.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Text or regex pattern to search for"
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional file or directory to search. Defaults to ."
+        },
+        "glob": {
+          "type": "string",
+          "description": "Optional file glob filter, for example *.sh"
+        }
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "TodoWrite",
+    "description": "Create and manage a structured task list for the current coding session. Use proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file work. Do not use for trivial single-step or purely informational requests.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "todos": {
+          "type": "array",
+          "description": "The full updated todo list for the current session. Send the complete list each time, not a partial diff.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": "A short, concrete, actionable task description."
+              },
+              "status": {
+                "type": "string",
+                "description": "Task status: pending, in_progress, or completed. Prefer exactly one in_progress item while actively working."
+              }
+            },
+            "required": ["content", "status"]
+          }
+        }
+      },
+      "required": ["todos"]
+    }
+  }
+]'
 MAX_TURNS=20
 MAX_CONTEXT_BYTES=200000
 MAX_CONTEXT_KEEP_PCT=25
@@ -44,7 +1033,6 @@ CONV_FILE=""
 TOOL_DEF_FILE=""
 AGENT_TMPDIR=""
 API_URL=""
-AWK_DIR=""
 EXEC_TOOL_RESULTS=""
 
 # ============================================================================
@@ -295,11 +1283,10 @@ parse_size_bytes() {
 
 json_escape() {
     local input="${1:-}"
-    printf '%s' "$input" | awk \
-        -v json_mode="escape_string" \
-        -f "$AWK_DIR/json.awk" \
-        -f "$AWK_DIR/json_cli.awk"
+    printf '%s' "$input" | awk -v json_mode="escape_string" "${_AWK_JSON}
+${_AWK_JSON_CLI}"
 }
+
 
 strip_ansi() {
     local input="$1"
@@ -431,7 +1418,7 @@ build_skill_index_section() {
     for skill_file in "$base"/*/SKILL.md; do
         [[ -f "$skill_file" ]] || continue
         skill_name=$(basename "$(dirname "$skill_file")")
-        summary=$(awk -f "$AWK_DIR/skill_summary.awk" "$skill_file")
+        summary=$(awk "${_AWK_SKILL_SUMMARY}" "$skill_file")
         output+="- ${skill_name}"
         [[ -n "$summary" ]] && output+=": ${summary}"
         output+=$'\n'
@@ -614,21 +1601,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-find_awk_dir() {
-    # If already set via env, use it
-    if [[ -n "${AWK_DIR:-}" ]]; then
-        [[ -d "$AWK_DIR" ]] && return
-        die "AWK_DIR not found: $AWK_DIR"
-    fi
-    # Try same directory as agent.sh
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [[ -d "$script_dir/awk" ]]; then
-        AWK_DIR="$script_dir/awk"
-        return
-    fi
-    die "Cannot find awk/ directory. Set AWK_DIR or ensure awk/ exists alongside agent.sh"
-}
+
 
 get_project_key() {
     local cwd="${PWD:-$(pwd)}"
@@ -867,12 +1840,12 @@ session_log_tool_results() {
 # ============================================================================
 
 get_tool_defs_file() {
-    local tools_file script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    tools_file="$script_dir/tools.json"
-    [[ -f "$tools_file" ]] || die "Cannot find tools.json: $tools_file"
-    printf '%s' "$tools_file"
+    local tmp
+    tmp=$(mktemp "${AGENT_TMPDIR}/tools.XXXXXX")
+    printf '%s\n' "$_TOOLS_JSON" > "$tmp"
+    printf '%s' "$tmp"
 }
+
 
 # ============================================================================
 # Section 7: Tool Implementations
@@ -1005,12 +1978,16 @@ dispatch_tool() {
 # ============================================================================
 
 convert_messages_to_openai() {
-    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"
+    awk "${_AWK_JSON}
+${_AWK_CONVERT_MESSAGES}"
 }
 
+
 convert_tools_to_openai() {
-    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"
+    awk "${_AWK_JSON}
+${_AWK_CONVERT_TOOLS}"
 }
+
 
 # ============================================================================
 # Section 7: API Request Builders
@@ -1071,24 +2048,30 @@ build_request() {
 # ============================================================================
 
 parse_http_stream() {
-    awk -f "$AWK_DIR/http_stream.awk"
+    awk "${_AWK_HTTP_STREAM}"
 }
+
 
 run_edit_file_awk() {
     local input="$1" max_bytes="$2" meta_file="$3"
-    printf '%s' "$input" | awk \
-        -v max_bytes="$max_bytes" \
-        -v meta_file="$meta_file" \
-        -f "$AWK_DIR/json.awk" \
-        -f "$AWK_DIR/edit_file.awk"
+    printf '%s' "$input" | awk -v max_bytes="$max_bytes" -v meta_file="$meta_file" "${_AWK_JSON}
+${_AWK_EDIT_FILE}"
 }
+
 
 parse_sse() {
     case "$PROVIDER" in
-        claude) awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" ;;
-        openai) awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" ;;
+        claude) awk -v verbose="${VERBOSE:-false}" "${_AWK_JSON}
+${_AWK_PROTOCOL}
+${_AWK_TODO_PROTOCOL}
+${_AWK_CLAUDE_SSE}" ;;
+        openai) awk "${_AWK_JSON}
+${_AWK_PROTOCOL}
+${_AWK_TODO_PROTOCOL}
+${_AWK_OPENAI_SSE}" ;;
     esac
 }
+
 
 # ============================================================================
 # Section 9: API Calls (curl)
@@ -1504,7 +2487,6 @@ main() {
     fi
 
     AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent.XXXXXX")
-    find_awk_dir
     conv_init
 
     if [[ "$COMMAND" == "compact" ]]; then

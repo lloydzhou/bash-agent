@@ -79,6 +79,21 @@ export OPENAI_API_KEY="sk-..."
 ./src/agent.sh -p claude --print "scan this repo"
 ```
 
+## Install
+
+```bash
+mkdir -p ~/.local/bin && \
+curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/agent.sh \
+  -o ~/.local/bin/bash-agent && \
+chmod +x ~/.local/bin/bash-agent
+```
+
+If `~/.local/bin` is not already in `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
 Third-party compatible endpoints are supported through `--base-url` or environment variables:
 
 ```bash
