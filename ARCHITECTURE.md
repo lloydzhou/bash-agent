@@ -62,6 +62,26 @@ src/awk/*
 - API 请求
 - main loop
 
+### `src/agent.sh` 当前停点
+
+`src/agent.sh` 仍然是单文件主控脚本，但当前已经到一个合理停点：
+
+- `compact_context_window()`
+  - 可以保留少量真正有独立语义的 helper
+  - 例如“按预算和 turn 边界计算保留窗口”
+- `execute_tool_calls()`
+  - 当前职责仍然连贯
+  - 不应为了缩短函数继续拆分
+- `agent_loop()`
+  - 当前虽然偏长，但主循环状态和渲染副作用耦合较强
+  - 只有在未来出现新的稳定职责边界时才值得继续拆
+
+这意味着后续优化应遵循：
+
+- 只在拆分能形成稳定职责边界时才抽 helper
+- 不为“函数更短”而拆
+- 不把流程状态通过一堆薄壳函数来回传递
+
 ### `awk` 负责什么
 
 - JSON 字段提取
@@ -116,6 +136,11 @@ compact 现在按 **context 实际大小** 触发，而不是按消息条数：
 - 总大小超预算时 compact
 - 保留最新的预算后缀
 - 但对齐到最近的完整 `user` 文本消息起点
+
+当前 compact 也有一条明确约束：
+
+- 自动 compact 不应重复做 provider/API 初始化检查
+- `compact` 子命令只有在真正需要生成 summary 时才校验配置
 
 ### 3. Prompt 组装
 
@@ -199,6 +224,14 @@ skills 当前只读取项目目录下：
 - `Grep`
   - 用 `rg -n`
 - 没有 `rg` 就报错，不做复杂 fallback
+
+### 后续不该做什么
+
+- 不要再让 bash 回去解析 JSON object
+- 不要把 `json.awk` 再变回杂物间
+- 不要为“更通用”引入更重的多行协议
+- 不要把 `run_with_timeout()` 做成长 supervisor
+- 不要继续为了缩短函数机械拆分 `agent_loop()` 或 `execute_tool_calls()`
 
 ## Provider 与请求构造
 
