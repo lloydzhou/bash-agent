@@ -1119,10 +1119,7 @@ _stream_curl() {
 
     # Merge stderr to stdout: curl errors come through same pipe
     # Handles: network errors, HTTP errors, and API JSON errors in body
-    curl -sS --no-buffer -D - \
-        "${header_args[@]}" \
-        -d "$body" \
-        "$API_URL" 2>&1 | parse_http_stream
+    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | parse_http_stream
 }
 
 call_api() {
