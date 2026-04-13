@@ -152,7 +152,9 @@ impl Runner {
             );
         }
         if !content.contains(old_s) {
-            bail!("Error: old_string not found in {path}");
+            bail!(
+                "Error: old_string not found in {path}. Hint: Read the file and copy exact bytes (including whitespace/indent/newlines) before retrying Edit."
+            );
         }
         let updated = content.replacen(old_s, new_s, 1);
         if updated.is_empty() {

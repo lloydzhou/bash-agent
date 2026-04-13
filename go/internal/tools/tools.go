@@ -163,7 +163,7 @@ func (r Runner) Edit(path, oldString, newString string) (string, error) {
 	content := string(data)
 	idx := strings.Index(content, oldString)
 	if idx < 0 {
-		return "", fmt.Errorf("Error: old_string not found in %s", path)
+		return "", fmt.Errorf("Error: old_string not found in %s. Hint: Read the file and copy exact bytes (including whitespace/indent/newlines) before retrying Edit.", path)
 	}
 	updated := strings.Replace(content, oldString, newString, 1)
 	if updated == "" {

@@ -21,7 +21,7 @@ impl Builder {
         ));
         sections.push(wrap_section(
             "rules",
-            "- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- Report failures clearly.",
+            "- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- Report failures clearly.",
             None,
         ));
         sections.push(wrap_section(
