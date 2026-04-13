@@ -186,7 +186,9 @@ impl Runtime {
             }
             let _ = rl.add_history_entry(line.as_str());
             let _ = rl.save_history(&history_path);
-            self.agent_loop(line)?;
+            if let Err(e) = self.agent_loop(line) {
+                self.error(&e.to_string());
+            }
         }
         self.info("Goodbye!");
         Ok(())
