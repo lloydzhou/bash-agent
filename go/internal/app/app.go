@@ -11,9 +11,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/peterh/liner"
+	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 
 	"github.com/lloydzhou/bash-agent/internal/assets"
 	"github.com/lloydzhou/bash-agent/internal/config"
@@ -28,18 +31,50 @@ import (
 )
 
 type runtime struct {
-	cfg       config.Config
-	cwd       string
-	home      string
-	stdin     io.Reader
-	stdout    io.Writer
-	stderr    io.Writer
-	apiURL    string
-	toolsJSON []byte
-	paths     session.Paths
-	conv      conversation.Store
-	tmpDir    string
-	http      httpclient.StreamClient
+	cfg         config.Config
+	cwd         string
+	home        string
+	stdin       io.Reader
+	stdout      io.Writer
+	stderr      io.Writer
+	apiURL      string
+	toolsJSON   []byte
+	paths       session.Paths
+	conv        conversation.Store
+	tmpDir      string
+	http        httpclient.StreamClient
+	escTTY      *os.File
+	escState    *term.State
+	escStop     chan struct{}
+	escDone     chan struct{}
+	interrupted atomic.Bool
+}
+
+var errInterrupted = errors.New("interrupted")
+
+func (rt *runtime) writeHuman(s string) (int, error) {
+	if rt.useCRLF() {
+		return fmt.Fprint(rt.stdout, strings.ReplaceAll(s, "\n", "\r\n"))
+	}
+	return fmt.Fprint(rt.stdout, s)
+}
+
+func (rt *runtime) nl() string {
+	if rt.useCRLF() {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func (rt *runtime) useCRLF() bool {
+	if !rt.cfg.Interactive {
+		return false
+	}
+	f, ok := rt.stdout.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
 }
 
 var newHTTPClient = func() *http.Client {
@@ -103,6 +138,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	}
 
 	if rt.cfg.Interactive || (rt.cfg.Prompt == "" && isTTY(os.Stdin)) {
+		rt.cfg.Interactive = true
 		return rt.interactiveMode()
 	}
 	if rt.cfg.Prompt != "" {
@@ -193,7 +229,7 @@ func (rt *runtime) cleanup() {
 }
 
 func (rt *runtime) interactiveMode() error {
-	rt.info("bash-agent interactive mode (type 'exit' or Ctrl+D to quit)")
+	_, _ = fmt.Fprintln(rt.stdout, "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)")
 	line := liner.NewLiner()
 	defer line.Close()
 	line.SetCtrlCAborts(true)
@@ -204,6 +240,7 @@ func (rt *runtime) interactiveMode() error {
 		_ = f.Close()
 	}
 	for {
+		_, _ = fmt.Fprint(rt.stdout, "\r")
 		input, err := line.Prompt("> ")
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -229,11 +266,15 @@ func (rt *runtime) interactiveMode() error {
 		_, _ = line.WriteHistory(f)
 		_ = f.Close()
 	}
-	rt.info("Goodbye!")
+	_, _ = fmt.Fprintln(rt.stdout, "Goodbye!")
 	return nil
 }
 
 func (rt *runtime) agentLoop(userInput string) error {
+	rt.interrupted.Store(false)
+	rt.startEscInterruptListener()
+	defer rt.stopEscInterruptListener()
+
 	if err := rt.conv.AddUser(userInput); err != nil {
 		return err
 	}
@@ -253,6 +294,9 @@ func (rt *runtime) agentLoop(userInput string) error {
 		}
 
 		err := rt.llmCall(func(evt protocol.Event) error {
+			if rt.interrupted.Load() {
+				return errInterrupted
+			}
 			if rt.cfg.Verbose {
 				rt.debug("<%s>", evt.Render())
 			}
@@ -261,7 +305,7 @@ func (rt *runtime) agentLoop(userInput string) error {
 				if rt.isStreamJSONMode() {
 					return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
 				}
-				if _, err := fmt.Fprint(rt.stdout, e.Content); err != nil {
+				if _, err := rt.writeHuman(e.Content); err != nil {
 					return err
 				}
 				if e.Content != "" {
@@ -270,7 +314,7 @@ func (rt *runtime) agentLoop(userInput string) error {
 				text += e.Content
 			case protocol.ToolCallEvent:
 				if !rt.isStreamJSONMode() && humanLastChar != "\n" {
-					if _, err := fmt.Fprint(rt.stdout, "\n"); err != nil {
+					if _, err := fmt.Fprint(rt.stdout, rt.nl()); err != nil {
 						return err
 					}
 					humanLastChar = "\n"
@@ -285,7 +329,7 @@ func (rt *runtime) agentLoop(userInput string) error {
 						return err
 					}
 				} else {
-					if _, err := fmt.Fprintf(rt.stdout, "\033[33m[tool] %s\033[0m\n", conversation.BuildToolCallSummary(e.Name, e.Fields)); err != nil {
+					if _, err := rt.writeHuman(fmt.Sprintf("\033[33m[tool] %s\033[0m\n", conversation.BuildToolCallSummary(e.Name, e.Fields))); err != nil {
 						return err
 					}
 				}
@@ -305,7 +349,7 @@ func (rt *runtime) agentLoop(userInput string) error {
 					return rt.emitStream(map[string]any{"type": "stop", "reason": e.Reason})
 				}
 				if humanLastChar != "\n" {
-					if _, err := fmt.Fprint(rt.stdout, "\n"); err != nil {
+					if _, err := fmt.Fprint(rt.stdout, rt.nl()); err != nil {
 						return err
 					}
 					humanLastChar = "\n"
@@ -319,6 +363,15 @@ func (rt *runtime) agentLoop(userInput string) error {
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errInterrupted) {
+				if rt.cfg.OutputFormat == config.OutputHuman {
+					if humanLastChar != "\n" {
+						_, _ = fmt.Fprint(rt.stdout, rt.nl())
+					}
+					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
+				}
+				return nil
+			}
 			rt.error("%v", err)
 			return err
 		}
@@ -333,9 +386,27 @@ func (rt *runtime) agentLoop(userInput string) error {
 			_, _ = rt.compactContextWindow("auto", false)
 			return nil
 		case "tool_use", "tool_calls":
+			if rt.interrupted.Load() {
+				if rt.cfg.OutputFormat == config.OutputHuman {
+					if humanLastChar != "\n" {
+						_, _ = fmt.Fprint(rt.stdout, rt.nl())
+					}
+					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
+				}
+				return nil
+			}
 			results, err := rt.executeToolCalls(calls)
 			if err != nil {
 				return err
+			}
+			if rt.interrupted.Load() {
+				if rt.cfg.OutputFormat == config.OutputHuman {
+					if humanLastChar != "\n" {
+						_, _ = fmt.Fprint(rt.stdout, rt.nl())
+					}
+					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
+				}
+				return nil
 			}
 			if err := rt.conv.AddToolResults(results); err != nil {
 				return err
@@ -407,7 +478,13 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 	}
 	results := make([]conversation.ToolResult, 0, len(calls))
 	for _, call := range calls {
+		if rt.interrupted.Load() {
+			break
+		}
 		result := runner.Dispatch(call.Name, call.InputJSON)
+		if rt.interrupted.Load() {
+			break
+		}
 		output := result.Output
 		if result.Err != nil {
 			output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
@@ -435,12 +512,103 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 				return nil, err
 			}
 		} else if output != "" {
-			if _, err := fmt.Fprintln(rt.stdout, output); err != nil {
+			if _, err := rt.writeHuman(output + "\n"); err != nil {
 				return nil, err
 			}
 		}
 	}
 	return results, nil
+}
+
+func (rt *runtime) startEscInterruptListener() {
+	if !rt.cfg.Interactive {
+		return
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	rt.stopEscInterruptListener()
+	oldState, err := term.MakeRaw(int(tty.Fd()))
+	if err != nil {
+		_ = tty.Close()
+		return
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	rt.escTTY = tty
+	rt.escState = oldState
+	rt.escStop = stop
+	rt.escDone = done
+
+	go func() {
+		defer close(done)
+		fd := int(tty.Fd())
+		buf := make([]byte, 1)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+
+			var readfds unix.FdSet
+			fdSet(fd, &readfds)
+			timeout := unix.Timeval{Sec: 0, Usec: 100000} // 100ms
+			n, err := unix.Select(fd+1, &readfds, nil, nil, &timeout)
+			if err != nil {
+				if errors.Is(err, unix.EINTR) {
+					continue
+				}
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				return
+			}
+			if n == 0 || !fdIsSet(fd, &readfds) {
+				continue
+			}
+			n, err = unix.Read(fd, buf)
+			if err != nil {
+				if errors.Is(err, unix.EINTR) || errors.Is(err, unix.EAGAIN) {
+					continue
+				}
+				return
+			}
+			if n == 1 && buf[0] == 0x1b {
+				rt.interrupted.Store(true)
+			}
+		}
+	}()
+}
+
+func (rt *runtime) stopEscInterruptListener() {
+	if rt.escStop != nil {
+		close(rt.escStop)
+		rt.escStop = nil
+	}
+	if rt.escDone != nil {
+		<-rt.escDone
+		rt.escDone = nil
+	}
+	if rt.escTTY != nil && rt.escState != nil {
+		_ = term.Restore(int(rt.escTTY.Fd()), rt.escState)
+		rt.escState = nil
+	}
+	if rt.escTTY != nil {
+		_ = rt.escTTY.Close()
+		rt.escTTY = nil
+	}
+}
+
+func fdSet(fd int, set *unix.FdSet) {
+	set.Bits[fd/64] |= 1 << (uint(fd) % 64)
+}
+
+func fdIsSet(fd int, set *unix.FdSet) bool {
+	return (set.Bits[fd/64] & (1 << (uint(fd) % 64))) != 0
 }
 
 func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error) {
@@ -614,22 +782,22 @@ func (rt *runtime) emitStream(v any) error {
 }
 
 func (rt *runtime) info(format string, args ...any) {
-	_, _ = fmt.Fprintf(rt.stderr, "\033[36m%s\033[0m\n", fmt.Sprintf(format, args...))
+	_, _ = fmt.Fprintf(rt.stderr, "\r\033[36m%s\033[0m\r\n", fmt.Sprintf(format, args...))
 }
 
 func (rt *runtime) error(format string, args ...any) {
-	_, _ = fmt.Fprintf(rt.stderr, "\033[31mError: %s\033[0m\n", fmt.Sprintf(format, args...))
+	_, _ = fmt.Fprintf(rt.stderr, "\r\033[31mError: %s\033[0m\r\n", fmt.Sprintf(format, args...))
 }
 
 func (rt *runtime) verbose(format string, args ...any) {
 	if rt.cfg.Verbose {
-		_, _ = fmt.Fprintf(rt.stderr, "\033[90m[verbose] %s\033[0m\n", fmt.Sprintf(format, args...))
+		_, _ = fmt.Fprintf(rt.stderr, "\r\033[90m[verbose] %s\033[0m\r\n", fmt.Sprintf(format, args...))
 	}
 }
 
 func (rt *runtime) debug(format string, args ...any) {
 	if rt.cfg.Verbose {
-		_, _ = fmt.Fprintf(rt.stderr, "[debug] %s\n", fmt.Sprintf(format, args...))
+		_, _ = fmt.Fprintf(rt.stderr, "\r[debug] %s\r\n", fmt.Sprintf(format, args...))
 	}
 }
 

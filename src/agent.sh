@@ -46,6 +46,9 @@ AGENT_TMPDIR=""
 API_URL=""
 AWK_DIR=""
 EXEC_TOOL_RESULTS=""
+INTERRUPT_REQUESTED=false
+ESC_LISTENER_PID=""
+ESC_LISTENER_FLAG=""
 
 # ============================================================================
 # Section 4: Environment Defaults
@@ -620,10 +623,12 @@ build_todo_event_json() {
 }
 
 cleanup() {
+    stop_esc_interrupt_listener
     # Only clean tmpdir, not session files
     [[ -n "${AGENT_TMPDIR:-}" && -d "${AGENT_TMPDIR:-}" ]] && rm -rf "$AGENT_TMPDIR"
 }
 trap cleanup EXIT
+trap 'INTERRUPT_REQUESTED=true' USR1
 
 find_awk_dir() {
     # If already set via env, use it
@@ -1184,6 +1189,8 @@ run_summary_call() {
 
 agent_loop() {
     local user_input="$1"
+    INTERRUPT_REQUESTED=false
+    start_esc_interrupt_listener
     conv_add_user "$user_input"
 
     local turn=0
@@ -1194,9 +1201,14 @@ agent_loop() {
 
         local text="" tool_calls="" stop=""
         local cur_tool_name="" cur_tool_id="" input=""
+        local loop_error=""
 
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
         while IFS= read -r line; do
+            if [[ "$INTERRUPT_REQUESTED" == true ]]; then
+                stop="interrupted"
+                break
+            fi
             [[ "$VERBOSE" == true ]] && printf '[debug] <%s>\n' "$line" >&2
             case "$line" in
                 TEXT:*)
@@ -1252,8 +1264,9 @@ agent_loop() {
                     if is_stream_json_mode; then
                         emit_stream_event "{\"type\":\"error\",\"message\":\"$(json_escape "${line#ERROR:}")\"}"
                     fi
-                    log_error "${line#ERROR:}"
-                    return 1
+                    loop_error="${line#ERROR:}"
+                    stop="error"
+                    break
                     ;;
             esac
         done < <(llm_call "$(conv_get_messages)")
@@ -1262,15 +1275,53 @@ agent_loop() {
         conv_add_assistant "$text" "$tool_calls"
 
         case "$stop" in
+            error)
+                log_error "$loop_error"
+                stop_esc_interrupt_listener
+                return 1
+                ;;
             end_turn|stop|done)
                 compact_context_window "auto" false || true
                 break
                 ;;
+            interrupted)
+                stop_esc_interrupt_listener
+                if [[ "$OUTPUT_FORMAT" == "human" ]]; then
+                    if [[ "$human_last_char" != $'\n' ]]; then
+                        printf '\n'
+                        human_last_char=$'\n'
+                    fi
+                    log_info "Interrupted."
+                fi
+                break
+                ;;
             tool_use|tool_calls)
+                if [[ "$INTERRUPT_REQUESTED" == true ]]; then
+                    stop_esc_interrupt_listener
+                    if [[ "$OUTPUT_FORMAT" == "human" ]]; then
+                        if [[ "$human_last_char" != $'\n' ]]; then
+                            printf '\n'
+                            human_last_char=$'\n'
+                        fi
+                        log_info "Interrupted."
+                    fi
+                    break
+                fi
                 # Execute tools and continue
                 local results=""
                 execute_tool_calls "$tool_calls"
                 results="$EXEC_TOOL_RESULTS"
+                if [[ "$INTERRUPT_REQUESTED" == true ]]; then
+                    stop_esc_interrupt_listener
+                    if [[ "$OUTPUT_FORMAT" == "human" ]]; then
+                        if [[ "$human_last_char" != $'\n' ]]; then
+                            printf '\n'
+                            human_last_char=$'\n'
+                        fi
+                        log_info "Interrupted."
+                    fi
+                    break
+                fi
                 conv_add_tool_results "$results"
                 compact_context_window "auto" false || true
                 ;;
@@ -1288,12 +1339,14 @@ agent_loop() {
     if (( turn >= MAX_TURNS )); then
         log_error "Max turns ($MAX_TURNS) reached"
     fi
+    stop_esc_interrupt_listener
 }
 
 execute_tool_calls() {
     local calls="$1"
     EXEC_TOOL_RESULTS=""
     while IFS= read -r tc; do
+        [[ "$INTERRUPT_REQUESTED" == true ]] && break
         [[ -z "$tc" ]] && continue
         local name id input_escaped kv_escaped input kv arg1="" arg2="" arg3=""
         IFS=$'\t' read -r name id input_escaped kv_escaped <<< "$tc"
@@ -1316,6 +1369,7 @@ execute_tool_calls() {
         local output
         output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?
+        [[ "$INTERRUPT_REQUESTED" == true ]] && break
         output=$(strip_ansi "$output")
         if (( tool_rc != 0 )); then
             output="Error: tool execution failed: $output"
@@ -1496,12 +1550,40 @@ setup_api_url() {
 interactive_mode() {
     log_info "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)"
     while true; do
+        stty echo 2>/dev/null || true
         IFS= read -e -r -p $'\033[32m> \033[0m' user_input || break
         [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
         [[ -z "$user_input" ]] && continue
         agent_loop "$user_input"
     done
     log_info "Goodbye!"
+}
+
+start_esc_interrupt_listener() {
+    [[ "$INTERACTIVE" == true ]] || return 0
+    [[ -r /dev/tty ]] || return 0
+    stop_esc_interrupt_listener
+    ESC_LISTENER_FLAG=$(mktemp "${TMPDIR:-/tmp}/agent-esc.XXXXXX")
+    (
+        local c
+        while [[ -f "$ESC_LISTENER_FLAG" ]]; do
+            if IFS= read -r -s -n 1 -t 1 c < /dev/tty; then
+                [[ "$c" == $'\e' ]] && kill -USR1 "$$" 2>/dev/null || true
+            fi
+        done
+    ) &
+    ESC_LISTENER_PID=$!
+}
+
+stop_esc_interrupt_listener() {
+    if [[ -n "${ESC_LISTENER_FLAG:-}" ]]; then
+        rm -f "$ESC_LISTENER_FLAG" 2>/dev/null || true
+        ESC_LISTENER_FLAG=""
+    fi
+    if [[ -n "${ESC_LISTENER_PID:-}" ]]; then
+        wait "$ESC_LISTENER_PID" 2>/dev/null || true
+        ESC_LISTENER_PID=""
+    fi
 }
 
 main() {
@@ -1546,6 +1628,7 @@ main() {
         agent_loop "$input"
     else
         TOOL_DEF_FILE=$(get_tool_defs_file)
+        INTERACTIVE=true
         interactive_mode
     fi
 }

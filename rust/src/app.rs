@@ -15,7 +15,10 @@ use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn run(args: Vec<String>) -> Result<()> {
     let mut cfg = match parse_args(args) {
@@ -54,6 +57,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     }
 
     if rt.cfg.interactive || (rt.cfg.prompt.is_empty() && io::stdin().is_terminal()) {
+        rt.cfg.interactive = true;
         return rt.interactive_mode();
     }
 
@@ -76,7 +80,12 @@ struct Runtime {
     tmp_dir: PathBuf,
     tools_json: Vec<Value>,
     http: StreamClient,
+    interrupted: Arc<AtomicBool>,
+    esc_stop: Option<Arc<AtomicBool>>,
+    esc_thread: Option<JoinHandle<()>>,
 }
+
+const INTERRUPTED_ERR: &str = "__INTERRUPTED__";
 
 impl Runtime {
     fn new(mut cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<Self> {
@@ -136,6 +145,7 @@ impl Runtime {
         } else {
             api_url(&cfg)
         };
+        let interrupted = Arc::new(AtomicBool::new(false));
 
         Ok(Self {
             cfg,
@@ -147,6 +157,9 @@ impl Runtime {
             tmp_dir,
             tools_json,
             http: StreamClient::new()?,
+            interrupted,
+            esc_stop: None,
+            esc_thread: None,
         })
     }
 
@@ -180,120 +193,150 @@ impl Runtime {
     }
 
     fn agent_loop(&mut self, user_input: String) -> Result<()> {
-        self.conv.add_user(&user_input)?;
-        self.append_event(json!({"type":"user_message","content":user_input}))?;
+        self.interrupted.store(false, Ordering::SeqCst);
+        self.start_esc_interrupt_listener();
+        let result = (|| -> Result<()> {
+            self.conv.add_user(&user_input)?;
+            self.append_event(json!({"type":"user_message","content":user_input}))?;
 
-        let mut turn = 0;
-        let mut human_last_char = String::new();
+            let mut turn = 0;
+            let mut human_last_char = String::new();
 
-        while turn < self.cfg.max_turns {
-            turn += 1;
-            let mut text = String::new();
-            let mut calls: Vec<ToolCallEvent> = Vec::new();
-            let mut stop = String::new();
+            while turn < self.cfg.max_turns {
+                turn += 1;
+                let mut text = String::new();
+                let mut calls: Vec<ToolCallEvent> = Vec::new();
+                let mut stop = String::new();
 
-            self.llm_call(|evt| {
-                if self.cfg.verbose {
-                    self.debug(&format!("<{}>", evt.render()));
-                }
-                match evt {
-                    Event::Text(TextEvent { content }) => {
-                        if self.is_stream_json_mode() {
-                            self.emit_stream(json!({"type":"text","content":content}))?;
-                        } else {
-                            print!("{content}");
-                            io::stdout().flush()?;
-                            if let Some(c) = content.chars().last() {
-                                human_last_char = c.to_string();
+                let call_result = self.llm_call(|evt| {
+                    if self.interrupted.load(Ordering::SeqCst) {
+                        return Err(anyhow!(INTERRUPTED_ERR));
+                    }
+                    if self.cfg.verbose {
+                        self.debug(&format!("<{}>", evt.render()));
+                    }
+                    match evt {
+                        Event::Text(TextEvent { content }) => {
+                            if self.is_stream_json_mode() {
+                                self.emit_stream(json!({"type":"text","content":content}))?;
+                            } else {
+                                print!("{content}");
+                                io::stdout().flush()?;
+                                if let Some(c) = content.chars().last() {
+                                    human_last_char = c.to_string();
+                                }
+                            }
+                            text.push_str(&content);
+                        }
+                        Event::ToolCall(call) => {
+                            if !self.is_stream_json_mode() && human_last_char != "\n" {
+                                println!();
+                                human_last_char = "\n".to_string();
+                            }
+                            if self.is_stream_json_mode() {
+                                self.emit_stream(json!({
+                                    "type":"tool_call",
+                                    "name": call.name,
+                                    "id": call.id,
+                                    "input": call.input_json,
+                                }))?;
+                            } else {
+                                println!(
+                                    "\x1b[33m[tool] {}\x1b[0m",
+                                    build_tool_call_summary(&call.name, &call.fields)
+                                );
+                            }
+                            calls.push(call);
+                        }
+                        Event::Usage(UsageEvent {
+                            input_tokens,
+                            output_tokens,
+                            cache_input_tokens,
+                        }) => {
+                            if self.is_stream_json_mode() {
+                                self.emit_stream(json!({
+                                    "type":"usage",
+                                    "input_tokens":input_tokens,
+                                    "output_tokens":output_tokens,
+                                    "cache_input_tokens":cache_input_tokens
+                                }))?;
                             }
                         }
-                        text.push_str(&content);
-                    }
-                    Event::ToolCall(call) => {
-                        if !self.is_stream_json_mode() && human_last_char != "\n" {
-                            println!();
-                            human_last_char = "\n".to_string();
+                        Event::Stop(StopEvent { reason }) => {
+                            stop = reason.clone();
+                            if self.is_stream_json_mode() {
+                                self.emit_stream(json!({"type":"stop","reason":reason}))?;
+                            } else if human_last_char != "\n" {
+                                println!();
+                                human_last_char = "\n".to_string();
+                            }
                         }
-                        if self.is_stream_json_mode() {
-                            self.emit_stream(json!({
-                                "type":"tool_call",
-                                "name": call.name,
-                                "id": call.id,
-                                "input": call.input_json,
-                            }))?;
-                        } else {
-                            println!(
-                                "\x1b[33m[tool] {}\x1b[0m",
-                                build_tool_call_summary(&call.name, &call.fields)
-                            );
-                        }
-                        calls.push(call);
-                    }
-                    Event::Usage(UsageEvent {
-                        input_tokens,
-                        output_tokens,
-                        cache_input_tokens,
-                    }) => {
-                        if self.is_stream_json_mode() {
-                            self.emit_stream(json!({
-                                "type":"usage",
-                                "input_tokens":input_tokens,
-                                "output_tokens":output_tokens,
-                                "cache_input_tokens":cache_input_tokens
-                            }))?;
+                        Event::Error(ErrorEvent { message }) => {
+                            if self.is_stream_json_mode() {
+                                let _ = self.emit_stream(json!({"type":"error","message":message}));
+                            }
+                            return Err(anyhow!(message));
                         }
                     }
-                    Event::Stop(StopEvent { reason }) => {
-                        stop = reason.clone();
-                        if self.is_stream_json_mode() {
-                            self.emit_stream(json!({"type":"stop","reason":reason}))?;
-                        } else if human_last_char != "\n" {
-                            println!();
-                            human_last_char = "\n".to_string();
+                    Ok(())
+                });
+                if let Err(e) = call_result {
+                    if e.to_string().contains(INTERRUPTED_ERR) {
+                        if !self.is_stream_json_mode() {
+                            self.info("Interrupted.");
                         }
+                        return Ok(());
                     }
-                    Event::Error(ErrorEvent { message }) => {
-                        if self.is_stream_json_mode() {
-                            let _ = self.emit_stream(json!({"type":"error","message":message}));
-                        }
-                        return Err(anyhow!(message));
-                    }
+                    return Err(e);
                 }
-                Ok(())
-            })?;
 
-            self.conv.add_assistant(&text, &calls)?;
-            self.append_event(self.build_assistant_event(&text, &calls))?;
+                self.conv.add_assistant(&text, &calls)?;
+                self.append_event(self.build_assistant_event(&text, &calls))?;
 
-            match stop.as_str() {
-                "end_turn" | "stop" | "done" => {
-                    let _ = self.compact_context_window("auto", false);
-                    return Ok(());
-                }
-                "tool_use" | "tool_calls" => {
-                    let results = self.execute_tool_calls(&calls)?;
-                    self.conv.add_tool_results(&results)?;
-                    for r in &results {
-                        self.append_event(json!({
-                            "type":"tool_result",
-                            "tool_use_id":r.tool_use_id,
-                            "content":r.content,
-                        }))?;
+                match stop.as_str() {
+                    "end_turn" | "stop" | "done" => {
+                        let _ = self.compact_context_window("auto", false);
+                        return Ok(());
                     }
-                    let _ = self.compact_context_window("auto", false);
-                }
-                "max_tokens" | "length" => {
-                    self.error("Response truncated (max_tokens reached)");
-                    return Ok(());
-                }
-                _ => {
-                    self.error(&format!("Unknown stop reason: {stop}"));
-                    return Ok(());
+                    "tool_use" | "tool_calls" => {
+                        if self.interrupted.load(Ordering::SeqCst) {
+                            if !self.is_stream_json_mode() {
+                                self.info("Interrupted.");
+                            }
+                            return Ok(());
+                        }
+                        let results = self.execute_tool_calls(&calls)?;
+                        if self.interrupted.load(Ordering::SeqCst) {
+                            if !self.is_stream_json_mode() {
+                                self.info("Interrupted.");
+                            }
+                            return Ok(());
+                        }
+                        self.conv.add_tool_results(&results)?;
+                        for r in &results {
+                            self.append_event(json!({
+                                "type":"tool_result",
+                                "tool_use_id":r.tool_use_id,
+                                "content":r.content,
+                            }))?;
+                        }
+                        let _ = self.compact_context_window("auto", false);
+                    }
+                    "max_tokens" | "length" => {
+                        self.error("Response truncated (max_tokens reached)");
+                        return Ok(());
+                    }
+                    _ => {
+                        self.error(&format!("Unknown stop reason: {stop}"));
+                        return Ok(());
+                    }
                 }
             }
-        }
-        self.error(&format!("Max turns ({}) reached", self.cfg.max_turns));
-        Ok(())
+            self.error(&format!("Max turns ({}) reached", self.cfg.max_turns));
+            Ok(())
+        })();
+        self.stop_esc_interrupt_listener();
+        result
     }
 
     fn llm_call(&self, emit: impl FnMut(Event) -> Result<()>) -> Result<()> {
@@ -331,10 +374,16 @@ impl Runtime {
         };
         let mut results = Vec::new();
         for call in calls {
+            if self.interrupted.load(Ordering::SeqCst) {
+                break;
+            }
             let mut output = match runner.dispatch(&call.name, &call.input_json) {
                 Ok(v) => v,
                 Err(e) => format!("Error: tool execution failed: {e}"),
             };
+            if self.interrupted.load(Ordering::SeqCst) {
+                break;
+            }
             output = tools::strip_ansi(&output);
             output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
 
@@ -364,6 +413,51 @@ impl Runtime {
             }
         }
         Ok(results)
+    }
+
+    fn start_esc_interrupt_listener(&mut self) {
+        if !self.cfg.interactive {
+            return;
+        }
+        if !Path::new("/dev/tty").exists() {
+            return;
+        }
+        self.stop_esc_interrupt_listener();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = stop.clone();
+        let interrupted = self.interrupted.clone();
+        let handle = std::thread::spawn(move || {
+            use crossterm::event::{self, Event, KeyCode};
+            use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+            if enable_raw_mode().is_err() {
+                return;
+            }
+            while !stop_flag.load(Ordering::SeqCst) {
+                match event::poll(Duration::from_millis(100)) {
+                    Ok(true) => {
+                        if let Ok(Event::Key(key)) = event::read() {
+                            if key.code == KeyCode::Esc {
+                                interrupted.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(_) => break,
+                }
+            }
+            let _ = disable_raw_mode();
+        });
+        self.esc_stop = Some(stop);
+        self.esc_thread = Some(handle);
+    }
+
+    fn stop_esc_interrupt_listener(&mut self) {
+        if let Some(stop) = self.esc_stop.take() {
+            stop.store(true, Ordering::SeqCst);
+        }
+        if let Some(handle) = self.esc_thread.take() {
+            let _ = handle.join();
+        }
     }
 
     fn compact_context_window(&mut self, trigger: &str, force: bool) -> Result<bool> {
