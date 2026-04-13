@@ -11,7 +11,7 @@ build-bash:
 
 build-go:
 	mkdir -p go/.gocache go/.gomodcache dist
-	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go build -o ../dist/goagent ./cmd/goagent
+	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go build -ldflags="-s -w" -o ../dist/goagent ./cmd/goagent
 
 build-rust:
 	cd rust && cargo build --release

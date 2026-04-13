@@ -99,7 +99,7 @@ export OPENAI_API_KEY="sk-..."
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/agent.sh -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
+curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
 Go 版本本地构建并安装：
@@ -111,17 +111,17 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 Rust 版本本地构建并安装（release）：
 
 ```bash
-cargo -C rust build --release && cp rust/target/release/rustagent ~/.local/bin/rustagent
+cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rustagent
 ```
 
 也可以直接下载预构建产物：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/goagent -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
+OS=$(uname -s | tr '[:upper:]' '[:lower:]'); ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=amd64; [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ] && ARCH=arm64; curl -fsSL "https://github.com/lloydzhou/bash-agent/releases/latest/download/goagent-${OS}-${ARCH}" -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/rustagent -o ~/.local/bin/rustagent && chmod +x ~/.local/bin/rustagent
+OS=$(uname -s | tr '[:upper:]' '[:lower:]'); ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=amd64; [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ] && ARCH=arm64; curl -fsSL "https://github.com/lloydzhou/bash-agent/releases/latest/download/rustagent-${OS}-${ARCH}" -o ~/.local/bin/rustagent && chmod +x ~/.local/bin/rustagent
 ```
 
 Go 版本 help：
@@ -456,7 +456,7 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 - session 状态按项目隔离
 - tool 协议已经结构化，适合机器消费
 - `TodoWrite` 负责维护 session 级 todo 状态
-- source 和 dist 都能通过完整测试
+- CI 会构建并上传 `agent.sh` / `goagent` / `rustagent` 产物（`dist/agent.sh` 会先跑测试）
 - Go 版可以编译运行，并保留当前主线的 agent loop / tool / session / compact 语义
 
 ## 文档

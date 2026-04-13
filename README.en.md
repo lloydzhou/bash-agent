@@ -100,7 +100,7 @@ export OPENAI_API_KEY="sk-..."
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/agent.sh -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
+curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
 Build and install the Go port locally:
@@ -112,17 +112,17 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 Build and install the Rust port locally (release):
 
 ```bash
-cargo -C rust build --release && cp rust/target/release/rustagent ~/.local/bin/rustagent
+cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rustagent
 ```
 
 Or download the built artifact directly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/goagent -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
+OS=$(uname -s | tr '[:upper:]' '[:lower:]'); ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=amd64; [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ] && ARCH=arm64; curl -fsSL "https://github.com/lloydzhou/bash-agent/releases/latest/download/goagent-${OS}-${ARCH}" -o ~/.local/bin/goagent && chmod +x ~/.local/bin/goagent
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lloydzhou/bash-agent/main/dist/rustagent -o ~/.local/bin/rustagent && chmod +x ~/.local/bin/rustagent
+OS=$(uname -s | tr '[:upper:]' '[:lower:]'); ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=amd64; [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ] && ARCH=arm64; curl -fsSL "https://github.com/lloydzhou/bash-agent/releases/latest/download/rustagent-${OS}-${ARCH}" -o ~/.local/bin/rustagent && chmod +x ~/.local/bin/rustagent
 ```
 
 Go port help:
@@ -456,7 +456,7 @@ Current status:
 - session state is project-scoped
 - tool protocol is structured and machine-readable
 - `TodoWrite` maintains session-scoped todo state
-- source and dist builds both pass the test suite
+- CI builds and uploads `agent.sh` / `goagent` / `rustagent` artifacts (with tests run before publishing `dist/agent.sh`)
 - the Go port builds successfully and preserves the main agent loop / tool / session / compact semantics
 
 ## Documentation

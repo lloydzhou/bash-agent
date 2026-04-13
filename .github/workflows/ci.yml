@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bash-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build bash artifact
+        run: make build-bash
+
+      - name: Test dist/agent.sh
+        run: AWK_DIR=./src/awk AGENT=./dist/agent.sh bash tests/test.sh
+
+      - name: Upload agent.sh
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-sh
+          path: dist/agent.sh
+
+  goagent:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - runner: macos-13
+            goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - runner: macos-14
+            goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+
+      - name: Run Go tests (linux only)
+        if: matrix.goos == 'linux'
+        run: make test-go
+
+      - name: Build goagent
+        run: |
+          mkdir -p dist
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+            go -C go build -ldflags="-s -w" -o ../dist/goagent-${{ matrix.suffix }} ./cmd/goagent
+
+      - name: Upload goagent
+        uses: actions/upload-artifact@v4
+        with:
+          name: goagent-${{ matrix.suffix }}
+          path: dist/goagent-${{ matrix.suffix }}
+
+  rustagent:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-amd64
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            suffix: darwin-amd64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            suffix: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Check Rust code (linux only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: make test-rust
+
+      - name: Build rustagent
+        run: |
+          mkdir -p dist
+          cd rust && cargo build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/rustagent ../dist/rustagent-${{ matrix.suffix }}
+
+      - name: Upload rustagent
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustagent-${{ matrix.suffix }}
+          path: dist/rustagent-${{ matrix.suffix }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [bash-agent, goagent, rustagent]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show artifacts
+        run: ls -lh dist
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/agent.sh
+            dist/goagent-linux-amd64
+            dist/goagent-darwin-amd64
+            dist/goagent-darwin-arm64
+            dist/rustagent-linux-amd64
+            dist/rustagent-darwin-amd64
+            dist/rustagent-darwin-arm64
