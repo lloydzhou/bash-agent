@@ -280,7 +280,8 @@ func (r Runner) TodoWrite(todos []struct {
 
 func StripANSI(s string) string {
 	re := regexp.MustCompile(`\x1b\[[0-9;]*[[:alpha:]]`)
-	return re.ReplaceAllString(s, "")
+	s = re.ReplaceAllString(s, "")
+	return strings.ReplaceAll(s, "\r", "")
 }
 
 func FormatToolResult(s string, max int) string {

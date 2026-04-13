@@ -259,7 +259,8 @@ func (rt *runtime) interactiveMode() error {
 		}
 		line.AppendHistory(input)
 		if err := rt.agentLoop(input); err != nil {
-			return err
+			rt.error("%v", err)
+			// continue REPL on error
 		}
 	}
 	if f, err := os.Create(historyPath); err == nil {
@@ -512,7 +513,11 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 				return nil, err
 			}
 		} else if output != "" {
-			if _, err := rt.writeHuman(output + "\n"); err != nil {
+			suffix := "\n"
+			if strings.HasSuffix(output, "\n") {
+				suffix = ""
+			}
+			if _, err := rt.writeHuman(output + suffix); err != nil {
 				return nil, err
 			}
 		}
