@@ -10,15 +10,33 @@ on:
 jobs:
   bash-agent:
     runs-on: ubuntu-latest
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONUTF8: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Ensure gawk
+        run: |
+          if ! command -v gawk >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gawk
+          fi
+          mkdir -p .ci-bin
+          cat > .ci-bin/awk <<'EOF'
+          #!/usr/bin/env bash
+          exec gawk "$@"
+          EOF
+          chmod +x .ci-bin/awk
+          echo "$PWD/.ci-bin" >> "$GITHUB_PATH"
 
       - name: Build bash artifact
         run: make build-bash
 
       - name: Test dist/agent.sh
-        run: AWK_DIR=./src/awk AGENT=./dist/agent.sh bash tests/test.sh
+        run: AGENT=./dist/agent.sh bash tests/test.sh
 
       - name: Upload agent.sh
         uses: actions/upload-artifact@v4
@@ -27,23 +45,31 @@ jobs:
           path: dist/agent.sh
 
   goagent:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: amd64
             suffix: linux-amd64
-          - runner: macos-13
-            goos: darwin
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+            ext: ""
+          - goos: darwin
             goarch: amd64
             suffix: darwin-amd64
-          - runner: macos-14
-            goos: darwin
+            ext: ""
+          - goos: darwin
             goarch: arm64
             suffix: darwin-arm64
-    runs-on: ${{ matrix.runner }}
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64
+            ext: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,29 +87,28 @@ jobs:
         run: |
           mkdir -p dist
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
-            go -C go build -ldflags="-s -w" -o ../dist/goagent-${{ matrix.suffix }} ./cmd/goagent
+            go -C go build -ldflags="-s -w" -o ../dist/goagent-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/goagent
 
       - name: Upload goagent
         uses: actions/upload-artifact@v4
         with:
           name: goagent-${{ matrix.suffix }}
-          path: dist/goagent-${{ matrix.suffix }}
+          path: dist/goagent-${{ matrix.suffix }}${{ matrix.ext }}
 
   rustagent:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-gnu
             suffix: linux-amd64
-          - runner: macos-13
-            target: x86_64-apple-darwin
-            suffix: darwin-amd64
-          - runner: macos-14
-            target: aarch64-apple-darwin
-            suffix: darwin-arm64
-    runs-on: ${{ matrix.runner }}
+            bin: rustagent
+            ext: ""
+          - target: x86_64-pc-windows-gnu
+            suffix: windows-amd64
+            bin: rustagent.exe
+            ext: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,17 +122,23 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: make test-rust
 
+      - name: Install MinGW (windows target)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
       - name: Build rustagent
         run: |
           mkdir -p dist
           cd rust && cargo build --release --target ${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/rustagent ../dist/rustagent-${{ matrix.suffix }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
       - name: Upload rustagent
         uses: actions/upload-artifact@v4
         with:
           name: rustagent-${{ matrix.suffix }}
-          path: dist/rustagent-${{ matrix.suffix }}
+          path: dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -131,8 +162,9 @@ jobs:
           files: |
             dist/agent.sh
             dist/goagent-linux-amd64
+            dist/goagent-linux-arm64
             dist/goagent-darwin-amd64
             dist/goagent-darwin-arm64
+            dist/goagent-windows-amd64.exe
             dist/rustagent-linux-amd64
-            dist/rustagent-darwin-amd64
-            dist/rustagent-darwin-arm64
+            dist/rustagent-windows-amd64.exe

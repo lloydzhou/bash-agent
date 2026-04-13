@@ -5,9 +5,7 @@ SHELL := /bin/bash
 build: build-bash build-go build-rust
 
 build-bash:
-	mkdir -p dist
-	cp src/agent.sh dist/agent.sh
-	chmod +x dist/agent.sh
+	bash scripts/build.sh dist/agent.sh
 
 build-go:
 	mkdir -p go/.gocache go/.gomodcache dist
