@@ -104,7 +104,7 @@ functions = [
     ("parse_sse", "_AWK_JSON", "", ""),
     ("convert_messages_to_openai", "_AWK_JSON", "_AWK_CONVERT_MESSAGES", ""),
     ("convert_tools_to_openai", "_AWK_JSON", "_AWK_CONVERT_TOOLS", ""),
-    ("get_tool_defs_file", "", "", ""),
+    ("load_tool_defs", "", "", ""),
 ]
 
 for func_name, json_var, specific_var, extra_args in functions:
@@ -131,13 +131,10 @@ for func_name, json_var, specific_var, extra_args in functions:
             "    esac\n"
             "}\n"
         )
-    elif func_name == "get_tool_defs_file":
+    elif func_name == "load_tool_defs":
         replacement = (
-            "get_tool_defs_file() {\n"
-            "    local tmp\n"
-            "    tmp=$(mktemp \"${AGENT_TMPDIR}/tools.XXXXXX\")\n"
-            "    printf '%s\\n' \"$_TOOLS_JSON\" > \"$tmp\"\n"
-            "    printf '%s' \"$tmp\"\n"
+            "load_tool_defs() {\n"
+            "    TOOL_DEF_JSON=\"$_TOOLS_JSON\"\n"
             "}\n"
         )
     else:

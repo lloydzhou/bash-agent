@@ -41,7 +41,7 @@ TODO_FILE=""
 # Section 3: Internal Runtime State
 # ============================================================================
 CONV_FILE=""
-TOOL_DEF_FILE=""
+TOOL_DEF_JSON=""
 AGENT_TMPDIR=""
 API_URL=""
 AWK_DIR=""
@@ -645,7 +645,6 @@ find_awk_dir() {
     fi
     die "Cannot find awk/ directory. Set AWK_DIR or ensure awk/ exists alongside agent.sh"
 }
-
 get_project_key() {
     local cwd="${PWD:-$(pwd)}"
     cwd="$(cd "$cwd" && pwd -P)"
@@ -882,12 +881,12 @@ session_log_tool_results() {
 # Section 6: Tool Definitions (auto-generated JSON)
 # ============================================================================
 
-get_tool_defs_file() {
+load_tool_defs() {
     local tools_file script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     tools_file="$script_dir/tools.json"
     [[ -f "$tools_file" ]] || die "Cannot find tools.json: $tools_file"
-    printf '%s' "$tools_file"
+    TOOL_DEF_JSON=$(<"$tools_file")
 }
 
 # ============================================================================
@@ -1145,8 +1144,7 @@ call_api() {
 
 llm_call() {
     local messages="$1"
-    local tools
-    tools=$(<"$TOOL_DEF_FILE")
+    local tools="$TOOL_DEF_JSON"
 
     local body
     body=$(build_request "$messages" "$tools")
@@ -1594,6 +1592,7 @@ main() {
     AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent.XXXXXX")
     find_awk_dir
     conv_init
+    load_tool_defs
 
     if [[ "$COMMAND" == "compact" ]]; then
         if compact_context_window "manual" true; then
@@ -1613,18 +1612,14 @@ main() {
     if [[ "$COMMAND" == "compact" ]]; then
         :
     elif [[ "$INTERACTIVE" == true ]]; then
-        TOOL_DEF_FILE=$(get_tool_defs_file)
         interactive_mode
     elif [[ -n "$PROMPT" ]]; then
-        TOOL_DEF_FILE=$(get_tool_defs_file)
         agent_loop "$PROMPT"
     elif [[ ! -t 0 ]]; then
-        TOOL_DEF_FILE=$(get_tool_defs_file)
         local input
         input=$(cat)
         agent_loop "$input"
     else
-        TOOL_DEF_FILE=$(get_tool_defs_file)
         INTERACTIVE=true
         interactive_mode
     fi
