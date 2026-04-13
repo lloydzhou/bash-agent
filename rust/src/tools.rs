@@ -251,7 +251,9 @@ impl Runner {
 static RE_ANSI: Lazy<Regex> = Lazy::new(|| Regex::new(r"\x1b\[[0-9;]*[[:alpha:]]").expect("regex"));
 
 pub fn strip_ansi(s: &str) -> String {
-    RE_ANSI.replace_all(s, "").to_string()
+    let no_ansi = RE_ANSI.replace_all(s, "").to_string();
+    // Strip carriage returns so \r\n becomes \n (avoids cursor-home artifacts)
+    no_ansi.replace('\r', "")
 }
 
 pub fn format_tool_result(s: &str, max: usize) -> String {

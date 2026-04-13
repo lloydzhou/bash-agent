@@ -409,7 +409,13 @@ impl Runtime {
                     "content": output,
                 }))?;
             } else if !output.is_empty() {
-                println!("{output}");
+                // Avoid double newline: print content as-is, ensure exactly one trailing newline
+                if output.ends_with('\n') {
+                    print!("{output}");
+                } else {
+                    println!("{output}");
+                }
+                let _ = std::io::stdout().flush();
             }
         }
         Ok(results)
