@@ -10,10 +10,6 @@ on:
 jobs:
   bash-agent:
     runs-on: ubuntu-latest
-    env:
-      LANG: C.UTF-8
-      LC_ALL: C.UTF-8
-      PYTHONUTF8: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,12 +17,24 @@ jobs:
       - name: Install test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep
+          sudo apt-get install -y ripgrep gawk locales
+          sudo locale-gen en_US.UTF-8
+          mkdir -p .ci-bin
+          cat > .ci-bin/awk <<'EOF'
+          #!/usr/bin/env bash
+          exec gawk "$@"
+          EOF
+          chmod +x .ci-bin/awk
+          echo "$PWD/.ci-bin" >> "$GITHUB_PATH"
 
       - name: Build bash artifact
         run: make build-bash
 
       - name: Test dist/agent.sh
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+          PYTHONUTF8: "1"
         run: AGENT=./dist/agent.sh bash tests/test.sh
 
       - name: Upload agent.sh
@@ -57,10 +65,6 @@ jobs:
             goarch: arm64
             suffix: darwin-arm64
             ext: ""
-          - goos: windows
-            goarch: amd64
-            suffix: windows-amd64
-            ext: ".exe"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -96,10 +100,10 @@ jobs:
             suffix: linux-amd64
             bin: rustagent
             ext: ""
-          - target: x86_64-pc-windows-gnu
-            suffix: windows-amd64
-            bin: rustagent.exe
-            ext: ".exe"
+          - target: aarch64-unknown-linux-gnu
+            suffix: linux-arm64
+            bin: rustagent
+            ext: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -113,15 +117,18 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: make test-rust
 
-      - name: Install MinGW (windows target)
-        if: matrix.target == 'x86_64-pc-windows-gnu'
+      - name: Install cross linker (linux arm64 target)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build rustagent
         run: |
           mkdir -p dist
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
           cd rust && cargo build --release --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
@@ -156,6 +163,5 @@ jobs:
             dist/goagent-linux-arm64
             dist/goagent-darwin-amd64
             dist/goagent-darwin-arm64
-            dist/goagent-windows-amd64.exe
             dist/rustagent-linux-amd64
-            dist/rustagent-windows-amd64.exe
+            dist/rustagent-linux-arm64
