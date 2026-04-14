@@ -132,7 +132,12 @@ func (r Runner) Write(path, content string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	// Preserve existing file permissions, default to 0o644 for new files
+	perm := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		perm = info.Mode().Perm()
+	}
+	if err := os.WriteFile(path, []byte(content), perm); err != nil {
 		return "", err
 	}
 	info, err := os.Stat(path)
@@ -168,7 +173,13 @@ func (r Runner) Edit(path, oldString, newString string) (string, error) {
 	if updated == "" {
 		return "", errors.New("Error: edit produced empty result, reverted")
 	}
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+	// Preserve original file permissions
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("Error: cannot stat file: %s", path)
+	}
+	perm := info.Mode().Perm()
+	if err := os.WriteFile(path, []byte(updated), perm); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("OK: edited %s", path), nil

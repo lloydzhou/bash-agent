@@ -919,23 +919,22 @@ tool_edit() {
         "$(json_escape "$new_string")")
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
     meta=$(mktemp "${AGENT_TMPDIR}/edit.meta.XXXXXX")
+    local edit_err=""
     if ! run_edit_file_awk "$input" "$FILE_WRITE_MAX_BYTES" "$meta" > "$tmp"; then
-        rm -f "$tmp"
-        rm -f "$meta"
-        return 1
+        edit_err="Error: edit_file awk failed"
     fi
-    path=$(<"$meta")
-    rm -f "$meta"
-    [[ -n "$path" ]] || { rm -f "$tmp"; echo "Error: no path provided"; return 1; }
-
-    if (( $(wc -c < "$tmp") > 0 )); then
-        mv "$tmp" "$path"
+    if [[ -z "$edit_err" ]]; then
+        path=$(<"$meta")
+        [[ -n "$path" ]] || edit_err="Error: no path provided"
+    fi
+    if [[ -z "$edit_err" ]] && (( $(wc -c < "$tmp") > 0 )); then
+        cat "$tmp" > "$path"
         echo "OK: edited $path"
-    else
-        rm -f "$tmp"
-        echo "Error: edit produced empty result, reverted"
-        return 1
+    elif [[ -z "$edit_err" ]]; then
+        edit_err="Error: edit produced empty result, reverted"
     fi
+    rm -f "$tmp" "$meta"
+    [[ -z "$edit_err" ]] || { echo "$edit_err"; return 1; }
 }
 
 tool_bash() {
