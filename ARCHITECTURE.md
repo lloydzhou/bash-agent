@@ -15,6 +15,10 @@
 
 - `bash` 负责流程、文件、进程、会话、请求调度
 - `awk` 负责 JSON/SSE 解析、字符串变换、文本抽取
+- 三个 runtime 都保持同样的交互分层：
+  - stream 层负责状态机、事件消费、tool 执行
+  - display 层负责终端输出
+  - history 统一写入 `~/.bash-agent/history`
 
 ## 核心原则
 
@@ -61,6 +65,7 @@ src/awk/*
 - tool 分发与文件/进程控制
 - API 请求
 - main loop
+- interactive history 读写
 
 ### `src/agent.sh` 当前停点
 
@@ -81,6 +86,21 @@ src/awk/*
 - 只在拆分能形成稳定职责边界时才抽 helper
 - 不为“函数更短”而拆
 - 不把流程状态通过一堆薄壳函数来回传递
+
+### `goagent` / `rustagent` 当前停点
+
+Go 和 Rust 版本当前也保持和 bash 一致的两层结构：
+
+- `agentLoopStream()`
+  - 负责读取模型流、消费事件、执行 tool、维护会话状态
+- `displayEvent()`
+  - 负责把事件渲染到终端，或输出成 `stream-json`
+
+这样做的目的不是复制同样的代码行数，而是让三端的职责边界一致：
+
+- 交互状态只在 display 层处理
+- 原始事件和会话状态只在 stream 层处理
+- interactive history 统一使用 `~/.bash-agent/history`
 
 ### `awk` 负责什么
 

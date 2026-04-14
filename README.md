@@ -4,10 +4,10 @@
 
 一个极简 AI coding agent runtime。
 
-仓库中同时包含一个正在对齐行为的 Go 版本：
+仓库中同时包含两个正在对齐行为的原生版本：
 
 - `bash-agent`：当前稳定主线，`bash + awk`
-- `goagent`：Go port，内部使用 struct/channel，但保持相同的 agent loop、tool/event/session 语义
+- `goagent`：Go port，保持相同的 agent loop、tool/event/session 语义
 - `rustagent`：Rust port，保持相同语义，使用 Rust 原生 JSON/SSE/dispatch
 
 它不是一个完整平台，而是一个尽量小、边界清晰、可以真正执行工作的 agent core。目标是：
@@ -41,6 +41,8 @@
 - session/compact 流程
 
 改成 Go 原生实现。
+
+`rustagent` 也保留同样的行为模型，并把交互、事件流、tool dispatch 改成 Rust 原生实现。
 
 重点不是“文件越少越好”，而是：
 
@@ -144,7 +146,7 @@ Rust 版 `-i` 模式支持：
 history 文件保存在：
 
 ```text
-~/.bash-agent/rustagent.history
+~/.bash-agent/history
 ```
 
 也支持第三方兼容端点：
@@ -179,7 +181,7 @@ Go 版 `-i` 模式支持：
 history 文件保存在：
 
 ```text
-~/.bash-agent/goagent.history
+~/.bash-agent/history
 ```
 
 ### `stream-json`

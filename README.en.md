@@ -2,10 +2,10 @@
 
 A minimal AI coding agent runtime.
 
-This repository contains two aligned implementations:
+This repository contains three aligned implementations:
 
 - `bash-agent`: the current stable `bash + awk` runtime
-- `goagent`: a Go port that keeps the same agent loop / tool / session semantics while using native Go structs and channels internally
+- `goagent`: a Go port that keeps the same agent loop / tool / session semantics
 - `rustagent`: a Rust port with the same behavior model using native Rust JSON/SSE/dispatch
 
 It is designed to stay small at runtime while still exposing the core pieces an agent needs:
@@ -41,6 +41,16 @@ The `goagent` line keeps the same behavior model, but rewrites:
 - session/compact flow
 
 in native Go.
+
+The `rustagent` line keeps the same behavior model, but rewrites:
+
+- interactive input/output
+- JSON/SSE parsing
+- internal event flow
+- tool dispatch
+- session/compact flow
+
+in native Rust.
 
 The goal is not “few files at any cost”. The goal is:
 
@@ -145,7 +155,7 @@ Rust interactive mode supports:
 History is stored in:
 
 ```text
-~/.bash-agent/rustagent.history
+~/.bash-agent/history
 ```
 
 Third-party compatible endpoints are supported through `--base-url` or environment variables:
@@ -200,7 +210,7 @@ The Go interactive mode supports:
 History is stored in:
 
 ```text
-~/.bash-agent/goagent.history
+~/.bash-agent/history
 ```
 
 ## CLI
