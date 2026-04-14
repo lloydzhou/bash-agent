@@ -231,17 +231,25 @@ func findInstructionFileInDir(dir string) string {
 }
 
 func extractSkillSummary(content string) string {
+	// Simply grep the "description:" line - it's the fastest and most reliable
 	lines := strings.Split(content, "\n")
-	heading := ""
 	for _, line := range lines {
-		if heading == "" && strings.HasPrefix(line, "# ") {
-			heading = strings.TrimSpace(strings.TrimPrefix(line, "# "))
-			continue
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "description:") {
+			desc := strings.TrimPrefix(trimmed, "description:")
+			desc = strings.TrimSpace(desc)
+			// Remove quotes if present
+			if len(desc) >= 2 {
+				if strings.HasPrefix(desc, "\"") {
+					desc = strings.TrimPrefix(desc, "\"")
+					desc = strings.TrimSuffix(desc, "\"")
+				} else if strings.HasPrefix(desc, "'") {
+					desc = strings.TrimPrefix(desc, "'")
+					desc = strings.TrimSuffix(desc, "'")
+				}
+			}
+			return desc
 		}
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		return strings.TrimSpace(line)
 	}
-	return heading
+	return ""
 }

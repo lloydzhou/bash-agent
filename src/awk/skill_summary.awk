@@ -1,29 +1,10 @@
 # skill_summary.awk — Extract a short summary from SKILL.md
+# Simply grep the "description:" line - it's the fastest and most reliable
 
-BEGIN {
-    heading = ""
-    summary = ""
-}
-
-{
-    line = $0
-
-    if (heading == "" && line ~ /^#[[:space:]]+/) {
-        sub(/^#[[:space:]]+/, "", line)
-        heading = line
-        next
-    }
-
-    if (line ~ /^[[:space:]]*$/) next
-
-    gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-    if (line != "") {
-        summary = line
-        exit
-    }
-}
-
-END {
-    if (summary != "") print summary
-    else if (heading != "") print heading
+/^description:/ {
+    sub(/^description:[[:space:]]*/, "")
+    gsub(/^[[:space:]]*"[[:space:]]*|[[:space:]]*"[[:space:]]*$/, "")
+    gsub(/^[[:space:]]*'"'"'[[:space:]]*|[[:space:]]*'"'"'[[:space:]]*$/, "")
+    print $0
+    exit
 }
