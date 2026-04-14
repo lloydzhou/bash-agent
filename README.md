@@ -70,6 +70,7 @@
   - `Glob`
   - `Grep`
   - `TodoWrite`
+  - `Skill`
 - Prompt 分层：
   - instruction files
   - skill index
@@ -268,6 +269,12 @@ history 文件保存在：
 - 面向复杂多步任务
 - 状态保存在 `*.todo.md`
 
+### `Skill`
+
+- 先从 prompt 里的 `skill-index` 选择 skill 名
+- 再用 `Skill(name)` 读取对应 `SKILL.md`
+- 用户要求使用某个 skill 时，优先用它而不是直接 `Read` skill 文件
+
 ## Session 与状态文件
 
 状态按项目保存到：
@@ -325,6 +332,10 @@ skills 只从这里加载：
    - 从 `.claude/skills/*/SKILL.md` 提取轻量摘要
 2. `selected-skills`
    - 只有显式传 `--skill NAME` 时才注入完整 `SKILL.md`
+3. `Skill` tool
+   - 运行时先参考 `skill-index`
+   - 再按 skill 名读取完整 `SKILL.md`
+   - 不修改后续轮次的 system prompt
 
 完整 skill 加载时，可使用 `${BASH_AGENT_SKILL_DIR}` 引用同目录脚本或模板。
 

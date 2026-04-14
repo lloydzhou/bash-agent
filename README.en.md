@@ -79,6 +79,7 @@ The goal is not “few files at any cost”. The goal is:
   - `Glob`
   - `Grep`
   - `TodoWrite`
+  - `Skill`
 - Prompt layers:
   - instruction files
   - skill index
@@ -277,6 +278,12 @@ History is stored in:
 - intended for complex multi-step tasks
 - stores checklist state in `*.todo.md`
 
+### `Skill`
+
+- first select a skill name from the prompt's `skill-index`
+- then use `Skill(name)` to read the matching `SKILL.md`
+- when the user asks to use a skill, prefer this over reading skill files directly with `Read`
+
 ## Sessions and State
 
 State is stored per project under:
@@ -331,6 +338,10 @@ The runtime uses two layers:
    - lightweight summaries from `.claude/skills/*/SKILL.md`
 2. `selected-skills`
    - full `SKILL.md` content only when `--skill NAME` is specified
+3. `Skill` tool
+   - consults `skill-index` first at runtime
+   - then reads the full `SKILL.md` by skill name
+   - does not change future-turn system prompt state
 
 During full skill loading, `${BASH_AGENT_SKILL_DIR}` is available for referencing sibling scripts or templates.
 

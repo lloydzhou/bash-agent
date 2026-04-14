@@ -200,6 +200,10 @@ skills 当前只读取项目目录下：
   - 只抽取简短摘要
 - `selected-skills`
   - 只有显式 `--skill NAME` 时，才加载完整 `SKILL.md`
+- `Skill` tool
+  - 运行时先参考 `skill-index`
+  - 再按 skill 名读取完整 `SKILL.md`
+  - 只影响当前轮，不写回后续 system prompt
 
 `SKILL.md` 支持：
 
@@ -229,6 +233,7 @@ skills 当前只读取项目目录下：
 - `Glob`
 - `Grep`
 - `TodoWrite`
+- `Skill`
 
 设计原则：
 
