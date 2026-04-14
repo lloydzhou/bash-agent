@@ -222,7 +222,7 @@ impl Runtime {
                             if self.is_stream_json_mode() {
                                 self.emit_stream(json!({"type":"text","content":content}))?;
                             } else {
-                                print!("{content}");
+                                print!("{}", normalize_display_text(&content, self.cfg.interactive));
                                 io::stdout().flush()?;
                                 if let Some(c) = content.chars().last() {
                                     human_last_char = c.to_string();
@@ -410,11 +410,12 @@ impl Runtime {
                     "content": output,
                 }))?;
             } else if !output.is_empty() {
+                let display_output = normalize_display_text(&output, self.cfg.interactive);
                 // Avoid double newline: print content as-is, ensure exactly one trailing newline
-                if output.ends_with('\n') {
-                    print!("{output}");
+                if display_output.ends_with('\n') {
+                    print!("{display_output}");
                 } else {
-                    println!("{output}");
+                    println!("{display_output}");
                 }
                 let _ = std::io::stdout().flush();
             }
@@ -597,11 +598,21 @@ impl Runtime {
     }
 
     fn info(&self, msg: &str) {
-        eprintln!("\x1b[36m{msg}\x1b[0m");
+        if self.cfg.interactive {
+            eprint!("\x1b[36m{msg}\x1b[0m\r\n");
+            let _ = io::stderr().flush();
+        } else {
+            eprintln!("\x1b[36m{msg}\x1b[0m");
+        }
     }
 
     fn error(&self, msg: &str) {
-        eprintln!("\x1b[31mError: {msg}\x1b[0m");
+        if self.cfg.interactive {
+            eprint!("\x1b[31mError: {msg}\x1b[0m\r\n");
+            let _ = io::stderr().flush();
+        } else {
+            eprintln!("\x1b[31mError: {msg}\x1b[0m");
+        }
     }
 
     fn debug(&self, msg: &str) {
@@ -613,7 +624,17 @@ impl Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
+        self.stop_esc_interrupt_listener();
         let _ = fs::remove_dir_all(&self.tmp_dir);
+    }
+}
+
+fn normalize_display_text(s: &str, interactive: bool) -> String {
+    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+    if interactive {
+        normalized.replace('\n', "\r\n")
+    } else {
+        normalized
     }
 }
 

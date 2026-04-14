@@ -257,12 +257,41 @@ pub fn format_tool_result(s: &str, max: usize) -> String {
     let marker_len = marker.len();
     let available = max.saturating_sub(marker_len);
     if available < 2 {
-        return s[..max.min(s.len())].to_string();
+        return utf8_prefix_by_bytes(s, max).to_string();
     }
     let head = available / 2;
     let tail = available - head;
-    let left = &s[..head.min(s.len())];
-    let right_start = s.len().saturating_sub(tail);
-    let right = &s[right_start..];
+    let left = utf8_prefix_by_bytes(s, head);
+    let right = utf8_suffix_by_bytes(s, tail);
     format!("{left}{marker}{right}")
+}
+
+fn utf8_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {
+    if max_bytes >= s.len() {
+        return s;
+    }
+    let mut end = 0;
+    for (i, ch) in s.char_indices() {
+        let next = i + ch.len_utf8();
+        if next > max_bytes {
+            break;
+        }
+        end = next;
+    }
+    &s[..end]
+}
+
+fn utf8_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
+    if max_bytes >= s.len() {
+        return s;
+    }
+    let len = s.len();
+    let mut start = len;
+    for (i, _) in s.char_indices() {
+        if len.saturating_sub(i) <= max_bytes {
+            start = i;
+            break;
+        }
+    }
+    &s[start..]
 }

@@ -53,28 +53,23 @@ type runtime struct {
 var errInterrupted = errors.New("interrupted")
 
 func (rt *runtime) writeHuman(s string) (int, error) {
-	if rt.useCRLF() {
-		return fmt.Fprint(rt.stdout, strings.ReplaceAll(s, "\n", "\r\n"))
+	if rt.cfg.Interactive {
+		s = strings.ReplaceAll(s, "\n", "\r\n")
 	}
 	return fmt.Fprint(rt.stdout, s)
 }
 
 func (rt *runtime) nl() string {
-	if rt.useCRLF() {
+	if rt.cfg.Interactive {
 		return "\r\n"
 	}
 	return "\n"
 }
 
-func (rt *runtime) useCRLF() bool {
-	if !rt.cfg.Interactive {
-		return false
-	}
-	f, ok := rt.stdout.(*os.File)
-	if !ok {
-		return false
-	}
-	return term.IsTerminal(int(f.Fd()))
+func normalizeDisplayText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return s
 }
 
 var newHTTPClient = func() *http.Client {
@@ -240,7 +235,6 @@ func (rt *runtime) interactiveMode() error {
 		_ = f.Close()
 	}
 	for {
-		_, _ = fmt.Fprint(rt.stdout, "\r")
 		input, err := line.Prompt("> ")
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -302,13 +296,13 @@ func (rt *runtime) agentLoop(userInput string) error {
 				rt.debug("<%s>", evt.Render())
 			}
 			switch e := evt.(type) {
-			case protocol.TextEvent:
-				if rt.isStreamJSONMode() {
-					return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
-				}
-				if _, err := rt.writeHuman(e.Content); err != nil {
-					return err
-				}
+				case protocol.TextEvent:
+					if rt.isStreamJSONMode() {
+						return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
+					}
+					if _, err := rt.writeHuman(normalizeDisplayText(e.Content)); err != nil {
+						return err
+					}
 				if e.Content != "" {
 					humanLastChar = e.Content[len(e.Content)-1:]
 				}
@@ -511,15 +505,16 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 			}); err != nil {
 				return nil, err
 			}
-		} else if output != "" {
-			suffix := "\n"
-			if strings.HasSuffix(output, "\n") {
-				suffix = ""
+			} else if output != "" {
+				displayOutput := normalizeDisplayText(output)
+				suffix := "\n"
+				if strings.HasSuffix(displayOutput, "\n") {
+					suffix = ""
+				}
+				if _, err := rt.writeHuman(displayOutput + suffix); err != nil {
+					return nil, err
+				}
 			}
-			if _, err := rt.writeHuman(output + suffix); err != nil {
-				return nil, err
-			}
-		}
 	}
 	return results, nil
 }
@@ -786,22 +781,22 @@ func (rt *runtime) emitStream(v any) error {
 }
 
 func (rt *runtime) info(format string, args ...any) {
-	_, _ = fmt.Fprintf(rt.stderr, "\r\033[36m%s\033[0m\r\n", fmt.Sprintf(format, args...))
+	_, _ = fmt.Fprintf(rt.stderr, "\033[36m%s\033[0m%s", fmt.Sprintf(format, args...), rt.nl())
 }
 
 func (rt *runtime) error(format string, args ...any) {
-	_, _ = fmt.Fprintf(rt.stderr, "\r\033[31mError: %s\033[0m\r\n", fmt.Sprintf(format, args...))
+	_, _ = fmt.Fprintf(rt.stderr, "\033[31mError: %s\033[0m%s", fmt.Sprintf(format, args...), rt.nl())
 }
 
 func (rt *runtime) verbose(format string, args ...any) {
 	if rt.cfg.Verbose {
-		_, _ = fmt.Fprintf(rt.stderr, "\r\033[90m[verbose] %s\033[0m\r\n", fmt.Sprintf(format, args...))
+		_, _ = fmt.Fprintf(rt.stderr, "\033[90m[verbose] %s\033[0m%s", fmt.Sprintf(format, args...), rt.nl())
 	}
 }
 
 func (rt *runtime) debug(format string, args ...any) {
 	if rt.cfg.Verbose {
-		_, _ = fmt.Fprintf(rt.stderr, "\r[debug] %s\r\n", fmt.Sprintf(format, args...))
+		_, _ = fmt.Fprintf(rt.stderr, "[debug] %s%s", fmt.Sprintf(format, args...), rt.nl())
 	}
 }
 

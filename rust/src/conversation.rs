@@ -151,8 +151,9 @@ pub fn build_tool_call_summary(
                 .cloned()
                 .unwrap_or_default()
                 .replace('\n', " ");
-            if label.len() > 80 {
-                label = format!("{}...", &label[..77]);
+            if label.chars().count() > 80 {
+                let truncated: String = label.chars().take(77).collect();
+                label = format!("{truncated}...");
             }
         }
         "TodoWrite" => label = fields.get("summary").cloned().unwrap_or_default(),
