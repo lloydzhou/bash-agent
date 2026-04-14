@@ -13,7 +13,7 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -174,12 +174,21 @@ impl Runtime {
 
     fn interactive_mode(&mut self) -> Result<()> {
         self.info("bash-agent interactive mode (type 'exit' or Ctrl+D to quit)");
-        let history_path = self.home.join(".bash-agent/rustagent.history");
+        let history_path = self.home.join(".bash-agent/history");
         if let Some(parent) = history_path.parent() {
             fs::create_dir_all(parent)?;
         }
         let mut rl = DefaultEditor::new()?;
-        let _ = rl.load_history(&history_path);
+        if let Ok(file) = fs::File::open(&history_path) {
+            for line in BufReader::new(file).lines() {
+                let line = line?;
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                let _ = rl.add_history_entry(trimmed);
+            }
+        }
         loop {
             let line = match rl.readline("> ") {
                 Ok(s) => s.trim_end().to_string(),
@@ -194,7 +203,11 @@ impl Runtime {
                 break;
             }
             let _ = rl.add_history_entry(line.as_str());
-            let _ = rl.save_history(&history_path);
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&history_path)?;
+            writeln!(file, "{line}")?;
             if let Err(e) = self.agent_loop(line) {
                 self.error(&e.to_string());
             }

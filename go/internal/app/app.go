@@ -228,7 +228,7 @@ func (rt *runtime) interactiveMode() error {
 	line := liner.NewLiner()
 	defer line.Close()
 	line.SetCtrlCAborts(true)
-	historyPath := filepath.Join(rt.home, ".bash-agent", "goagent.history")
+	historyPath := filepath.Join(rt.home, ".bash-agent", "history")
 	_ = os.MkdirAll(filepath.Dir(historyPath), 0o755)
 	if f, err := os.Open(historyPath); err == nil {
 		_, _ = line.ReadHistory(f)

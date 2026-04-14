@@ -1561,14 +1561,25 @@ setup_api_url() {
 }
 
 interactive_mode() {
+    local history_file="${HOME:-$PWD}/.bash-agent/history"
+
+    mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
+    touch "$history_file" 2>/dev/null || true
+
+    history -r "$history_file" 2>/dev/null || true
+    trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
+
     log_info "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)"
     while true; do
         stty echo 2>/dev/null || true
         IFS= read -e -r -p $'\033[32m> \033[0m' user_input || break
         [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
         [[ -z "$user_input" ]] && continue
+        history -s -- "$user_input" 2>/dev/null || true
+        history -a "$history_file" 2>/dev/null || true
         agent_loop "$user_input"
     done
+    history -w "$history_file" 2>/dev/null || true
     log_info "Goodbye!"
 }
 
