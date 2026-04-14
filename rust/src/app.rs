@@ -222,9 +222,12 @@ impl Runtime {
                             if self.is_stream_json_mode() {
                                 self.emit_stream(json!({"type":"text","content":content}))?;
                             } else {
-                                print!("{}", normalize_display_text(&content, self.cfg.interactive));
-                                io::stdout().flush()?;
-                                if let Some(c) = content.chars().last() {
+                                self.write_human(&content)?;
+                                let display_content =
+                                    normalize_display_text(&content, self.cfg.interactive);
+                                if display_content.ends_with('\n') {
+                                    human_last_char = "\n".to_string();
+                                } else if let Some(c) = display_content.chars().last() {
                                     human_last_char = c.to_string();
                                 }
                             }
@@ -232,8 +235,10 @@ impl Runtime {
                         }
                         Event::ToolCall(call) => {
                             if !self.is_stream_json_mode() && human_last_char != "\n" {
-                                println!();
+                                self.write_human("\n")?;
                                 human_last_char = "\n".to_string();
+                            } else if !self.is_stream_json_mode() {
+                                self.write_carriage_return()?;
                             }
                             if self.is_stream_json_mode() {
                                 self.emit_stream(json!({
@@ -243,10 +248,11 @@ impl Runtime {
                                     "input": call.input_json,
                                 }))?;
                             } else {
-                                println!(
+                                self.write_human(&format!(
                                     "\x1b[33m[tool] {}\x1b[0m",
                                     build_tool_call_summary(&call.name, &call.fields)
-                                );
+                                ))?;
+                                self.write_human("\n")?;
                             }
                             calls.push(call);
                         }
@@ -269,7 +275,7 @@ impl Runtime {
                             if self.is_stream_json_mode() {
                                 self.emit_stream(json!({"type":"stop","reason":reason}))?;
                             } else if human_last_char != "\n" {
-                                println!();
+                                self.write_human("\n")?;
                                 human_last_char = "\n".to_string();
                             }
                         }
@@ -410,14 +416,11 @@ impl Runtime {
                     "content": output,
                 }))?;
             } else if !output.is_empty() {
-                let display_output = normalize_display_text(&output, self.cfg.interactive);
-                // Avoid double newline: print content as-is, ensure exactly one trailing newline
-                if display_output.ends_with('\n') {
-                    print!("{display_output}");
+                if output.ends_with('\n') {
+                    self.write_human(&output)?;
                 } else {
-                    println!("{display_output}");
+                    self.write_human(&(output + "\n"))?;
                 }
-                let _ = std::io::stdout().flush();
             }
         }
         Ok(results)
@@ -594,6 +597,20 @@ impl Runtime {
 
     fn emit_stream(&self, value: Value) -> Result<()> {
         println!("{}", serde_json::to_string(&value)?);
+        Ok(())
+    }
+
+    fn write_human(&self, s: &str) -> Result<()> {
+        print!("{}", normalize_display_text(s, self.cfg.interactive));
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn write_carriage_return(&self) -> Result<()> {
+        if self.cfg.interactive {
+            print!("\r");
+            io::stdout().flush()?;
+        }
         Ok(())
     }
 
