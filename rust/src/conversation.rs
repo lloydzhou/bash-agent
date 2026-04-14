@@ -157,6 +157,7 @@ pub fn build_tool_call_summary(
             }
         }
         "TodoWrite" => label = fields.get("summary").cloned().unwrap_or_default(),
+        "Skill" => label = fields.get("name").cloned().unwrap_or_default(),
         _ => {}
     }
     if label.is_empty() {

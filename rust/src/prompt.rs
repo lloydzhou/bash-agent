@@ -221,6 +221,10 @@ fn find_skill_file(bases: &[PathBuf], skill: &str) -> Option<PathBuf> {
     None
 }
 
+pub fn resolve_skill_file(cwd: &Path, home: &Path, skill: &str) -> Option<PathBuf> {
+    find_skill_file(&find_skill_base_dirs(cwd, home), skill)
+}
+
 fn find_instruction_file_in_dir(dir: &Path) -> Option<PathBuf> {
     let candidates = [
         dir.join("AGENTS.md"),

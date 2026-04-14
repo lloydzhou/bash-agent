@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lloydzhou/bash-agent/internal/config"
+	"github.com/lloydzhou/bash-agent/internal/prompt"
 	"github.com/lloydzhou/bash-agent/internal/safety"
 )
 
@@ -24,6 +25,8 @@ type Result struct {
 type Runner struct {
 	Config   config.Config
 	TodoFile string
+	Cwd      string
+	Home     string
 }
 
 func (r Runner) Dispatch(name string, input json.RawMessage) Result {
@@ -99,6 +102,15 @@ func (r Runner) Dispatch(name string, input json.RawMessage) Result {
 			return Result{Err: err}
 		}
 		out, err := r.TodoWrite(args.Todos)
+		return Result{Output: out, Err: err}
+	case "Skill":
+		var args struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return Result{Err: err}
+		}
+		out, err := r.ToolSkill(args.Name)
 		return Result{Output: out, Err: err}
 	default:
 		return Result{Err: fmt.Errorf("unknown tool: %s", name)}
@@ -287,6 +299,25 @@ func (r Runner) TodoWrite(todos []struct {
 	}
 	return checklist, nil
 }
+
+func (r Runner) ToolSkill(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("Error: no skill name provided")
+	}
+	skillFile := prompt.ResolveSkillFile(r.Cwd, r.Home, name)
+	if skillFile == "" {
+		return "", fmt.Errorf("Error: skill not found: %s", name)
+	}
+	data, err := os.ReadFile(skillFile)
+	if err != nil {
+		return "", err
+	}
+	baseDir := filepath.Dir(skillFile)
+	content := strings.ReplaceAll(string(data), "${BASH_AGENT_SKILL_DIR}", baseDir)
+	return fmt.Sprintf("Skill: %s\nBase directory: %s\n\n%s", name, baseDir, content), nil
+}
+
 func FormatToolResult(s string, max int) string {
 	if len([]byte(s)) <= max {
 		return s

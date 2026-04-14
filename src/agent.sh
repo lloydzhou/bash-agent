@@ -159,6 +159,10 @@ tool_metadata() {
             meta_keys="checklist summary"
             meta_summary_key="summary"
             ;;
+        Skill)
+            meta_keys="name"
+            meta_summary_key="name"
+            ;;
     esac
     printf -v "$__keys_outvar" '%s' "$meta_keys"
     printf -v "$__summary_outvar" '%s' "$meta_summary_key"
@@ -1079,6 +1083,19 @@ tool_todo() {
     printf '%s' "$checklist"
 }
 
+tool_skill() {
+    local skill_name="$1"
+    skill_name="${skill_name#"${skill_name%%[![:space:]]*}"}"
+    skill_name="${skill_name%"${skill_name##*[![:space:]]}"}"
+    [[ -n "$skill_name" ]] || { echo "Error: no skill name provided"; return 1; }
+    local skill_file="" base_dir="" content=""
+    skill_file=$(resolve_skill_file "$skill_name") || { echo "Error: skill not found: $skill_name"; return 1; }
+    base_dir=$(dirname "$skill_file")
+    content=$(<"$skill_file") || return 1
+    content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$base_dir}"
+    printf 'Skill: %s\nBase directory: %s\n\n%s' "$skill_name" "$base_dir" "$content"
+}
+
 dispatch_tool() {
     local name="$1" arg1="${2:-}" arg2="${3:-}" arg3="${4:-}"
     case "$name" in
@@ -1089,6 +1106,7 @@ dispatch_tool() {
         Glob)      tool_glob "$arg1" "$arg2" ;;
         Grep)      tool_grep "$arg1" "$arg2" "$arg3" ;;
         TodoWrite) tool_todo "$arg1" ;;
+        Skill)     tool_skill "$arg1" ;;
         *)
             echo "Error: unknown tool: $name"
             return 1

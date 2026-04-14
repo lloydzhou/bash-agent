@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::prompt;
 use crate::safety;
 use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
@@ -10,6 +11,8 @@ use std::process::{Command, Stdio};
 pub struct Runner {
     pub config: Config,
     pub todo_file: std::path::PathBuf,
+    pub cwd: std::path::PathBuf,
+    pub home: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +103,14 @@ impl Runner {
                 }
                 let args: Args = serde_json::from_value(input.clone())?;
                 self.todo_write(args.todos)
+            }
+            "Skill" => {
+                #[derive(Deserialize)]
+                struct Args {
+                    name: String,
+                }
+                let args: Args = serde_json::from_value(input.clone())?;
+                self.tool_skill(&args.name)
             }
             _ => bail!("unknown tool: {name}"),
         }
@@ -243,6 +254,23 @@ impl Runner {
         let checklist = lines.join("\n");
         fs::write(&self.todo_file, format!("{checklist}\n"))?;
         Ok(checklist)
+    }
+
+    fn tool_skill(&self, name: &str) -> Result<String> {
+        let name = name.trim();
+        if name.is_empty() {
+            bail!("Error: no skill name provided");
+        }
+        let Some(skill_file) = prompt::resolve_skill_file(&self.cwd, &self.home, name) else {
+            bail!("Error: skill not found: {name}");
+        };
+        let base_dir = skill_file.parent().unwrap_or(Path::new(""));
+        let content = fs::read_to_string(&skill_file)?
+            .replace("${BASH_AGENT_SKILL_DIR}", &base_dir.display().to_string());
+        Ok(format!(
+            "Skill: {name}\nBase directory: {}\n\n{content}",
+            base_dir.display()
+        ))
     }
 }
 

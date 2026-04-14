@@ -215,6 +215,10 @@ func findSkillFile(bases []string, skill string) string {
 	return ""
 }
 
+func ResolveSkillFile(cwd, home, skill string) string {
+	return findSkillFile(findSkillBaseDirs(cwd, home), skill)
+}
+
 func findInstructionFileInDir(dir string) string {
 	candidates := []string{
 		filepath.Join(dir, "AGENTS.md"),

@@ -38,3 +38,26 @@ func TestDispatchTodoWrite(t *testing.T) {
 		t.Fatalf("unexpected checklist: %q", result.Output)
 	}
 }
+
+func TestDispatchToolSkill(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".claude", "skills", "test-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("description: test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := Runner{Config: config.Default(), Cwd: dir, Home: filepath.Join(dir, "home")}
+	input := json.RawMessage(`{"name":"test-skill"}`)
+	result := r.Dispatch("Skill", input)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	if !strings.Contains(result.Output, "Skill: test-skill") {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "description: test") {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+}

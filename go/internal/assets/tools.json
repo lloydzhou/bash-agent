@@ -134,5 +134,19 @@
       },
       "required": ["todos"]
     }
+  },
+  {
+    "name": "Skill",
+    "description": "First look in the skill-index section of the prompt to find the right skill name. Then use Skill(name) to read it. Use this instead of reading skill files directly with Read when the user asks to use a skill.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The skill name selected from the skill-index section of the prompt"
+        }
+      },
+      "required": ["name"]
+    }
   }
 ]

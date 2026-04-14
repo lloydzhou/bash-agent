@@ -540,6 +540,8 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 	runner := tools.Runner{
 		Config:   rt.cfg,
 		TodoFile: rt.paths.Todo,
+		Cwd:      rt.cwd,
+		Home:     rt.home,
 	}
 	results := make([]conversation.ToolResult, 0, len(calls))
 	for _, call := range calls {

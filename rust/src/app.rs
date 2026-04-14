@@ -245,11 +245,17 @@ impl Runtime {
                     }
                     match evt {
                         Event::Text(TextEvent { content }) => {
-                            self.display_event(&mut display_last_char, DisplayEvent::Text(content.clone()))?;
+                            self.display_event(
+                                &mut display_last_char,
+                                DisplayEvent::Text(content.clone()),
+                            )?;
                             text.push_str(&content);
                         }
                         Event::ToolCall(call) => {
-                            self.display_event(&mut display_last_char, DisplayEvent::ToolCall(call.clone()))?;
+                            self.display_event(
+                                &mut display_last_char,
+                                DisplayEvent::ToolCall(call.clone()),
+                            )?;
                             calls.push(call);
                         }
                         Event::Usage(UsageEvent {
@@ -271,7 +277,10 @@ impl Runtime {
                             self.display_event(&mut display_last_char, DisplayEvent::Stop(reason))?;
                         }
                         Event::Error(ErrorEvent { message }) => {
-                            return self.display_event(&mut display_last_char, DisplayEvent::Error(message));
+                            return self.display_event(
+                                &mut display_last_char,
+                                DisplayEvent::Error(message),
+                            );
                         }
                     }
                     Ok(())
@@ -415,7 +424,8 @@ impl Runtime {
                         "content": result.content,
                     }))?;
                 } else if !result.content.is_empty() {
-                    let display_output = normalize_display_text(&result.content, self.cfg.interactive);
+                    let display_output =
+                        normalize_display_text(&result.content, self.cfg.interactive);
                     let last = display_output.chars().last();
                     if display_output.ends_with('\n') {
                         self.write_human(&display_output)?;
@@ -464,6 +474,8 @@ impl Runtime {
         let runner = tools::Runner {
             config: self.cfg.clone(),
             todo_file: self.paths.todo.clone(),
+            cwd: self.cwd.clone(),
+            home: self.home.clone(),
         };
         let mut results = Vec::new();
         for call in calls {
