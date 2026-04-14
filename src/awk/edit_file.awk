@@ -3,7 +3,7 @@ BEGIN {
         if ((getline json_input) < 0) json_input = ""
     }
 
-    RS = "\0"
+    RS = sprintf("%c", 1)
     ORS = ""
 
     path = extract_str(json_input, "path")
