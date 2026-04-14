@@ -74,7 +74,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
-        if b'Skill marker for tests' in body:
+        if b'Skill marker for tests' in body and b'ANSI_TOOL_RESULT_MARKER' not in body:
             if path.startswith('/v1/messages'):
                 if b'Skill path marker: ' in body and b'/helper.sh' in body:
                     for c in [
@@ -661,7 +661,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Running long bash command.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bash_long_1\",\"name\":\"Bash\",\"input\":{}}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'echo BASH-LONG-HEAD; yes middle | head -n 12000; echo BASH-LONG-TAIL'})}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({\"command\":\"echo BASH-LONG-HEAD; awk 'BEGIN { for (i = 0; i < 1000; i++) print \\\"middle-middle-middle-middle-middle\\\" }'; echo BASH-LONG-TAIL\"})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
@@ -1344,10 +1344,10 @@ test_agent_read_file_long_result() {
     target_file="/tmp/bash-agent-read-long.txt"
     {
         printf 'READ-LONG-HEAD\n'
-        yes middle | head -n 12000
+        awk 'BEGIN { for (i = 0; i < 1000; i++) print "middle" }'
         printf 'READ-LONG-TAIL\n'
     } > "$target_file"
-    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'LONG_READ_MARKER' 2>&1) || true
+    output=$(TOOL_RESULT_MAX_BYTES=1000 "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'LONG_READ_MARKER' 2>&1) || true
     if [[ "$output" == *"Long read complete."* ]] && \
        [[ "$output" == *"READ-LONG-HEAD"* ]] && \
        [[ "$output" == *"READ-LONG-TAIL"* ]] && \
@@ -1504,7 +1504,7 @@ test_agent_bash_allows_dev_null_redirection() {
 test_agent_bash_long_result() {
     info "Test 25b: Agent.sh bash long result formatting"
     local output
-    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'LONG_BASH_MARKER' 2>&1) || true
+    output=$(TOOL_RESULT_MAX_BYTES=1000 "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'LONG_BASH_MARKER' 2>&1) || true
     if [[ "$output" == *"Long bash complete."* ]] && \
        [[ "$output" == *"BASH-LONG-HEAD"* ]] && \
        [[ "$output" == *"BASH-LONG-TAIL"* ]] && \

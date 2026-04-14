@@ -232,9 +232,12 @@ fn find_instruction_file_in_dir(dir: &Path) -> Option<PathBuf> {
 }
 
 fn extract_skill_summary(content: &str) -> String {
-    // Simply grep the "description:" line - it's the fastest and most reliable
+    let mut fallback = String::new();
     for line in content.lines() {
         let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
         if trimmed.starts_with("description:") {
             let desc = trimmed.trim_start_matches("description:").trim();
             // Remove quotes if present
@@ -252,6 +255,13 @@ fn extract_skill_summary(content: &str) -> String {
             };
             return desc.to_string();
         }
+        if fallback.is_empty()
+            && !trimmed.starts_with('#')
+            && trimmed != "---"
+            && !trimmed.starts_with("```")
+        {
+            fallback = trimmed.to_string();
+        }
     }
-    String::new()
+    fallback
 }

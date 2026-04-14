@@ -296,21 +296,32 @@ func (rt *runtime) agentLoop(userInput string) error {
 				rt.debug("<%s>", evt.Render())
 			}
 			switch e := evt.(type) {
-				case protocol.TextEvent:
-					if rt.isStreamJSONMode() {
-						return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
+			case protocol.TextEvent:
+				if rt.isStreamJSONMode() {
+					return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
+				}
+				displayContent := normalizeDisplayText(e.Content)
+				if _, err := rt.writeHuman(displayContent); err != nil {
+					return err
+				}
+				if displayContent != "" {
+					if strings.HasSuffix(displayContent, "\n") {
+						humanLastChar = "\n"
+					} else {
+						humanLastChar = displayContent[len(displayContent)-1:]
 					}
-					if _, err := rt.writeHuman(normalizeDisplayText(e.Content)); err != nil {
-						return err
-					}
-				if e.Content != "" {
-					humanLastChar = e.Content[len(e.Content)-1:]
 				}
 				text += e.Content
 			case protocol.ToolCallEvent:
-				if !rt.isStreamJSONMode() && humanLastChar != "\n" {
-					if _, err := fmt.Fprint(rt.stdout, rt.nl()); err != nil {
-						return err
+				if !rt.isStreamJSONMode() {
+					if humanLastChar != "\n" {
+						if _, err := rt.writeHuman(rt.nl()); err != nil {
+							return err
+						}
+					} else {
+						if _, err := rt.writeHuman("\r"); err != nil {
+							return err
+						}
 					}
 					humanLastChar = "\n"
 				}
@@ -344,7 +355,7 @@ func (rt *runtime) agentLoop(userInput string) error {
 					return rt.emitStream(map[string]any{"type": "stop", "reason": e.Reason})
 				}
 				if humanLastChar != "\n" {
-					if _, err := fmt.Fprint(rt.stdout, rt.nl()); err != nil {
+					if _, err := rt.writeHuman(rt.nl()); err != nil {
 						return err
 					}
 					humanLastChar = "\n"

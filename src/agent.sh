@@ -13,7 +13,7 @@ MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
 TOOL_TIMEOUT_SECS=600
-TOOL_RESULT_MAX_BYTES=50000
+: "${TOOL_RESULT_MAX_BYTES:=50000}"
 FILE_WRITE_MAX_BYTES=1048576
 OUTPUT_FORMAT="human"
 VERBOSE=false
@@ -49,6 +49,7 @@ EXEC_TOOL_RESULTS=""
 INTERRUPT_REQUESTED=false
 ESC_LISTENER_PID=""
 ESC_LISTENER_FLAG=""
+DISPLAY_LAST_CHAR=$'\n'
 
 # ============================================================================
 # Section 4: Environment Defaults
@@ -217,6 +218,19 @@ parse_usage_fields() {
     printf -v "$__cachevar" '%s' "${cache_value:-0}"
 }
 
+clear_interrupt_state() {
+    INTERRUPT_REQUESTED=false
+    if [[ -n "${ESC_LISTENER_FLAG:-}" && -f "${ESC_LISTENER_FLAG:-}" ]]; then
+        : > "$ESC_LISTENER_FLAG"
+    fi
+}
+
+interrupt_requested() {
+    [[ "$INTERRUPT_REQUESTED" == true ]] && return 0
+    [[ -n "${ESC_LISTENER_FLAG:-}" && -s "${ESC_LISTENER_FLAG:-}" ]] && return 0
+    return 1
+}
+
 run_with_timeout() {
     local timeout_secs="$1"
     shift
@@ -359,8 +373,97 @@ session_append_line() {
     printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"
 }
 
-emit_stream_event() {
-    printf '%s\n' "$1"
+display_ensure_newline() {
+    if [[ "$DISPLAY_LAST_CHAR" != $'\n' ]]; then
+        printf '\n'
+        DISPLAY_LAST_CHAR=$'\n'
+    fi
+}
+
+display_human_text() {
+    local s="$1"
+    [[ -z "$s" ]] && return 0
+    printf '%s' "$s"
+    if [[ "$s" == *$'\n' ]]; then
+        DISPLAY_LAST_CHAR=$'\n'
+    else
+        DISPLAY_LAST_CHAR="${s: -1}"
+    fi
+}
+
+display_event() {
+    local line="$1"
+    local payload="" tc_name="" tc_id="" tc_input="" tc_kv=""
+    local msg="" id="" escaped="" result=""
+    local in_tok=0 out_tok=0 cache_tok=0
+    local stream_event="" human_text="" human_kind=""
+
+    case "$line" in
+        TEXT:*)
+            msg="${line#TEXT:}"
+            unescape_protocol_to_var msg "$msg"
+            stream_event="{\"type\":\"text\",\"content\":\"$(json_escape "$msg")\"}"
+            human_kind="text"
+            human_text="$msg"
+            ;;
+        TOOL_CALL:*)
+            payload="${line#TOOL_CALL:}"
+            parse_tool_call_record "$payload" tc_name tc_id tc_input tc_kv
+            stream_event="{\"type\":\"tool_call\",\"name\":\"$(json_escape "$tc_name")\",\"id\":\"$(json_escape "$tc_id")\",\"input\":$tc_input}"
+            human_kind="tool_call"
+            human_text="$(tool_call_summary "$tc_name" "$tc_kv")"
+            ;;
+        USAGE:*)
+            parse_usage_fields "${line#USAGE:}" in_tok out_tok cache_tok
+            stream_event="{\"type\":\"usage\",\"input_tokens\":${in_tok:-0},\"output_tokens\":${out_tok:-0},\"cache_input_tokens\":${cache_tok:-0}}"
+            ;;
+        STOP:*)
+            msg="${line#STOP:}"
+            stream_event="{\"type\":\"stop\",\"reason\":\"$(json_escape "$msg")\"}"
+            human_kind="stop"
+            ;;
+        TOOL_RESULT:*)
+            payload="${line#TOOL_RESULT:}"
+            IFS=$'\t' read -r id escaped <<< "$payload"
+            result="$escaped"
+            unescape_protocol_to_var result "$result"
+            stream_event="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$(json_escape "$result")\"}"
+            human_kind="text"
+            human_text="$(format_tool_result "$result")"$'\n'
+            ;;
+        TODO_UPDATE:*)
+            msg="${line#TODO_UPDATE:}"
+            unescape_protocol_to_var msg "$msg"
+            stream_event="$(build_todo_event_json "$msg")"
+            ;;
+        ERROR:*)
+            msg="${line#ERROR:}"
+            stream_event="{\"type\":\"error\",\"message\":\"$(json_escape "$msg")\"}"
+            human_kind="error"
+            human_text="$msg"
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    if is_stream_json_mode; then
+        [[ -n "$stream_event" ]] && printf '%s\n' "$stream_event"
+        return 0
+    fi
+
+    if [[ "$human_kind" == "text" ]]; then
+        [[ -n "$human_text" ]] && display_human_text "$human_text"
+    elif [[ "$human_kind" == "tool_call" ]]; then
+        display_ensure_newline
+        log_tool "$human_text"
+        DISPLAY_LAST_CHAR=$'\n'
+    elif [[ "$human_kind" == "stop" ]]; then
+        display_ensure_newline
+    elif [[ "$human_kind" == "error" ]]; then
+        display_ensure_newline
+        log_error "$human_text"
+    fi
 }
 
 build_system_prompt() {
@@ -373,8 +476,8 @@ build_system_prompt() {
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
     selected_skills=$(build_selected_skills_section)
-    stable_context=$(build_stable_context_section)
-    todo=$(build_todo_section)
+    stable_context=$(read_optional_file "${CONTEXT_SUMMARY_FILE:-}")
+    todo=$(read_optional_file "${TODO_FILE:-}")
 
     append_section output "agent-identity" "$agent_identity"
     append_section output "rules" "$core_rules"
@@ -603,11 +706,6 @@ build_tool_results_content_json() {
     printf '%s' "$content"
 }
 
-build_tool_result_event_json() {
-    local tid="$1" result="$2"
-    build_tool_result_json_object "$tid" "$result"
-}
-
 build_todo_event_json() {
     local checklist="$1"
     printf '{"type":"todo_update","content":"%s"}' "$(json_escape "$checklist")"
@@ -615,11 +713,12 @@ build_todo_event_json() {
 
 cleanup() {
     stop_esc_interrupt_listener
+    clear_interrupt_state
     # Only clean tmpdir, not session files
     [[ -n "${AGENT_TMPDIR:-}" && -d "${AGENT_TMPDIR:-}" ]] && rm -rf "$AGENT_TMPDIR"
 }
 trap cleanup EXIT
-trap 'INTERRUPT_REQUESTED=true' USR1
+trap 'INTERRUPT_REQUESTED=true; [[ -n "${ESC_LISTENER_FLAG:-}" ]] && printf 1 > "$ESC_LISTENER_FLAG"' USR1
 
 find_awk_dir() {
     # If already set via env, use it
@@ -743,14 +842,6 @@ context_append_summary() {
     printf '%s\n' "$text" > "$CONTEXT_SUMMARY_FILE"
 }
 
-build_stable_context_section() {
-    read_optional_file "${CONTEXT_SUMMARY_FILE:-}"
-}
-
-build_todo_section() {
-    read_optional_file "${TODO_FILE:-}"
-}
-
 build_compact_summary_user_prompt() {
     local current_summary="$1" dropped_messages="$2" summary_section dropped_section
     summary_section=$(wrap_section "current-summary" "$current_summary")
@@ -841,11 +932,11 @@ compact_context_window() {
     fi
 
     rm -f "$tmp_dropped"
-    if is_stream_json_mode; then
-        emit_stream_event "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
-    elif [[ "$trigger" == "auto" ]]; then
-        log_info "Context compacted automatically."
-    fi
+        if is_stream_json_mode; then
+            printf '%s\n' "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
+        elif [[ "$trigger" == "auto" ]]; then
+            log_info "Context compacted automatically."
+        fi
     return 0
 }
 
@@ -864,7 +955,7 @@ session_log_tool_results() {
         [[ -z "$tr" ]] && continue
         local tid result
         IFS=$'\t' read -r tid result <<< "$tr"
-        session_append_line "$(build_tool_result_event_json "$tid" "$result")"
+        session_append_line "$(build_tool_result_json_object "$tid" "$result")"
     done <<< "$results"
 }
 
@@ -1009,14 +1100,6 @@ dispatch_tool() {
 # Section 6: Format Conversion (call awk/*.awk)
 # ============================================================================
 
-convert_messages_to_openai() {
-    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"
-}
-
-convert_tools_to_openai() {
-    awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"
-}
-
 # ============================================================================
 # Section 7: API Request Builders
 # ============================================================================
@@ -1039,7 +1122,7 @@ build_claude_request() {
 build_openai_request() {
     local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
     local msgs
-    msgs=$(printf '%s' "$messages" | convert_messages_to_openai)
+    msgs=$(printf '%s' "$messages" | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
     if [[ -z "$system_prompt" ]]; then
         system_prompt=$(build_system_prompt)
     fi
@@ -1055,7 +1138,7 @@ build_openai_request() {
 
     if [[ -n "$tools" ]]; then
         local openai_tools
-        openai_tools=$(printf '%s' "$tools" | convert_tools_to_openai)
+        openai_tools=$(printf '%s' "$tools" | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
         body+=",\"tools\":${openai_tools}"
     fi
 
@@ -1172,83 +1255,39 @@ run_summary_call() {
 # Section 12: Agent Loop
 # ============================================================================
 
-agent_loop() {
+agent_loop_stream() {
     local user_input="$1"
-    INTERRUPT_REQUESTED=false
-    start_esc_interrupt_listener
     conv_add_user "$user_input"
 
     local turn=0
-    local human_last_char=""
-
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
 
-        local text="" tool_calls="" stop=""
-        local cur_tool_name="" cur_tool_id="" input=""
-        local loop_error=""
-
+        local text="" tool_calls="" stop="" loop_error=""
+        local line
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
         while IFS= read -r line; do
-            if [[ "$INTERRUPT_REQUESTED" == true ]]; then
+            if interrupt_requested; then
                 stop="interrupted"
                 break
             fi
             [[ "$VERBOSE" == true ]] && printf '[debug] <%s>\n' "$line" >&2
+            printf '%s\n' "$line"
             case "$line" in
                 TEXT:*)
-                    t="${line#TEXT:}"
-                    local d="$t"
+                    local d="${line#TEXT:}"
                     unescape_protocol_to_var d "$d"
-                    if is_stream_json_mode; then
-                        emit_stream_event "{\"type\":\"text\",\"content\":\"$(json_escape "$d")\"}"
-                    else
-                        printf '%s' "$d"
-                        if [[ -n "$d" ]]; then
-                            human_last_char="${d: -1}"
-                        fi
-                    fi
                     text+="$d"
                     ;;
                 TOOL_CALL:*)
-                    if ! is_stream_json_mode; then
-                        if [[ "$human_last_char" != $'\n' ]]; then
-                            printf '\n'
-                        fi
-                        human_last_char=$'\n'
-                    fi
-                    local tool_call_payload="${line#TOOL_CALL:}"
-                    local tool_kv=""
-                    parse_tool_call_record "$tool_call_payload" cur_tool_name cur_tool_id input tool_kv
-                    if is_stream_json_mode; then
-                        emit_stream_event "{\"type\":\"tool_call\",\"name\":\"$(json_escape "$cur_tool_name")\",\"id\":\"$(json_escape "$cur_tool_id")\",\"input\":$input}"
-                    else
-                        log_tool "$(tool_call_summary "$cur_tool_name" "$tool_kv")"
-                    fi
+                    local cur_tool_name="" cur_tool_id="" input="" tool_kv=""
+                    parse_tool_call_record "${line#TOOL_CALL:}" cur_tool_name cur_tool_id input tool_kv
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"$(escape_protocol_text "$input")"$'\t'"${tool_kv}"$'\n'
-                    ;;
-                USAGE:*)
-                    if is_stream_json_mode; then
-                        local input_tokens output_tokens cache_input_tokens
-                        parse_usage_fields "${line#USAGE:}" input_tokens output_tokens cache_input_tokens
-                        emit_stream_event "{\"type\":\"usage\",\"input_tokens\":${input_tokens:-0},\"output_tokens\":${output_tokens:-0},\"cache_input_tokens\":${cache_input_tokens:-0}}"
-                    fi
                     ;;
                 STOP:*)
                     stop="${line#STOP:}"
-                    if is_stream_json_mode; then
-                        emit_stream_event "{\"type\":\"stop\",\"reason\":\"$(json_escape "$stop")\"}"
-                    else
-                        if [[ "$human_last_char" != $'\n' ]]; then
-                            printf '\n'
-                        fi
-                        human_last_char=$'\n'
-                    fi
                     ;;
                 ERROR:*)
-                    if is_stream_json_mode; then
-                        emit_stream_event "{\"type\":\"error\",\"message\":\"$(json_escape "${line#ERROR:}")\"}"
-                    fi
                     loop_error="${line#ERROR:}"
                     stop="error"
                     break
@@ -1256,13 +1295,10 @@ agent_loop() {
             esac
         done < <(llm_call "$(conv_get_messages)")
 
-        # Record assistant response
         conv_add_assistant "$text" "$tool_calls"
 
         case "$stop" in
             error)
-                log_error "$loop_error"
-                stop_esc_interrupt_listener
                 return 1
                 ;;
             end_turn|stop|done)
@@ -1270,68 +1306,69 @@ agent_loop() {
                 break
                 ;;
             interrupted)
-                stop_esc_interrupt_listener
-                if [[ "$OUTPUT_FORMAT" == "human" ]]; then
-                    if [[ "$human_last_char" != $'\n' ]]; then
-                        printf '\n'
-                        human_last_char=$'\n'
-                    fi
-                    log_info "Interrupted."
-                fi
+                printf '%s\n' "STOP:interrupted"
                 break
                 ;;
             tool_use|tool_calls)
-                if [[ "$INTERRUPT_REQUESTED" == true ]]; then
-                    stop_esc_interrupt_listener
-                    if [[ "$OUTPUT_FORMAT" == "human" ]]; then
-                        if [[ "$human_last_char" != $'\n' ]]; then
-                            printf '\n'
-                            human_last_char=$'\n'
-                        fi
-                        log_info "Interrupted."
-                    fi
+                if interrupt_requested; then
+                    printf '%s\n' "STOP:interrupted"
                     break
                 fi
-                # Execute tools and continue
                 local results=""
-                execute_tool_calls "$tool_calls"
+                execute_tool_calls_stream "$tool_calls"
                 results="$EXEC_TOOL_RESULTS"
-                if [[ "$INTERRUPT_REQUESTED" == true ]]; then
-                    stop_esc_interrupt_listener
-                    if [[ "$OUTPUT_FORMAT" == "human" ]]; then
-                        if [[ "$human_last_char" != $'\n' ]]; then
-                            printf '\n'
-                            human_last_char=$'\n'
-                        fi
-                        log_info "Interrupted."
-                    fi
+                if interrupt_requested; then
+                    printf '%s\n' "STOP:interrupted"
                     break
                 fi
                 conv_add_tool_results "$results"
                 compact_context_window "auto" false || true
                 ;;
             max_tokens|length)
-                log_error "Response truncated (max_tokens reached)"
+                printf '%s\n' "ERROR:Response truncated (max_tokens reached)"
                 break
                 ;;
             *)
-                log_error "Unknown stop reason: $stop"
+                printf '%s\n' "ERROR:Unknown stop reason: $stop"
                 break
                 ;;
         esac
     done
 
     if (( turn >= MAX_TURNS )); then
-        log_error "Max turns ($MAX_TURNS) reached"
+        printf '%s\n' "ERROR:Max turns ($MAX_TURNS) reached"
     fi
-    stop_esc_interrupt_listener
 }
 
-execute_tool_calls() {
+agent_loop() {
+    local user_input="$1"
+    local stream_line had_error=false
+    clear_interrupt_state
+    DISPLAY_LAST_CHAR=$'\n'
+    start_esc_interrupt_listener
+
+    while IFS= read -r stream_line; do
+        [[ "$stream_line" == ERROR:* ]] && had_error=true
+        if [[ "$stream_line" == STOP:interrupted ]]; then
+            display_event "$stream_line"
+            if [[ "$OUTPUT_FORMAT" == "human" ]]; then
+                log_info "Interrupted."
+            fi
+            break
+        fi
+        display_event "$stream_line"
+    done < <(agent_loop_stream "$user_input")
+
+    stop_esc_interrupt_listener
+    $had_error && return 1
+    return 0
+}
+
+execute_tool_calls_stream() {
     local calls="$1"
     EXEC_TOOL_RESULTS=""
     while IFS= read -r tc; do
-        [[ "$INTERRUPT_REQUESTED" == true ]] && break
+        interrupt_requested && break
         [[ -z "$tc" ]] && continue
         local name id input_escaped kv_escaped input kv arg1="" arg2="" arg3=""
         IFS=$'\t' read -r name id input_escaped kv_escaped <<< "$tc"
@@ -1354,7 +1391,7 @@ execute_tool_calls() {
         local output
         output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?
-        [[ "$INTERRUPT_REQUESTED" == true ]] && break
+        interrupt_requested && break
         if (( tool_rc != 0 )); then
             output="Error: tool execution failed: $output"
         fi
@@ -1363,18 +1400,10 @@ execute_tool_calls() {
         local escaped
         escaped=$(json_escape "$output")
         EXEC_TOOL_RESULTS+="${id}"$'\t'"${escaped}"$'\n'
-
-        # Print tool_result event in stream-json mode
-        if is_stream_json_mode; then
-            if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
-                emit_stream_event "$(build_todo_event_json "$(<"$TODO_FILE")")"
-            fi
-            emit_stream_event "{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$escaped\"}"
-        else
-            if [[ -n "$output" ]]; then
-                printf '%s\n' "$output"
-            fi
+        if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
+            printf 'TODO_UPDATE:%s\n' "$(escape_protocol_text "$(<"$TODO_FILE")")"
         fi
+        printf 'TOOL_RESULT:%s\t%s\n' "$id" "$(escape_protocol_text "$output")"
     done <<< "$calls"
 }
 

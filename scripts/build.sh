@@ -65,8 +65,6 @@ awk_files = {
     "edit_file": ("edit_file.awk", "_AWK_EDIT_FILE"),
     "claude_sse": ("claude_sse.awk", "_AWK_CLAUDE_SSE"),
     "openai_sse": ("openai_sse.awk", "_AWK_OPENAI_SSE"),
-    "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
-    "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
 }
 
@@ -102,8 +100,6 @@ functions = [
     ("parse_http_stream", "", "_AWK_HTTP_STREAM", ""),
     ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
     ("parse_sse", "_AWK_JSON", "", ""),
-    ("convert_messages_to_openai", "_AWK_JSON", "_AWK_CONVERT_MESSAGES", ""),
-    ("convert_tools_to_openai", "_AWK_JSON", "_AWK_CONVERT_TOOLS", ""),
     ("load_tool_defs", "", "", ""),
 ]
 
