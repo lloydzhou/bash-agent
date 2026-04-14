@@ -87,6 +87,15 @@ struct Runtime {
 
 const INTERRUPTED_ERR: &str = "__INTERRUPTED__";
 
+enum DisplayEvent {
+    Text(String),
+    ToolCall(ToolCallEvent),
+    Usage(UsageEvent),
+    Stop(String),
+    Error(String),
+    ToolResult(ToolResult),
+}
+
 impl Runtime {
     fn new(mut cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<Self> {
         let tmp_dir = std::env::temp_dir().join(format!(
@@ -195,6 +204,10 @@ impl Runtime {
     }
 
     fn agent_loop(&mut self, user_input: String) -> Result<()> {
+        self.agent_loop_stream(user_input)
+    }
+
+    fn agent_loop_stream(&mut self, user_input: String) -> Result<()> {
         self.interrupted.store(false, Ordering::SeqCst);
         self.start_esc_interrupt_listener();
         let result = (|| -> Result<()> {
@@ -202,7 +215,7 @@ impl Runtime {
             self.append_event(json!({"type":"user_message","content":user_input}))?;
 
             let mut turn = 0;
-            let mut human_last_char = String::new();
+            let mut display_last_char = String::from("\n");
 
             while turn < self.cfg.max_turns {
                 turn += 1;
@@ -219,41 +232,11 @@ impl Runtime {
                     }
                     match evt {
                         Event::Text(TextEvent { content }) => {
-                            if self.is_stream_json_mode() {
-                                self.emit_stream(json!({"type":"text","content":content}))?;
-                            } else {
-                                self.write_human(&content)?;
-                                let display_content =
-                                    normalize_display_text(&content, self.cfg.interactive);
-                                if display_content.ends_with('\n') {
-                                    human_last_char = "\n".to_string();
-                                } else if let Some(c) = display_content.chars().last() {
-                                    human_last_char = c.to_string();
-                                }
-                            }
+                            self.display_event(&mut display_last_char, DisplayEvent::Text(content.clone()))?;
                             text.push_str(&content);
                         }
                         Event::ToolCall(call) => {
-                            if !self.is_stream_json_mode() && human_last_char != "\n" {
-                                self.write_human("\n")?;
-                                human_last_char = "\n".to_string();
-                            } else if !self.is_stream_json_mode() {
-                                self.write_carriage_return()?;
-                            }
-                            if self.is_stream_json_mode() {
-                                self.emit_stream(json!({
-                                    "type":"tool_call",
-                                    "name": call.name,
-                                    "id": call.id,
-                                    "input": call.input_json,
-                                }))?;
-                            } else {
-                                self.write_human(&format!(
-                                    "\x1b[33m[tool] {}\x1b[0m",
-                                    build_tool_call_summary(&call.name, &call.fields)
-                                ))?;
-                                self.write_human("\n")?;
-                            }
+                            self.display_event(&mut display_last_char, DisplayEvent::ToolCall(call.clone()))?;
                             calls.push(call);
                         }
                         Event::Usage(UsageEvent {
@@ -261,29 +244,21 @@ impl Runtime {
                             output_tokens,
                             cache_input_tokens,
                         }) => {
-                            if self.is_stream_json_mode() {
-                                self.emit_stream(json!({
-                                    "type":"usage",
-                                    "input_tokens":input_tokens,
-                                    "output_tokens":output_tokens,
-                                    "cache_input_tokens":cache_input_tokens
-                                }))?;
-                            }
+                            self.display_event(
+                                &mut display_last_char,
+                                DisplayEvent::Usage(UsageEvent {
+                                    input_tokens,
+                                    output_tokens,
+                                    cache_input_tokens,
+                                }),
+                            )?;
                         }
                         Event::Stop(StopEvent { reason }) => {
                             stop = reason.clone();
-                            if self.is_stream_json_mode() {
-                                self.emit_stream(json!({"type":"stop","reason":reason}))?;
-                            } else if human_last_char != "\n" {
-                                self.write_human("\n")?;
-                                human_last_char = "\n".to_string();
-                            }
+                            self.display_event(&mut display_last_char, DisplayEvent::Stop(reason))?;
                         }
                         Event::Error(ErrorEvent { message }) => {
-                            if self.is_stream_json_mode() {
-                                let _ = self.emit_stream(json!({"type":"error","message":message}));
-                            }
-                            return Err(anyhow!(message));
+                            return self.display_event(&mut display_last_char, DisplayEvent::Error(message));
                         }
                     }
                     Ok(())
@@ -320,6 +295,12 @@ impl Runtime {
                             }
                             return Ok(());
                         }
+                        for result in &results {
+                            self.display_event(
+                                &mut display_last_char,
+                                DisplayEvent::ToolResult(result.clone()),
+                            )?;
+                        }
                         self.conv.add_tool_results(&results)?;
                         for r in &results {
                             self.append_event(json!({
@@ -345,6 +326,97 @@ impl Runtime {
         })();
         self.stop_esc_interrupt_listener();
         result
+    }
+
+    fn display_event(&self, last_char: &mut String, evt: DisplayEvent) -> Result<()> {
+        match evt {
+            DisplayEvent::Text(content) => {
+                if self.is_stream_json_mode() {
+                    self.emit_stream(json!({"type":"text","content":content}))?;
+                } else {
+                    self.write_human(&content)?;
+                    let display_content = normalize_display_text(&content, self.cfg.interactive);
+                    if display_content.ends_with('\n') {
+                        *last_char = "\n".to_string();
+                    } else if let Some(c) = display_content.chars().last() {
+                        *last_char = c.to_string();
+                    }
+                }
+            }
+            DisplayEvent::ToolCall(call) => {
+                if !self.is_stream_json_mode() {
+                    if last_char != "\n" {
+                        self.write_human("\n")?;
+                    } else {
+                        self.write_carriage_return()?;
+                    }
+                    *last_char = "\n".to_string();
+                }
+                if self.is_stream_json_mode() {
+                    self.emit_stream(json!({
+                        "type":"tool_call",
+                        "name": call.name,
+                        "id": call.id,
+                        "input": call.input_json,
+                    }))?;
+                } else {
+                    self.write_human(&format!(
+                        "\x1b[33m[tool] {}\x1b[0m\n",
+                        build_tool_call_summary(&call.name, &call.fields)
+                    ))?;
+                }
+            }
+            DisplayEvent::Usage(UsageEvent {
+                input_tokens,
+                output_tokens,
+                cache_input_tokens,
+            }) => {
+                if self.is_stream_json_mode() {
+                    self.emit_stream(json!({
+                        "type":"usage",
+                        "input_tokens":input_tokens,
+                        "output_tokens":output_tokens,
+                        "cache_input_tokens":cache_input_tokens
+                    }))?;
+                }
+            }
+            DisplayEvent::Stop(reason) => {
+                if self.is_stream_json_mode() {
+                    self.emit_stream(json!({"type":"stop","reason":reason}))?;
+                } else if last_char != "\n" {
+                    self.write_human("\n")?;
+                    *last_char = "\n".to_string();
+                }
+            }
+            DisplayEvent::Error(message) => {
+                if self.is_stream_json_mode() {
+                    let _ = self.emit_stream(json!({"type":"error","message":message}));
+                }
+                return Err(anyhow!(message));
+            }
+            DisplayEvent::ToolResult(result) => {
+                if self.is_stream_json_mode() {
+                    self.emit_stream(json!({
+                        "type":"tool_result",
+                        "tool_use_id": result.tool_use_id,
+                        "content": result.content,
+                    }))?;
+                } else if !result.content.is_empty() {
+                    let display_output = normalize_display_text(&result.content, self.cfg.interactive);
+                    let last = display_output.chars().last();
+                    if display_output.ends_with('\n') {
+                        self.write_human(&display_output)?;
+                        *last_char = "\n".to_string();
+                    } else {
+                        self.write_human(&(display_output + "\n"))?;
+                        if let Some(c) = last {
+                            *last_char = c.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn llm_call(&self, emit: impl FnMut(Event) -> Result<()>) -> Result<()> {
@@ -403,23 +475,6 @@ impl Runtime {
                 if let Ok(data) = fs::read_to_string(&self.paths.todo) {
                     let trimmed = data.trim_end().to_string();
                     self.append_event(json!({"type":"todo_update","content":trimmed}))?;
-                    if self.is_stream_json_mode() {
-                        self.emit_stream(json!({"type":"todo_update","content":trimmed}))?;
-                    }
-                }
-            }
-
-            if self.is_stream_json_mode() {
-                self.emit_stream(json!({
-                    "type":"tool_result",
-                    "tool_use_id": call.id,
-                    "content": output,
-                }))?;
-            } else if !output.is_empty() {
-                if output.ends_with('\n') {
-                    self.write_human(&output)?;
-                } else {
-                    self.write_human(&(output + "\n"))?;
                 }
             }
         }

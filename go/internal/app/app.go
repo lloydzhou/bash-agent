@@ -266,6 +266,14 @@ func (rt *runtime) interactiveMode() error {
 }
 
 func (rt *runtime) agentLoop(userInput string) error {
+	return rt.agentLoopStream(userInput)
+}
+
+type displayState struct {
+	lastChar string
+}
+
+func (rt *runtime) agentLoopStream(userInput string) error {
 	rt.interrupted.Store(false)
 	rt.startEscInterruptListener()
 	defer rt.stopEscInterruptListener()
@@ -276,7 +284,7 @@ func (rt *runtime) agentLoop(userInput string) error {
 	_ = rt.appendEvent(map[string]any{"type": "user_message", "content": userInput})
 
 	turn := 0
-	humanLastChar := ""
+	state := displayState{lastChar: "\n"}
 	for turn < rt.cfg.MaxTurns {
 		turn++
 		text := ""
@@ -297,81 +305,33 @@ func (rt *runtime) agentLoop(userInput string) error {
 			}
 			switch e := evt.(type) {
 			case protocol.TextEvent:
-				if rt.isStreamJSONMode() {
-					return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
-				}
-				displayContent := normalizeDisplayText(e.Content)
-				if _, err := rt.writeHuman(displayContent); err != nil {
+				if err := rt.displayEvent(&state, e); err != nil {
 					return err
-				}
-				if displayContent != "" {
-					if strings.HasSuffix(displayContent, "\n") {
-						humanLastChar = "\n"
-					} else {
-						humanLastChar = displayContent[len(displayContent)-1:]
-					}
 				}
 				text += e.Content
 			case protocol.ToolCallEvent:
-				if !rt.isStreamJSONMode() {
-					if humanLastChar != "\n" {
-						if _, err := rt.writeHuman(rt.nl()); err != nil {
-							return err
-						}
-					} else {
-						if _, err := rt.writeHuman("\r"); err != nil {
-							return err
-						}
-					}
-					humanLastChar = "\n"
-				}
-				if rt.isStreamJSONMode() {
-					if err := rt.emitStream(map[string]any{
-						"type":  "tool_call",
-						"name":  e.Name,
-						"id":    e.ID,
-						"input": json.RawMessage(e.InputJSON),
-					}); err != nil {
-						return err
-					}
-				} else {
-					if _, err := rt.writeHuman(fmt.Sprintf("\033[33m[tool] %s\033[0m\n", conversation.BuildToolCallSummary(e.Name, e.Fields))); err != nil {
-						return err
-					}
+				if err := rt.displayEvent(&state, e); err != nil {
+					return err
 				}
 				calls = append(calls, e)
 			case protocol.UsageEvent:
-				if rt.isStreamJSONMode() {
-					return rt.emitStream(map[string]any{
-						"type":               "usage",
-						"input_tokens":       e.InputTokens,
-						"output_tokens":      e.OutputTokens,
-						"cache_input_tokens": e.CacheInputTokens,
-					})
+				if err := rt.displayEvent(&state, e); err != nil {
+					return err
 				}
 			case protocol.StopEvent:
 				stop = e.Reason
-				if rt.isStreamJSONMode() {
-					return rt.emitStream(map[string]any{"type": "stop", "reason": e.Reason})
-				}
-				if humanLastChar != "\n" {
-					if _, err := rt.writeHuman(rt.nl()); err != nil {
-						return err
-					}
-					humanLastChar = "\n"
+				if err := rt.displayEvent(&state, e); err != nil {
+					return err
 				}
 			case protocol.ErrorEvent:
-				if rt.isStreamJSONMode() {
-					_ = rt.emitStream(map[string]any{"type": "error", "message": e.Message})
-				}
-				return fmt.Errorf("%s", e.Message)
+				return rt.displayEvent(&state, e)
 			}
 			return nil
 		})
 		if err != nil {
 			if errors.Is(err, errInterrupted) {
 				if rt.cfg.OutputFormat == config.OutputHuman {
-					if humanLastChar != "\n" {
+					if state.lastChar != "\n" {
 						_, _ = fmt.Fprint(rt.stdout, rt.nl())
 					}
 					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
@@ -394,7 +354,7 @@ func (rt *runtime) agentLoop(userInput string) error {
 		case "tool_use", "tool_calls":
 			if rt.interrupted.Load() {
 				if rt.cfg.OutputFormat == config.OutputHuman {
-					if humanLastChar != "\n" {
+					if state.lastChar != "\n" {
 						_, _ = fmt.Fprint(rt.stdout, rt.nl())
 					}
 					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
@@ -407,12 +367,17 @@ func (rt *runtime) agentLoop(userInput string) error {
 			}
 			if rt.interrupted.Load() {
 				if rt.cfg.OutputFormat == config.OutputHuman {
-					if humanLastChar != "\n" {
+					if state.lastChar != "\n" {
 						_, _ = fmt.Fprint(rt.stdout, rt.nl())
 					}
 					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
 				}
 				return nil
+			}
+			for _, result := range results {
+				if err := rt.displayEvent(&state, result); err != nil {
+					return err
+				}
 			}
 			if err := rt.conv.AddToolResults(results); err != nil {
 				return err
@@ -477,6 +442,100 @@ func (rt *runtime) llmCall(emit func(protocol.Event) error) error {
 	}
 }
 
+func (rt *runtime) displayEvent(state *displayState, evt any) error {
+	switch e := evt.(type) {
+	case protocol.TextEvent:
+		if rt.isStreamJSONMode() {
+			return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
+		}
+		displayContent := normalizeDisplayText(e.Content)
+		if _, err := rt.writeHuman(displayContent); err != nil {
+			return err
+		}
+		if displayContent != "" {
+			if strings.HasSuffix(displayContent, "\n") {
+				state.lastChar = "\n"
+			} else {
+				state.lastChar = displayContent[len(displayContent)-1:]
+			}
+		}
+	case protocol.ToolCallEvent:
+		if !rt.isStreamJSONMode() {
+			if state.lastChar != "\n" {
+				if _, err := rt.writeHuman(rt.nl()); err != nil {
+					return err
+				}
+			} else {
+				if _, err := rt.writeHuman("\r"); err != nil {
+					return err
+				}
+			}
+			state.lastChar = "\n"
+		}
+		if rt.isStreamJSONMode() {
+			return rt.emitStream(map[string]any{
+				"type":  "tool_call",
+				"name":  e.Name,
+				"id":    e.ID,
+				"input": json.RawMessage(e.InputJSON),
+			})
+		}
+		if _, err := rt.writeHuman(fmt.Sprintf("\033[33m[tool] %s\033[0m\n", conversation.BuildToolCallSummary(e.Name, e.Fields))); err != nil {
+			return err
+		}
+	case protocol.UsageEvent:
+		if rt.isStreamJSONMode() {
+			return rt.emitStream(map[string]any{
+				"type":               "usage",
+				"input_tokens":       e.InputTokens,
+				"output_tokens":      e.OutputTokens,
+				"cache_input_tokens": e.CacheInputTokens,
+			})
+		}
+	case protocol.StopEvent:
+		if rt.isStreamJSONMode() {
+			return rt.emitStream(map[string]any{"type": "stop", "reason": e.Reason})
+		}
+		if state.lastChar != "\n" {
+			if _, err := rt.writeHuman(rt.nl()); err != nil {
+				return err
+			}
+			state.lastChar = "\n"
+		}
+	case protocol.ErrorEvent:
+		if rt.isStreamJSONMode() {
+			_ = rt.emitStream(map[string]any{"type": "error", "message": e.Message})
+		}
+		return fmt.Errorf("%s", e.Message)
+	case conversation.ToolResult:
+		if rt.isStreamJSONMode() {
+			return rt.emitStream(map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": e.ToolUseID,
+				"content":     e.Content,
+			})
+		}
+		if e.Content != "" {
+			displayOutput := normalizeDisplayText(e.Content)
+			suffix := "\n"
+			if strings.HasSuffix(displayOutput, "\n") {
+				suffix = ""
+			}
+			if _, err := rt.writeHuman(displayOutput + suffix); err != nil {
+				return err
+			}
+			if displayOutput != "" {
+				if strings.HasSuffix(displayOutput, "\n") {
+					state.lastChar = "\n"
+				} else {
+					state.lastChar = displayOutput[len(displayOutput)-1:]
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversation.ToolResult, error) {
 	runner := tools.Runner{
 		Config:   rt.cfg,
@@ -503,29 +562,8 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 		if call.Name == "TodoWrite" && result.Err == nil {
 			if data, err := os.ReadFile(rt.paths.Todo); err == nil && len(data) > 0 {
 				_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": strings.TrimRight(string(data), "\n")})
-				if rt.isStreamJSONMode() {
-					_ = rt.emitStream(map[string]any{"type": "todo_update", "content": strings.TrimRight(string(data), "\n")})
-				}
 			}
 		}
-		if rt.isStreamJSONMode() {
-			if err := rt.emitStream(map[string]any{
-				"type":        "tool_result",
-				"tool_use_id": call.ID,
-				"content":     output,
-			}); err != nil {
-				return nil, err
-			}
-			} else if output != "" {
-				displayOutput := normalizeDisplayText(output)
-				suffix := "\n"
-				if strings.HasSuffix(displayOutput, "\n") {
-					suffix = ""
-				}
-				if _, err := rt.writeHuman(displayOutput + suffix); err != nil {
-					return nil, err
-				}
-			}
 	}
 	return results, nil
 }
