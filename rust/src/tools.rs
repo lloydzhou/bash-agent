@@ -1,8 +1,6 @@
 use crate::config::Config;
 use crate::safety;
 use anyhow::{Result, anyhow, bail};
-use once_cell::sync::Lazy;
-use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
@@ -246,14 +244,6 @@ impl Runner {
         fs::write(&self.todo_file, format!("{checklist}\n"))?;
         Ok(checklist)
     }
-}
-
-static RE_ANSI: Lazy<Regex> = Lazy::new(|| Regex::new(r"\x1b\[[0-9;]*[[:alpha:]]").expect("regex"));
-
-pub fn strip_ansi(s: &str) -> String {
-    let no_ansi = RE_ANSI.replace_all(s, "").to_string();
-    // Strip carriage returns so \r\n becomes \n (avoids cursor-home artifacts)
-    no_ansi.replace('\r', "")
 }
 
 pub fn format_tool_result(s: &str, max: usize) -> String {

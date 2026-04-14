@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -277,13 +276,6 @@ func (r Runner) TodoWrite(todos []struct {
 	}
 	return checklist, nil
 }
-
-func StripANSI(s string) string {
-	re := regexp.MustCompile(`\x1b\[[0-9;]*[[:alpha:]]`)
-	s = re.ReplaceAllString(s, "")
-	return strings.ReplaceAll(s, "\r", "")
-}
-
 func FormatToolResult(s string, max int) string {
 	if len([]byte(s)) <= max {
 		return s

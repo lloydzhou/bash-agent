@@ -386,7 +386,6 @@ impl Runtime {
             if self.interrupted.load(Ordering::SeqCst) {
                 break;
             }
-            output = tools::strip_ansi(&output);
             output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
 
             results.push(ToolResult {

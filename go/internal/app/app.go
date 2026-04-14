@@ -490,7 +490,6 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 		if result.Err != nil {
 			output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
 		}
-		output = tools.StripANSI(output)
 		output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
 		results = append(results, conversation.ToolResult{
 			ToolUseID: call.ID,

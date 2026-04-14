@@ -304,15 +304,6 @@ json_escape() {
         -f "$AWK_DIR/json_cli.awk"
 }
 
-strip_ansi() {
-    local input="$1"
-    printf '%s' "$input" | awk '
-    {
-        gsub(/\033\[[0-9;]*[[:alpha:]]/, "", $0)
-        print
-    }'
-}
-
 format_tool_result() {
     local output="$1"
     local size marker marker_bytes available head_chars tail_chars
@@ -1365,7 +1356,6 @@ execute_tool_calls() {
         output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?
         [[ "$INTERRUPT_REQUESTED" == true ]] && break
-        output=$(strip_ansi "$output")
         if (( tool_rc != 0 )); then
             output="Error: tool execution failed: $output"
         fi
