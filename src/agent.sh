@@ -524,7 +524,7 @@ load_skill_content() {
         skill_dir=$(dirname "$skill_file")
         content=$(<"$skill_file") || return 1
         content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$skill_dir}"
-        printf 'Base directory for this skill: %s\n\n%s' "$skill_dir" "$content"
+        printf 'Base directory: %s\n\n%s' "$skill_dir" "$content"
         return 0
     done < <(find_skill_base_dirs)
     return 1
@@ -1084,16 +1084,12 @@ tool_todo() {
 }
 
 tool_skill() {
-    local skill_name="$1"
+    local skill_name="$1" skill_content=""
     skill_name="${skill_name#"${skill_name%%[![:space:]]*}"}"
     skill_name="${skill_name%"${skill_name##*[![:space:]]}"}"
     [[ -n "$skill_name" ]] || { echo "Error: no skill name provided"; return 1; }
-    local skill_file="" base_dir="" content=""
-    skill_file=$(resolve_skill_file "$skill_name") || { echo "Error: skill not found: $skill_name"; return 1; }
-    base_dir=$(dirname "$skill_file")
-    content=$(<"$skill_file") || return 1
-    content="${content//\$\{BASH_AGENT_SKILL_DIR\}/$base_dir}"
-    printf 'Skill: %s\nBase directory: %s\n\n%s' "$skill_name" "$base_dir" "$content"
+    skill_content=$(load_skill_content "$skill_name") || { echo "Error: skill not found: $skill_name"; return 1; }
+    printf 'Skill: %s\n%s' "$skill_name" "$skill_content"
 }
 
 dispatch_tool() {

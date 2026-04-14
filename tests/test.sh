@@ -174,6 +174,34 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing TodoWrite tool result content')
             return
+        if b'SKILL_TOOL_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_skill_tool\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will load the requested skill.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_skill_1\",\"name\":\"Skill\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'name':'test-skill-tool'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'SKILL_TOOL_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'Skill: test-skill-tool' in body and b'Skill tool marker' in body and b'helper.sh' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_skill_tool_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Skill tool loaded.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing Skill tool_result content')
+            return
         if b'READ_FILE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -1265,6 +1293,27 @@ EOF
     fi
 }
 
+test_agent_skill_tool() {
+    info "Test 14b: Agent.sh Skill tool"
+    local skill_dir skill_file output
+    skill_dir="$ROOT_DIR/.claude/skills/test-skill-tool"
+    skill_file="$skill_dir/SKILL.md"
+    mkdir -p "$skill_dir"
+    cat > "$skill_file" <<'EOF'
+# test-skill-tool
+
+Skill tool marker
+Path marker: ${BASH_AGENT_SKILL_DIR}/helper.sh
+EOF
+    output=$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'SKILL_TOOL_MARKER' 2>&1) || true
+    rm -rf "$skill_dir"
+    if echo "$output" | grep -Fq "[tool] Skill(test-skill-tool)" && echo "$output" | grep -q "Skill tool loaded."; then
+        green "Agent Skill tool"; ((PASS++)) || true
+    else
+        red "Agent Skill tool"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 test_agent_instruction_files() {
     info "Test 15: Agent.sh instruction file injection"
     local home_dir global_dir project_file output
@@ -1722,6 +1771,7 @@ test_agent_compact_preserves_turn_boundary
 test_agent_compact_noop_without_provider
 test_agent_skill_injection
 test_agent_skill_index
+test_agent_skill_tool
 test_agent_instruction_files
 test_agent_todo_state
 test_agent_read_file

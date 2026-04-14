@@ -323,3 +323,44 @@ fn utf8_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
     }
     &s[start..]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Runner;
+    use crate::config::Config;
+    use serde_json::json;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn dispatch_skill_reads_content() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("rustagent-skill-test-{unique}"));
+        let skill_dir = root.join(".claude/skills/test-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "description: test\nPath: ${BASH_AGENT_SKILL_DIR}/helper.sh\n",
+        )
+        .unwrap();
+
+        let runner = Runner {
+            config: Config::default(),
+            todo_file: PathBuf::new(),
+            cwd: root.clone(),
+            home: root.join("home"),
+        };
+        let result = runner
+            .dispatch("Skill", &json!({ "name": "test-skill" }))
+            .unwrap();
+        assert!(result.contains("Skill: test-skill"));
+        assert!(result.contains("description: test"));
+        assert!(result.contains("/helper.sh"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+}
