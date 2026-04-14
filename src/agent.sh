@@ -45,7 +45,6 @@ TOOL_DEF_JSON=""
 AGENT_TMPDIR=""
 API_URL=""
 AWK_DIR=""
-EXEC_TOOL_RESULTS=""
 INTERRUPT_REQUESTED=false
 ESC_LISTENER_PID=""
 ESC_LISTENER_FLAG=""
@@ -932,11 +931,11 @@ compact_context_window() {
     fi
 
     rm -f "$tmp_dropped"
-        if is_stream_json_mode; then
-            printf '%s\n' "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
-        elif [[ "$trigger" == "auto" ]]; then
-            log_info "Context compacted automatically."
-        fi
+    if is_stream_json_mode; then
+        printf '%s\n' "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
+    elif [[ "$trigger" == "auto" ]]; then
+        log_info "Context compacted automatically."
+    fi
     return 0
 }
 
@@ -1030,7 +1029,7 @@ tool_edit() {
 
 tool_bash() {
     local cmd="$1" script_file
-    local reason
+    local reason output tool_rc
 
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
     reason=$(deny_bash_command_reason "$cmd") || reason=""
@@ -1039,13 +1038,14 @@ tool_bash() {
         return 1
     fi
 
-    local output
     script_file=$(mktemp "${AGENT_TMPDIR}/bash.XXXXXX.sh")
     printf '%s\n' "$cmd" > "$script_file"
     chmod 700 "$script_file" 2>/dev/null || true
-    output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file") || true
+    output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file")
+    tool_rc=$?
     rm -f "$script_file"
     printf '%s' "$output"
+    return "$tool_rc"
 }
 
 tool_glob() {
@@ -1314,9 +1314,13 @@ agent_loop_stream() {
                     printf '%s\n' "STOP:interrupted"
                     break
                 fi
-                local results=""
-                execute_tool_calls_stream "$tool_calls"
-                results="$EXEC_TOOL_RESULTS"
+                local results_file results=""
+                results_file=$(mktemp "${AGENT_TMPDIR}/tool-results.XXXXXX")
+                execute_tool_calls_stream "$tool_calls" "$results_file"
+                if [[ -s "$results_file" ]]; then
+                    results=$(<"$results_file")
+                fi
+                rm -f "$results_file"
                 if interrupt_requested; then
                     printf '%s\n' "STOP:interrupted"
                     break
@@ -1365,8 +1369,7 @@ agent_loop() {
 }
 
 execute_tool_calls_stream() {
-    local calls="$1"
-    EXEC_TOOL_RESULTS=""
+    local calls="$1" results_file="$2"
     while IFS= read -r tc; do
         interrupt_requested && break
         [[ -z "$tc" ]] && continue
@@ -1388,7 +1391,6 @@ execute_tool_calls_stream() {
                 esac
             done
         fi
-        local output
         output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?
         interrupt_requested && break
@@ -1399,7 +1401,7 @@ execute_tool_calls_stream() {
         # json_escape so newlines in output don't break the line-based format
         local escaped
         escaped=$(json_escape "$output")
-        EXEC_TOOL_RESULTS+="${id}"$'\t'"${escaped}"$'\n'
+        printf '%s\t%s\n' "$id" "$escaped" >> "$results_file"
         if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
             printf 'TODO_UPDATE:%s\n' "$(escape_protocol_text "$(<"$TODO_FILE")")"
         fi
