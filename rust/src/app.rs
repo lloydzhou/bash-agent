@@ -207,7 +207,16 @@ impl Runtime {
                 turn += 1;
                 let mut text = String::new();
                 let mut calls: Vec<ToolCallEvent> = Vec::new();
+                let mut tool_results: Vec<ToolResult> = Vec::new();
                 let mut stop = String::new();
+                let mut loop_error = String::new();
+
+                let runner = tools::Runner {
+                    config: self.cfg.clone(),
+                    todo_file: self.paths.todo.clone(),
+                    cwd: self.cwd.clone(),
+                    home: self.home.clone(),
+                };
 
                 let call_result = self.llm_call(|evt| {
                     if self.interrupted.load(Ordering::SeqCst) {
@@ -229,20 +238,66 @@ impl Runtime {
                                 &mut display_last_char,
                                 DisplayEvent::ToolCall(call.clone()),
                             )?;
-                            calls.push(call);
-                        }
-                        Event::Usage(UsageEvent {
-                            input_tokens,
-                            output_tokens,
-                            cache_input_tokens,
-                        }) => {
+                            calls.push(call.clone());
+
+                            // Inline dispatch: execute tool immediately
+                            if self.interrupted.load(Ordering::SeqCst) {
+                                return Err(anyhow!(INTERRUPTED_ERR));
+                            }
+                            let dispatch_result = runner.dispatch(&call.name, &call.input_json);
+                            if self.interrupted.load(Ordering::SeqCst) {
+                                return Err(anyhow!(INTERRUPTED_ERR));
+                            }
+                            let mut output = match dispatch_result {
+                                Ok(v) => v,
+                                Err(e) => format!("Error: tool execution failed: {e}"),
+                            };
+                            output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
+                            let mut display_content = output.clone();
+                            if call.name == "Edit" {
+                                let edit_diff = output.clone();
+                                let summary = edit_diff_summary(
+                                    call.fields.get("path").map(String::as_str).unwrap_or(""),
+                                    &output,
+                                );
+                                output = summary;
+                                display_content = edit_diff;
+                            }
+
+                            let tool_result = ToolResult {
+                                tool_use_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                tool_args: call
+                                    .fields
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect(),
+                                content: output.clone(),
+                                display_content,
+                            };
                             self.display_event(
                                 &mut display_last_char,
-                                DisplayEvent::Usage(UsageEvent {
-                                    input_tokens,
-                                    output_tokens,
-                                    cache_input_tokens,
-                                }),
+                                DisplayEvent::ToolResult(tool_result.clone()),
+                            )?;
+                            tool_results.push(tool_result);
+
+                            // Handle TodoWrite event
+                            if call.name == "TodoWrite" {
+                                if let Ok(data) = fs::read_to_string(&self.paths.todo) {
+                                    if !data.trim().is_empty() {
+                                        let trimmed = data.trim_end().to_string();
+                                        self.append_event(json!({"type":"todo_update","content":trimmed}))?;
+                                        if self.is_stream_json_mode() {
+                                            self.emit_stream(json!({"type":"todo_update","content":trimmed}))?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Event::Usage(usage) => {
+                            self.display_event(
+                                &mut display_last_char,
+                                DisplayEvent::Usage(usage),
                             )?;
                         }
                         Event::Stop(StopEvent { reason }) => {
@@ -250,70 +305,63 @@ impl Runtime {
                             self.display_event(&mut display_last_char, DisplayEvent::Stop(reason))?;
                         }
                         Event::Error(ErrorEvent { message }) => {
-                            return self.display_event(
+                            loop_error = message.clone();
+                            stop = "error".to_string();
+                            let _ = self.display_event(
                                 &mut display_last_char,
                                 DisplayEvent::Error(message),
                             );
+                            return Err(anyhow!("{}", loop_error));
                         }
                     }
                     Ok(())
                 });
                 if let Err(e) = call_result {
                     if e.to_string().contains(INTERRUPTED_ERR) {
-                        if !self.is_stream_json_mode() {
-                            self.info("Interrupted.");
-                        }
-                        return Ok(());
+                        stop = "interrupted".to_string();
+                    } else if loop_error.is_empty() {
+                        return Err(e);
                     }
-                    return Err(e);
                 }
 
-                self.conv.add_assistant(&text, &calls)?;
-                self.append_event(self.build_assistant_event(&text, &calls))?;
-
+                // Fatal stop reasons exit immediately
                 match stop.as_str() {
-                    "end_turn" | "stop" | "done" | "" => {
-                        let _ = self.compact_context_window("auto", false);
+                    "error" | "max_tokens" | "length" => {
+                        if stop != "error" {
+                            self.error("Response truncated (max_tokens reached)");
+                        }
                         return Ok(());
                     }
-                    "tool_use" | "tool_calls" => {
-                        if self.interrupted.load(Ordering::SeqCst) {
-                            if !self.is_stream_json_mode() {
-                                self.info("Interrupted.");
-                            }
-                            return Ok(());
-                        }
-                        let results = self.execute_tool_calls(&calls)?;
-                        if self.interrupted.load(Ordering::SeqCst) {
-                            if !self.is_stream_json_mode() {
-                                self.info("Interrupted.");
-                            }
-                            return Ok(());
-                        }
-                        for result in &results {
-                            self.display_event(
-                                &mut display_last_char,
-                                DisplayEvent::ToolResult(result.clone()),
-                            )?;
-                        }
-                        self.conv.add_tool_results(&results)?;
-                        for r in &results {
+                    _ => {}
+                }
+
+                // Tools already executed inline; persist unless interrupted
+                if !self.interrupted.load(Ordering::SeqCst) {
+                    self.conv.add_assistant(&text, &calls)?;
+                    self.append_event(self.build_assistant_event(&text, &calls))?;
+                    if !tool_results.is_empty() {
+                        self.conv.add_tool_results(&tool_results)?;
+                        for r in &tool_results {
                             self.append_event(json!({
                                 "type":"tool_result",
                                 "tool_use_id":r.tool_use_id,
                                 "content":r.content,
                             }))?;
                         }
-                        let _ = self.compact_context_window("auto", false);
                     }
-                    "max_tokens" | "length" => {
-                        self.error("Response truncated (max_tokens reached)");
+                    let _ = self.compact_context_window("auto", false);
+                    // tool_use/tool_calls → loop continues; anything else → break
+                    if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
                     }
-                    _ => {
-                        self.error(&format!("Unknown stop reason: {stop}"));
-                        return Ok(());
+                } else {
+                    if !self.is_stream_json_mode() {
+                        if display_last_char != "\n" {
+                            self.write_human("\n")?;
+                        }
+                        self.info("Interrupted.");
                     }
+                    return Ok(());
                 }
             }
             self.error(&format!("Max turns ({}) reached", self.cfg.max_turns));
@@ -459,62 +507,6 @@ impl Runtime {
             "openai" => sse::openai::parse(resp, emit),
             _ => Err(anyhow!("unknown provider: {}", self.cfg.provider)),
         }
-    }
-
-    fn execute_tool_calls(&mut self, calls: &[ToolCallEvent]) -> Result<Vec<ToolResult>> {
-        let runner = tools::Runner {
-            config: self.cfg.clone(),
-            todo_file: self.paths.todo.clone(),
-            cwd: self.cwd.clone(),
-            home: self.home.clone(),
-        };
-        let mut results = Vec::new();
-        for call in calls {
-            if self.interrupted.load(Ordering::SeqCst) {
-                break;
-            }
-            let mut output = match runner.dispatch(&call.name, &call.input_json) {
-                Ok(v) => v,
-                Err(e) => format!("Error: tool execution failed: {e}"),
-            };
-            if self.interrupted.load(Ordering::SeqCst) {
-                break;
-            }
-            output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
-            let mut display_content = output.clone();
-            if call.name == "Edit" {
-                let edit_diff = output.clone();
-                let summary = edit_diff_summary(
-                    call.fields.get("path").map(String::as_str).unwrap_or(""),
-                    &output,
-                );
-                output = summary;
-                display_content = edit_diff;
-            }
-
-            results.push(ToolResult {
-                tool_use_id: call.id.clone(),
-                tool_name: call.name.clone(),
-                tool_args: call
-                    .fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                content: output.clone(),
-                display_content,
-            });
-
-            if call.name == "TodoWrite" {
-                if let Ok(data) = fs::read_to_string(&self.paths.todo) {
-                    let trimmed = data.trim_end().to_string();
-                    self.append_event(json!({"type":"todo_update","content":trimmed}))?;
-                    if self.is_stream_json_mode() {
-                        self.emit_stream(json!({"type":"todo_update","content":trimmed}))?;
-                    }
-                }
-            }
-        }
-        Ok(results)
     }
 
     fn start_esc_interrupt_listener(&mut self) {

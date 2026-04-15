@@ -280,11 +280,20 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 		turn++
 		text := ""
 		var calls []protocol.ToolCallEvent
+		var toolResults []conversation.ToolResult
 		stop := ""
+		var loopError string
 		if rt.cfg.Verbose {
 			if messages, err := rt.conv.MessagesJSON(); err == nil {
 				rt.debug("messages: %.500s...", string(messages))
 			}
+		}
+
+		runner := tools.Runner{
+			Config:   rt.cfg,
+			TodoFile: rt.paths.Todo,
+			Cwd:      rt.cwd,
+			Home:     rt.home,
 		}
 
 		err := rt.llmCall(func(evt protocol.Event) error {
@@ -305,6 +314,48 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					return err
 				}
 				calls = append(calls, e)
+
+				// Inline dispatch: execute tool immediately
+				if rt.interrupted.Load() {
+					return errInterrupted
+				}
+				result := runner.Dispatch(e.Name, e.InputJSON)
+				if rt.interrupted.Load() {
+					return errInterrupted
+				}
+				output := result.Output
+				if result.Err != nil {
+					output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
+				}
+				output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
+				displayOutput := output
+				if e.Name == "Edit" {
+					editDiff := output
+					summary := conversation.BuildEditDiffSummary(e.Fields["path"], output)
+					output = summary
+					displayOutput = editDiff
+				}
+				toolResults = append(toolResults, conversation.ToolResult{
+					ToolUseID:      e.ID,
+					ToolName:       e.Name,
+					ToolArgs:       e.Fields,
+					Content:        output,
+					DisplayContent: displayOutput,
+				})
+				// Display tool result immediately
+				if err := rt.displayEvent(&state, toolResults[len(toolResults)-1]); err != nil {
+					return err
+				}
+				// Handle TodoWrite event
+				if e.Name == "TodoWrite" && result.Err == nil {
+					if data, err := os.ReadFile(rt.paths.Todo); err == nil && len(data) > 0 {
+						todoContent := strings.TrimRight(string(data), "\n")
+						_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": todoContent})
+						if rt.isStreamJSONMode() {
+							_ = rt.emitStream(map[string]any{"type": "todo_update", "content": todoContent})
+						}
+					}
+				}
 			case protocol.UsageEvent:
 				if err := rt.displayEvent(&state, e); err != nil {
 					return err
@@ -315,77 +366,60 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					return err
 				}
 			case protocol.ErrorEvent:
-				return rt.displayEvent(&state, e)
+				loopError = e.Message
+				stop = "error"
+				_ = rt.displayEvent(&state, e)
+				return fmt.Errorf("%s", e.Message)
 			}
 			return nil
 		})
 		if err != nil {
 			if errors.Is(err, errInterrupted) {
-				if rt.cfg.OutputFormat == config.OutputHuman {
-					if state.lastChar != "\n" {
-						_, _ = fmt.Fprint(rt.stdout, rt.nl())
-					}
-					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
-				}
-				return nil
-			}
-			rt.error("%v", err)
-			return err
-		}
-
-		if err := rt.conv.AddAssistant(text, calls); err != nil {
-			return err
-		}
-		_ = rt.appendEvent(rt.buildAssistantEvent(text, calls))
-
-		switch stop {
-		case "end_turn", "stop", "done":
-			_, _ = rt.compactContextWindow("auto", false)
-			return nil
-		case "tool_use", "tool_calls":
-			if rt.interrupted.Load() {
-				if rt.cfg.OutputFormat == config.OutputHuman {
-					if state.lastChar != "\n" {
-						_, _ = fmt.Fprint(rt.stdout, rt.nl())
-					}
-					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
-				}
-				return nil
-			}
-			results, err := rt.executeToolCalls(calls)
-			if err != nil {
+				stop = "interrupted"
+			} else if loopError == "" {
 				return err
 			}
-			if rt.interrupted.Load() {
-				if rt.cfg.OutputFormat == config.OutputHuman {
-					if state.lastChar != "\n" {
-						_, _ = fmt.Fprint(rt.stdout, rt.nl())
-					}
-					_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
-				}
-				return nil
+		}
+
+		// Fatal stop reasons exit immediately
+		switch stop {
+		case "error", "max_tokens", "length":
+			if stop != "error" {
+				rt.error("Response truncated (max_tokens reached)")
 			}
-			for _, result := range results {
-				if err := rt.displayEvent(&state, result); err != nil {
+			return nil
+		}
+
+		// Tools already executed inline; persist unless interrupted
+		if !rt.interrupted.Load() {
+			if err := rt.conv.AddAssistant(text, calls); err != nil {
+				return err
+			}
+			_ = rt.appendEvent(rt.buildAssistantEvent(text, calls))
+			if len(toolResults) > 0 {
+				if err := rt.conv.AddToolResults(toolResults); err != nil {
 					return err
 				}
-			}
-			if err := rt.conv.AddToolResults(results); err != nil {
-				return err
-			}
-			for _, result := range results {
-				_ = rt.appendEvent(map[string]any{
-					"type":        "tool_result",
-					"tool_use_id": result.ToolUseID,
-					"content":     result.Content,
-				})
+				for _, result := range toolResults {
+					_ = rt.appendEvent(map[string]any{
+						"type":        "tool_result",
+						"tool_use_id": result.ToolUseID,
+						"content":     result.Content,
+					})
+				}
 			}
 			_, _ = rt.compactContextWindow("auto", false)
-		case "max_tokens", "length":
-			rt.error("Response truncated (max_tokens reached)")
-			return nil
-		default:
-			rt.error("Unknown stop reason: %s", stop)
+			// tool_use/tool_calls → loop continues; anything else → break
+			if stop != "tool_use" && stop != "tool_calls" {
+				return nil
+			}
+		} else {
+			if rt.cfg.OutputFormat == config.OutputHuman {
+				if state.lastChar != "\n" {
+					_, _ = fmt.Fprint(rt.stdout, rt.nl())
+				}
+				_, _ = fmt.Fprint(rt.stdout, "Interrupted."+rt.nl())
+			}
 			return nil
 		}
 	}
@@ -538,54 +572,6 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 		}
 	}
 	return nil
-}
-
-func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversation.ToolResult, error) {
-	runner := tools.Runner{
-		Config:   rt.cfg,
-		TodoFile: rt.paths.Todo,
-		Cwd:      rt.cwd,
-		Home:     rt.home,
-	}
-	results := make([]conversation.ToolResult, 0, len(calls))
-	for _, call := range calls {
-		if rt.interrupted.Load() {
-			break
-		}
-		result := runner.Dispatch(call.Name, call.InputJSON)
-		if rt.interrupted.Load() {
-			break
-		}
-		output := result.Output
-		if result.Err != nil {
-			output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
-		}
-		output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
-		displayOutput := output
-		if call.Name == "Edit" {
-			editDiff := output
-			summary := conversation.BuildEditDiffSummary(call.Fields["path"], output)
-			output = summary
-			displayOutput = editDiff
-		}
-		results = append(results, conversation.ToolResult{
-			ToolUseID:      call.ID,
-			ToolName:       call.Name,
-			ToolArgs:       call.Fields,
-			Content:        output,
-			DisplayContent: displayOutput,
-		})
-		if call.Name == "TodoWrite" && result.Err == nil {
-			if data, err := os.ReadFile(rt.paths.Todo); err == nil && len(data) > 0 {
-				todoContent := strings.TrimRight(string(data), "\n")
-				_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": todoContent})
-				if rt.isStreamJSONMode() {
-					_ = rt.emitStream(map[string]any{"type": "todo_update", "content": todoContent})
-				}
-			}
-		}
-	}
-	return results, nil
 }
 
 func (rt *runtime) startEscInterruptListener() {

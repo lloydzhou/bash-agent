@@ -74,11 +74,9 @@ src/awk/*
 - `compact_context_window()`
   - 可以保留少量真正有独立语义的 helper
   - 例如“按预算和 turn 边界计算保留窗口”
-- `execute_tool_calls()`
-  - 当前职责仍然连贯
-  - 不应为了缩短函数继续拆分
-- `agent_loop()`
-  - 当前虽然偏长，但主循环状态和渲染副作用耦合较强
+- `agent_loop_stream()`
+  - 主循环内联执行 tool 调用，不再有独立的 `execute_tool_calls*` 函数
+  - tool 调用、结果收集、conv 写入都在流解析过程中完成
   - 只有在未来出现新的稳定职责边界时才值得继续拆
 
 这意味着后续优化应遵循：
@@ -258,7 +256,7 @@ skills 当前优先读取：
 - 不要把 `json.awk` 再变回杂物间
 - 不要为“更通用”引入更重的多行协议
 - 不要把 `run_with_timeout()` 做成长 supervisor
-- 不要继续为了缩短函数机械拆分 `agent_loop()` 或 `execute_tool_calls()`
+- 不要继续为了缩短函数机械拆分 `agent_loop_stream()`
 
 ## Provider 与请求构造
 
