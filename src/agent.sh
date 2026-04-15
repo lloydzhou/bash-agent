@@ -837,11 +837,17 @@ conv_add_assistant() {
     session_log_assistant "$text" "$calls"
 }
 
-conv_add_single_tool_result() {
-    local tid="$1" result="$2"
-    local obj
-    obj=$(build_tool_result_json_object "$tid" "$result")
-    printf '{"role":"user","content":[%s]}\n' "$obj" >> "$CONV_FILE"
+conv_add_tool_results() {
+    # $1: newline-separated list of id<TAB>json_escaped_result
+    local results="$1" content="[" first=true tid="" result=""
+    while IFS=$'\t' read -r tid result; do
+        [[ -z "$tid" ]] && continue
+        $first || content+=","
+        first=false
+        content+=$(build_tool_result_json_object "$tid" "$result")
+    done <<< "$results"
+    content+="]"
+    printf '{"role":"user","content":%s}\n' "$content" >> "$CONV_FILE"
 }
 
 conv_get_messages() {
@@ -1365,11 +1371,7 @@ agent_loop_stream() {
         if ! interrupt_requested; then
             conv_add_assistant "$text" "$tool_calls"
             if [[ -n "$tool_conv_results" ]]; then
-                local cr_id="" cr_result=""
-                while IFS=$'\t' read -r cr_id cr_result; do
-                    [[ -z "$cr_id" ]] && continue
-                    conv_add_single_tool_result "$cr_id" "$cr_result"
-                done <<< "$tool_conv_results"
+                conv_add_tool_results "$tool_conv_results"
             fi
             compact_context_window "auto" false || true
             # tool_use/tool_calls → loop continues; anything else → break
