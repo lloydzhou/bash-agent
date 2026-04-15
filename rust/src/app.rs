@@ -799,7 +799,7 @@ fn print_usage() {
     println!(
         "  --skill NAME            Load skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)"
     );
-    println!("  --max-turns N           Max agent turns (default: 20)");
+    println!("  --max-turns N           Max agent turns (default: 40)");
     println!("  --max-context N         Max stored context bytes before compact (default: 200000)");
     println!("  --api-key KEY           API key (default from env)");
     println!("  --base-url URL          Override API base URL");

@@ -20,7 +20,7 @@ VERBOSE=false
 API_KEY=""
 BASE_URL=""
 PROMPT=""
-MAX_TURNS=20
+MAX_TURNS=40
 MAX_CONTEXT_BYTES=200000
 MAX_CONTEXT_KEEP_PCT=25
 declare -a SKILL_NAMES=()
@@ -1436,7 +1436,7 @@ Options:
   --max-tokens N          Max output tokens (default: 4096)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
-  --max-turns N           Max agent turns (default: 20)
+  --max-turns N           Max agent turns (default: 40)
   --max-context N         Max stored context bytes before compact (default: 200000; supports k/m/g)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)

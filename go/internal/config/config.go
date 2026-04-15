@@ -58,7 +58,7 @@ func Default() Config {
 		ToolResultMaxBytes: 50000,
 		FileWriteMaxBytes:  1048576,
 		OutputFormat:       OutputHuman,
-		MaxTurns:           20,
+		MaxTurns:           40,
 		MaxContextBytes:    200000,
 		MaxContextKeepPct:  25,
 		Command:            CommandChat,

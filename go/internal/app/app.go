@@ -861,7 +861,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --max-tokens N          Max output tokens (default: 4096)")
 	fmt.Fprintln(w, "  --tool-timeout N        Tool execution timeout in seconds (default: 600)")
 	fmt.Fprintln(w, "  --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)")
-	fmt.Fprintln(w, "  --max-turns N           Max agent turns (default: 20)")
+	fmt.Fprintln(w, "  --max-turns N           Max agent turns (default: 40)")
 	fmt.Fprintln(w, "  --max-context N         Max stored context bytes before compact (default: 200000; supports k/m/g)")
 	fmt.Fprintln(w, "  --api-key KEY           API key (default from env)")
 	fmt.Fprintln(w, "  --base-url URL          Override API base URL")

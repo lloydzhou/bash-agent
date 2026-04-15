@@ -53,7 +53,7 @@ impl Default for Config {
             api_key: String::new(),
             base_url: String::new(),
             prompt: String::new(),
-            max_turns: 20,
+            max_turns: 40,
             max_context_bytes: 200_000,
             max_context_keep_pct: 25,
             skills: Vec::new(),
