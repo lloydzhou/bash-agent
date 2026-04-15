@@ -518,6 +518,9 @@ find_skill_base_dirs() {
     if [[ -d "$cwd/.claude/skills" ]]; then
         printf '%s\n' "$cwd/.claude/skills"
     fi
+    if [[ -d "$cwd/skills" ]]; then
+        printf '%s\n' "$cwd/skills"
+    fi
     if [[ -n "$home" && -d "$home/.claude/skills" ]]; then
         printf '%s\n' "$home/.claude/skills"
     fi

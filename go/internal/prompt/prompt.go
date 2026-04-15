@@ -196,6 +196,10 @@ func findSkillBaseDirs(cwd, home string) []string {
 	if info, err := os.Stat(project); err == nil && info.IsDir() {
 		dirs = append(dirs, project)
 	}
+	projectDev := filepath.Join(cwd, "skills")
+	if info, err := os.Stat(projectDev); err == nil && info.IsDir() {
+		dirs = append(dirs, projectDev)
+	}
 	if home != "" {
 		global := filepath.Join(home, ".claude", "skills")
 		if info, err := os.Stat(global); err == nil && info.IsDir() {

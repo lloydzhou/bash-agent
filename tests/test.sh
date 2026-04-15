@@ -1299,6 +1299,27 @@ EOF
     fi
 }
 
+test_agent_skill_injection_from_repo_skills_dir() {
+    info "Test 13a: Agent.sh skill injection from repo skills dir"
+    local skill_dir skill_file output
+    skill_dir="$ROOT_DIR/skills/test-skill-repo"
+    skill_file="$skill_dir/SKILL.md"
+    mkdir -p "$skill_dir"
+    cat > "$skill_file" <<'EOF'
+# test-skill-repo
+
+Skill marker for repo skills dir
+Skill path marker: ${BASH_AGENT_SKILL_DIR}/helper.sh
+EOF
+    output=$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --skill test-skill-repo 'Hello' 2>&1) || true
+    rm -rf "$ROOT_DIR/skills"
+    if echo "$output" | grep -q "skill-path-aware" && echo "$output" | grep -q "mock"; then
+        green "Agent skill injection from repo skills dir"; ((PASS++)) || true
+    else
+        red "Agent skill injection from repo skills dir"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 test_agent_skill_index() {
     info "Test 14: Agent.sh skill index"
     local skill_dir skill_file output
@@ -1814,6 +1835,7 @@ test_agent_compact
 test_agent_compact_preserves_turn_boundary
 test_agent_compact_noop_without_provider
 test_agent_skill_injection
+test_agent_skill_injection_from_repo_skills_dir
 test_agent_skill_index
 test_agent_skill_tool
 test_agent_instruction_files

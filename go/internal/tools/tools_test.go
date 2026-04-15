@@ -41,7 +41,7 @@ func TestDispatchTodoWrite(t *testing.T) {
 
 func TestDispatchToolSkill(t *testing.T) {
 	dir := t.TempDir()
-	skillDir := filepath.Join(dir, ".claude", "skills", "test-skill")
+	skillDir := filepath.Join(dir, "skills", "test-skill")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -204,6 +204,10 @@ fn find_skill_base_dirs(cwd: &Path, home: &Path) -> Vec<PathBuf> {
     if project.is_dir() {
         out.push(project);
     }
+    let project_dev = cwd.join("skills");
+    if project_dev.is_dir() {
+        out.push(project_dev);
+    }
     let global = home.join(".claude/skills");
     if global.is_dir() {
         out.push(global);

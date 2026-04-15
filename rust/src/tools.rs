@@ -340,7 +340,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let root = std::env::temp_dir().join(format!("rustagent-skill-test-{unique}"));
-        let skill_dir = root.join(".claude/skills/test-skill");
+        let skill_dir = root.join("skills/test-skill");
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
