@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 static RE_FIND_DELETE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)(^|[;&|])\s*find\b.*\b-delete\b").expect("regex"));
+    Lazy::new(|| Regex::new(r"(?i)(^|[;&|])\s*find\b.*\bdelete\b").expect("regex"));
 static RE_FORK_BOMB: Lazy<Regex> = Lazy::new(|| Regex::new(r":\(\)\{:\|:&\};:").expect("regex"));
 static RE_BLOCK_DEVICE_WRITE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(^|\s)(>|>>|of=)\s*/dev/(sd[a-z]|disk\d+|rdisk\d+|nvme\d+n\d+)")
@@ -27,7 +27,7 @@ pub fn deny_bash_command_reason(command: &str) -> Option<&'static str> {
         return Some("destructive root delete pattern");
     }
     if RE_FIND_DELETE.is_match(trimmed) {
-        return Some("find -delete pattern");
+        return Some("blocked destructive find -delete pattern");
     }
     if RE_FORK_BOMB.is_match(trimmed) {
         return Some("fork bomb pattern");

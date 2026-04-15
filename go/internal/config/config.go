@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -186,6 +187,18 @@ func ParseArgs(args []string) (Config, error) {
 	case OutputHuman, OutputStreamJSON:
 	default:
 		return cfg, fmt.Errorf("unknown output format: %s", cfg.OutputFormat)
+	}
+
+	// Allow environment variable overrides for limits
+	if v := os.Getenv("TOOL_RESULT_MAX_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ToolResultMaxBytes = n
+		}
+	}
+	if v := os.Getenv("FILE_WRITE_MAX_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.FileWriteMaxBytes = n
+		}
 	}
 
 	return cfg, nil

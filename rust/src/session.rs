@@ -12,9 +12,10 @@ pub struct Paths {
 }
 
 pub fn project_key(cwd: &Path) -> String {
-    let mut clean = cwd
-        .to_string_lossy()
-        .replace(std::path::MAIN_SEPARATOR, "-");
+    let s = cwd.to_string_lossy();
+    // Strip leading separator, matching the bash version: cwd="${cwd#/}"
+    let stripped = s.strip_prefix(std::path::MAIN_SEPARATOR).unwrap_or(&s);
+    let mut clean = stripped.replace(std::path::MAIN_SEPARATOR, "-");
     while clean.contains("--") {
         clean = clean.replace("--", "-");
     }

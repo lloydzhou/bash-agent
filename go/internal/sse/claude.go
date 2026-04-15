@@ -151,8 +151,7 @@ func (p ClaudeParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 			}
 			if payload.Usage.CacheReadInputTokens != 0 {
 				cacheInputTokens = payload.Usage.CacheReadInputTokens
-			}
-			if payload.Usage.CacheCreationInputTokens != 0 {
+			} else if payload.Usage.CacheCreationInputTokens != 0 {
 				cacheInputTokens = payload.Usage.CacheCreationInputTokens
 			}
 		case "message_start":
@@ -173,8 +172,7 @@ func (p ClaudeParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 			}
 			if payload.Message.Usage.CacheReadInputTokens != 0 {
 				cacheInputTokens = payload.Message.Usage.CacheReadInputTokens
-			}
-			if payload.Message.Usage.CacheCreationInputTokens != 0 {
+			} else if payload.Message.Usage.CacheCreationInputTokens != 0 {
 				cacheInputTokens = payload.Message.Usage.CacheCreationInputTokens
 			}
 		case "message_stop":

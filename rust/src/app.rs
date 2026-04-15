@@ -197,6 +197,7 @@ impl Runtime {
         self.start_esc_interrupt_listener();
         let result = (|| -> Result<()> {
             self.conv.add_user(&user_input)?;
+            self.append_event(json!({"type":"session_start"}))?;
             self.append_event(json!({"type":"user_message","content":user_input}))?;
 
             let mut turn = 0;
@@ -271,7 +272,7 @@ impl Runtime {
                 self.append_event(self.build_assistant_event(&text, &calls))?;
 
                 match stop.as_str() {
-                    "end_turn" | "stop" | "done" => {
+                    "end_turn" | "stop" | "done" | "" => {
                         let _ = self.compact_context_window("auto", false);
                         return Ok(());
                     }
@@ -472,6 +473,9 @@ impl Runtime {
                 if let Ok(data) = fs::read_to_string(&self.paths.todo) {
                     let trimmed = data.trim_end().to_string();
                     self.append_event(json!({"type":"todo_update","content":trimmed}))?;
+                    if self.is_stream_json_mode() {
+                        self.emit_stream(json!({"type":"todo_update","content":trimmed}))?;
+                    }
                 }
             }
         }

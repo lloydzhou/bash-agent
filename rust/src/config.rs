@@ -165,6 +165,18 @@ fn require_value(args: &[String], i: usize) -> Result<String> {
 }
 
 pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
+    // Env var overrides for size limits
+    if let Ok(v) = std::env::var("TOOL_RESULT_MAX_BYTES") {
+        if let Ok(n) = v.parse::<usize>() {
+            cfg.tool_result_max_bytes = n;
+        }
+    }
+    if let Ok(v) = std::env::var("FILE_WRITE_MAX_BYTES") {
+        if let Ok(n) = v.parse::<usize>() {
+            cfg.file_write_max_bytes = n;
+        }
+    }
+
     match cfg.provider.as_str() {
         "claude" => {
             if cfg.api_key.is_empty() {

@@ -539,7 +539,11 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 		})
 		if call.Name == "TodoWrite" && result.Err == nil {
 			if data, err := os.ReadFile(rt.paths.Todo); err == nil && len(data) > 0 {
-				_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": strings.TrimRight(string(data), "\n")})
+				todoContent := strings.TrimRight(string(data), "\n")
+				_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": todoContent})
+				if rt.isStreamJSONMode() {
+					_ = rt.emitStream(map[string]any{"type": "todo_update", "content": todoContent})
+				}
 			}
 		}
 	}
