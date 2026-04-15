@@ -88,8 +88,8 @@ for key, (filename, varname) in awk_files.items():
     var_block += "\n" + varname + "='" + awk_bodies[key] + "'\n"
 var_block += "\n_TOOLS_JSON='" + tools_json_raw.replace("'", "'\\''") + "'\n"
 
-# Insert after the PROMPT="" line (end of config section)
-marker = 'PROMPT=""\n'
+# Insert after the USER_INPUT="" line (end of config section)
+marker = 'USER_INPUT=""\n'
 idx = content.find(marker)
 if idx != -1:
     content = content[:idx + len(marker)] + var_block + content[idx + len(marker):]

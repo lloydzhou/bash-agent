@@ -9,13 +9,6 @@ import (
 	"strings"
 )
 
-type Command string
-
-const (
-	CommandChat    Command = "chat"
-	CommandCompact Command = "compact"
-)
-
 type OutputFormat string
 
 const (
@@ -42,7 +35,6 @@ type Config struct {
 	Skills             []string
 
 	Interactive     bool
-	Command         Command
 	SessionMode     bool
 	SessionID       string
 	ContinueSession bool
@@ -61,17 +53,11 @@ func Default() Config {
 		MaxTurns:           40,
 		MaxContextBytes:    200000,
 		MaxContextKeepPct:  25,
-		Command:            CommandChat,
 	}
 }
 
 func ParseArgs(args []string) (Config, error) {
 	cfg := Default()
-	if len(args) > 0 && args[0] == string(CommandCompact) {
-		cfg.Command = CommandCompact
-		args = args[1:]
-	}
-
 	for i := 0; i < len(args); {
 		arg := args[i]
 		switch arg {
@@ -204,7 +190,6 @@ func ParseArgs(args []string) (Config, error) {
 
 	return cfg, nil
 }
-
 func ApplyProviderDefaults(cfg *Config, env map[string]string) error {
 	switch cfg.Provider {
 	case "claude":

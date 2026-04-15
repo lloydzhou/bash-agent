@@ -19,7 +19,7 @@ OUTPUT_FORMAT="human"
 VERBOSE=false
 API_KEY=""
 BASE_URL=""
-PROMPT=""
+USER_INPUT=""
 MAX_TURNS=40
 MAX_CONTEXT_BYTES=200000
 MAX_CONTEXT_KEEP_PCT=25
@@ -29,10 +29,7 @@ declare -a SKILL_NAMES=()
 # Runtime Mode & Session State
 # ============================================================================
 INTERACTIVE=false
-COMMAND="chat"
-SESSION_MODE=false
 SESSION_ID=""
-CONTINUE_SESSION=false
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 TODO_FILE=""
@@ -380,7 +377,7 @@ append_section() {
 }
 
 session_append_line() {
-    [[ "$SESSION_MODE" == true && -n "${SESSION_EVENT_FILE:-}" ]] || return 0
+    [[ -n "${SESSION_EVENT_FILE:-}" ]] || return 0
     printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"
 }
 
@@ -749,10 +746,11 @@ find_awk_dir() {
     fi
     die "Cannot find awk/ directory. Set AWK_DIR or ensure awk/ exists alongside agent.sh"
 }
-get_project_key() {
+get_session_dir() {
     local cwd="${PWD:-$(pwd)}"
+    local project_key
     cwd="$(cd "$cwd" && pwd -P)"
-    printf '%s' "$cwd" | awk '
+    project_key="$(printf '%s' "$cwd" | awk '
     {
         sub(/^\/+/, "", $0)
         gsub(/\//, "-", $0)
@@ -761,7 +759,25 @@ get_project_key() {
         sub(/^-+/, "", $0)
         sub(/-+$/, "", $0)
         print "-" $0
-    }'
+    }')"
+    printf '%s/.bash-agent/projects/%s' "${HOME}" "$project_key"
+}
+
+get_latest_session_file() {
+    local session_dir
+    session_dir="$(get_session_dir)"
+    [[ -d "$session_dir" ]] || return 1
+    ls -t "${session_dir}"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$' | head -1
+}
+
+resolve_continue_session_id() {
+    local latest_file=""
+    latest_file="$(get_latest_session_file || true)"
+    if [[ -n "$latest_file" ]]; then
+        SESSION_ID="$(basename "$latest_file" .jsonl)"
+    else
+        SESSION_ID="$(date +%Y%m%d-%H%M%S)"
+    fi
 }
 
 # ============================================================================
@@ -769,35 +785,15 @@ get_project_key() {
 # ============================================================================
 
 conv_init() {
-    if [[ "$SESSION_MODE" == true ]]; then
+    if [[ -n "$SESSION_ID" ]]; then
         local session_dir
-        session_dir="${HOME}/.bash-agent/projects/$(get_project_key)"
+        session_dir="$(get_session_dir)"
         mkdir -p "$session_dir"
 
-        local session_base=""
-        if [[ -n "$SESSION_ID" ]]; then
-            # Named session
-            session_base="$SESSION_ID"
-        elif [[ "$CONTINUE_SESSION" == true ]]; then
-            # Continue most recent session
-            CONV_FILE=$(ls -t "${session_dir}"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$' | head -1)
-            if [[ -n "$CONV_FILE" ]]; then
-                session_base="$(basename "$CONV_FILE" .jsonl)"
-            elif [[ "$COMMAND" == "compact" ]]; then
-                die "No existing session found to compact. Use --session NAME or run a session first."
-            else
-                session_base="$(date +%Y%m%d-%H%M%S)"
-            fi
-        else
-            # New unnamed session
-            session_base="$(date +%Y%m%d-%H%M%S)"
-        fi
-
-        [[ -z "$session_base" ]] && session_base="$(date +%Y%m%d-%H%M%S)"
-        CONV_FILE="${session_dir}/${session_base}.jsonl"
-        SESSION_EVENT_FILE="${session_dir}/${session_base}.events.jsonl"
-        CONTEXT_SUMMARY_FILE="${session_dir}/${session_base}.summary.txt"
-        TODO_FILE="${session_dir}/${session_base}.todo.md"
+        CONV_FILE="${session_dir}/${SESSION_ID}.jsonl"
+        SESSION_EVENT_FILE="${session_dir}/${SESSION_ID}.events.jsonl"
+        CONTEXT_SUMMARY_FILE="${session_dir}/${SESSION_ID}.summary.txt"
+        TODO_FILE="${session_dir}/${SESSION_ID}.todo.md"
         local new_session=false
         [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
         touch "$CONV_FILE"
@@ -805,7 +801,7 @@ conv_init() {
         touch "$CONTEXT_SUMMARY_FILE"
         touch "$TODO_FILE"
         if [[ "$new_session" == true ]]; then
-            session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$session_base")\"}"
+            session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
         fi
     else
         # Ephemeral: use tmpdir (cleaned on exit)
@@ -1428,7 +1424,6 @@ execute_tool_calls_stream() {
 usage() {
     cat <<'EOF'
 Usage: agent.sh [options] [prompt]
-       agent.sh compact [options]
 
 Options:
   -p, --provider PROV     LLM provider: claude | openai (default: claude)
@@ -1463,18 +1458,12 @@ Examples:
   ./agent.sh --continue "What did we discuss?"
   ./agent.sh --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'
   echo "prompt" | ./agent.sh --print
-  ./agent.sh compact --session code-review
   ./agent.sh -i
 EOF
     exit 0
 }
 
 parse_args() {
-    if [[ $# -gt 0 && "$1" == "compact" ]]; then
-        COMMAND="compact"
-        shift
-    fi
-
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
@@ -1492,14 +1481,19 @@ parse_args() {
             --output-format)  OUTPUT_FORMAT="$2"; shift 2 ;;
             --print)         OUTPUT_FORMAT="stream-json"; shift ;;
             --session)
-                SESSION_MODE=true
                 if [[ $# -gt 1 && ! "$2" =~ ^- ]]; then
                     SESSION_ID="$2"; shift 2
                 else
+                    SESSION_ID="$(date +%Y%m%d-%H%M%S)"
                     shift
                 fi
                 ;;
-            --continue)      SESSION_MODE=true; CONTINUE_SESSION=true; shift ;;
+            --continue)
+                if [[ -z "$SESSION_ID" ]]; then
+                    resolve_continue_session_id
+                fi
+                shift
+                ;;
             --list-sessions)
                 list_sessions
                 exit 0
@@ -1508,7 +1502,7 @@ parse_args() {
             -i|--interactive) INTERACTIVE=true; shift ;;
             -h|--help)       usage ;;
             -*)              die "Unknown option: $1" ;;
-            *)               PROMPT="$1"; shift ;;
+            *)               USER_INPUT="$1"; shift ;;
         esac
     done
 
@@ -1522,7 +1516,7 @@ parse_args() {
 
 list_sessions() {
     local dir
-    dir="${HOME}/.bash-agent/projects/$(get_project_key)"
+    dir="$(get_session_dir)"
     if [[ ! -d "$dir" ]]; then
         echo "No sessions found."
         return
@@ -1627,37 +1621,18 @@ stop_esc_interrupt_listener() {
 main() {
     parse_args "$@"
 
-    if [[ "$COMMAND" == "compact" && "$SESSION_MODE" != true && "$CONTINUE_SESSION" != true && -z "$SESSION_ID" ]]; then
-        SESSION_MODE=true
-        CONTINUE_SESSION=true
-    fi
-
     AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent.XXXXXX")
     find_awk_dir
     conv_init
     load_tool_defs
 
-    if [[ "$COMMAND" == "compact" ]]; then
-        if compact_context_window "manual" true; then
-            if [[ "$OUTPUT_FORMAT" == "human" ]]; then
-                log_info "Context compacted."
-            fi
-        else
-            if [[ "$OUTPUT_FORMAT" == "human" ]]; then
-                log_info "Context is within budget; no compaction needed."
-            fi
-        fi
-    else
-        validate_config
-        setup_api_url
-    fi
+    validate_config
+    setup_api_url
 
-    if [[ "$COMMAND" == "compact" ]]; then
-        :
-    elif [[ "$INTERACTIVE" == true ]]; then
+    if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode
-    elif [[ -n "$PROMPT" ]]; then
-        agent_loop "$PROMPT"
+    elif [[ -n "$USER_INPUT" ]]; then
+        agent_loop "$USER_INPUT"
     elif [[ ! -t 0 ]]; then
         local input
         input=$(cat)

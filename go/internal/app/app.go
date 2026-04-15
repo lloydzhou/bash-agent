@@ -107,30 +107,13 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			Client: newHTTPClient(),
 		},
 	}
-	if cfg.Command != config.CommandCompact {
-		if err := rt.applyProviderDefaults(); err != nil {
-			return err
-		}
+	if err := rt.applyProviderDefaults(); err != nil {
+		return err
 	}
 	if err := rt.initState(); err != nil {
 		return err
 	}
 	defer rt.cleanup()
-
-	if rt.cfg.Command == config.CommandCompact {
-		compacted, err := rt.compactContextWindow("manual", true)
-		if err != nil {
-			return err
-		}
-		if rt.cfg.OutputFormat == config.OutputHuman {
-			if compacted {
-				rt.info("Context compacted.")
-			} else {
-				rt.info("Context is within budget; no compaction needed.")
-			}
-		}
-		return nil
-	}
 
 	if rt.cfg.Interactive || (rt.cfg.Prompt == "" && isTTY(os.Stdin)) {
 		rt.cfg.Interactive = true
@@ -168,18 +151,11 @@ func (rt *runtime) initState() error {
 	rt.tmpDir = tmpDir
 	rt.toolsJSON = append([]byte(nil), assets.ToolsJSON...)
 
-	if rt.cfg.Command == config.CommandCompact && !rt.cfg.SessionMode && !rt.cfg.ContinueSession && rt.cfg.SessionID == "" {
-		rt.cfg.SessionMode = true
-		rt.cfg.ContinueSession = true
-	}
-
 	if rt.cfg.SessionMode {
 		sessionID := rt.cfg.SessionID
 		if sessionID == "" && rt.cfg.ContinueSession {
 			if id, err := session.ContinueSession(rt.home, rt.cwd); err == nil {
 				sessionID = id
-			} else if rt.cfg.Command == config.CommandCompact {
-				return fmt.Errorf("no existing session found to compact")
 			}
 		}
 		if sessionID == "" {
@@ -853,7 +829,6 @@ func (rt *runtime) debug(format string, args ...any) {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: goagent [options] [prompt]")
-	fmt.Fprintln(w, "       goagent compact [options]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Options:")
 	fmt.Fprintln(w, "  -p, --provider PROV     LLM provider: claude | openai (default: claude)")
@@ -888,7 +863,6 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `  goagent --continue "What did we discuss?"`)
 	fmt.Fprintln(w, `  goagent --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'`)
 	fmt.Fprintln(w, `  echo "prompt" | goagent --print`)
-	fmt.Fprintln(w, `  goagent compact --session code-review`)
 	fmt.Fprintln(w, `  goagent -i`)
 }
 

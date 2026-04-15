@@ -1204,79 +1204,6 @@ test_agent_e2e_openai() {
     fi
 }
 
-# Test 12: Compact subcommand
-test_agent_compact() {
-    info "Test 12: Agent.sh compact subcommand"
-    local home_dir session_dir session_file summary_file output remaining_bytes remaining_lines
-    home_dir=$(mktemp -d)
-    session_dir="$home_dir/.bash-agent/projects/$(project_key)"
-    mkdir -p "$session_dir"
-    session_file="$session_dir/demo.jsonl"
-    summary_file="$session_dir/demo.summary.txt"
-    : > "$session_file"
-    for i in $(seq 1 45); do
-        printf '{"role":"user","content":"message %s"}\n' "$i" >> "$session_file"
-    done
-    output=$(HOME="$home_dir" "$AGENT" compact -p claude --base-url "$BASE/v1" --api-key test --session demo --max-context 200 2>&1) || true
-    remaining_bytes=$(wc -c < "$session_file")
-    remaining_lines=$(wc -l < "$session_file")
-    if echo "$output" | grep -q "Context compacted" && \
-       grep -q "Task focus: summarize compact test" "$summary_file" && \
-       grep -q "^Latest request: compact session$" "$summary_file" && \
-       grep -q "^Progress: trimmed old context$" "$summary_file" && \
-       grep -q "^Tool evidence: none$" "$summary_file" && \
-       (( remaining_lines > 0 )) && \
-       (( remaining_lines < 45 )) && \
-       (( remaining_bytes <= 80 )); then
-        green "Agent compact subcommand"; ((PASS++)) || true
-    else
-        red "Agent compact subcommand"; echo "  Output: $output"; echo "  Session lines: $remaining_lines"; echo "  Session bytes: $remaining_bytes"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || true)"; ((FAIL++)) || true
-    fi
-}
-
-test_agent_compact_preserves_turn_boundary() {
-    info "Test 13: Agent.sh compact preserves turn boundary"
-    local home_dir session_dir session_file output first_line remaining_lines
-    home_dir=$(mktemp -d)
-    session_dir="$home_dir/.bash-agent/projects/$(project_key)"
-    mkdir -p "$session_dir"
-    session_file="$session_dir/demo.jsonl"
-    cat > "$session_file" <<'EOF'
-{"role":"user","content":"turn one request"}
-{"role":"assistant","content":[{"type":"text","text":"first turn assistant step"}]}
-{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"tool output from first turn"}]}
-{"role":"assistant","content":[{"type":"text","text":"first turn done"}]}
-{"role":"user","content":"turn two request"}
-{"role":"assistant","content":[{"type":"text","text":"second turn done"}]}
-EOF
-    output=$(HOME="$home_dir" "$AGENT" compact -p claude --base-url "$BASE/v1" --api-key test --session demo --max-context 180 2>&1) || true
-    first_line=$(sed -n '1p' "$session_file")
-    remaining_lines=$(wc -l < "$session_file")
-    if echo "$output" | grep -q "Context compacted" && \
-       [[ "$first_line" == '{"role":"user","content":"turn two request"}' || "$first_line" == '{"role":"user","content":"turn one request"}' ]] && \
-       (( remaining_lines < 6 )); then
-        green "Agent compact preserves turn boundary"; ((PASS++)) || true
-    else
-        red "Agent compact preserves turn boundary"; echo "  Output: $output"; echo "  First line: $first_line"; echo "  Remaining lines: $remaining_lines"; ((FAIL++)) || true
-    fi
-}
-
-test_agent_compact_noop_without_provider() {
-    info "Test 13b: Agent.sh compact no-op without provider config"
-    local home_dir session_dir session_file output
-    home_dir=$(mktemp -d)
-    session_dir="$home_dir/.bash-agent/projects/$(project_key)"
-    mkdir -p "$session_dir"
-    session_file="$session_dir/demo.jsonl"
-    printf '{"role":"user","content":"small message"}\n' > "$session_file"
-    output=$(HOME="$home_dir" "$AGENT" compact --session demo --max-context 1m 2>&1) || true
-    if echo "$output" | grep -q "Context is within budget; no compaction needed."; then
-        green "Agent compact no-op without provider config"; ((PASS++)) || true
-    else
-        red "Agent compact no-op without provider config"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-}
-
 # Test 13: Skill injection
 test_agent_skill_injection() {
     info "Test 13: Agent.sh skill injection"
@@ -1831,9 +1758,6 @@ test_convert_messages
 test_convert_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
-test_agent_compact
-test_agent_compact_preserves_turn_boundary
-test_agent_compact_noop_without_provider
 test_agent_skill_injection
 test_agent_skill_injection_from_repo_skills_dir
 test_agent_skill_index

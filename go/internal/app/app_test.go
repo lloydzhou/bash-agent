@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"github.com/lloydzhou/bash-agent/internal/session"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -139,34 +137,6 @@ func TestRunClaudeToolLoop(t *testing.T) {
 	}
 	if string(data) != "abc" {
 		t.Fatalf("unexpected file content: %q", string(data))
-	}
-}
-
-func TestCompactNoOpWithoutProviderConfig(t *testing.T) {
-	project := t.TempDir()
-	home := t.TempDir()
-	oldHome := os.Getenv("HOME")
-	defer os.Setenv("HOME", oldHome)
-	_ = os.Setenv("HOME", home)
-	oldWD, _ := os.Getwd()
-	defer os.Chdir(oldWD)
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
-	}
-	sessionDir := filepath.Join(home, ".bash-agent", "projects", session.ProjectKey(project))
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	conv := filepath.Join(sessionDir, "test.jsonl")
-	if err := os.WriteFile(conv, []byte(`{"role":"user","content":"hello"}`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var out, errOut strings.Builder
-	if err := Run([]string{"compact", "--session", "test"}, strings.NewReader(""), &out, &errOut); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(errOut.String(), "Context is within budget; no compaction needed.") {
-		t.Fatalf("unexpected compact output: %q", errOut.String())
 	}
 }
 

@@ -1,12 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Command {
-    Chat,
-    Compact,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Human,
     StreamJson,
@@ -31,7 +25,6 @@ pub struct Config {
     pub max_context_keep_pct: i32,
     pub skills: Vec<String>,
     pub interactive: bool,
-    pub command: Command,
     pub session_mode: bool,
     pub session_id: String,
     pub continue_session: bool,
@@ -58,7 +51,6 @@ impl Default for Config {
             max_context_keep_pct: 25,
             skills: Vec::new(),
             interactive: false,
-            command: Command::Chat,
             session_mode: false,
             session_id: String::new(),
             continue_session: false,
@@ -70,11 +62,6 @@ impl Default for Config {
 pub fn parse_args(args: Vec<String>) -> Result<Config> {
     let mut cfg = Config::default();
     let mut i = 0usize;
-    let mut args = args;
-    if args.first().map(|s| s.as_str()) == Some("compact") {
-        cfg.command = Command::Compact;
-        args.remove(0);
-    }
 
     while i < args.len() {
         let arg = &args[i];

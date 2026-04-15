@@ -1,5 +1,5 @@
 use crate::assets::TOOLS_JSON;
-use crate::config::{Command, Config, OutputFormat, api_url, apply_provider_defaults, parse_args};
+use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, parse_args};
 use crate::conversation::{Store, ToolResult, build_tool_call_summary};
 use crate::httpclient::StreamClient;
 use crate::prompt;
@@ -38,23 +38,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    if cfg.command != Command::Compact {
-        apply_provider_defaults(&mut cfg)?;
-    }
+    apply_provider_defaults(&mut cfg)?;
 
     let mut rt = Runtime::new(cfg, cwd, home)?;
-
-    if rt.cfg.command == Command::Compact {
-        let compacted = rt.compact_context_window("manual", true)?;
-        if rt.cfg.output_format == OutputFormat::Human {
-            if compacted {
-                rt.info("Context compacted.");
-            } else {
-                rt.info("Context is within budget; no compaction needed.");
-            }
-        }
-        return Ok(());
-    }
 
     if rt.cfg.interactive || (rt.cfg.prompt.is_empty() && io::stdin().is_terminal()) {
         rt.cfg.interactive = true;
@@ -104,20 +90,10 @@ impl Runtime {
         ));
         fs::create_dir_all(&tmp_dir)?;
 
-        if cfg.command == Command::Compact
-            && !cfg.session_mode
-            && !cfg.continue_session
-            && cfg.session_id.is_empty()
-        {
-            cfg.session_mode = true;
-            cfg.continue_session = true;
-        }
-
         let paths = if cfg.session_mode {
             let mut sid = cfg.session_id.clone();
             if sid.is_empty() && cfg.continue_session {
-                sid = session::continue_session(&home, &cwd)
-                    .map_err(|_| anyhow!("no existing session found to compact"))?;
+                sid = session::continue_session(&home, &cwd).unwrap_or_default();
             }
             if sid.is_empty() {
                 sid = chrono_like_now();
@@ -149,11 +125,7 @@ impl Runtime {
         conv.ensure()?;
 
         let tools_json: Vec<Value> = serde_json::from_str(TOOLS_JSON)?;
-        let api_url = if cfg.command == Command::Compact {
-            String::new()
-        } else {
-            api_url(&cfg)
-        };
+        let api_url = api_url(&cfg);
         let interrupted = Arc::new(AtomicBool::new(false));
 
         Ok(Self {
@@ -789,7 +761,6 @@ fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {
 
 fn print_usage() {
     println!("Usage: rustagent [options] [prompt]");
-    println!("       rustagent compact [options]");
     println!();
     println!("Options:");
     println!("  -p, --provider PROV     LLM provider: claude | openai (default: claude)");
