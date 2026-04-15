@@ -230,6 +230,34 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing read tool_result content')
             return
+        if b'READ_ARG_PARSE_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_read_arg_parse\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will read the file now.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_read_arg_parse_1\",\"name\":\"Read\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-read-arg-parse.txt'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'READ_ARG_PARSE_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'read-arg-parse-content' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_read_arg_parse_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Read arg parsing complete.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing read arg parse tool_result content')
+            return
         if b'LONG_READ_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -1387,6 +1415,22 @@ test_agent_read_file() {
     rm -f "$target_file"
 }
 
+test_agent_read_tool_arg_parsing() {
+    info "Test 18a: Agent.sh Read tool arg parsing"
+    local output target_file
+    target_file="/tmp/bash-agent-read-arg-parse.txt"
+    printf 'read-arg-parse-content\n' > "$target_file"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test "READ_ARG_PARSE_MARKER" 2>&1) || true
+    if echo "$output" | grep -Fq "[tool] Read($target_file)" && \
+       echo "$output" | grep -q "Read arg parsing complete." && \
+       ! echo "$output" | grep -Fq "Error: tool execution failed: Error: no path provided"; then
+        green "Agent Read tool arg parsing"; ((PASS++)) || true
+    else
+        red "Agent Read tool arg parsing"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
 test_agent_read_file_long_result() {
     info "Test 18b: Agent.sh read_file long result formatting"
     local output target_file
@@ -1775,6 +1819,7 @@ test_agent_skill_tool
 test_agent_instruction_files
 test_agent_todo_state
 test_agent_read_file
+test_agent_read_tool_arg_parsing
 test_agent_read_file_long_result
 test_agent_glob
 test_agent_grep

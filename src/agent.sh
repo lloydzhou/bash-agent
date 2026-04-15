@@ -128,49 +128,57 @@ tool_call_arg() {
     return 1
 }
 
-tool_metadata() {
-    local name="$1" __keys_outvar="$2" __summary_outvar="$3" meta_keys="" meta_summary_key=""
-    case "$name" in
-        Read)
-            meta_keys="path"
-            meta_summary_key="path"
-            ;;
-        Write)
-            meta_keys="path content"
-            meta_summary_key="path"
-            ;;
-        Edit)
-            meta_keys="path old_string new_string"
-            meta_summary_key="path"
-            ;;
-        Bash)
-            meta_keys="command"
-            meta_summary_key="command"
-            ;;
-        Glob)
-            meta_keys="pattern path"
-            meta_summary_key="pattern"
-            ;;
-        Grep)
-            meta_keys="pattern path glob"
-            meta_summary_key="pattern"
-            ;;
-        TodoWrite)
-            meta_keys="checklist summary"
-            meta_summary_key="summary"
-            ;;
-        Skill)
-            meta_keys="name"
-            meta_summary_key="name"
-            ;;
+tool_param_keys() {
+    case "$1" in
+        Read) printf 'path' ;;
+        Write) printf 'path content' ;;
+        Edit) printf 'path old_string new_string' ;;
+        Bash) printf 'command' ;;
+        Glob) printf 'pattern path' ;;
+        Grep) printf 'pattern path glob' ;;
+        TodoWrite) printf 'checklist' ;;
+        Skill) printf 'name' ;;
+        *) printf '' ;;
     esac
-    printf -v "$__keys_outvar" '%s' "$meta_keys"
-    printf -v "$__summary_outvar" '%s' "$meta_summary_key"
+}
+
+tool_summary_key() {
+    case "$1" in
+        Read|Write|Edit) printf 'path' ;;
+        Bash) printf 'command' ;;
+        Glob|Grep) printf 'pattern' ;;
+        TodoWrite) printf 'summary' ;;
+        Skill) printf 'name' ;;
+        *) printf '' ;;
+    esac
+}
+
+tool_args_from_kv() {
+    local name="$1" kv="$2" __arg1="$3" __arg2="$4" __arg3="$5"
+    local param_key_string="" param_keys=() idx param_value="" out1="" out2="" out3=""
+
+    param_key_string=$(tool_param_keys "$name")
+    if [[ -n "$param_key_string" ]]; then
+        IFS=' ' read -r -a param_keys <<< "$param_key_string"
+        for idx in "${!param_keys[@]}"; do
+            param_value=""
+            tool_call_arg "$kv" "${param_keys[idx]}" param_value || true
+            case "$idx" in
+                0) out1="$param_value" ;;
+                1) out2="$param_value" ;;
+                2) out3="$param_value" ;;
+            esac
+        done
+    fi
+
+    printf -v "$__arg1" '%s' "$out1"
+    printf -v "$__arg2" '%s' "$out2"
+    printf -v "$__arg3" '%s' "$out3"
 }
 
 tool_call_summary() {
-    local name="$1" payload="${2:-}" label="" value="" summary_key="" _
-    tool_metadata "$name" _ summary_key
+    local name="$1" payload="${2:-}" label="" value="" summary_key=""
+    summary_key=$(tool_summary_key "$name")
     if [[ "$name" == "Bash" && -n "$summary_key" ]]; then
         tool_call_arg "$payload" "$summary_key" value || true
         if [[ -n "$value" ]]; then
@@ -1391,20 +1399,7 @@ execute_tool_calls_stream() {
         IFS=$'\t' read -r name id input_escaped kv_escaped <<< "$tc"
         unescape_protocol_to_var input "$input_escaped"
         kv="$kv_escaped"
-        local param_key_string="" summary_key="" param_keys=() idx param_value=""
-        tool_metadata "$name" param_key_string summary_key
-        if [[ -n "$param_key_string" ]]; then
-            IFS=' ' read -r -a param_keys <<< "$param_key_string"
-            for idx in "${!param_keys[@]}"; do
-                param_value=""
-                tool_call_arg "$kv" "${param_keys[idx]}" param_value || true
-                case "$idx" in
-                    0) arg1="$param_value" ;;
-                    1) arg2="$param_value" ;;
-                    2) arg3="$param_value" ;;
-                esac
-            done
-        fi
+        tool_args_from_kv "$name" "$kv" arg1 arg2 arg3
         output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
         local tool_rc=$?
         interrupt_requested && break
