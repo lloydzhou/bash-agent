@@ -72,6 +72,21 @@ func normalizeDisplayText(s string) string {
 	return s
 }
 
+func colorizeDiff(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "), strings.HasPrefix(line, "@@ "):
+			lines[i] = "\033[36m" + line + "\033[0m"
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			lines[i] = "\033[32m" + line + "\033[0m"
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			lines[i] = "\033[31m" + line + "\033[0m"
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 var newHTTPClient = func() *http.Client {
 	return &http.Client{Timeout: 0}
 }
@@ -492,11 +507,19 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 			})
 		}
 		if e.Content != "" {
-			displayOutput := normalizeDisplayText(e.Content)
+			displayOutput := normalizeDisplayText(e.DisplayContent)
+			if e.ToolName == "Edit" {
+				displayOutput = normalizeDisplayText(e.Content)
+				if e.DisplayContent != "" {
+					displayOutput += "\n" + colorizeDiff(normalizeDisplayText(e.DisplayContent))
+				}
+			} else if displayOutput == "" {
+				displayOutput = normalizeDisplayText(e.Content)
+			}
 			if e.ToolName == "Read" {
-				displayOutput = conversation.BuildReadToolResultSummary(e.ToolArgs["path"])
+				displayOutput = conversation.BuildFileToolResultSummary("Read", e.ToolArgs["path"])
 			} else if e.ToolName == "Write" {
-				displayOutput = conversation.BuildWriteToolResultSummary(e.ToolArgs["path"], e.ToolArgs["content"])
+				displayOutput = conversation.BuildFileToolResultSummary("Write", e.ToolArgs["path"])
 			}
 			suffix := "\n"
 			if strings.HasSuffix(displayOutput, "\n") {
@@ -538,11 +561,19 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 			output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
 		}
 		output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
+		displayOutput := output
+		if call.Name == "Edit" {
+			editDiff := output
+			summary := conversation.BuildEditDiffSummary(call.Fields["path"], output)
+			output = summary
+			displayOutput = editDiff
+		}
 		results = append(results, conversation.ToolResult{
-			ToolUseID: call.ID,
-			ToolName:  call.Name,
-			ToolArgs:  call.Fields,
-			Content:   output,
+			ToolUseID:      call.ID,
+			ToolName:       call.Name,
+			ToolArgs:       call.Fields,
+			Content:        output,
+			DisplayContent: displayOutput,
 		})
 		if call.Name == "TodoWrite" && result.Err == nil {
 			if data, err := os.ReadFile(rt.paths.Todo); err == nil && len(data) > 0 {

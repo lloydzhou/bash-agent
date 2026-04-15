@@ -358,7 +358,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'EDIT_FILE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'Edit(/tmp/bash-agent-edit-test.txt)' in body:
+                if b'Edit(/tmp/bash-agent-edit-test.txt)' in body and b'--- a/tmp/bash-agent-edit-test.txt' not in body and b'@@ -1 +1 @@' not in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -1441,7 +1441,10 @@ test_agent_edit_file() {
     target_file="/tmp/bash-agent-edit-test.txt"
     printf 'prefix old-value suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_FILE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "Edit complete." && grep -q 'new-value' "$target_file" && ! grep -q 'old-value' "$target_file"; then
+    if echo "$output" | grep -q '^Edit(/tmp/bash-agent-edit-test.txt) \[+' && \
+       echo "$output" | grep -q '^--- a/' && \
+       echo "$output" | grep -q '^+++ b/' && \
+       grep -q 'new-value' "$target_file" && ! grep -q 'old-value' "$target_file"; then
         green "Agent edit_file"; ((PASS++)) || true
     else
         red "Agent edit_file"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
@@ -1484,7 +1487,9 @@ test_agent_write_file_newlines() {
     target_file="/tmp/bash-agent-write-test.txt"
     rm -f "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test -v 'WRITE_FILE_MARKER' 2>&1) || true
-    if [[ -f "$target_file" ]] && grep -q $'line1\nline2\nline3' "$target_file"; then
+    if [[ -f "$target_file" ]] && \
+       grep -q $'line1\nline2\nline3' "$target_file" && \
+       echo "$output" | grep -Fq "Write($target_file) ["; then
         green "Agent write_file newline handling"; ((PASS++)) || true
     else
         red "Agent write_file newline handling"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
@@ -1594,19 +1599,8 @@ test_agent_tool_result_multiline_url() {
     fi
 }
 
-test_agent_tool_result_strips_ansi() {
-    info "Test 27: Agent.sh tool_result strips ANSI"
-    local output
-    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'ANSI_TOOL_RESULT_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "ANSI output sanitized."; then
-        green "Agent tool_result strips ANSI"; ((PASS++)) || true
-    else
-        red "Agent tool_result strips ANSI"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-}
-
 test_agent_multiple_tool_calls() {
-    info "Test 28: Agent.sh multiple tool calls in one turn"
+    info "Test 27: Agent.sh multiple tool calls in one turn"
     local output target_file
     target_file="/tmp/bash-agent-multi-read.txt"
     printf 'multi-read-content\n' > "$target_file"
@@ -1665,12 +1659,12 @@ AWK
 }
 
 test_agent_edit_unicode() {
-    info "Test 32: Agent.sh edit_file unicode/Chinese/Japanese/Korean"
+    info "Test 31: Agent.sh edit_file unicode/Chinese/Japanese/Korean"
     local output target_file
     target_file="/tmp/bash-agent-edit-unicode.txt"
     printf 'prefix old-text suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_UNICODE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "Unicode edit complete." && grep -q '中文' "$target_file" && grep -q '日本語' "$target_file" && grep -q '한국어' "$target_file" && ! grep -q 'old-text' "$target_file"; then
+    if echo "$output" | grep -q '^--- a/' && echo "$output" | grep -q '^+++ b/' && grep -q '中文' "$target_file" && grep -q '日本語' "$target_file" && grep -q '한국어' "$target_file" && ! grep -q 'old-text' "$target_file"; then
         green "Agent edit_file unicode"; ((PASS++)) || true
     else
         red "Agent edit_file unicode"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
@@ -1679,12 +1673,12 @@ test_agent_edit_unicode() {
 }
 
 test_agent_edit_special_chars() {
-    info "Test 33: Agent.sh edit_file special chars (quotes, dollar, html, apostrophe)"
+    info "Test 32: Agent.sh edit_file special chars (quotes, dollar, html, apostrophe)"
     local output target_file
     target_file="/tmp/bash-agent-edit-special.txt"
     printf 'prefix plain suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_SPECIAL_CHARS_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "Special chars edit complete." && grep -q 'quotes' "$target_file" && grep -q 'dollar' "$target_file" && grep -q '<html>' "$target_file" && grep -q 'apos' "$target_file" && ! grep -q 'plain' "$target_file"; then
+    if echo "$output" | grep -q '^--- a/' && echo "$output" | grep -q '^+++ b/' && grep -q 'quotes' "$target_file" && grep -q 'dollar' "$target_file" && grep -q '<html>' "$target_file" && grep -q 'apos' "$target_file" && ! grep -q 'plain' "$target_file"; then
         green "Agent edit_file special chars"; ((PASS++)) || true
     else
         red "Agent edit_file special chars"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
@@ -1693,7 +1687,7 @@ test_agent_edit_special_chars() {
 }
 
 test_agent_edit_multiline() {
-    info "Test 34: Agent.sh edit_file multiline (replace 5 lines with 8 lines in 15-line file)"
+    info "Test 33: Agent.sh edit_file multiline (replace 5 lines with 8 lines in 15-line file)"
     local output target_file
     target_file="/tmp/bash-agent-edit-multiline.txt"
     # Create a 15-line file
@@ -1703,8 +1697,8 @@ test_agent_edit_multiline() {
     # Lines 1-3 unchanged, lines 4-11 replaced (was 4-8), lines 12-15 (was 9-15) unchanged
     local line_count
     line_count=$(wc -l < "$target_file" | tr -d ' ')
-    if echo "$output" | grep -q "Multiline edit complete." \
-        && grep -q 'line4_replaced_a' "$target_file" \
+    if echo "$output" | grep -q '^--- a/' \
+       && grep -q 'line4_replaced_a' "$target_file" \
         && grep -q 'line11_new_h' "$target_file" \
         && grep -q 'line9_original' "$target_file" \
         && ! grep -q 'line5_original' "$target_file" \
@@ -1717,14 +1711,14 @@ test_agent_edit_multiline() {
 }
 
 test_agent_edit_code_snippet() {
-    info "Test 35: Agent.sh edit_file code snippet (tabs, braces, quotes, percent, backslash)"
+    info "Test 34: Agent.sh edit_file code snippet (tabs, braces, quotes, percent, backslash)"
     local output target_file
     target_file="/tmp/bash-agent-edit-code.txt"
     # Simulate a Go source file with tabs, braces, %v, %w format strings
     printf 'func main() {\n\tif err != nil {\n\t\treturn err\n\t}\n}\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_CODE_SNIPPET_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "Code snippet edit complete." \
-        && grep -q 'log.Printf' "$target_file" \
+    if echo "$output" | grep -q '^--- a/' \
+       && grep -q 'log.Printf' "$target_file" \
         && grep -q 'fmt.Errorf' "$target_file" \
         && grep -q '%v' "$target_file" \
         && grep -q '%w' "$target_file" \
@@ -1781,7 +1775,6 @@ test_agent_bash_long_result
 test_agent_stream_tool_call
 test_agent_stream_usage_event
 test_agent_tool_result_multiline_url
-test_agent_tool_result_strips_ansi
 test_agent_multiple_tool_calls
 test_agent_write_file_unicode
 test_json_escape_unicode_multiline

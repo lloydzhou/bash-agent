@@ -16,6 +16,7 @@ pub struct ToolResult {
     pub tool_name: String,
     pub tool_args: std::collections::BTreeMap<String, String>,
     pub content: String,
+    pub display_content: String,
 }
 
 impl Store {
@@ -49,18 +50,14 @@ impl Store {
         self.append_line(&json!({"role":"user","content":content}))
     }
 
-    pub fn read_tool_result_summary(path: &str) -> String {
+    pub fn file_tool_result_summary(kind: &str, path: &str) -> String {
         if path.is_empty() {
-            return String::from("Read");
+            return kind.to_string();
         }
         match fs::read(path) {
-            Ok(data) => format!("Read({path}) [{} lines, {} bytes]", line_count(&data), data.len()),
-            Err(_) => format!("Read({path})"),
+            Ok(data) => format!("{kind}({path}) [{} lines, {} bytes]", line_count(&data), data.len()),
+            Err(_) => format!("{kind}({path})"),
         }
-    }
-
-    pub fn write_tool_result_summary(path: &str, content: &str) -> String {
-        format!("Write({path}) [{} lines, {} bytes]", line_count(content.as_bytes()), content.len())
     }
 
     pub fn lines(&self) -> Result<Vec<Value>> {
@@ -151,6 +148,24 @@ impl Store {
         writeln!(file, "{}", serde_json::to_string(value)?)?;
         Ok(())
     }
+}
+
+pub fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or(s)
+}
+
+pub fn edit_diff_summary(path: &str, diff: &str) -> String {
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    for line in diff.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            added += 1;
+        }
+        if line.starts_with('-') && !line.starts_with("---") {
+            removed += 1;
+        }
+    }
+    format!("Edit({path}) [+{added} -{removed} lines]")
 }
 
 fn line_count(s: &[u8]) -> usize {

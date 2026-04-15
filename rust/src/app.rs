@@ -1,6 +1,6 @@
 use crate::assets::TOOLS_JSON;
 use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, parse_args};
-use crate::conversation::{Store, ToolResult, build_tool_call_summary};
+use crate::conversation::{Store, ToolResult, build_tool_call_summary, edit_diff_summary};
 use crate::httpclient::StreamClient;
 use crate::prompt;
 use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ToolCallEvent, UsageEvent};
@@ -397,14 +397,22 @@ impl Runtime {
                         "content": result.content,
                     }))?;
                 } else if !result.content.is_empty() {
-                    let display_output = if result.tool_name == "Read" {
-                        Store::read_tool_result_summary(
+                    let display_output = if result.tool_name == "Edit" {
+                        let mut out = result.content.clone();
+                        if !result.display_content.is_empty() {
+                            out.push('\n');
+                            out.push_str(&colorize_diff(&result.display_content));
+                        }
+                        normalize_display_text(&out, self.cfg.interactive)
+                    } else if result.tool_name == "Read" {
+                        Store::file_tool_result_summary(
+                            "Read",
                             result.tool_args.get("path").map(String::as_str).unwrap_or(""),
                         )
                     } else if result.tool_name == "Write" {
-                        Store::write_tool_result_summary(
+                        Store::file_tool_result_summary(
+                            "Write",
                             result.tool_args.get("path").map(String::as_str).unwrap_or(""),
-                            result.tool_args.get("content").map(String::as_str).unwrap_or(""),
                         )
                     } else {
                         normalize_display_text(&result.content, self.cfg.interactive)
@@ -473,6 +481,16 @@ impl Runtime {
                 break;
             }
             output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
+            let mut display_content = output.clone();
+            if call.name == "Edit" {
+                let edit_diff = output.clone();
+                let summary = edit_diff_summary(
+                    call.fields.get("path").map(String::as_str).unwrap_or(""),
+                    &output,
+                );
+                output = summary;
+                display_content = edit_diff;
+            }
 
             results.push(ToolResult {
                 tool_use_id: call.id.clone(),
@@ -483,6 +501,7 @@ impl Runtime {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
                 content: output.clone(),
+                display_content,
             });
 
             if call.name == "TodoWrite" {
@@ -725,6 +744,23 @@ fn normalize_display_text(s: &str, interactive: bool) -> String {
     } else {
         normalized
     }
+}
+
+fn colorize_diff(s: &str) -> String {
+    let mut out = Vec::new();
+    for line in s.lines() {
+        let colored = if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("@@ ") {
+            format!("\x1b[36m{line}\x1b[0m")
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            format!("\x1b[32m{line}\x1b[0m")
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            format!("\x1b[31m{line}\x1b[0m")
+        } else {
+            line.to_string()
+        };
+        out.push(colored);
+    }
+    out.join("\n")
 }
 
 fn touch(path: &Path) -> Result<()> {

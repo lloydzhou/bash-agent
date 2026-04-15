@@ -212,10 +212,11 @@ func appendLine(path string, line []byte) error {
 }
 
 type ToolResult struct {
-	ToolUseID string
-	ToolName  string
-	ToolArgs  map[string]string
-	Content   string
+	ToolUseID      string
+	ToolName       string
+	ToolArgs       map[string]string
+	Content        string
+	DisplayContent string
 }
 
 func BuildToolResultJSON(id, content string) ([]byte, error) {
@@ -224,6 +225,13 @@ func BuildToolResultJSON(id, content string) ([]byte, error) {
 		"tool_use_id": id,
 		"content":     content,
 	})
+}
+
+func FirstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func BuildReadToolResultSummary(path string) string {
@@ -237,8 +245,28 @@ func BuildReadToolResultSummary(path string) string {
 	return fmt.Sprintf("Read(%s) [%d lines, %d bytes]", path, lineCount(string(data)), len(data))
 }
 
-func BuildWriteToolResultSummary(path, content string) string {
-	return fmt.Sprintf("Write(%s) [%d lines, %d bytes]", path, lineCount(content), len([]byte(content)))
+func BuildFileToolResultSummary(kind, path string) string {
+	if path == "" {
+		return kind
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("%s(%s)", kind, path)
+	}
+	return fmt.Sprintf("%s(%s) [%d lines, %d bytes]", kind, path, lineCount(string(data)), len(data))
+}
+
+func BuildEditDiffSummary(path, diff string) string {
+	added, removed := 0, 0
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+			added++
+		}
+		if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+			removed++
+		}
+	}
+	return fmt.Sprintf("Edit(%s) [+%d -%d lines]", path, added, removed)
 }
 
 func BuildEditToolResultSummary(path, oldString, newString string) string {

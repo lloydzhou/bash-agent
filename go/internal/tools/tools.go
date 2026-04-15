@@ -191,10 +191,46 @@ func (r Runner) Edit(path, oldString, newString string) (string, error) {
 		return "", fmt.Errorf("Error: cannot stat file: %s", path)
 	}
 	perm := info.Mode().Perm()
+	diffOut, diffErr := unifiedDiff(path, content, updated)
 	if err := os.WriteFile(path, []byte(updated), perm); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Edit(%s)\n- %s\n+ %s", path, oldString, newString), nil
+	if diffErr != nil {
+		return "", diffErr
+	}
+	if diffOut == "" {
+		return fmt.Sprintf("Edit(%s) [no changes]", path), nil
+	}
+	return diffOut, nil
+}
+
+func unifiedDiff(path, oldContent, newContent string) (string, error) {
+	oldFile, err := os.CreateTemp("", "edit-old-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(oldFile.Name())
+	defer oldFile.Close()
+	newFile, err := os.CreateTemp("", "edit-new-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(newFile.Name())
+	defer newFile.Close()
+	if _, err := oldFile.WriteString(oldContent); err != nil {
+		return "", err
+	}
+	if _, err := newFile.WriteString(newContent); err != nil {
+		return "", err
+	}
+	out, err := exec.Command("diff", "-u", "--label", "a/"+strings.TrimPrefix(path, "/"), "--label", "b/"+strings.TrimPrefix(path, "/"), oldFile.Name(), newFile.Name()).CombinedOutput()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return string(out), nil
+		}
+		return "", fmt.Errorf("Error: diff failed")
+	}
+	return string(out), nil
 }
 
 func (r Runner) Bash(command string) (string, error) {

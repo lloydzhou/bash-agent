@@ -354,25 +354,13 @@ format_tool_result() {
 }
 
 tool_file_summary() {
-    local kind="$1" kv="$2" path="" content="" bytes lines
-    tool_call_arg "$kv" "path" path || true
-    case "$kind" in
-        Read)
-            [[ -n "$path" && -f "$path" ]] || { printf 'Read(%s)' "$path"; return 0; }
-            bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
-            bytes=${bytes//[[:space:]]/}
-            lines=$(wc -l < "$path" 2>/dev/null || echo 0)
-            lines=${lines//[[:space:]]/}
-            printf 'Read(%s) [%s lines, %s bytes]' "$path" "$lines" "$bytes"
-            ;;
-        Write)
-            tool_call_arg "$kv" "content" content || true
-            bytes=$(printf '%s' "$content" | wc -c)
-            bytes=${bytes//[[:space:]]/}
-            lines=$(printf '%s' "$content" | awk 'END { print NR }')
-            printf 'Write(%s) [%s lines, %s bytes]' "$path" "$lines" "$bytes"
-            ;;
-    esac
+    local kind="$1" path="$2" bytes lines
+    [[ -n "$path" && -f "$path" ]] || { printf '%s(%s)' "$kind" "$path"; return 0; }
+    bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
+    bytes=${bytes//[[:space:]]/}
+    lines=$(awk 'END { print NR }' "$path" 2>/dev/null || echo 0)
+    lines=${lines//[[:space:]]/}
+    printf '%s(%s) [%s lines, %s bytes]' "$kind" "$path" "$lines" "$bytes"
 }
 
 is_stream_json_mode() {
@@ -460,10 +448,14 @@ display_event() {
             unescape_protocol_to_var result "$result"
             stream_event="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$(json_escape "$result")\"}"
             human_kind="text"
-            if [[ "$tool_name" == "Read" ]]; then
-                human_text="$(tool_file_summary "Read" "$tool_fields")"$'\n'
+            if [[ "$tool_name" == "Edit" ]]; then
+                human_text="$(format_tool_result "$result")"$'\n'
+            elif [[ "$tool_name" == "Read" ]]; then
+                tool_call_arg "$tool_fields" "path" tool_path || true
+                human_text="$(tool_file_summary "Read" "$tool_path")"$'\n'
             elif [[ "$tool_name" == "Write" ]]; then
-                human_text="$(tool_file_summary "Write" "$tool_fields")"$'\n'
+                tool_call_arg "$tool_fields" "path" tool_path || true
+                human_text="$(tool_file_summary "Write" "$tool_path")"$'\n'
             else
                 human_text="$(format_tool_result "$result")"$'\n'
             fi
@@ -694,6 +686,11 @@ build_tool_result_json_object() {
         "$result"
 }
 
+tool_result_first_line() {
+    local result="$1"
+    printf '%s' "$result" | sed -n '1p'
+}
+
 build_tool_calls_json() {
     local calls="$1"
     local tool_json="[" first=true
@@ -739,6 +736,9 @@ build_tool_results_content_json() {
         [[ -z "$tr" ]] && continue
         local tid result
         IFS=$'\t' read -r tid result <<< "$tr"
+        if [[ "$result" == Edit\(* ]]; then
+            result="$(tool_result_first_line "$result")"
+        fi
         $first || content+=","
         first=false
         content+="$(build_tool_result_json_object "$tid" "$result")"
@@ -1044,7 +1044,7 @@ tool_write() {
 
 tool_edit() {
     local path="$1" old_string="$2" new_string="$3"
-    local input tmp meta
+    local input tmp meta diff_output
     input=$(printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
         "$(json_escape "$path")" \
         "$(json_escape "$old_string")" \
@@ -1060,17 +1060,21 @@ tool_edit() {
         [[ -n "$path" ]] || edit_err="Error: no path provided"
     fi
     if [[ -z "$edit_err" ]] && (( $(wc -c < "$tmp") > 0 )); then
-        cat "$tmp" > "$path"
-        printf 'Edit(%s)\n' "$path"
-        if [[ -n "$old_string" ]]; then
-            printf '%s\n' "$old_string" | sed 's/^/- /'
-        else
-            printf '%s\n' '- (empty)'
+        local diff_path="${path#/}"
+        local added removed plain_diff_output
+        plain_diff_output=$(diff -u --label "a/$diff_path" --label "b/$diff_path" "$path" "$tmp" 2>&1)
+        diff_output=$(diff -u --color=always --label "a/$diff_path" --label "b/$diff_path" "$path" "$tmp" 2>&1)
+        if [[ "$diff_output" == *"unsupported --color"* || "$diff_output" == *"unrecognized option '--color'"* ]]; then
+            diff_output="$plain_diff_output"
         fi
-        if [[ -n "$new_string" ]]; then
-            printf '%s\n' "$new_string" | sed 's/^/+ /'
+        added=$(printf '%s\n' "$plain_diff_output" | awk '/^\+[^+]/ { n++ } END { print n+0 }')
+        removed=$(printf '%s\n' "$plain_diff_output" | awk '/^-[^-]/ { n++ } END { print n+0 }')
+        cat "$tmp" > "$path"
+        printf 'Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"
+        if [[ -n "$diff_output" ]]; then
+            printf '%s\n' "$diff_output"
         else
-            printf '%s\n' '+ (empty)'
+            printf 'Edit(%s) [no changes]\n' "$path"
         fi
     elif [[ -z "$edit_err" ]]; then
         edit_err="Error: edit produced empty result, reverted"
@@ -1447,13 +1451,14 @@ execute_tool_calls_stream() {
             output="Error: tool execution failed: $output"
         fi
         output=$(format_tool_result "$output")
-        # json_escape so newlines in output don't break the line-based format
-        local escaped
-        escaped=$(json_escape "$output")
-        printf '%s\t%s\n' "$id" "$escaped" >> "$results_file"
         if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
             printf 'TODO_UPDATE:%s\n' "$(escape_protocol_text "$(<"$TODO_FILE")")"
         fi
+        local result_for_conv="$output"
+        if [[ "$name" == "Edit" ]]; then
+            result_for_conv="$(tool_result_first_line "$output")"
+        fi
+        printf '%s\t%s\n' "$id" "$(escape_protocol_text "$result_for_conv")" >> "$results_file"
         printf 'TOOL_RESULT:%s\t%s\t%s\t%s\n' "$id" "$name" "$(escape_protocol_text "$kv")" "$(escape_protocol_text "$output")"
     done <<< "$calls"
 }

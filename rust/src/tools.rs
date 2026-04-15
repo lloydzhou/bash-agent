@@ -169,8 +169,13 @@ impl Runner {
         if updated.is_empty() {
             bail!("Error: edit produced empty result, reverted");
         }
+        let diff = unified_diff(path, &content, &updated)?;
         fs::write(path, updated)?;
-        Ok(format!("Edit({path})\n- {old_s}\n+ {new_s}"))
+        if diff.is_empty() {
+            Ok(format!("Edit({path}) [no changes]"))
+        } else {
+            Ok(diff)
+        }
     }
 
     fn bash(&self, command: &str) -> Result<String> {
@@ -271,6 +276,31 @@ impl Runner {
             "Skill: {name}\nBase directory: {}\n\n{content}",
             base_dir.display()
         ))
+    }
+}
+
+fn unified_diff(path: &str, old_content: &str, new_content: &str) -> Result<String> {
+    let old_path = std::env::temp_dir().join(format!("edit-old-{}", std::process::id()));
+    let new_path = std::env::temp_dir().join(format!("edit-new-{}", std::process::id()));
+    fs::write(&old_path, old_content)?;
+    fs::write(&new_path, new_content)?;
+    let diff = Command::new("diff")
+        .args([
+            "-u",
+            "--label",
+            &format!("a/{}", path.trim_start_matches('/')),
+            "--label",
+            &format!("b/{}", path.trim_start_matches('/')),
+            old_path.to_str().unwrap_or(""),
+            new_path.to_str().unwrap_or(""),
+        ])
+        .output()?;
+    let _ = fs::remove_file(&old_path);
+    let _ = fs::remove_file(&new_path);
+    if diff.status.success() || diff.status.code() == Some(1) {
+        Ok(String::from_utf8_lossy(&diff.stdout).to_string())
+    } else {
+        bail!("Error: diff failed");
     }
 }
 
