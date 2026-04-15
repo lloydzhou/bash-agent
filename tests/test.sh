@@ -1308,7 +1308,7 @@ test_agent_skill_injection_from_repo_skills_dir() {
     cat > "$skill_file" <<'EOF'
 # test-skill-repo
 
-Skill marker for repo skills dir
+Skill marker for tests
 Skill path marker: ${BASH_AGENT_SKILL_DIR}/helper.sh
 EOF
     output=$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --skill test-skill-repo 'Hello' 2>&1) || true
