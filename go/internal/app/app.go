@@ -495,6 +495,8 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 			displayOutput := normalizeDisplayText(e.Content)
 			if e.ToolName == "Read" {
 				displayOutput = conversation.BuildReadToolResultSummary(e.ToolArgs["path"])
+			} else if e.ToolName == "Write" {
+				displayOutput = conversation.BuildWriteToolResultSummary(e.ToolArgs["path"], e.ToolArgs["content"])
 			}
 			suffix := "\n"
 			if strings.HasSuffix(displayOutput, "\n") {

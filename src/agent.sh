@@ -353,15 +353,26 @@ format_tool_result() {
     printf '%s' "${output: -tail_chars}"
 }
 
-tool_read_summary() {
-    local kv="$1" path="" bytes lines
+tool_file_summary() {
+    local kind="$1" kv="$2" path="" content="" bytes lines
     tool_call_arg "$kv" "path" path || true
-    [[ -n "$path" && -f "$path" ]] || { printf 'Read(%s)' "$path"; return 0; }
-    bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
-    bytes=${bytes//[[:space:]]/}
-    lines=$(wc -l < "$path" 2>/dev/null || echo 0)
-    lines=${lines//[[:space:]]/}
-    printf 'Read(%s) [%s lines, %s bytes]' "$path" "$lines" "$bytes"
+    case "$kind" in
+        Read)
+            [[ -n "$path" && -f "$path" ]] || { printf 'Read(%s)' "$path"; return 0; }
+            bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
+            bytes=${bytes//[[:space:]]/}
+            lines=$(wc -l < "$path" 2>/dev/null || echo 0)
+            lines=${lines//[[:space:]]/}
+            printf 'Read(%s) [%s lines, %s bytes]' "$path" "$lines" "$bytes"
+            ;;
+        Write)
+            tool_call_arg "$kv" "content" content || true
+            bytes=$(printf '%s' "$content" | wc -c)
+            bytes=${bytes//[[:space:]]/}
+            lines=$(printf '%s' "$content" | awk 'END { print NR }')
+            printf 'Write(%s) [%s lines, %s bytes]' "$path" "$lines" "$bytes"
+            ;;
+    esac
 }
 
 is_stream_json_mode() {
@@ -450,7 +461,9 @@ display_event() {
             stream_event="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$(json_escape "$result")\"}"
             human_kind="text"
             if [[ "$tool_name" == "Read" ]]; then
-                human_text="$(tool_read_summary "$tool_fields")"$'\n'
+                human_text="$(tool_file_summary "Read" "$tool_fields")"$'\n'
+            elif [[ "$tool_name" == "Write" ]]; then
+                human_text="$(tool_file_summary "Write" "$tool_fields")"$'\n'
             else
                 human_text="$(format_tool_result "$result")"$'\n'
             fi
@@ -1048,7 +1061,17 @@ tool_edit() {
     fi
     if [[ -z "$edit_err" ]] && (( $(wc -c < "$tmp") > 0 )); then
         cat "$tmp" > "$path"
-        echo "OK: edited $path"
+        printf 'Edit(%s)\n' "$path"
+        if [[ -n "$old_string" ]]; then
+            printf '%s\n' "$old_string" | sed 's/^/- /'
+        else
+            printf '%s\n' '- (empty)'
+        fi
+        if [[ -n "$new_string" ]]; then
+            printf '%s\n' "$new_string" | sed 's/^/+ /'
+        else
+            printf '%s\n' '+ (empty)'
+        fi
     elif [[ -z "$edit_err" ]]; then
         edit_err="Error: edit produced empty result, reverted"
     fi

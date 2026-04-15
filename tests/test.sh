@@ -358,7 +358,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'EDIT_FILE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'OK: edited /tmp/bash-agent-edit-test.txt' in body:
+                if b'Edit(/tmp/bash-agent-edit-test.txt)' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -442,7 +442,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'EDIT_UNICODE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'OK: edited /tmp/bash-agent-edit-unicode.txt' in body:
+                if b'Edit(/tmp/bash-agent-edit-unicode.txt)' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_unicode_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -470,7 +470,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'EDIT_SPECIAL_CHARS_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'OK: edited /tmp/bash-agent-edit-special.txt' in body:
+                if b'Edit(/tmp/bash-agent-edit-special.txt)' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_special_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -500,7 +500,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'EDIT_MULTILINE_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'OK: edited /tmp/bash-agent-edit-multiline.txt' in body:
+                if b'Edit(/tmp/bash-agent-edit-multiline.txt)' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_ml_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -531,7 +531,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'EDIT_CODE_SNIPPET_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'OK: edited /tmp/bash-agent-edit-code.txt' in body:
+                if b'Edit(/tmp/bash-agent-edit-code.txt)' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_code_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',

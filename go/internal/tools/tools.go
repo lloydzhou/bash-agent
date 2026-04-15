@@ -194,7 +194,7 @@ func (r Runner) Edit(path, oldString, newString string) (string, error) {
 	if err := os.WriteFile(path, []byte(updated), perm); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("OK: edited %s", path), nil
+	return fmt.Sprintf("Edit(%s)\n- %s\n+ %s", path, oldString, newString), nil
 }
 
 func (r Runner) Bash(command string) (string, error) {

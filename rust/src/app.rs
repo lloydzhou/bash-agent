@@ -401,6 +401,11 @@ impl Runtime {
                         Store::read_tool_result_summary(
                             result.tool_args.get("path").map(String::as_str).unwrap_or(""),
                         )
+                    } else if result.tool_name == "Write" {
+                        Store::write_tool_result_summary(
+                            result.tool_args.get("path").map(String::as_str).unwrap_or(""),
+                            result.tool_args.get("content").map(String::as_str).unwrap_or(""),
+                        )
                     } else {
                         normalize_display_text(&result.content, self.cfg.interactive)
                     };

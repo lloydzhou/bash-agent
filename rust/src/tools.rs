@@ -170,7 +170,7 @@ impl Runner {
             bail!("Error: edit produced empty result, reverted");
         }
         fs::write(path, updated)?;
-        Ok(format!("OK: edited {path}"))
+        Ok(format!("Edit({path})\n- {old_s}\n+ {new_s}"))
     }
 
     fn bash(&self, command: &str) -> Result<String> {

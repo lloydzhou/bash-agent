@@ -237,6 +237,36 @@ func BuildReadToolResultSummary(path string) string {
 	return fmt.Sprintf("Read(%s) [%d lines, %d bytes]", path, lineCount(string(data)), len(data))
 }
 
+func BuildWriteToolResultSummary(path, content string) string {
+	return fmt.Sprintf("Write(%s) [%d lines, %d bytes]", path, lineCount(content), len([]byte(content)))
+}
+
+func BuildEditToolResultSummary(path, oldString, newString string) string {
+	oldPreview := previewLines(oldString, 6)
+	newPreview := previewLines(newString, 6)
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Edit(%s)\n", path))
+	if oldPreview == "" {
+		b.WriteString("- (empty)\n")
+	} else {
+		for _, line := range strings.Split(oldPreview, "\n") {
+			b.WriteString("- ")
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	if newPreview == "" {
+		b.WriteString("+ (empty)")
+	} else {
+		for _, line := range strings.Split(newPreview, "\n") {
+			b.WriteString("+ ")
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func BuildTodoEventJSON(content string) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"type":    "todo_update",
@@ -278,4 +308,15 @@ func lineCount(s string) int {
 		}
 	}
 	return n
+}
+
+func previewLines(s string, limit int) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > limit {
+		lines = lines[:limit]
+	}
+	return strings.Join(lines, "\n")
 }

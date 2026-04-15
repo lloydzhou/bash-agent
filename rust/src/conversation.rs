@@ -59,6 +59,10 @@ impl Store {
         }
     }
 
+    pub fn write_tool_result_summary(path: &str, content: &str) -> String {
+        format!("Write({path}) [{} lines, {} bytes]", line_count(content.as_bytes()), content.len())
+    }
+
     pub fn lines(&self) -> Result<Vec<Value>> {
         let data = fs::read_to_string(&self.path)?;
         Ok(data

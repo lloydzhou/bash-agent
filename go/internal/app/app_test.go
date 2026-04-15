@@ -128,7 +128,7 @@ func TestRunClaudeToolLoop(t *testing.T) {
 		}
 	})
 	got := strings.TrimSpace(out.String())
-	if !strings.Contains(got, "OK: wrote") || !strings.HasSuffix(got, "done") {
+	if !strings.Contains(got, "Write(") || !strings.HasSuffix(got, "done") {
 		t.Fatalf("unexpected output: %q", got)
 	}
 	data, err := os.ReadFile(target)
