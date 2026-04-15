@@ -493,6 +493,9 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 		}
 		if e.Content != "" {
 			displayOutput := normalizeDisplayText(e.Content)
+			if e.ToolName == "Read" {
+				displayOutput = conversation.BuildReadToolResultSummary(e.ToolArgs["path"])
+			}
 			suffix := "\n"
 			if strings.HasSuffix(displayOutput, "\n") {
 				suffix = ""
@@ -535,6 +538,8 @@ func (rt *runtime) executeToolCalls(calls []protocol.ToolCallEvent) ([]conversat
 		output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
 		results = append(results, conversation.ToolResult{
 			ToolUseID: call.ID,
+			ToolName:  call.Name,
+			ToolArgs:  call.Fields,
 			Content:   output,
 		})
 		if call.Name == "TodoWrite" && result.Err == nil {

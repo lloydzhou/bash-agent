@@ -1390,9 +1390,9 @@ test_agent_read_file_long_result() {
     } > "$target_file"
     output=$(TOOL_RESULT_MAX_BYTES=1000 "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'LONG_READ_MARKER' 2>&1) || true
     if [[ "$output" == *"Long read complete."* ]] && \
-       [[ "$output" == *"READ-LONG-HEAD"* ]] && \
-       [[ "$output" == *"READ-LONG-TAIL"* ]] && \
-       [[ "$output" == *"omitted, original result was"* ]]; then
+       [[ "$output" == *"Read($target_file) ["* ]] && \
+       [[ "$output" != *"READ-LONG-HEAD"* ]] && \
+       [[ "$output" != *"READ-LONG-TAIL"* ]]; then
         green "Agent read_file long result formatting"; ((PASS++)) || true
     else
         red "Agent read_file long result formatting"; echo "  Output: $output"; ((FAIL++)) || true

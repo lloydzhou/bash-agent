@@ -213,6 +213,8 @@ func appendLine(path string, line []byte) error {
 
 type ToolResult struct {
 	ToolUseID string
+	ToolName  string
+	ToolArgs  map[string]string
 	Content   string
 }
 
@@ -222,6 +224,17 @@ func BuildToolResultJSON(id, content string) ([]byte, error) {
 		"tool_use_id": id,
 		"content":     content,
 	})
+}
+
+func BuildReadToolResultSummary(path string) string {
+	if path == "" {
+		return "Read"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("Read(%s)", path)
+	}
+	return fmt.Sprintf("Read(%s) [%d lines, %d bytes]", path, lineCount(string(data)), len(data))
 }
 
 func BuildTodoEventJSON(content string) ([]byte, error) {
@@ -252,4 +265,17 @@ func BuildToolCallSummary(name string, fields map[string]string) string {
 		return name
 	}
 	return fmt.Sprintf("%s(%s)", name, label)
+}
+
+func lineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := 1
+	for _, ch := range s {
+		if ch == '\n' {
+			n++
+		}
+	}
+	return n
 }

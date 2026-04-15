@@ -353,6 +353,17 @@ format_tool_result() {
     printf '%s' "${output: -tail_chars}"
 }
 
+tool_read_summary() {
+    local kv="$1" path="" bytes lines
+    tool_call_arg "$kv" "path" path || true
+    [[ -n "$path" && -f "$path" ]] || { printf 'Read(%s)' "$path"; return 0; }
+    bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
+    bytes=${bytes//[[:space:]]/}
+    lines=$(wc -l < "$path" 2>/dev/null || echo 0)
+    lines=${lines//[[:space:]]/}
+    printf 'Read(%s) [%s lines, %s bytes]' "$path" "$lines" "$bytes"
+}
+
 is_stream_json_mode() {
     [[ "$OUTPUT_FORMAT" == "stream-json" ]]
 }
@@ -402,7 +413,7 @@ display_human_text() {
 display_event() {
     local line="$1"
     local payload="" tc_name="" tc_id="" tc_input="" tc_kv=""
-    local msg="" id="" escaped="" result=""
+    local msg="" id="" escaped="" result="" tool_name="" tool_fields=""
     local in_tok=0 out_tok=0 cache_tok=0
     local stream_event="" human_text="" human_kind=""
 
@@ -432,12 +443,17 @@ display_event() {
             ;;
         TOOL_RESULT:*)
             payload="${line#TOOL_RESULT:}"
-            IFS=$'\t' read -r id escaped <<< "$payload"
+            IFS=$'\t' read -r id tool_name tool_fields escaped <<< "$payload"
+            unescape_protocol_to_var tool_fields "$tool_fields"
             result="$escaped"
             unescape_protocol_to_var result "$result"
             stream_event="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$(json_escape "$result")\"}"
             human_kind="text"
-            human_text="$(format_tool_result "$result")"$'\n'
+            if [[ "$tool_name" == "Read" ]]; then
+                human_text="$(tool_read_summary "$tool_fields")"$'\n'
+            else
+                human_text="$(format_tool_result "$result")"$'\n'
+            fi
             ;;
         TODO_UPDATE:*)
             msg="${line#TODO_UPDATE:}"
@@ -1415,7 +1431,7 @@ execute_tool_calls_stream() {
         if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
             printf 'TODO_UPDATE:%s\n' "$(escape_protocol_text "$(<"$TODO_FILE")")"
         fi
-        printf 'TOOL_RESULT:%s\t%s\n' "$id" "$(escape_protocol_text "$output")"
+        printf 'TOOL_RESULT:%s\t%s\t%s\t%s\n' "$id" "$name" "$(escape_protocol_text "$kv")" "$(escape_protocol_text "$output")"
     done <<< "$calls"
 }
 

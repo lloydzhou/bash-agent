@@ -397,17 +397,22 @@ impl Runtime {
                         "content": result.content,
                     }))?;
                 } else if !result.content.is_empty() {
-                    let display_output =
-                        normalize_display_text(&result.content, self.cfg.interactive);
-                    let last = display_output.chars().last();
+                    let display_output = if result.tool_name == "Read" {
+                        Store::read_tool_result_summary(
+                            result.tool_args.get("path").map(String::as_str).unwrap_or(""),
+                        )
+                    } else {
+                        normalize_display_text(&result.content, self.cfg.interactive)
+                    };
                     if display_output.ends_with('\n') {
                         self.write_human(&display_output)?;
                         *last_char = "\n".to_string();
                     } else {
-                        self.write_human(&(display_output + "\n"))?;
-                        if let Some(c) = last {
-                            *last_char = c.to_string();
-                        }
+                        let last = display_output.chars().last();
+                        self.write_human(&format!("{display_output}\n"))?;
+                        *last_char = last
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "\n".to_string());
                     }
                 }
             }
@@ -466,6 +471,12 @@ impl Runtime {
 
             results.push(ToolResult {
                 tool_use_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                tool_args: call
+                    .fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
                 content: output.clone(),
             });
 

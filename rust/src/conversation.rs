@@ -13,6 +13,8 @@ pub struct Store {
 #[derive(Debug, Clone)]
 pub struct ToolResult {
     pub tool_use_id: String,
+    pub tool_name: String,
+    pub tool_args: std::collections::BTreeMap<String, String>,
     pub content: String,
 }
 
@@ -45,6 +47,16 @@ impl Store {
             .map(|r| json!({"type":"tool_result","tool_use_id":r.tool_use_id,"content":r.content}))
             .collect();
         self.append_line(&json!({"role":"user","content":content}))
+    }
+
+    pub fn read_tool_result_summary(path: &str) -> String {
+        if path.is_empty() {
+            return String::from("Read");
+        }
+        match fs::read(path) {
+            Ok(data) => format!("Read({path}) [{} lines, {} bytes]", line_count(&data), data.len()),
+            Err(_) => format!("Read({path})"),
+        }
     }
 
     pub fn lines(&self) -> Result<Vec<Value>> {
@@ -134,6 +146,14 @@ impl Store {
             .open(&self.path)?;
         writeln!(file, "{}", serde_json::to_string(value)?)?;
         Ok(())
+    }
+}
+
+fn line_count(s: &[u8]) -> usize {
+    if s.is_empty() {
+        0
+    } else {
+        s.iter().filter(|&&c| c == b'\n').count() + 1
     }
 }
 
