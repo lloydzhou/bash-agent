@@ -320,16 +320,18 @@ compact 依据真实 context 大小，而不是消息条数。
 
 ## Skills
 
-skills 只从这里加载：
+skills 主要从这些位置加载：
 
 ```text
-.claude/skills/<name>/SKILL.md
+./.claude/skills/<name>/SKILL.md
+./skills/<name>/SKILL.md
+~/.claude/skills/<name>/SKILL.md
 ```
 
-运行时分两层：
+运行时分三层：
 
 1. `skill-index`
-   - 从 `.claude/skills/*/SKILL.md` 提取轻量摘要
+   - 从所有可见 skill 目录里的 `SKILL.md` 提取轻量摘要
 2. `selected-skills`
    - 只有显式传 `--skill NAME` 时才注入完整 `SKILL.md`
 3. `Skill` tool

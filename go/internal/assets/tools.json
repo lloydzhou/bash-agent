@@ -1,7 +1,7 @@
 [
   {
     "name": "Read",
-    "description": "Read a file from the local filesystem.",
+    "description": "Read a single file from the local filesystem. Use multiple Read calls if you need multiple files.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -69,7 +69,7 @@
   },
   {
     "name": "Glob",
-    "description": "Fast file pattern matching tool that works with any codebase size.",
+    "description": "Find files matching a single glob pattern. Use multiple Glob calls if you need multiple patterns.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -87,7 +87,7 @@
   },
   {
     "name": "Grep",
-    "description": "A powerful search tool built on ripgrep.",
+    "description": "Search file contents with a single pattern. Use multiple Grep calls if you need multiple patterns.",
     "input_schema": {
       "type": "object",
       "properties": {

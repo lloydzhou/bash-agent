@@ -21,7 +21,12 @@ impl Builder {
         ));
         sections.push(wrap_section(
             "rules",
-            "- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- Report failures clearly.",
+            "- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.",
+            None,
+        ));
+        sections.push(wrap_section(
+            "using-your-tools",
+            "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Use Glob and Grep for one pattern at a time.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.",
             None,
         ));
         sections.push(wrap_section(

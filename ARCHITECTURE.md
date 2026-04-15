@@ -160,7 +160,7 @@ compact 现在按 **context 实际大小** 触发，而不是按消息条数：
 当前 compact 也有一条明确约束：
 
 - 自动 compact 不应重复做 provider/API 初始化检查
-- `compact` 子命令只有在真正需要生成 summary 时才校验配置
+- 手动 compact 入口已移除，compact 仅在主循环内自动触发
 
 ### 3. Prompt 组装
 
@@ -187,16 +187,18 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 
 ### 4. Skills
 
-skills 当前只读取项目目录下：
+skills 当前优先读取：
 
 ```text
-.claude/skills/<name>/SKILL.md
+./.claude/skills/<name>/SKILL.md
+./skills/<name>/SKILL.md
+~/.claude/skills/<name>/SKILL.md
 ```
 
 策略分两层：
 
 - `skill-index`
-  - 默认扫描 `.claude/skills/*/SKILL.md`
+  - 默认扫描所有可见 skill 目录的 `SKILL.md`
   - 只抽取简短摘要
 - `selected-skills`
   - 只有显式 `--skill NAME` 时，才加载完整 `SKILL.md`

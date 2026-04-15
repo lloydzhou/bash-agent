@@ -476,9 +476,10 @@ display_event() {
 
 build_system_prompt() {
     local output=""
-    local agent_identity core_rules todo_guidance instruction_files skill_index selected_skills stable_context todo
+    local agent_identity core_rules tool_guidance todo_guidance instruction_files skill_index selected_skills stable_context todo
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
-    core_rules=$'- Be concise and concrete.\n- Use tools when needed.\n- Prefer safe, exact edits.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- Report failures clearly.'
+    core_rules=$'- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.'
+    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Use Glob and Grep for one pattern at a time.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
 
     instruction_files=$(build_instruction_files_section)
@@ -489,6 +490,7 @@ build_system_prompt() {
 
     append_section output "agent-identity" "$agent_identity"
     append_section output "rules" "$core_rules"
+    append_section output "using-your-tools" "$tool_guidance"
     append_section output "todo-guidance" "$todo_guidance"
     append_section output "instruction-files" "$instruction_files"
     append_section output "skill-index" "$skill_index"

@@ -326,16 +326,18 @@ This avoids invalid tails such as:
 
 ## Skills
 
-Skills are loaded only from:
+Skills are loaded primarily from:
 
 ```text
-.claude/skills/<name>/SKILL.md
+./.claude/skills/<name>/SKILL.md
+./skills/<name>/SKILL.md
+~/.claude/skills/<name>/SKILL.md
 ```
 
-The runtime uses two layers:
+The runtime uses three layers:
 
 1. `skill-index`
-   - lightweight summaries from `.claude/skills/*/SKILL.md`
+   - lightweight summaries from all visible skill directories
 2. `selected-skills`
    - full `SKILL.md` content only when `--skill NAME` is specified
 3. `Skill` tool
