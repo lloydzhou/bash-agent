@@ -1441,9 +1441,9 @@ test_agent_edit_file() {
     target_file="/tmp/bash-agent-edit-test.txt"
     printf 'prefix old-value suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_FILE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q '^Edit(/tmp/bash-agent-edit-test.txt) \[+' && \
-       echo "$output" | grep -q '^--- a/' && \
-       echo "$output" | grep -q '^+++ b/' && \
+    local plain_output
+    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-test.txt) [+' && \
        grep -q 'new-value' "$target_file" && ! grep -q 'old-value' "$target_file"; then
         green "Agent edit_file"; ((PASS++)) || true
     else
@@ -1664,7 +1664,8 @@ test_agent_edit_unicode() {
     target_file="/tmp/bash-agent-edit-unicode.txt"
     printf 'prefix old-text suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_UNICODE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q '^--- a/' && echo "$output" | grep -q '^+++ b/' && grep -q '中文' "$target_file" && grep -q '日本語' "$target_file" && grep -q '한국어' "$target_file" && ! grep -q 'old-text' "$target_file"; then
+    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-unicode.txt) [+' && grep -q '中文' "$target_file" && grep -q '日本語' "$target_file" && grep -q '한국어' "$target_file" && ! grep -q 'old-text' "$target_file"; then
         green "Agent edit_file unicode"; ((PASS++)) || true
     else
         red "Agent edit_file unicode"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
@@ -1678,7 +1679,8 @@ test_agent_edit_special_chars() {
     target_file="/tmp/bash-agent-edit-special.txt"
     printf 'prefix plain suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_SPECIAL_CHARS_MARKER' 2>&1) || true
-    if echo "$output" | grep -q '^--- a/' && echo "$output" | grep -q '^+++ b/' && grep -q 'quotes' "$target_file" && grep -q 'dollar' "$target_file" && grep -q '<html>' "$target_file" && grep -q 'apos' "$target_file" && ! grep -q 'plain' "$target_file"; then
+    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-special.txt) [+' && grep -q 'quotes' "$target_file" && grep -q 'dollar' "$target_file" && grep -q '<html>' "$target_file" && grep -q 'apos' "$target_file" && ! grep -q 'plain' "$target_file"; then
         green "Agent edit_file special chars"; ((PASS++)) || true
     else
         red "Agent edit_file special chars"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
@@ -1697,7 +1699,8 @@ test_agent_edit_multiline() {
     # Lines 1-3 unchanged, lines 4-11 replaced (was 4-8), lines 12-15 (was 9-15) unchanged
     local line_count
     line_count=$(wc -l < "$target_file" | tr -d ' ')
-    if echo "$output" | grep -q '^--- a/' \
+    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-multiline.txt) [+' \
        && grep -q 'line4_replaced_a' "$target_file" \
         && grep -q 'line11_new_h' "$target_file" \
         && grep -q 'line9_original' "$target_file" \
@@ -1717,7 +1720,8 @@ test_agent_edit_code_snippet() {
     # Simulate a Go source file with tabs, braces, %v, %w format strings
     printf 'func main() {\n\tif err != nil {\n\t\treturn err\n\t}\n}\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_CODE_SNIPPET_MARKER' 2>&1) || true
-    if echo "$output" | grep -q '^--- a/' \
+    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-code.txt) [+' \
        && grep -q 'log.Printf' "$target_file" \
         && grep -q 'fmt.Errorf' "$target_file" \
         && grep -q '%v' "$target_file" \
