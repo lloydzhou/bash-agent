@@ -728,26 +728,6 @@ build_assistant_content_json() {
     printf '%s' "$content"
 }
 
-build_tool_results_content_json() {
-    local results="$1"
-    local content="[" first=true
-
-    while IFS= read -r tr; do
-        [[ -z "$tr" ]] && continue
-        local tid result
-        IFS=$'\t' read -r tid result <<< "$tr"
-        if [[ "$result" == Edit\(* ]]; then
-            result="$(tool_result_first_line "$result")"
-        fi
-        $first || content+=","
-        first=false
-        content+="$(build_tool_result_json_object "$tid" "$result")"
-    done <<< "$results"
-
-    content+="]"
-    printf '%s' "$content"
-}
-
 build_todo_event_json() {
     local checklist="$1"
     printf '{"type":"todo_update","content":"%s"}' "$(json_escape "$checklist")"
@@ -857,12 +837,11 @@ conv_add_assistant() {
     session_log_assistant "$text" "$calls"
 }
 
-conv_add_tool_results() {
-    local results="$1"
-    local content
-    content=$(build_tool_results_content_json "$results")
-    printf '{"role":"user","content":%s}\n' "$content" >> "$CONV_FILE"
-    session_log_tool_results "$results"
+conv_add_single_tool_result() {
+    local tid="$1" result="$2"
+    local obj
+    obj=$(build_tool_result_json_object "$tid" "$result")
+    printf '{"role":"user","content":[%s]}\n' "$obj" >> "$CONV_FILE"
 }
 
 conv_get_messages() {
@@ -988,16 +967,6 @@ session_log_assistant() {
     tool_json=$(build_tool_calls_json "$calls")
     payload+=",\"tool_calls\":${tool_json}}"
     session_append_line "$payload"
-}
-
-session_log_tool_results() {
-    local results="$1"
-    while IFS= read -r tr; do
-        [[ -z "$tr" ]] && continue
-        local tid result
-        IFS=$'\t' read -r tid result <<< "$tr"
-        session_append_line "$(build_tool_result_json_object "$tid" "$result")"
-    done <<< "$results"
 }
 
 # ============================================================================
@@ -1330,6 +1299,7 @@ agent_loop_stream() {
         (( turn++ )) || true
 
         local text="" tool_calls="" stop="" loop_error=""
+        local tool_conv_results=""  # collected: id<TAB>json_escaped_result per line
         local line
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
         while IFS= read -r line; do
@@ -1349,6 +1319,28 @@ agent_loop_stream() {
                     local cur_tool_name="" cur_tool_id="" input="" tool_kv=""
                     parse_tool_call_record "${line#TOOL_CALL:}" cur_tool_name cur_tool_id input tool_kv
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"$(escape_protocol_text "$input")"$'\t'"${tool_kv}"$'\n'
+
+                    # Inline dispatch: execute tool immediately, output result, collect for conv
+                    local arg1="" arg2="" arg3=""
+                    tool_args_from_kv "$cur_tool_name" "$tool_kv" arg1 arg2 arg3
+                    local output
+                    output=$(dispatch_tool "$cur_tool_name" "$arg1" "$arg2" "$arg3" 2>&1)
+                    local tool_rc=$?
+                    if (( tool_rc != 0 )); then
+                        output="Error: tool execution failed: $output"
+                    fi
+                    output=$(format_tool_result "$output")
+                    if [[ "$cur_tool_name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
+                        printf 'TODO_UPDATE:%s\n' "$(escape_protocol_text "$(<"$TODO_FILE")")"
+                    fi
+                    local result_for_conv="$output"
+                    if [[ "$cur_tool_name" == "Edit" ]]; then
+                        result_for_conv="$(tool_result_first_line "$output")"
+                    fi
+                    # Collect for conv write (after conv_add_assistant)
+                    tool_conv_results+="${cur_tool_id}"$'\t'"$(json_escape "$result_for_conv")"$'\n'
+                    # Output TOOL_RESULT immediately for display
+                    printf 'TOOL_RESULT:%s\t%s\t%s\t%s\n' "$cur_tool_id" "$cur_tool_name" "$(escape_protocol_text "$tool_kv")" "$(escape_protocol_text "$output")"
                     ;;
                 STOP:*)
                     stop="${line#STOP:}"
@@ -1361,48 +1353,31 @@ agent_loop_stream() {
             esac
         done < <(llm_call "$(conv_get_messages)")
 
-        conv_add_assistant "$text" "$tool_calls"
-
+        # Fatal stop reasons exit immediately
         case "$stop" in
-            error)
+            error|max_tokens|length)
+                [[ "$stop" != "error" ]] && printf '%s\n' "ERROR:Response truncated (max_tokens reached)"
                 return 1
                 ;;
-            end_turn|stop|done)
-                compact_context_window "auto" false || true
-                break
-                ;;
-            interrupted)
-                printf '%s\n' "STOP:interrupted"
-                break
-                ;;
-            tool_use|tool_calls)
-                if interrupt_requested; then
-                    printf '%s\n' "STOP:interrupted"
-                    break
-                fi
-                local results_file results=""
-                results_file=$(mktemp "${AGENT_TMPDIR}/tool-results.XXXXXX")
-                execute_tool_calls_stream "$tool_calls" "$results_file"
-                if [[ -s "$results_file" ]]; then
-                    results=$(<"$results_file")
-                fi
-                rm -f "$results_file"
-                if interrupt_requested; then
-                    printf '%s\n' "STOP:interrupted"
-                    break
-                fi
-                conv_add_tool_results "$results"
-                compact_context_window "auto" false || true
-                ;;
-            max_tokens|length)
-                printf '%s\n' "ERROR:Response truncated (max_tokens reached)"
-                break
-                ;;
-            *)
-                printf '%s\n' "ERROR:Unknown stop reason: $stop"
-                break
-                ;;
         esac
+
+        # Tools already executed inline; persist unless interrupted
+        if ! interrupt_requested; then
+            conv_add_assistant "$text" "$tool_calls"
+            if [[ -n "$tool_conv_results" ]]; then
+                local cr_id="" cr_result=""
+                while IFS=$'\t' read -r cr_id cr_result; do
+                    [[ -z "$cr_id" ]] && continue
+                    conv_add_single_tool_result "$cr_id" "$cr_result"
+                done <<< "$tool_conv_results"
+            fi
+            compact_context_window "auto" false || true
+            # tool_use/tool_calls → loop continues; anything else → break
+            [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
+        else
+            printf '%s\n' "STOP:interrupted"
+            break
+        fi
     done
 
     if (( turn >= MAX_TURNS )); then
@@ -1432,35 +1407,6 @@ agent_loop() {
     stop_esc_interrupt_listener
     $had_error && return 1
     return 0
-}
-
-execute_tool_calls_stream() {
-    local calls="$1" results_file="$2"
-    while IFS= read -r tc; do
-        interrupt_requested && break
-        [[ -z "$tc" ]] && continue
-        local name id input_escaped kv_escaped input kv arg1="" arg2="" arg3=""
-        IFS=$'\t' read -r name id input_escaped kv_escaped <<< "$tc"
-        unescape_protocol_to_var input "$input_escaped"
-        kv="$kv_escaped"
-        tool_args_from_kv "$name" "$kv" arg1 arg2 arg3
-        output=$(dispatch_tool "$name" "$arg1" "$arg2" "$arg3" 2>&1)
-        local tool_rc=$?
-        interrupt_requested && break
-        if (( tool_rc != 0 )); then
-            output="Error: tool execution failed: $output"
-        fi
-        output=$(format_tool_result "$output")
-        if [[ "$name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
-            printf 'TODO_UPDATE:%s\n' "$(escape_protocol_text "$(<"$TODO_FILE")")"
-        fi
-        local result_for_conv="$output"
-        if [[ "$name" == "Edit" ]]; then
-            result_for_conv="$(tool_result_first_line "$output")"
-        fi
-        printf '%s\t%s\n' "$id" "$(escape_protocol_text "$result_for_conv")" >> "$results_file"
-        printf 'TOOL_RESULT:%s\t%s\t%s\t%s\n' "$id" "$name" "$(escape_protocol_text "$kv")" "$(escape_protocol_text "$output")"
-    done <<< "$calls"
 }
 
 # ============================================================================
