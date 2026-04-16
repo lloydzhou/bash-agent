@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,6 +113,24 @@ func (r Runner) Dispatch(name string, input json.RawMessage) Result {
 			return Result{Err: err}
 		}
 		out, err := r.ToolSkill(args.Name)
+		return Result{Output: out, Err: err}
+	case "WebSearch":
+		var args struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return Result{Err: err}
+		}
+		out, err := r.WebSearch(args.Query)
+		return Result{Output: out, Err: err}
+	case "WebFetch":
+		var args struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(input, &args); err != nil {
+			return Result{Err: err}
+		}
+		out, err := r.WebFetch(args.URL)
 		return Result{Output: out, Err: err}
 	default:
 		return Result{Err: fmt.Errorf("unknown tool: %s", name)}
@@ -352,6 +372,67 @@ func (r Runner) ToolSkill(name string) (string, error) {
 	baseDir := filepath.Dir(skillFile)
 	content := strings.ReplaceAll(string(data), "${BASH_AGENT_SKILL_DIR}", baseDir)
 	return fmt.Sprintf("Skill: %s\nBase directory: %s\n\n%s", name, baseDir, content), nil
+}
+
+func (r Runner) WebSearch(query string) (string, error) {
+	if query == "" {
+		return "", errors.New("Error: no query provided")
+	}
+	apiKey := os.Getenv("JINA_API_KEY")
+	req, err := http.NewRequest("GET", "https://s.jina.ai/", nil)
+	if err != nil {
+		return "", fmt.Errorf("Error: creating search request: %w", err)
+	}
+	q := req.URL.Query()
+	q.Set("q", query)
+	req.URL.RawQuery = q.Encode()
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	req.Header.Set("X-Respond-With", "no-content")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Error: search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("Error: reading search response: %w", err)
+	}
+	return string(body), nil
+}
+
+func (r Runner) WebFetch(url string) (string, error) {
+	if url == "" {
+		return "", errors.New("Error: no url provided")
+	}
+	apiKey := os.Getenv("JINA_API_KEY")
+	req, err := http.NewRequest("GET", "https://r.jina.ai/", nil)
+	if err != nil {
+		return "", fmt.Errorf("Error: creating fetch request: %w", err)
+	}
+	q := req.URL.Query()
+	q.Set("url", url)
+	req.URL.RawQuery = q.Encode()
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Error: fetch request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("Error: reading fetch response: %w", err)
+	}
+	return string(body), nil
 }
 
 func FormatToolResult(s string, max int) string {

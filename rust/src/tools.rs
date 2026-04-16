@@ -112,6 +112,22 @@ impl Runner {
                 let args: Args = serde_json::from_value(input.clone())?;
                 self.tool_skill(&args.name)
             }
+            "WebSearch" => {
+                #[derive(Deserialize)]
+                struct Args {
+                    query: String,
+                }
+                let args: Args = serde_json::from_value(input.clone())?;
+                self.web_search(&args.query)
+            }
+            "WebFetch" => {
+                #[derive(Deserialize)]
+                struct Args {
+                    url: String,
+                }
+                let args: Args = serde_json::from_value(input.clone())?;
+                self.web_fetch(&args.url)
+            }
             _ => bail!("unknown tool: {name}"),
         }
     }
@@ -276,6 +292,45 @@ impl Runner {
             "Skill: {name}\nBase directory: {}\n\n{content}",
             base_dir.display()
         ))
+    }
+
+    fn web_search(&self, query: &str) -> Result<String> {
+        if query.is_empty() {
+            bail!("Error: no query provided");
+        }
+        let client = reqwest::blocking::Client::new();
+        let mut req = client
+            .get("https://s.jina.ai/")
+            .query(&[("q", query)])
+            .header("X-Respond-With", "no-content")
+            .timeout(std::time::Duration::from_secs(30));
+        if let Ok(key) = std::env::var("JINA_API_KEY") {
+            if !key.is_empty() {
+                req = req.header("Authorization", format!("Bearer {key}"));
+            }
+        }
+        let resp = req.send()?;
+        let body = resp.text()?;
+        Ok(body)
+    }
+
+    fn web_fetch(&self, url: &str) -> Result<String> {
+        if url.is_empty() {
+            bail!("Error: no url provided");
+        }
+        let client = reqwest::blocking::Client::new();
+        let mut req = client
+            .get("https://r.jina.ai/")
+            .query(&[("url", url)])
+            .timeout(std::time::Duration::from_secs(60));
+        if let Ok(key) = std::env::var("JINA_API_KEY") {
+            if !key.is_empty() {
+                req = req.header("Authorization", format!("Bearer {key}"));
+            }
+        }
+        let resp = req.send()?;
+        let body = resp.text()?;
+        Ok(body)
     }
 }
 

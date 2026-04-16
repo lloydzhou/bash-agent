@@ -121,6 +121,8 @@ tool_param_keys() {
         Grep) printf 'pattern path glob' ;;
         TodoWrite) printf 'checklist' ;;
         Skill) printf 'name' ;;
+        WebSearch) printf 'query' ;;
+        WebFetch) printf 'url' ;;
         *) printf '' ;;
     esac
 }
@@ -132,6 +134,8 @@ tool_summary_key() {
         Glob|Grep) printf 'pattern' ;;
         TodoWrite) printf 'summary' ;;
         Skill) printf 'name' ;;
+        WebSearch) printf 'query' ;;
+        WebFetch) printf 'url' ;;
         *) printf '' ;;
     esac
 }
@@ -1126,6 +1130,10 @@ tool_skill() {
     printf 'Skill: %s\n%s' "$skill_name" "$skill_content"
 }
 
+tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlencode "q=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" -H "X-Respond-With: no-content" "https://s.jina.ai/" 2>&1; }
+
+tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlencode "url=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/" 2>&1; }
+
 dispatch_tool() {
     local name="$1" arg1="${2:-}" arg2="${3:-}" arg3="${4:-}"
     case "$name" in
@@ -1137,6 +1145,8 @@ dispatch_tool() {
         Grep)      tool_grep "$arg1" "$arg2" "$arg3" ;;
         TodoWrite) tool_todo "$arg1" ;;
         Skill)     tool_skill "$arg1" ;;
+        WebSearch) tool_web_search "$arg1" ;;
+        WebFetch)  tool_web_fetch "$arg1" ;;
         *)
             echo "Error: unknown tool: $name"
             return 1
