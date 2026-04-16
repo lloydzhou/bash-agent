@@ -86,7 +86,6 @@ struct LlmStream {
     rx: mpsc::Receiver<StreamMsg>,
     finished: bool,
     cancel: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
 }
 
 struct CancelReader<R> {
@@ -131,9 +130,6 @@ impl LlmStream {
 impl Drop for LlmStream {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
     }
 }
 
@@ -609,7 +605,7 @@ impl Runtime {
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_thread = cancel.clone();
         let provider = self.cfg.provider.clone();
-        let handle = std::thread::spawn(move || {
+        let _reader_thread = std::thread::spawn(move || {
             let reader = CancelReader { inner: resp, cancel: cancel_thread.clone() };
             let send = |evt: Event| -> Result<()> {
                 tx.send(StreamMsg::Event(evt)).map_err(|e| anyhow!(e.to_string()))
@@ -622,7 +618,7 @@ impl Runtime {
             let _ = tx.send(StreamMsg::Done(parse_res.map_err(|err| anyhow!("sse_parse: {err}"))));
         });
 
-        Ok(LlmStream { rx, finished: false, cancel, handle: Some(handle) })
+        Ok(LlmStream { rx, finished: false, cancel })
     }
 
     fn start_esc_interrupt_listener(&mut self) {

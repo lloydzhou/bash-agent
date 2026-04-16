@@ -1,8 +1,12 @@
 use anyhow::{Result, anyhow};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use std::io::{Read, Result as IoResult};
 use std::fmt;
 use std::thread::sleep;
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// HTTPError carries the status code and body of an HTTP or network error.
@@ -47,6 +51,7 @@ const DEFAULT_RETRY_COUNT: u32 = 2;
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(1);
 const DEFAULT_RETRY_MAX_TIME: Duration = Duration::from_secs(20);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl StreamClient {
     pub fn new() -> Result<Self> {
@@ -58,7 +63,7 @@ impl StreamClient {
         })
     }
 
-    pub fn post(&self, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<Response> {
+    pub fn post(&self, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<StreamBody> {
         let mut h = HeaderMap::new();
         for (k, v) in headers {
             h.insert(
@@ -93,7 +98,7 @@ impl StreamClient {
                             body: text.trim().to_string(),
                         }.into());
                     }
-                    return Ok(resp);
+                    return StreamBody::from_response(resp, DEFAULT_IDLE_TIMEOUT).map_err(|e| e.into());
                 }
                 Err(err) => {
                     if should_retry_attempt(attempt, start) {
@@ -108,6 +113,74 @@ impl StreamClient {
                 }
             }
         }
+    }
+}
+
+pub struct StreamBody {
+    rx: Receiver<Vec<u8>>,
+    buf: std::io::Cursor<Vec<u8>>,
+    done: bool,
+    idle_timeout: Duration,
+}
+
+impl StreamBody {
+    fn from_response(mut resp: Response, idle_timeout: Duration) -> std::io::Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let _handle = thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            loop {
+                match resp.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx.send(buf[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Ok(Self {
+            rx,
+            buf: std::io::Cursor::new(Vec::new()),
+            done: false,
+            idle_timeout,
+        })
+    }
+}
+
+impl Read for StreamBody {
+    fn read(&mut self, out: &mut [u8]) -> IoResult<usize> {
+        if self.done {
+            return Ok(0);
+        }
+        loop {
+            if (self.buf.position() as usize) < self.buf.get_ref().len() {
+                return self.buf.read(out);
+            }
+            match self.rx.recv_timeout(self.idle_timeout) {
+                Ok(chunk) => {
+                    self.buf = std::io::Cursor::new(chunk);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    self.done = true;
+                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "idle timeout"));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.done = true;
+                    return Ok(0);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for StreamBody {
+    fn drop(&mut self) {
+        self.done = true;
+        // Intentionally do not join the background reader thread here.
+        // The underlying blocking read may still be stuck in the network stack,
+        // and joining would turn an idle-timeout into a hang.
     }
 }
 

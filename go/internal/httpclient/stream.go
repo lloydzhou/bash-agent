@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,11 +38,12 @@ type StreamClient struct {
 }
 
 const (
-	defaultRetryCount   = 2
-	defaultRetryDelay   = time.Second
-	defaultRetryMaxTime = 20 * time.Second
-	defaultConnectTimeout = 5 * time.Second
-	defaultResponseHeaderTimeout = 60 * time.Second
+	defaultRetryCount              = 2
+	defaultRetryDelay              = time.Second
+	defaultRetryMaxTime            = 20 * time.Second
+	defaultConnectTimeout          = 5 * time.Second
+	defaultStreamIdleTimeout       = 60 * time.Second
+	defaultResponseHeaderTimeout   = 60 * time.Second
 )
 
 func (c StreamClient) Post(url string, headers map[string]string, body []byte) (io.ReadCloser, error) {
@@ -49,9 +51,15 @@ func (c StreamClient) Post(url string, headers map[string]string, body []byte) (
 	if client == nil {
 		client = &http.Client{
 			Transport: &http.Transport{
-				DialContext: (&net.Dialer{
-					Timeout: defaultConnectTimeout,
-				}).DialContext,
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					conn, err := (&net.Dialer{
+						Timeout: defaultConnectTimeout,
+					}).DialContext(ctx, network, addr)
+					if err != nil {
+						return nil, err
+					}
+					return &deadlineConn{Conn: conn, idleTimeout: defaultStreamIdleTimeout}, nil
+				},
 				ResponseHeaderTimeout: defaultResponseHeaderTimeout,
 			},
 		}
@@ -92,6 +100,22 @@ func (c StreamClient) Post(url string, headers map[string]string, body []byte) (
 		}
 		return resp.Body, nil
 	}
+}
+
+type deadlineConn struct {
+	net.Conn
+	idleTimeout time.Duration
+}
+
+func (c *deadlineConn) Read(b []byte) (int, error) {
+	if c.idleTimeout > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+	}
+	n, err := c.Conn.Read(b)
+	if n > 0 && c.idleTimeout > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+	}
+	return n, err
 }
 
 func shouldRetryAttempt(attempt int, start time.Time) bool {
