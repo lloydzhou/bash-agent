@@ -18,7 +18,7 @@ func TestBuildOpenAIRequestConvertsMessagesAndTools(t *testing.T) {
 		json.RawMessage(`{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"abc"}]}`),
 	}
 	tools := []byte(`[{"name":"Read","description":"Read a file.","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]`)
-	body, err := BuildRequest(cfg, messages, tools, "sys", 123)
+	body, err := BuildRequest(cfg, messages, tools, "sys", 123, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

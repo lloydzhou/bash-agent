@@ -8,10 +8,11 @@ pub fn build_request(
     tools: &[Value],
     system_prompt: &str,
     max_tokens: i32,
+    thinking_budget: i32,
 ) -> Result<Vec<u8>> {
     match cfg.provider.as_str() {
-        "claude" => build_claude_request(cfg, messages, tools, system_prompt, max_tokens),
-        "openai" => build_openai_request(cfg, messages, tools, system_prompt, max_tokens),
+        "claude" => build_claude_request(cfg, messages, tools, system_prompt, max_tokens, thinking_budget),
+        "openai" => build_openai_request(cfg, messages, tools, system_prompt, max_tokens, thinking_budget),
         _ => bail!("unknown provider: {}", cfg.provider),
     }
 }
@@ -22,6 +23,7 @@ fn build_claude_request(
     tools: &[Value],
     system_prompt: &str,
     max_tokens: i32,
+    thinking_budget: i32,
 ) -> Result<Vec<u8>> {
     let mut body = json!({
         "model": cfg.model,
@@ -29,6 +31,12 @@ fn build_claude_request(
         "stream": true,
         "messages": messages,
     });
+    if thinking_budget > 0 {
+        body["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": thinking_budget,
+        });
+    }
     if !system_prompt.is_empty() {
         body["system"] = Value::String(system_prompt.to_string());
     }
@@ -44,6 +52,7 @@ fn build_openai_request(
     tools: &[Value],
     system_prompt: &str,
     max_tokens: i32,
+    thinking_budget: i32,
 ) -> Result<Vec<u8>> {
     let mut converted = convert_messages_to_openai(messages)?;
     if !system_prompt.is_empty() {
@@ -55,6 +64,9 @@ fn build_openai_request(
         "stream": true,
         "messages": converted,
     });
+    if thinking_budget > 0 {
+        body["reasoning_effort"] = Value::String("high".to_string());
+    }
     if !tools.is_empty() {
         body["tools"] = Value::Array(convert_tools_to_openai(tools));
     }
@@ -88,6 +100,7 @@ fn convert_assistant_message(content: &Value) -> Result<Value> {
     let mut tool_calls = Vec::new();
     for block in blocks {
         match block.get("type").and_then(Value::as_str).unwrap_or("") {
+            "thinking" => { /* skip thinking blocks — not part of OpenAI message format */ }
             "text" => text.push_str(block.get("text").and_then(Value::as_str).unwrap_or("")),
             "tool_use" => {
                 let args = block

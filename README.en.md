@@ -371,6 +371,7 @@ Internally, SSE output is normalized into a lightweight line protocol:
 
 ```text
 TEXT:Hello
+THINKING:Let me analyze this...
 TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tcommand\tpwd
 USAGE:25\t42\t8
 STOP:end_turn
@@ -379,6 +380,7 @@ STOP:end_turn
 `stream-json` exposes machine-readable events such as:
 
 - `text`
+- `thinking`
 - `tool_call`
 - `todo_update`
 - `tool_result`

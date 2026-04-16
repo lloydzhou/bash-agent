@@ -34,6 +34,7 @@ type Config struct {
 	MaxContextBytes    int
 	MaxContextKeepPct  int
 	Skills             []string
+	ThinkingBudget     int
 
 	Interactive     bool
 	SessionMode     bool
@@ -54,6 +55,7 @@ func Default() Config {
 		MaxTurns:           40,
 		MaxContextBytes:    200000,
 		MaxContextKeepPct:  25,
+		ThinkingBudget:     2048,
 	}
 }
 
@@ -198,6 +200,11 @@ func ParseArgs(args []string) (Config, error) {
 	if v := os.Getenv("FILE_WRITE_MAX_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.FileWriteMaxBytes = n
+		}
+	}
+	if v := os.Getenv("THINKING_BUDGET"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.ThinkingBudget = n
 		}
 	}
 

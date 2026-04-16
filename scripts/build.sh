@@ -66,6 +66,8 @@ awk_files = {
     "claude_sse": ("claude_sse.awk", "_AWK_CLAUDE_SSE"),
     "openai_sse": ("openai_sse.awk", "_AWK_OPENAI_SSE"),
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
+    "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
+    "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
 }
 
 awk_bodies = {}
@@ -174,6 +176,9 @@ if idx != -1:
 content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
+# --- Inline convert_messages.awk and convert_tools.awk references in build_openai_request ---
+content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_MESSAGES}"')
+content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_TOOLS}"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)

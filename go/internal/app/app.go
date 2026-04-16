@@ -261,7 +261,8 @@ func (rt *runtime) agentLoop(userInput string) error {
 }
 
 type displayState struct {
-	lastChar string
+	lastChar        string
+	prevWasThinking bool
 }
 
 func (rt *runtime) agentLoopStream(userInput string) error {
@@ -446,7 +447,7 @@ func (rt *runtime) llmCall(emit func(protocol.Event) error) error {
 	if err != nil {
 		return err
 	}
-	body, err := provider.BuildRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens)
+	body, err := provider.BuildRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
 	if err != nil {
 		return err
 	}
@@ -481,6 +482,14 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 		if rt.isStreamJSONMode() {
 			return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
 		}
+		// Insert newline when transitioning from thinking to text
+		if state.prevWasThinking && state.lastChar != "\n" {
+			if _, err := rt.writeHuman(rt.nl()); err != nil {
+				return err
+			}
+			state.lastChar = "\n"
+		}
+		state.prevWasThinking = false
 		displayContent := normalizeDisplayText(e.Content)
 		if _, err := rt.writeHuman(displayContent); err != nil {
 			return err
@@ -507,6 +516,7 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 				state.lastChar = displayContent[len(displayContent)-1:]
 			}
 		}
+		state.prevWasThinking = true
 	case protocol.ToolCallEvent:
 		if !rt.isStreamJSONMode() {
 			if state.lastChar != "\n" {
@@ -759,7 +769,8 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 		return "", err
 	}
 	lines = append(lines, msg)
-	body, err := provider.BuildRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens)
+	// Disable thinking for summary calls (not needed, saves tokens)
+	body, err := provider.BuildRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens, 0)
 	if err != nil {
 		return "", err
 	}

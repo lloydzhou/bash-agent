@@ -24,6 +24,7 @@ pub struct Config {
     pub max_context_bytes: usize,
     pub max_context_keep_pct: i32,
     pub skills: Vec<String>,
+    pub thinking_budget: i32,
     pub interactive: bool,
     pub session_mode: bool,
     pub session_id: String,
@@ -50,6 +51,7 @@ impl Default for Config {
             max_context_bytes: 200_000,
             max_context_keep_pct: 25,
             skills: Vec::new(),
+            thinking_budget: 2048,
             interactive: false,
             session_mode: false,
             session_id: String::new(),
@@ -174,6 +176,11 @@ pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
     if let Ok(v) = std::env::var("FILE_WRITE_MAX_BYTES") {
         if let Ok(n) = v.parse::<usize>() {
             cfg.file_write_max_bytes = n;
+        }
+    }
+    if let Ok(v) = std::env::var("THINKING_BUDGET") {
+        if let Ok(n) = v.parse::<i32>() {
+            cfg.thinking_budget = n;
         }
     }
 

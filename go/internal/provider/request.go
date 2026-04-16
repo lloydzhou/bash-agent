@@ -7,23 +7,29 @@ import (
 	"github.com/lloydzhou/bash-agent/internal/config"
 )
 
-func BuildRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int) ([]byte, error) {
+func BuildRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int, thinkingBudget int) ([]byte, error) {
 	switch cfg.Provider {
 	case "claude":
-		return buildClaudeRequest(cfg, messages, tools, systemPrompt, maxTokens)
+		return buildClaudeRequest(cfg, messages, tools, systemPrompt, maxTokens, thinkingBudget)
 	case "openai":
-		return buildOpenAIRequest(cfg, messages, tools, systemPrompt, maxTokens)
+		return buildOpenAIRequest(cfg, messages, tools, systemPrompt, maxTokens, thinkingBudget)
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.Provider)
 	}
 }
 
-func buildClaudeRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int) ([]byte, error) {
+func buildClaudeRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int, thinkingBudget int) ([]byte, error) {
 	body := map[string]any{
 		"model":      cfg.Model,
 		"max_tokens": maxTokens,
 		"stream":     true,
 		"messages":   rawArray(messages),
+	}
+	if thinkingBudget > 0 {
+		body["thinking"] = map[string]any{
+			"type":          "enabled",
+			"budget_tokens": thinkingBudget,
+		}
 	}
 	if systemPrompt != "" {
 		body["system"] = systemPrompt
@@ -34,7 +40,7 @@ func buildClaudeRequest(cfg config.Config, messages []json.RawMessage, tools []b
 	return json.Marshal(body)
 }
 
-func buildOpenAIRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int) ([]byte, error) {
+func buildOpenAIRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int, thinkingBudget int) ([]byte, error) {
 	converted, err := convertMessagesToOpenAI(messages)
 	if err != nil {
 		return nil, err
@@ -51,6 +57,9 @@ func buildOpenAIRequest(cfg config.Config, messages []json.RawMessage, tools []b
 		"max_tokens": maxTokens,
 		"stream":     true,
 		"messages":   converted,
+	}
+	if thinkingBudget > 0 {
+		body["reasoning_effort"] = "high"
 	}
 	if len(tools) > 0 {
 		openAITools, err := convertToolsToOpenAI(tools)
@@ -124,6 +133,8 @@ func convertAssistantMessage(raw json.RawMessage) (map[string]any, error) {
 	toolCalls := make([]map[string]any, 0)
 	for _, block := range blocks {
 		switch block.Type {
+		case "thinking":
+			// Skip thinking blocks — not part of OpenAI message format
 		case "text":
 			text += block.Text
 		case "tool_use":

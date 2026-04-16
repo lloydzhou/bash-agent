@@ -73,6 +73,11 @@ struct Runtime {
 
 const INTERRUPTED_ERR: &str = "__INTERRUPTED__";
 
+struct DisplayState {
+    last_char: String,
+    prev_was_thinking: bool,
+}
+
 enum DisplayEvent {
     Thinking(String),
     Text(String),
@@ -202,7 +207,10 @@ impl Runtime {
             self.append_event(json!({"type":"user_message","content":user_input}))?;
 
             let mut turn = 0;
-            let mut display_last_char = String::from("\n");
+            let mut ds = DisplayState {
+                last_char: String::from("\n"),
+                prev_was_thinking: false,
+            };
 
             while turn < self.cfg.max_turns {
                 turn += 1;
@@ -229,21 +237,21 @@ impl Runtime {
                     match evt {
                         Event::Thinking(ThinkingEvent { content }) => {
                             self.display_event(
-                                &mut display_last_char,
+                                &mut ds,
                                 DisplayEvent::Thinking(content.clone()),
                             )?;
                             // Thinking content does NOT accumulate into text
                         }
                         Event::Text(TextEvent { content }) => {
                             self.display_event(
-                                &mut display_last_char,
+                                &mut ds,
                                 DisplayEvent::Text(content.clone()),
                             )?;
                             text.push_str(&content);
                         }
                         Event::ToolCall(call) => {
                             self.display_event(
-                                &mut display_last_char,
+                                &mut ds,
                                 DisplayEvent::ToolCall(call.clone()),
                             )?;
                             calls.push(call.clone());
@@ -284,7 +292,7 @@ impl Runtime {
                                 display_content,
                             };
                             self.display_event(
-                                &mut display_last_char,
+                                &mut ds,
                                 DisplayEvent::ToolResult(tool_result.clone()),
                             )?;
                             tool_results.push(tool_result);
@@ -304,19 +312,19 @@ impl Runtime {
                         }
                         Event::Usage(usage) => {
                             self.display_event(
-                                &mut display_last_char,
+                                &mut ds,
                                 DisplayEvent::Usage(usage),
                             )?;
                         }
                         Event::Stop(StopEvent { reason }) => {
                             stop = reason.clone();
-                            self.display_event(&mut display_last_char, DisplayEvent::Stop(reason))?;
+                            self.display_event(&mut ds, DisplayEvent::Stop(reason))?;
                         }
                         Event::Error(ErrorEvent { message }) => {
                             loop_error = message.clone();
                             stop = "error".to_string();
                             let _ = self.display_event(
-                                &mut display_last_char,
+                                &mut ds,
                                 DisplayEvent::Error(message),
                             );
                             return Err(anyhow!("{}", loop_error));
@@ -364,7 +372,7 @@ impl Runtime {
                     }
                 } else {
                     if !self.is_stream_json_mode() {
-                        if display_last_char != "\n" {
+                        if ds.last_char != "\n" {
                             self.write_human("\n")?;
                         }
                         self.info("Interrupted.");
@@ -379,7 +387,7 @@ impl Runtime {
         result
     }
 
-    fn display_event(&self, last_char: &mut String, evt: DisplayEvent) -> Result<()> {
+    fn display_event(&self, ds: &mut DisplayState, evt: DisplayEvent) -> Result<()> {
         match evt {
             DisplayEvent::Thinking(content) => {
                 if self.is_stream_json_mode() {
@@ -389,33 +397,40 @@ impl Runtime {
                     self.write_human(&format!("\x1b[90m{}\x1b[0m", content))?;
                     let display_content = normalize_display_text(&content, self.cfg.interactive);
                     if display_content.ends_with('\n') {
-                        *last_char = "\n".to_string();
+                        ds.last_char = "\n".to_string();
                     } else if let Some(c) = display_content.chars().last() {
-                        *last_char = c.to_string();
+                        ds.last_char = c.to_string();
                     }
                 }
+                ds.prev_was_thinking = true;
             }
             DisplayEvent::Text(content) => {
                 if self.is_stream_json_mode() {
                     self.emit_stream(json!({"type":"text","content":content}))?;
                 } else {
+                    // Insert newline when transitioning from thinking to text
+                    if ds.prev_was_thinking && ds.last_char != "\n" {
+                        self.write_human("\n")?;
+                        ds.last_char = "\n".to_string();
+                    }
                     self.write_human(&content)?;
                     let display_content = normalize_display_text(&content, self.cfg.interactive);
                     if display_content.ends_with('\n') {
-                        *last_char = "\n".to_string();
+                        ds.last_char = "\n".to_string();
                     } else if let Some(c) = display_content.chars().last() {
-                        *last_char = c.to_string();
+                        ds.last_char = c.to_string();
                     }
                 }
+                ds.prev_was_thinking = false;
             }
             DisplayEvent::ToolCall(call) => {
                 if !self.is_stream_json_mode() {
-                    if last_char != "\n" {
+                    if ds.last_char != "\n" {
                         self.write_human("\n")?;
                     } else {
                         self.write_carriage_return()?;
                     }
-                    *last_char = "\n".to_string();
+                    ds.last_char = "\n".to_string();
                 }
                 if self.is_stream_json_mode() {
                     self.emit_stream(json!({
@@ -448,9 +463,9 @@ impl Runtime {
             DisplayEvent::Stop(reason) => {
                 if self.is_stream_json_mode() {
                     self.emit_stream(json!({"type":"stop","reason":reason}))?;
-                } else if last_char != "\n" {
+                } else if ds.last_char != "\n" {
                     self.write_human("\n")?;
-                    *last_char = "\n".to_string();
+                    ds.last_char = "\n".to_string();
                 }
             }
             DisplayEvent::Error(message) => {
@@ -489,11 +504,11 @@ impl Runtime {
                     };
                     if display_output.ends_with('\n') {
                         self.write_human(&display_output)?;
-                        *last_char = "\n".to_string();
+                        ds.last_char = "\n".to_string();
                     } else {
                         let last = display_output.chars().last();
                         self.write_human(&format!("{display_output}\n"))?;
-                        *last_char = last
+                        ds.last_char = last
                             .map(|c| c.to_string())
                             .unwrap_or_else(|| "\n".to_string());
                     }
@@ -520,6 +535,7 @@ impl Runtime {
             &self.tools_json,
             &system_prompt,
             self.cfg.max_tokens,
+            self.cfg.thinking_budget,
         )?;
 
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
@@ -636,12 +652,14 @@ impl Runtime {
         let user_prompt =
             prompt::build_compact_summary_user_prompt(current_summary, dropped_messages);
         let messages = vec![json!({"role":"user","content":user_prompt})];
+        // Disable thinking for summary calls (not needed, saves tokens)
         let body = provider::build_request(
             &self.cfg,
             &messages,
             &[],
             &prompt::build_compact_summary_system_prompt(),
             self.cfg.summary_max_tokens,
+            0,
         )?;
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
             Ok(r) => r,

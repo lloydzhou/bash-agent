@@ -365,6 +365,7 @@ skills 主要从这些位置加载：
 
 ```text
 TEXT:Hello
+THINKING:Let me analyze this...
 TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tcommand\tpwd
 USAGE:25\t42\t8
 STOP:end_turn
@@ -373,6 +374,7 @@ STOP:end_turn
 对外的 `stream-json` 会输出这些结构化事件：
 
 - `text`
+- `thinking`
 - `tool_call`
 - `todo_update`
 - `tool_result`

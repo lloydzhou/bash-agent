@@ -24,6 +24,7 @@ MAX_TURNS=40
 MAX_CONTEXT_BYTES=200000
 MAX_CONTEXT_KEEP_PCT=25
 declare -a SKILL_NAMES=()
+: "${THINKING_BUDGET:=2048}"
 
 # ============================================================================
 # Runtime Mode & Session State
@@ -46,6 +47,7 @@ INTERRUPT_REQUESTED=false
 ESC_LISTENER_PID=""
 ESC_LISTENER_FLAG=""
 DISPLAY_LAST_CHAR=$'\n'
+PREV_WAS_THINKING=false
 
 # ============================================================================
 # Environment Defaults
@@ -489,6 +491,12 @@ display_event() {
     fi
 
     if [[ "$human_kind" == "text" ]]; then
+        # Insert newline when transitioning from thinking to text
+        if [[ "$PREV_WAS_THINKING" == true && "$DISPLAY_LAST_CHAR" != $'\n' ]]; then
+            printf '\n'
+            DISPLAY_LAST_CHAR=$'\n'
+        fi
+        PREV_WAS_THINKING=false
         [[ -n "$human_text" ]] && display_human_text "$human_text"
     elif [[ "$human_kind" == "thinking" ]]; then
         [[ -n "$human_text" ]] && printf '\033[90m%s\033[0m' "$human_text"
@@ -497,6 +505,7 @@ display_event() {
         else
             DISPLAY_LAST_CHAR="${human_text: -1}"
         fi
+        PREV_WAS_THINKING=true
     elif [[ "$human_kind" == "tool_call" ]]; then
         display_ensure_newline
         log_tool "$human_text"
@@ -1160,12 +1169,17 @@ dispatch_tool() {
 # ============================================================================
 
 build_claude_request() {
-    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
+    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-0}"
     local body
     if [[ -z "$system_prompt" ]]; then
         system_prompt=$(build_system_prompt)
     fi
+
     body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
+
+    if (( thinking_budget > 0 )); then
+        body+=",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":${thinking_budget}}"
+    fi
 
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(json_escape "$system_prompt")\""
     [[ -n "$tools" ]] && body+=",\"tools\":${tools}"
@@ -1175,7 +1189,7 @@ build_claude_request() {
 }
 
 build_openai_request() {
-    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
+    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-0}"
     local msgs
     msgs=$(printf '%s' "$messages" | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
     if [[ -z "$system_prompt" ]]; then
@@ -1191,6 +1205,10 @@ build_openai_request() {
     local body
     body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
 
+    if (( thinking_budget > 0 )); then
+        body+=",\"reasoning_effort\":\"high\""
+    fi
+
     if [[ -n "$tools" ]]; then
         local openai_tools
         openai_tools=$(printf '%s' "$tools" | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
@@ -1202,10 +1220,10 @@ build_openai_request() {
 }
 
 build_request() {
-    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}"
+    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-$THINKING_BUDGET}"
     case "$PROVIDER" in
-        claude)            build_claude_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
-        openai)            build_openai_request "$messages" "$tools" "$system_prompt" "$max_tokens" ;;
+        claude)            build_claude_request "$messages" "$tools" "$system_prompt" "$max_tokens" "$thinking_budget" ;;
+        openai)            build_openai_request "$messages" "$tools" "$system_prompt" "$max_tokens" "$thinking_budget" ;;
     esac
 }
 
@@ -1283,8 +1301,9 @@ llm_call() {
 
 run_summary_call() {
     local messages="$1"
+    # Disable thinking for summary calls (not needed, saves tokens)
     local body text line
-    body=$(build_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS")
+    body=$(build_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS" 0)
     log_verbose "Summary request body ($((${#body} / 1024))KB): ${body:0:200}..."
 
     text=""
@@ -1409,6 +1428,7 @@ agent_loop() {
     local stream_line had_error=false
     clear_interrupt_state
     DISPLAY_LAST_CHAR=$'\n'
+    PREV_WAS_THINKING=false
     start_esc_interrupt_listener
 
     while IFS= read -r stream_line; do

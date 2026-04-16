@@ -22,7 +22,10 @@ function convert_assistant_msg(json,    role, content_val, text_parts, tool_part
         for (i = 1; i <= n; i++) {
             block = blocks[i]
             btype = extract_str(block, "type")
-            if (btype == "text") {
+            if (btype == "thinking") {
+                # Skip thinking blocks — not part of OpenAI message format
+                continue
+            } else if (btype == "text") {
                 t = extract_value(block, "text")
                 # Strip surrounding quotes
                 if (substr(t, 1, 1) == "\"") t = substr(t, 2, length(t) - 2)

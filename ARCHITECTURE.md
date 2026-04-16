@@ -280,6 +280,22 @@ skills 当前优先读取：
 - provider-specific builder 只做必要差异
 - 错误流通过 `http_stream.awk` 统一处理
 
+### Thinking / Reasoning
+
+通过环境变量 `THINKING_BUDGET` 控制（默认 `2048`）：
+
+- `claude`：发送 `thinking.type=enabled, budget_tokens=N`
+- `openai`：发送 `reasoning_effort=high`（统一值，不按模型名分支）
+- summary 调用传 `0` 禁用 thinking，节省 token
+
+消息转换时，assistant 的 `thinking` content block 会被跳过（OpenAI 格式不支持 thinking block）。
+
+SSE 流中：
+- Claude 的 `content_block_delta` + `type=thinking` → `THINKING:` 协议行
+- OpenAI 的 `reasoning_content` / `reasoning` delta → `THINKING:` 协议行
+
+human 模式下 thinking 文本以灰色（`\033[90m`）显示，thinking→text 转换时自动插入换行。
+
 ## 中间协议
 
 运行时内部和 `stream-json` 输出共用一套轻量事件边界。
@@ -289,6 +305,7 @@ skills 当前优先读取：
 内部 SSE 解析结果会先转成单行协议，例如：
 
 - `TEXT:...`
+- `THINKING:...`
 - `TOOL_CALL:<tool>\t<id>\t<raw_input_json>\t<key>\t<value>...`
 - `USAGE:<input_tokens>\t<output_tokens>\t<cache_input_tokens>`
 - `STOP:...`
@@ -312,6 +329,7 @@ skills 当前优先读取：
 当前事件类型：
 
 - `text`
+- `thinking`
 - `tool_call`
 - `todo_update`
 - `tool_result`
