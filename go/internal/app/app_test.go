@@ -278,3 +278,32 @@ func TestRunSessionWritesConversationAndEvents(t *testing.T) {
 		t.Fatalf("unexpected events file: %s", string(eventsData))
 	}
 }
+
+func TestRunClaudeApiErrorReturnsError(t *testing.T) {
+	project := t.TempDir()
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+	_ = os.Setenv("HOME", home)
+	oldWD, _ := os.Getwd()
+	defer os.Chdir(oldWD)
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return sseResponse(strings.Join([]string{
+			"event: error",
+			`data: {"error":{"message":"rate limited"}}`,
+			"",
+		}, "\n")), nil
+	})}
+
+	var out, errOut strings.Builder
+	withTestHTTPClient(client, func() {
+		err := Run([]string{"--base-url", "http://example.invalid", "hello"}, strings.NewReader(""), &out, &errOut)
+		if err == nil || !strings.Contains(err.Error(), "rate limited") {
+			t.Fatalf("expected rate limited error, got %v", err)
+		}
+	})
+}

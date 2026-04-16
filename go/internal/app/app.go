@@ -389,6 +389,12 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 		// Fatal stop reasons exit immediately
 		switch stop {
 		case "error", "max_tokens", "length":
+			if stop == "error" {
+				if loopError != "" {
+					return fmt.Errorf("%s", loopError)
+				}
+				return fmt.Errorf("unknown API error")
+			}
 			if stop != "error" {
 				rt.error("Response truncated (max_tokens reached)")
 			}

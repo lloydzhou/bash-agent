@@ -99,7 +99,6 @@ if idx != -1:
 # --- Replace each awk function to use variable concatenation ---
 functions = [
     ("json_escape", "_AWK_JSON", "", ""),
-    ("parse_http_stream", "", "_AWK_HTTP_STREAM", ""),
     ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
     ("parse_sse", "_AWK_JSON", "", ""),
     ("load_tool_defs", "", "", ""),
@@ -176,6 +175,7 @@ if idx != -1:
 content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
+content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk "${_AWK_HTTP_STREAM}"')
 # --- Inline convert_messages.awk and convert_tools.awk references in build_openai_request ---
 content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_MESSAGES}"')
 content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_TOOLS}"')

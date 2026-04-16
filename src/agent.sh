@@ -61,22 +61,6 @@ PREV_WAS_THINKING=false
 # Utility Functions
 # ============================================================================
 
-log_error() {
-    printf '\033[31mError: %s\033[0m\n' "$*" >&2
-}
-
-log_info() {
-    printf '\033[36m%s\033[0m\n' "$*" >&2
-}
-
-log_tool() {
-    printf '\033[33m[tool] %s\033[0m\n' "$*"
-}
-
-log_verbose() {
-    $VERBOSE && printf '\033[90m[verbose] %s\033[0m\n' "$*" >&2
-}
-
 deny_bash_command_reason() {
     local cmd="$1"
     local device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
@@ -290,7 +274,7 @@ run_with_timeout() {
 }
 
 die() {
-    log_error "$@"
+    printf '\033[31mError: %s\033[0m\n' "$*" >&2
     exit 1
 }
 
@@ -508,13 +492,13 @@ display_event() {
         PREV_WAS_THINKING=true
     elif [[ "$human_kind" == "tool_call" ]]; then
         display_ensure_newline
-        log_tool "$human_text"
+        printf '\033[33m[tool] %s\033[0m\n' "$human_text"
         DISPLAY_LAST_CHAR=$'\n'
     elif [[ "$human_kind" == "stop" ]]; then
         display_ensure_newline
     elif [[ "$human_kind" == "error" ]]; then
         display_ensure_newline
-        log_error "$human_text"
+        printf '\033[31mError: %s\033[0m\n' "$human_text" >&2
     fi
 }
 
@@ -984,7 +968,7 @@ compact_context_window() {
     if is_stream_json_mode; then
         printf '%s\n' "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
     elif [[ "$trigger" == "auto" ]]; then
-        log_info "Context compacted automatically."
+        printf '\033[36mContext compacted automatically.\033[0m\n'
     fi
     return 0
 }
@@ -1231,10 +1215,6 @@ build_request() {
 # SSE Parsers (call awk/*.awk)
 # ============================================================================
 
-parse_http_stream() {
-    awk -f "$AWK_DIR/http_stream.awk"
-}
-
 run_edit_file_awk() {
     local input="$1" max_bytes="$2" meta_file="$3"
     printf '%s' "$input" | awk \
@@ -1260,11 +1240,11 @@ _stream_curl() {
     shift
     local header_args=("$@")
 
-    $VERBOSE && log_verbose "POST $API_URL ($((${#body}/1024))KB body)"
+    $VERBOSE && printf '\033[90m[verbose] POST %s (%dKB body)\033[0m\n' "$API_URL" "$((${#body}/1024))" >&2
 
     # Merge stderr to stdout: curl errors come through same pipe
     # Handles: network errors, HTTP errors, and API JSON errors in body
-    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | parse_http_stream
+    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk -f "$AWK_DIR/http_stream.awk"
 }
 
 call_api() {
@@ -1294,7 +1274,7 @@ llm_call() {
 
     local body
     body=$(build_request "$messages" "$tools")
-    log_verbose "Request body ($((${#body} / 1024))KB): ${body:0:200}..."
+    $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
 
     call_api "$body" | parse_sse
 }
@@ -1304,7 +1284,7 @@ run_summary_call() {
     # Disable thinking for summary calls (not needed, saves tokens)
     local body text line
     body=$(build_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS" 0)
-    log_verbose "Summary request body ($((${#body} / 1024))KB): ${body:0:200}..."
+    $VERBOSE && printf '\033[90m[verbose] Summary request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
 
     text=""
     while IFS= read -r line; do
@@ -1436,7 +1416,7 @@ agent_loop() {
         if [[ "$stream_line" == STOP:interrupted ]]; then
             display_event "$stream_line"
             if [[ "$OUTPUT_FORMAT" == "human" ]]; then
-                log_info "Interrupted."
+                printf '\033[36mInterrupted.\033[0m\n'
             fi
             break
         fi
@@ -1608,7 +1588,7 @@ interactive_mode() {
     history -r "$history_file" 2>/dev/null || true
     trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
 
-    log_info "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)"
+    printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     while true; do
         stty echo 2>/dev/null || true
         IFS= read -e -r -p $'\033[32m> \033[0m' user_input || break
@@ -1619,7 +1599,7 @@ interactive_mode() {
         agent_loop "$user_input"
     done
     history -w "$history_file" 2>/dev/null || true
-    log_info "Goodbye!"
+    printf '\033[36mGoodbye!\033[0m\n'
 }
 
 start_esc_interrupt_listener() {

@@ -343,6 +343,12 @@ impl Runtime {
                 // Fatal stop reasons exit immediately
                 match stop.as_str() {
                     "error" | "max_tokens" | "length" => {
+                        if stop == "error" {
+                            if !loop_error.is_empty() {
+                                return Err(anyhow!("{}", loop_error));
+                            }
+                            return Err(anyhow!("unknown API error"));
+                        }
                         if stop != "error" {
                             self.error("Response truncated (max_tokens reached)");
                         }
