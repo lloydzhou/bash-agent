@@ -439,9 +439,33 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 }
 
 func (rt *runtime) llmCall(emit func(protocol.Event) error) error {
-	lines, err := rt.conv.Lines()
+	body, err := rt.buildLLMRequest()
 	if err != nil {
 		return err
+	}
+	respBody, err := rt.postLLMRequest(body)
+	if err != nil {
+		return err
+	}
+	defer respBody.Close()
+	done := make(chan struct{})
+	defer close(done)
+	events, streamErr := rt.streamLLMEvents(respBody, done)
+	for evt := range events {
+		if err := emit(evt); err != nil {
+			return err
+		}
+	}
+	if err := <-streamErr; err != nil {
+		return err
+	}
+	return nil
+}
+
+func (rt *runtime) buildLLMRequest() ([]byte, error) {
+	lines, err := rt.conv.Lines()
+	if err != nil {
+		return nil, fmt.Errorf("build_request: %w", err)
 	}
 	systemPrompt, err := prompt.Builder{
 		Cwd:         rt.cwd,
@@ -451,35 +475,62 @@ func (rt *runtime) llmCall(emit func(protocol.Event) error) error {
 		TodoFile:    rt.paths.Todo,
 	}.BuildSystemPrompt()
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("build_request: %w", err)
 	}
 	body, err := provider.BuildRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("build_request: %w", err)
 	}
 	if rt.cfg.Verbose {
 		rt.verbose("POST %s (%dKB body)", rt.apiURL, len(body)/1024)
 		rt.verbose("Request body (%dKB): %.200s...", len(body)/1024, string(body))
 	}
+	return body, nil
+}
+
+func (rt *runtime) postLLMRequest(body []byte) (io.ReadCloser, error) {
 	headers := rt.headers()
 	respBody, err := rt.http.Post(rt.apiURL, headers, body)
 	if err != nil {
 		var httpErr httpclient.HTTPError
 		if errors.As(err, &httpErr) {
-			return fmt.Errorf("%s", httpErr.FormatDetailed())
+			return nil, fmt.Errorf("http_post: %s", httpErr.FormatDetailed())
 		}
-		return fmt.Errorf("Error: parse %s sse: %v", rt.cfg.Provider, err)
+		return nil, fmt.Errorf("http_post: %w", err)
 	}
-	defer respBody.Close()
+	return respBody, nil
+}
 
-	switch rt.cfg.Provider {
-	case "claude":
-		return (sse.ClaudeParser{}).Parse(respBody, emit)
-	case "openai":
-		return (sse.OpenAIParser{}).Parse(respBody, emit)
-	default:
-		return fmt.Errorf("unknown provider: %s", rt.cfg.Provider)
-	}
+func (rt *runtime) streamLLMEvents(respBody io.Reader, done <-chan struct{}) (<-chan protocol.Event, <-chan error) {
+	events := make(chan protocol.Event, 16)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errCh)
+		emit := func(evt protocol.Event) error {
+			select {
+			case <-done:
+				return errInterrupted
+			case events <- evt:
+			}
+			return nil
+		}
+		var err error
+		switch rt.cfg.Provider {
+		case "claude":
+			err = sse.ClaudeParser{}.Parse(respBody, emit)
+		case "openai":
+			err = sse.OpenAIParser{}.Parse(respBody, emit)
+		default:
+			err = fmt.Errorf("unknown provider: %s", rt.cfg.Provider)
+		}
+		if err != nil {
+			errCh <- fmt.Errorf("sse_parse: %w", err)
+			return
+		}
+		errCh <- nil
+	}()
+	return events, errCh
 }
 
 func (rt *runtime) displayEvent(state *displayState, evt any) error {
@@ -778,7 +829,7 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 	// Disable thinking for summary calls (not needed, saves tokens)
 	body, err := provider.BuildRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens, 0)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("build_summary_request: %w", err)
 	}
 	if rt.cfg.Verbose {
 		rt.verbose("Summary request body (%dKB): %.200s...", len(body)/1024, string(body))
@@ -787,9 +838,9 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 	if err != nil {
 		var httpErr httpclient.HTTPError
 		if errors.As(err, &httpErr) {
-			return "", fmt.Errorf("%s", httpErr.FormatDetailed())
+			return "", fmt.Errorf("http_post: %s", httpErr.FormatDetailed())
 		}
-		return "", err
+		return "", fmt.Errorf("http_post: %w", err)
 	}
 	defer respBody.Close()
 	var b strings.Builder
@@ -808,10 +859,10 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 	case "openai":
 		err = (sse.OpenAIParser{}).Parse(respBody, parserEmit)
 	default:
-		err = fmt.Errorf("unknown provider: %s", rt.cfg.Provider)
+		err = fmt.Errorf("sse_parse: unknown provider: %s", rt.cfg.Provider)
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("sse_parse: %w", err)
 	}
 	if b.Len() == 0 {
 		return "", errors.New("failed to generate context summary")

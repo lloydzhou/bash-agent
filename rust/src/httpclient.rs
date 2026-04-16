@@ -46,11 +46,15 @@ pub struct StreamClient {
 const DEFAULT_RETRY_COUNT: u32 = 2;
 const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(1);
 const DEFAULT_RETRY_MAX_TIME: Duration = Duration::from_secs(20);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl StreamClient {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            client: Client::builder().timeout(None).build()?,
+            client: Client::builder()
+                .timeout(None)
+                .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+                .build()?,
         })
     }
 

@@ -13,9 +13,10 @@ use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{self, BufRead, BufReader, IsTerminal, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -71,11 +72,69 @@ struct Runtime {
     esc_thread: Option<JoinHandle<()>>,
 }
 
-const INTERRUPTED_ERR: &str = "__INTERRUPTED__";
-
 struct DisplayState {
     last_char: String,
     prev_was_thinking: bool,
+}
+
+enum StreamMsg {
+    Event(Event),
+    Done(Result<()>),
+}
+
+struct LlmStream {
+    rx: mpsc::Receiver<StreamMsg>,
+    finished: bool,
+    cancel: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+struct CancelReader<R> {
+    inner: R,
+    cancel: Arc<AtomicBool>,
+}
+
+impl<R: Read> Read for CancelReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"));
+        }
+        let n = self.inner.read(buf)?;
+        if self.cancel.load(Ordering::SeqCst) {
+            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"));
+        }
+        Ok(n)
+    }
+}
+
+impl LlmStream {
+    fn next_event(&mut self) -> Result<Option<Event>> {
+        if self.finished {
+            return Ok(None);
+        }
+        match self.rx.recv() {
+            Ok(StreamMsg::Event(evt)) => Ok(Some(evt)),
+            Ok(StreamMsg::Done(res)) => {
+                self.finished = true;
+                res?;
+                Ok(None)
+            }
+            Err(e) => {
+                self.finished = true;
+                Err(anyhow!(e.to_string()))
+            }
+        }
+    }
+
+}
+
+impl Drop for LlmStream {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 enum DisplayEvent {
@@ -227,9 +286,11 @@ impl Runtime {
                     home: self.home.clone(),
                 };
 
-                let call_result = self.llm_call(|evt| {
+                let mut stream = self.llm_stream()?;
+                while let Some(evt) = stream.next_event()? {
                     if self.interrupted.load(Ordering::SeqCst) {
-                        return Err(anyhow!(INTERRUPTED_ERR));
+                        stop = "interrupted".to_string();
+                        break;
                     }
                     if self.cfg.verbose {
                         self.debug(&format!("<{}>", evt.render()));
@@ -240,7 +301,6 @@ impl Runtime {
                                 &mut ds,
                                 DisplayEvent::Thinking(content.clone()),
                             )?;
-                            // Thinking content does NOT accumulate into text
                         }
                         Event::Text(TextEvent { content }) => {
                             self.display_event(
@@ -256,13 +316,14 @@ impl Runtime {
                             )?;
                             calls.push(call.clone());
 
-                            // Inline dispatch: execute tool immediately
                             if self.interrupted.load(Ordering::SeqCst) {
-                                return Err(anyhow!(INTERRUPTED_ERR));
+                                stop = "interrupted".to_string();
+                                break;
                             }
                             let dispatch_result = runner.dispatch(&call.name, &call.input_json);
                             if self.interrupted.load(Ordering::SeqCst) {
-                                return Err(anyhow!(INTERRUPTED_ERR));
+                                stop = "interrupted".to_string();
+                                break;
                             }
                             let mut output = match dispatch_result {
                                 Ok(v) => v,
@@ -297,7 +358,6 @@ impl Runtime {
                             )?;
                             tool_results.push(tool_result);
 
-                            // Handle TodoWrite event
                             if call.name == "TodoWrite" {
                                 if let Ok(data) = fs::read_to_string(&self.paths.todo) {
                                     if !data.trim().is_empty() {
@@ -311,32 +371,19 @@ impl Runtime {
                             }
                         }
                         Event::Usage(usage) => {
-                            self.display_event(
-                                &mut ds,
-                                DisplayEvent::Usage(usage),
-                            )?;
+                            self.display_event(&mut ds, DisplayEvent::Usage(usage))?;
                         }
                         Event::Stop(StopEvent { reason }) => {
                             stop = reason.clone();
                             self.display_event(&mut ds, DisplayEvent::Stop(reason))?;
+                            break;
                         }
                         Event::Error(ErrorEvent { message }) => {
                             loop_error = message.clone();
                             stop = "error".to_string();
-                            let _ = self.display_event(
-                                &mut ds,
-                                DisplayEvent::Error(message),
-                            );
-                            return Err(anyhow!("{}", loop_error));
+                            let _ = self.display_event(&mut ds, DisplayEvent::Error(message));
+                            break;
                         }
-                    }
-                    Ok(())
-                });
-                if let Err(e) = call_result {
-                    if e.to_string().contains(INTERRUPTED_ERR) {
-                        stop = "interrupted".to_string();
-                    } else if loop_error.is_empty() {
-                        return Err(e);
                     }
                 }
 
@@ -524,7 +571,7 @@ impl Runtime {
         Ok(())
     }
 
-    fn llm_call(&self, emit: impl FnMut(Event) -> Result<()>) -> Result<()> {
+    fn llm_stream(&self) -> Result<LlmStream> {
         let lines = self.conv.lines()?;
         let system_prompt = prompt::Builder {
             cwd: self.cwd.clone(),
@@ -543,22 +590,39 @@ impl Runtime {
             self.cfg.max_tokens,
             self.cfg.thinking_budget,
         )?;
+        if self.cfg.verbose {
+            self.debug(&format!("POST {} ({}KB body)", self.api_url, body.len() / 1024));
+            self.debug(&format!("Request body ({}KB): {:.200}...", body.len() / 1024, String::from_utf8_lossy(&body)));
+        }
 
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
             Ok(r) => r,
             Err(e) => {
                 if let Some(http_err) = e.downcast_ref::<HTTPError>() {
-                    return Err(anyhow!("{}", http_err.format_detailed()));
+                    return Err(anyhow!("http_post: {}", http_err.format_detailed()));
                 }
-                return Err(e);
+                return Err(anyhow!("http_post: {e}"));
             }
         };
 
-        match self.cfg.provider.as_str() {
-            "claude" => sse::claude::parse(resp, emit),
-            "openai" => sse::openai::parse(resp, emit),
-            _ => Err(anyhow!("unknown provider: {}", self.cfg.provider)),
-        }
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_thread = cancel.clone();
+        let provider = self.cfg.provider.clone();
+        let handle = std::thread::spawn(move || {
+            let reader = CancelReader { inner: resp, cancel: cancel_thread.clone() };
+            let send = |evt: Event| -> Result<()> {
+                tx.send(StreamMsg::Event(evt)).map_err(|e| anyhow!(e.to_string()))
+            };
+            let parse_res = match provider.as_str() {
+                "claude" => sse::claude::parse(reader, send),
+                "openai" => sse::openai::parse(reader, send),
+                _ => Err(anyhow!("unknown provider: {}", provider)),
+            };
+            let _ = tx.send(StreamMsg::Done(parse_res.map_err(|err| anyhow!("sse_parse: {err}"))));
+        });
+
+        Ok(LlmStream { rx, finished: false, cancel, handle: Some(handle) })
     }
 
     fn start_esc_interrupt_listener(&mut self) {

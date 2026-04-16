@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net"
 	"time"
 )
 
@@ -39,12 +40,21 @@ const (
 	defaultRetryCount   = 2
 	defaultRetryDelay   = time.Second
 	defaultRetryMaxTime = 20 * time.Second
+	defaultConnectTimeout = 5 * time.Second
+	defaultResponseHeaderTimeout = 60 * time.Second
 )
 
 func (c StreamClient) Post(url string, headers map[string]string, body []byte) (io.ReadCloser, error) {
 	client := c.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout: defaultConnectTimeout,
+				}).DialContext,
+				ResponseHeaderTimeout: defaultResponseHeaderTimeout,
+			},
+		}
 	}
 	start := time.Now()
 	for attempt := 0; ; attempt++ {
