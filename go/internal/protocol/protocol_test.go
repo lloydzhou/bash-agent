@@ -30,6 +30,15 @@ func TestToolCallRenderParseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestThinkingEventRender(t *testing.T) {
+	evt := ThinkingEvent{Content: "Let me think\nabout this"}
+	got := evt.Render()
+	want := "THINKING:Let me think\\nabout this"
+	if got != want {
+		t.Fatalf("unexpected render: %q", got)
+	}
+}
+
 func TestEscapeUnescapeText(t *testing.T) {
 	raw := "line1\nline2\t中文\\tail"
 	escaped := EscapeText(raw)

@@ -3,7 +3,7 @@ use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, pars
 use crate::conversation::{Store, ToolResult, build_tool_call_summary, edit_diff_summary};
 use crate::httpclient::{HTTPError, StreamClient};
 use crate::prompt;
-use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ToolCallEvent, UsageEvent};
+use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent};
 use crate::provider;
 use crate::session::{self, Paths};
 use crate::sse;
@@ -74,6 +74,7 @@ struct Runtime {
 const INTERRUPTED_ERR: &str = "__INTERRUPTED__";
 
 enum DisplayEvent {
+    Thinking(String),
     Text(String),
     ToolCall(ToolCallEvent),
     Usage(UsageEvent),
@@ -226,6 +227,13 @@ impl Runtime {
                         self.debug(&format!("<{}>", evt.render()));
                     }
                     match evt {
+                        Event::Thinking(ThinkingEvent { content }) => {
+                            self.display_event(
+                                &mut display_last_char,
+                                DisplayEvent::Thinking(content.clone()),
+                            )?;
+                            // Thinking content does NOT accumulate into text
+                        }
                         Event::Text(TextEvent { content }) => {
                             self.display_event(
                                 &mut display_last_char,
@@ -373,6 +381,20 @@ impl Runtime {
 
     fn display_event(&self, last_char: &mut String, evt: DisplayEvent) -> Result<()> {
         match evt {
+            DisplayEvent::Thinking(content) => {
+                if self.is_stream_json_mode() {
+                    self.emit_stream(json!({"type":"thinking","content":content}))?;
+                } else {
+                    // Gray color for thinking output
+                    self.write_human(&format!("\x1b[90m{}\x1b[0m", content))?;
+                    let display_content = normalize_display_text(&content, self.cfg.interactive);
+                    if display_content.ends_with('\n') {
+                        *last_char = "\n".to_string();
+                    } else if let Some(c) = display_content.chars().last() {
+                        *last_char = c.to_string();
+                    }
+                }
+            }
             DisplayEvent::Text(content) => {
                 if self.is_stream_json_mode() {
                     self.emit_stream(json!({"type":"text","content":content}))?;

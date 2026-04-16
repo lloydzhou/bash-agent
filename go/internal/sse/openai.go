@@ -77,7 +77,9 @@ func (p OpenAIParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 		var body struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					Reasoning        string `json:"reasoning"`
 					ToolCalls []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
@@ -130,6 +132,15 @@ func (p OpenAIParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 				if err := emit(protocol.TextEvent{Content: content}); err != nil {
 					return err
 				}
+			}
+		}
+		reasoning := choice.Delta.ReasoningContent
+		if reasoning == "" {
+			reasoning = choice.Delta.Reasoning
+		}
+		if reasoning != "" {
+			if err := emit(protocol.ThinkingEvent{Content: reasoning}); err != nil {
+				return err
 			}
 		}
 		for _, tc := range choice.Delta.ToolCalls {

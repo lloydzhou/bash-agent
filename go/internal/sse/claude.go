@@ -82,6 +82,8 @@ func (p ClaudeParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 			switch payload.ContentBlock.Type {
 			case "text":
 				blockType = "text"
+			case "thinking":
+				blockType = "thinking"
 			case "tool_use":
 				blockType = "tool"
 				toolName = payload.ContentBlock.Name
@@ -100,6 +102,20 @@ func (p ClaudeParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 				}
 				if payload.Delta.Text != "" {
 					if err := emit(protocol.TextEvent{Content: payload.Delta.Text}); err != nil {
+						return err
+					}
+				}
+			} else if blockType == "thinking" {
+				var payload struct {
+					Delta struct {
+						Thinking string `json:"thinking"`
+					} `json:"delta"`
+				}
+				if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
+					return err
+				}
+				if payload.Delta.Thinking != "" {
+					if err := emit(protocol.ThinkingEvent{Content: payload.Delta.Thinking}); err != nil {
 						return err
 					}
 				}

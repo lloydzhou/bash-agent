@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub enum Event {
     Text(TextEvent),
+    Thinking(ThinkingEvent),
     ToolCall(ToolCallEvent),
     Usage(UsageEvent),
     Stop(StopEvent),
@@ -16,6 +17,7 @@ impl Event {
     pub fn render(&self) -> String {
         match self {
             Event::Text(e) => format!("TEXT:{}", escape_text(&e.content)),
+            Event::Thinking(e) => format!("THINKING:{}", escape_text(&e.content)),
             Event::ToolCall(e) => {
                 let mut out = format!(
                     "TOOL_CALL:{}\t{}\t{}",
@@ -45,6 +47,11 @@ impl Event {
 
 #[derive(Debug, Clone)]
 pub struct TextEvent {
+    pub content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThinkingEvent {
     pub content: String,
 }
 

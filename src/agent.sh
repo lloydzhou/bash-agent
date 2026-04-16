@@ -424,6 +424,13 @@ display_event() {
             human_kind="text"
             human_text="$msg"
             ;;
+        THINKING:*)
+            msg="${line#THINKING:}"
+            unescape_protocol_to_var msg "$msg"
+            stream_event="{\"type\":\"thinking\",\"content\":\"$(json_escape "$msg")\"}"
+            human_kind="thinking"
+            human_text="$msg"
+            ;;
         TOOL_CALL:*)
             payload="${line#TOOL_CALL:}"
             parse_tool_call_record "$payload" tc_name tc_id tc_input tc_kv
@@ -483,6 +490,13 @@ display_event() {
 
     if [[ "$human_kind" == "text" ]]; then
         [[ -n "$human_text" ]] && display_human_text "$human_text"
+    elif [[ "$human_kind" == "thinking" ]]; then
+        [[ -n "$human_text" ]] && printf '\033[90m%s\033[0m' "$human_text"
+        if [[ "$human_text" == *$'\n' ]]; then
+            DISPLAY_LAST_CHAR=$'\n'
+        else
+            DISPLAY_LAST_CHAR="${human_text: -1}"
+        fi
     elif [[ "$human_kind" == "tool_call" ]]; then
         display_ensure_newline
         log_tool "$human_text"
@@ -1320,6 +1334,9 @@ agent_loop_stream() {
                     local d="${line#TEXT:}"
                     unescape_protocol_to_var d "$d"
                     text+="$d"
+                    ;;
+                THINKING:*)
+                    # Thinking content: pass through for display, but don't accumulate into text
                     ;;
                 TOOL_CALL:*)
                     local cur_tool_name="" cur_tool_id="" input="" tool_kv=""

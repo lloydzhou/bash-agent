@@ -11,6 +11,7 @@ type EventKind string
 
 const (
 	EventText     EventKind = "TEXT"
+	EventThinking EventKind = "THINKING"
 	EventToolCall EventKind = "TOOL_CALL"
 	EventUsage    EventKind = "USAGE"
 	EventStop     EventKind = "STOP"
@@ -26,6 +27,11 @@ type TextEvent struct{ Content string }
 
 func (e TextEvent) Kind() EventKind { return EventText }
 func (e TextEvent) Render() string  { return "TEXT:" + EscapeText(e.Content) }
+
+type ThinkingEvent struct{ Content string }
+
+func (e ThinkingEvent) Kind() EventKind { return EventThinking }
+func (e ThinkingEvent) Render() string  { return "THINKING:" + EscapeText(e.Content) }
 
 type StopEvent struct{ Reason string }
 

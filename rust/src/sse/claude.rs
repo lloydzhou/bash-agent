@@ -1,4 +1,4 @@
-use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, UsageEvent};
+use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
 use crate::sse::toolcall::build_tool_call_event;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
@@ -61,6 +61,8 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
                 let t = cb.get("type").and_then(Value::as_str).unwrap_or("");
                 if t == "text" {
                     block_type = "text".to_string();
+                } else if t == "thinking" {
+                    block_type = "thinking".to_string();
                 } else if t == "tool_use" {
                     block_type = "tool".to_string();
                     tool_name = cb
@@ -82,6 +84,13 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
                     let text = delta.get("text").and_then(Value::as_str).unwrap_or("");
                     if !text.is_empty() {
                         emit(Event::Text(TextEvent {
+                            content: text.to_string(),
+                        }))?;
+                    }
+                } else if block_type == "thinking" {
+                    let text = delta.get("thinking").and_then(Value::as_str).unwrap_or("");
+                    if !text.is_empty() {
+                        emit(Event::Thinking(ThinkingEvent {
                             content: text.to_string(),
                         }))?;
                     }

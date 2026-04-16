@@ -1,6 +1,6 @@
 # claude_sse.awk — Anthropic Claude SSE stream parser
 # Input: SSE lines (event:, data:)
-# Output: Unified protocol (TEXT:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
+# Output: Unified protocol (TEXT:, THINKING:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
 # Requires: awk -v verbose=true/false -f json.awk -f protocol.awk -f todo_protocol.awk -f claude_sse.awk
 
 BEGIN {
@@ -34,6 +34,8 @@ BEGIN {
         block_kind = extract_str(block_json, "type")
         if (block_kind == "text") {
             block_type = "text"
+        } else if (block_kind == "thinking") {
+            block_type = "thinking"
         } else if (block_kind == "tool_use") {
             block_type = "tool"
             tool_name = extract_str(block_json, "name")
@@ -46,6 +48,13 @@ BEGIN {
             text = extract_str(json, "text", 1)
             if (text != "") {
                 printf "TEXT:%s\n", escape_protocol_text(text)
+                fflush()
+            }
+        }
+        else if (block_type == "thinking") {
+            text = extract_str(json, "thinking", 1)
+            if (text != "") {
+                printf "THINKING:%s\n", escape_protocol_text(text)
                 fflush()
             }
         }

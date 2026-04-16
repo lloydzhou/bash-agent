@@ -1,4 +1,4 @@
-use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, UsageEvent};
+use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
 use crate::sse::toolcall::build_tool_call_event;
 use anyhow::Result;
 use serde_json::Value;
@@ -95,6 +95,19 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
             if !c.is_empty() {
                 saw_text = true;
                 emit(Event::Text(TextEvent { content: c }))?;
+            }
+        }
+
+        // Reasoning / thinking content (e.g. o-series, deepseek)
+        if let Some(reasoning) = delta
+            .get("reasoning_content")
+            .or_else(|| delta.get("reasoning"))
+            .and_then(Value::as_str)
+        {
+            if !reasoning.is_empty() {
+                emit(Event::Thinking(ThinkingEvent {
+                    content: reasoning.to_string(),
+                }))?;
             }
         }
 

@@ -1,6 +1,6 @@
 # openai_sse.awk — OpenAI Chat Completions SSE stream parser
 # Input: SSE lines (data:)
-# Output: Unified protocol (TEXT:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
+# Output: Unified protocol (TEXT:, THINKING:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
 # Requires: awk -f json.awk -f protocol.awk -f todo_protocol.awk -f openai_sse.awk
 
 BEGIN {
@@ -47,6 +47,17 @@ BEGIN {
         if (content != "") {
             saw_text = 1
             printf "TEXT:%s\n", escape_protocol_text(content)
+            fflush()
+        }
+    }
+
+    # Extract reasoning/thinking content from delta
+    reasoning = extract_json_string(json, "reasoning_content", 1)
+    if (reasoning == "") reasoning = extract_json_string(json, "reasoning", 1)
+    if (reasoning != "") {
+        reasoning = unescape_json_string(reasoning)
+        if (reasoning != "") {
+            printf "THINKING:%s\n", escape_protocol_text(reasoning)
             fflush()
         }
     }

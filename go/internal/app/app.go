@@ -309,6 +309,10 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					return err
 				}
 				text += e.Content
+			case protocol.ThinkingEvent:
+				if err := rt.displayEvent(&state, e); err != nil {
+					return err
+				}
 			case protocol.ToolCallEvent:
 				if err := rt.displayEvent(&state, e); err != nil {
 					return err
@@ -479,6 +483,21 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 		}
 		displayContent := normalizeDisplayText(e.Content)
 		if _, err := rt.writeHuman(displayContent); err != nil {
+			return err
+		}
+		if displayContent != "" {
+			if strings.HasSuffix(displayContent, "\n") {
+				state.lastChar = "\n"
+			} else {
+				state.lastChar = displayContent[len(displayContent)-1:]
+			}
+		}
+	case protocol.ThinkingEvent:
+		if rt.isStreamJSONMode() {
+			return rt.emitStream(map[string]any{"type": "thinking", "content": e.Content})
+		}
+		displayContent := normalizeDisplayText(e.Content)
+		if _, err := rt.writeHuman(fmt.Sprintf("\033[90m%s\033[0m", displayContent)); err != nil {
 			return err
 		}
 		if displayContent != "" {
