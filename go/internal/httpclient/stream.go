@@ -8,6 +8,29 @@ import (
 	"time"
 )
 
+// HTTPError carries HTTP/network error information with status code and body.
+type HTTPError struct {
+	StatusCode int    // 0 when the request never reached the server (network error)
+	Body       string // response body (may be empty for network errors)
+}
+
+func (e HTTPError) Error() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
+	}
+	return e.Body
+}
+
+// FormatDetailed returns the canonical error string matching the Bash format:
+// "ERROR:{code}\tHTTP {code}: {body}" for HTTP errors
+// "ERROR:0\t{body}" for network errors
+func (e HTTPError) FormatDetailed() string {
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("ERROR:%d\tHTTP %d: %s", e.StatusCode, e.StatusCode, e.Body)
+	}
+	return fmt.Sprintf("ERROR:0\t%s", e.Body)
+}
+
 type StreamClient struct {
 	Client *http.Client
 }
@@ -39,17 +62,23 @@ func (c StreamClient) Post(url string, headers map[string]string, body []byte) (
 				time.Sleep(defaultRetryDelay)
 				continue
 			}
-			return nil, err
+			return nil, HTTPError{
+				StatusCode: 0,
+				Body:       err.Error(),
+			}
 		}
 		if resp.StatusCode >= 400 {
 			data, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			httpErr := fmt.Errorf("http %d: %s", resp.StatusCode, bytes.TrimSpace(data))
-			if shouldRetryStatus(resp.StatusCode) && shouldRetryAttempt(attempt, start) {
+			retryable := shouldRetryStatus(resp.StatusCode) && shouldRetryAttempt(attempt, start)
+			if retryable {
 				time.Sleep(defaultRetryDelay)
 				continue
 			}
-			return nil, httpErr
+			return nil, HTTPError{
+				StatusCode: resp.StatusCode,
+				Body:       string(bytes.TrimSpace(data)),
+			}
 		}
 		return resp.Body, nil
 	}

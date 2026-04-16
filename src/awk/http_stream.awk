@@ -11,7 +11,7 @@ BEGIN {
 }
 
 /^curl: / {
-    printf "ERROR:%s\n", $0
+    printf "ERROR:0\t%s\n", $0
     exit 1
 }
 
@@ -42,7 +42,7 @@ END {
     if (http_code >= 400) {
         if (body == "") body = "(empty)"
         gsub(/\r/, "", body)
-        printf "ERROR:HTTP %s BODY:%s\n", http_code, body
+        printf "ERROR:%s\tHTTP %s: %s\n", http_code, http_code, body
         fflush()
         exit 1
     }

@@ -453,7 +453,11 @@ func (rt *runtime) llmCall(emit func(protocol.Event) error) error {
 	headers := rt.headers()
 	respBody, err := rt.http.Post(rt.apiURL, headers, body)
 	if err != nil {
-		return err
+		var httpErr httpclient.HTTPError
+		if errors.As(err, &httpErr) {
+			return fmt.Errorf("%s", httpErr.FormatDetailed())
+		}
+		return fmt.Errorf("Error: parse %s sse: %v", rt.cfg.Provider, err)
 	}
 	defer respBody.Close()
 
@@ -745,6 +749,10 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 	}
 	respBody, err := rt.http.Post(rt.apiURL, rt.headers(), body)
 	if err != nil {
+		var httpErr httpclient.HTTPError
+		if errors.As(err, &httpErr) {
+			return "", fmt.Errorf("%s", httpErr.FormatDetailed())
+		}
 		return "", err
 	}
 	defer respBody.Close()

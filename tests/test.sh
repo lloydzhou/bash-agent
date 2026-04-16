@@ -1149,7 +1149,7 @@ test_http_stream_error_body() {
     info "Test 8: HTTP stream preserves error body"
     local output
     output=$(printf 'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{"error":{"message":"bad request detail"}}\n' | awk -f "$AWK_DIR/http_stream.awk")
-    if echo "$output" | grep -q '^ERROR:HTTP 400 BODY:' && echo "$output" | grep -q 'bad request detail'; then
+    if echo "$output" | grep -q '^ERROR:400	HTTP 400:' && echo "$output" | grep -q 'bad request detail'; then
         green "HTTP stream error body"; ((PASS++)) || true
     else
         red "HTTP stream error body"; echo "  Output: $output"; ((FAIL++)) || true

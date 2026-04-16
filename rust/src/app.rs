@@ -1,7 +1,7 @@
 use crate::assets::TOOLS_JSON;
 use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, parse_args};
 use crate::conversation::{Store, ToolResult, build_tool_call_summary, edit_diff_summary};
-use crate::httpclient::StreamClient;
+use crate::httpclient::{HTTPError, StreamClient};
 use crate::prompt;
 use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ToolCallEvent, UsageEvent};
 use crate::provider;
@@ -500,7 +500,15 @@ impl Runtime {
             self.cfg.max_tokens,
         )?;
 
-        let resp = self.http.post(&self.api_url, &self.headers(), &body)?;
+        let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(http_err) = e.downcast_ref::<HTTPError>() {
+                    return Err(anyhow!("{}", http_err.format_detailed()));
+                }
+                return Err(e);
+            }
+        };
 
         match self.cfg.provider.as_str() {
             "claude" => sse::claude::parse(resp, emit),
@@ -613,7 +621,15 @@ impl Runtime {
             &prompt::build_compact_summary_system_prompt(),
             self.cfg.summary_max_tokens,
         )?;
-        let resp = self.http.post(&self.api_url, &self.headers(), &body)?;
+        let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(http_err) = e.downcast_ref::<HTTPError>() {
+                    return Err(anyhow!("{}", http_err.format_detailed()));
+                }
+                return Err(e);
+            }
+        };
         let mut out = String::new();
         let mut parse_emit = |evt: Event| -> Result<()> {
             match evt {
