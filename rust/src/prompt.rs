@@ -21,7 +21,7 @@ impl Builder {
         ));
         sections.push(wrap_section(
             "rules",
-            "- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.",
+            "- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.",
             None,
         ));
         sections.push(wrap_section(
