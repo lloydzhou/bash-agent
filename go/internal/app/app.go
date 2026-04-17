@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/peterh/liner"
+	"github.com/reeflective/readline"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
@@ -216,22 +216,21 @@ func (rt *runtime) cleanup() {
 
 func (rt *runtime) interactiveMode() error {
 	_, _ = fmt.Fprintln(rt.stdout, "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)")
-	line := liner.NewLiner()
-	defer line.Close()
-	line.SetCtrlCAborts(true)
+
+	shell := readline.NewShell()
+	shell.Prompt.Primary(func() string { return "\033[32m> \033[0m" })
+
 	historyPath := filepath.Join(rt.home, ".bash-agent", "history")
 	_ = os.MkdirAll(filepath.Dir(historyPath), 0o755)
-	if f, err := os.Open(historyPath); err == nil {
-		_, _ = line.ReadHistory(f)
-		_ = f.Close()
-	}
+	shell.History.AddFromFile("default", historyPath)
+
 	for {
-		input, err := line.Prompt("> ")
+		input, err := shell.Readline()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			if errors.Is(err, liner.ErrPromptAborted) {
+			if errors.Is(err, readline.ErrInterrupt) {
 				continue
 			}
 			return err
@@ -242,15 +241,10 @@ func (rt *runtime) interactiveMode() error {
 		if input == "exit" || input == "quit" {
 			break
 		}
-		line.AppendHistory(input)
 		if err := rt.agentLoop(input); err != nil {
 			rt.error("%v", err)
 			// continue REPL on error
 		}
-	}
-	if f, err := os.Create(historyPath); err == nil {
-		_, _ = line.WriteHistory(f)
-		_ = f.Close()
 	}
 	_, _ = fmt.Fprintln(rt.stdout, "Goodbye!")
 	return nil
