@@ -728,7 +728,7 @@ func (rt *runtime) startEscInterruptListener() {
 			}
 
 			var readfds unix.FdSet
-			fdSet(fd, &readfds)
+			readfds.Set(fd)
 			timeout := unix.Timeval{Sec: 0, Usec: 100000} // 100ms
 			n, err := unix.Select(fd+1, &readfds, nil, nil, &timeout)
 			if err != nil {
@@ -742,7 +742,7 @@ func (rt *runtime) startEscInterruptListener() {
 				}
 				return
 			}
-			if n == 0 || !fdIsSet(fd, &readfds) {
+			if n == 0 || !readfds.IsSet(fd) {
 				continue
 			}
 			n, err = unix.Read(fd, buf)
@@ -778,13 +778,7 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-func fdSet(fd int, set *unix.FdSet) {
-	set.Bits[fd/64] |= 1 << (uint(fd) % 64)
-}
 
-func fdIsSet(fd int, set *unix.FdSet) bool {
-	return (set.Bits[fd/64] & (1 << (uint(fd) % 64))) != 0
-}
 
 func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error) {
 	totalBytes, err := rt.conv.TotalBytes()

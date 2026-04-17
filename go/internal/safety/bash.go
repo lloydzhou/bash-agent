@@ -1,6 +1,9 @@
 package safety
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 var deviceWriteRE = regexp.MustCompile(`(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)`)
 
@@ -35,7 +38,7 @@ func hasAnyPrefix(s string, prefixes ...string) bool {
 
 func containsAny(s string, parts ...string) bool {
 	for _, part := range parts {
-		if part != "" && regexp.MustCompile(regexp.QuoteMeta(part)).FindStringIndex(s) != nil {
+		if part != "" && strings.Contains(s, part) {
 			return true
 		}
 	}

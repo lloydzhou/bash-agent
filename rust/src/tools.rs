@@ -5,8 +5,12 @@ use anyhow::{Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
+use std::io::{BufRead, BufReader, Read as IoRead};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub struct Runner {
     pub config: Config,
@@ -201,16 +205,70 @@ impl Runner {
         if let Some(reason) = safety::deny_bash_command_reason(command) {
             bail!("Error: command blocked by bash safety policy ({reason})");
         }
-        let output = Command::new("bash")
+        let timeout_secs = self.config.tool_timeout_secs as u64;
+        let timeout = Duration::from_secs(if timeout_secs > 0 { timeout_secs } else { 600 });
+
+        let mut child = Command::new("bash")
             .arg("-lc")
             .arg(command)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()?;
-        let mut s = String::new();
-        s.push_str(&String::from_utf8_lossy(&output.stdout));
-        s.push_str(&String::from_utf8_lossy(&output.stderr));
-        Ok(s)
+            .spawn()?;
+
+        // Take stdout/stderr handles before polling; spawn reader threads that
+        // accumulate output into a shared buffer so we don't deadlock on large
+        // output while waiting for the process to exit.
+        let stdout_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+        let stderr_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+
+        if let Some(stdout) = child.stdout.take() {
+            let buf = stdout_buf.clone();
+            thread::spawn(move || stream_reader(stdout, buf));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let buf = stderr_buf.clone();
+            thread::spawn(move || stream_reader(stderr, buf));
+        }
+
+        let start = Instant::now();
+        let mut timed_out = false;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_status)) => break,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        timed_out = true;
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    bail!("Error: failed to wait on child process: {e}");
+                }
+            }
+        }
+
+        // Wait briefly for reader threads to finish draining
+        thread::sleep(Duration::from_millis(30));
+
+        let mut out = stdout_buf.lock().unwrap().clone();
+        let stderr = stderr_buf.lock().unwrap().clone();
+        if !stderr.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&stderr);
+        }
+
+        if timed_out {
+            out.push_str(&format!(
+                "\n[... truncated, command timed out after {} seconds ...]",
+                timeout.as_secs()
+            ));
+        }
+        Ok(out)
     }
 
     fn glob(&self, pattern: &str, path: &str) -> Result<String> {
@@ -331,6 +389,33 @@ impl Runner {
         let resp = req.send()?;
         let body = resp.text()?;
         Ok(body)
+    }
+}
+
+/// Reads from a child process pipe (stdout or stderr) line-by-line into a
+/// shared buffer. This prevents deadlocks when the child produces more output
+/// than the OS pipe buffer can hold while the parent is waiting on `try_wait()`.
+fn stream_reader<R: std::io::Read>(pipe: R, buf: Arc<Mutex<String>>) {
+    let mut reader = BufReader::new(pipe);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break, // EOF
+            Ok(_) => {
+                if let Ok(mut guard) = buf.lock() {
+                    guard.push_str(&line);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    // Flush any remaining bytes not terminated by a newline
+    let mut tail = String::new();
+    if reader.read_to_string(&mut tail).is_ok() && !tail.is_empty() {
+        if let Ok(mut guard) = buf.lock() {
+            guard.push_str(&tail);
+        }
     }
 }
 

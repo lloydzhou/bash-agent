@@ -1,4 +1,5 @@
 BEGIN {
+    if (max_bytes == "") max_bytes = 1048576
     if (json_input == "") {
         if ((getline json_input) < 0) json_input = ""
     }

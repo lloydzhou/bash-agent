@@ -893,11 +893,13 @@ fn touch(path: &Path) -> Result<()> {
 }
 
 fn chrono_like_now() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("{}", secs)
+    // Format: YYYYMMDD-HHmmss  (matches Go's "20060102-150405" and Bash's date +%Y%m%d-%H%M%S)
+    use time::format_description::FormatItem;
+    use time::macros::format_description;
+    static FMT: &[FormatItem<'_>] = format_description!("[year][month][day]-[hour][minute][second]");
+    time::OffsetDateTime::now_utc()
+        .format(FMT)
+        .unwrap_or_else(|_| format!("{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)))
 }
 
 fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {
