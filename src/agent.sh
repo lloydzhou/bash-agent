@@ -468,6 +468,9 @@ display_event() {
             human_kind="error"
             human_text="$msg"
             ;;
+        RETRY:*)
+            stream_event="{\"type\":\"retry\"}"
+            ;;
         *)
             return 0
             ;;
@@ -1313,6 +1316,15 @@ agent_loop_stream() {
             [[ "$VERBOSE" == true ]] && printf '[debug] <%s>\n' "$line" >&2
             printf '%s\n' "$line"
             case "$line" in
+                RETRY:*)
+                    # curl retry detected — reset collection state for new LLM response.
+                    # Already-executed tools from first response remain (side effects can't be undone),
+                    # but text/tool_calls/tool_conv_results must restart so the conversation store
+                    # only reflects the final successful response.
+                    text=""
+                    tool_calls=""
+                    tool_conv_results=""
+                    ;;
                 TEXT:*)
                     local d="${line#TEXT:}"
                     unescape_protocol_to_var d "$d"

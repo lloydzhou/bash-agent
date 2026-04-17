@@ -12,6 +12,8 @@ BEGIN {
     output_tokens = 0
     cache_input_tokens = 0
     saw_text = 0
+    pending_usage = ""
+    pending_stop = ""
 }
 
 /^:/ { next }
@@ -19,13 +21,30 @@ BEGIN {
 # Pass through ERROR lines from _stream_curl
 /^ERROR:/ { print; fflush(); next }
 
+# Handle curl retry: reset all parser state for new response
+/^RETRY:/ {
+    stop_reason = ""
+    tc_count = 0
+    tc_max_index = -1
+    input_tokens = 0
+    output_tokens = 0
+    cache_input_tokens = 0
+    saw_text = 0
+    pending_usage = ""
+    pending_stop = ""
+    # Clear tool call arrays
+    for (idx in tool_name) delete tool_name[idx]
+    for (idx in tool_id) delete tool_id[idx]
+    for (idx in tool_args) delete tool_args[idx]
+    print; fflush(); next
+}
+
 /^data: \[DONE\]/ {
     emit_pending_tool_calls()
     if (stop_reason == "") stop_reason = "done"
-    printf "USAGE:%d\t%d\t%d\n", input_tokens, output_tokens, cache_input_tokens
-    fflush()
-    printf "STOP:%s\n", stop_reason
-    fflush()
+    # Buffer STOP/USAGE — emit at EOF to avoid premature output on curl retry
+    pending_usage = sprintf("USAGE:%d\t%d\t%d", input_tokens, output_tokens, cache_input_tokens)
+    pending_stop = sprintf("STOP:%s", stop_reason)
     next
 }
 
@@ -116,5 +135,16 @@ function emit_pending_tool_calls(    idx) {
         emit_tool_call_record(tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx]))
         fflush()
         tool_args[idx] = ""
+    }
+}
+
+END {
+    if (pending_usage != "") {
+        printf "%s\n", pending_usage
+        fflush()
+    }
+    if (pending_stop != "") {
+        printf "%s\n", pending_stop
+        fflush()
     }
 }

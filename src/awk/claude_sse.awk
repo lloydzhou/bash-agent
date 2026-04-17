@@ -13,12 +13,30 @@ BEGIN {
     input_tokens = 0
     output_tokens = 0
     cache_input_tokens = 0
+    pending_usage = ""
+    pending_stop = ""
 }
 
 /^:/ { next }
 
-# Pass through ERROR lines from _stream_curl
+# Pass through ERROR lines from http_stream.awk
 /^ERROR:/ { print; fflush(); next }
+
+# Handle curl retry: reset all parser state for new response
+/^RETRY:/ {
+    event = ""
+    block_type = ""
+    tool_name = ""
+    tool_id = ""
+    partial_json = ""
+    stop_reason = ""
+    input_tokens = 0
+    output_tokens = 0
+    cache_input_tokens = 0
+    pending_usage = ""
+    pending_stop = ""
+    print; fflush(); next
+}
 
 /^event: / {
     event = substr($0, 8)
@@ -92,10 +110,9 @@ BEGIN {
         if (crt != "") cache_input_tokens = crt
     }
     else if (event == "message_stop") {
-        printf "USAGE:%d\t%d\t%d\n", input_tokens, output_tokens, cache_input_tokens
-        fflush()
-        printf "STOP:%s\n", stop_reason
-        fflush()
+        # Buffer STOP/USAGE — emit at EOF to avoid premature output on curl retry
+        pending_usage = sprintf("USAGE:%d\t%d\t%d", input_tokens, output_tokens, cache_input_tokens)
+        pending_stop = sprintf("STOP:%s", stop_reason)
     }
     else if (event == "error") {
         msg = extract_str(json, "message", 1)
@@ -104,6 +121,17 @@ BEGIN {
     }
 
     next
+}
+
+END {
+    if (pending_usage != "") {
+        printf "%s\n", pending_usage
+        fflush()
+    }
+    if (pending_stop != "") {
+        printf "%s\n", pending_stop
+        fflush()
+    }
 }
 
 # Extract number from nested JSON (kept for call-site clarity)
