@@ -1,4 +1,4 @@
-use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
+use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
 use crate::sse::toolcall::build_tool_call_event;
 use anyhow::Result;
 use serde_json::Value;
@@ -21,6 +21,8 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
     let mut cache_input_tokens = 0i64;
     let mut saw_text = false;
     let mut pending_calls: BTreeMap<i64, PendingCall> = BTreeMap::new();
+    let mut pending_usage: Option<UsageEvent> = None;
+    let mut pending_stop: Option<String> = None;
 
     loop {
         line.clear();
@@ -29,6 +31,21 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
             break;
         }
         let l = line.trim_end_matches(['\n', '\r']);
+
+        // RETRY: reset all parser state
+        if l == "RETRY:" {
+            stop_reason.clear();
+            input_tokens = 0;
+            output_tokens = 0;
+            cache_input_tokens = 0;
+            saw_text = false;
+            pending_calls.clear();
+            pending_usage = None;
+            pending_stop = None;
+            emit(Event::Retry(RetryEvent {}))?;
+            continue;
+        }
+
         if l.is_empty() || !l.starts_with("data: ") {
             continue;
         }
@@ -38,14 +55,12 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
             if stop_reason.is_empty() {
                 stop_reason = "done".to_string();
             }
-            emit(Event::Usage(UsageEvent {
+            pending_usage = Some(UsageEvent {
                 input_tokens,
                 output_tokens,
                 cache_input_tokens,
-            }))?;
-            emit(Event::Stop(StopEvent {
-                reason: stop_reason,
-            }))?;
+            });
+            pending_stop = Some(stop_reason.clone());
             break;
         }
 
@@ -138,6 +153,13 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
         if choice.get("finish_reason").and_then(Value::as_str) == Some("tool_calls") {
             emit_pending(&mut pending_calls, &mut emit)?;
         }
+    }
+
+    if let Some(usage) = pending_usage {
+        emit(Event::Usage(usage))?;
+    }
+    if let Some(reason) = pending_stop {
+        emit(Event::Stop(StopEvent { reason }))?;
     }
 
     Ok(())

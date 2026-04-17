@@ -11,6 +11,7 @@ pub enum Event {
     Usage(UsageEvent),
     Stop(StopEvent),
     Error(ErrorEvent),
+    Retry(RetryEvent),
 }
 
 impl Event {
@@ -41,6 +42,7 @@ impl Event {
             ),
             Event::Stop(e) => format!("STOP:{}", e.reason),
             Event::Error(e) => format!("ERROR:{}", e.message),
+            Event::Retry(_) => "RETRY:".to_string(),
         }
     }
 }
@@ -64,6 +66,9 @@ pub struct StopEvent {
 pub struct ErrorEvent {
     pub message: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct RetryEvent {}
 
 #[derive(Debug, Clone)]
 pub struct UsageEvent {

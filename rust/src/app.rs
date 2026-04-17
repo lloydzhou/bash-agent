@@ -3,7 +3,7 @@ use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, pars
 use crate::conversation::{Store, ToolResult, build_tool_call_summary, edit_diff_summary};
 use crate::httpclient::{HTTPError, StreamClient};
 use crate::prompt;
-use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent};
+use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent};
 use crate::provider;
 use crate::session::{self, Paths};
 use crate::sse;
@@ -379,6 +379,14 @@ impl Runtime {
                             stop = "error".to_string();
                             let _ = self.display_event(&mut ds, DisplayEvent::Error(message));
                             break;
+                        }
+                        Event::Retry(RetryEvent {}) => {
+                            text.clear();
+                            calls.clear();
+                            tool_results.clear();
+                            if self.is_stream_json_mode() {
+                                self.emit_stream(json!({"type":"retry"}))?;
+                            }
                         }
                     }
                 }

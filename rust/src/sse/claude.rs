@@ -1,4 +1,4 @@
-use crate::protocol::{ErrorEvent, Event, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
+use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
 use crate::sse::toolcall::build_tool_call_event;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
@@ -24,6 +24,14 @@ fn read_sse<R: Read>(reader: R, mut emit: impl FnMut(SseEvent) -> Result<()>) ->
             break;
         }
         let l = line.trim_end_matches(['\n', '\r']);
+        if l == "RETRY:" {
+            if !cur.event.is_empty() || !cur.data.is_empty() {
+                emit(cur)?;
+            }
+            emit(SseEvent { event: "RETRY".to_string(), data: String::new() })?;
+            cur = SseEvent::default();
+            continue;
+        }
         if l.is_empty() {
             if !cur.event.is_empty() || !cur.data.is_empty() {
                 emit(cur)?;
@@ -49,8 +57,26 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
     let mut input_tokens = 0i64;
     let mut output_tokens = 0i64;
     let mut cache_input_tokens = 0i64;
+    let mut pending_usage: Option<UsageEvent> = None;
+    let mut pending_stop: Option<String> = None;
 
     read_sse(reader, |evt| {
+        // RETRY: reset all parser state
+        if evt.event == "RETRY" {
+            block_type.clear();
+            tool_name.clear();
+            tool_id.clear();
+            partial_json.clear();
+            stop_reason.clear();
+            input_tokens = 0;
+            output_tokens = 0;
+            cache_input_tokens = 0;
+            pending_usage = None;
+            pending_stop = None;
+            emit(Event::Retry(RetryEvent {}))?;
+            return Ok(());
+        }
+
         if evt.data.is_empty() {
             return Ok(());
         }
@@ -161,14 +187,12 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
                 }
             }
             "message_stop" => {
-                emit(Event::Usage(UsageEvent {
+                pending_usage = Some(UsageEvent {
                     input_tokens,
                     output_tokens,
                     cache_input_tokens,
-                }))?;
-                emit(Event::Stop(StopEvent {
-                    reason: stop_reason.clone(),
-                }))?;
+                });
+                pending_stop = Some(stop_reason.clone());
             }
             "error" => {
                 let msg = body
@@ -189,6 +213,13 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
         Ok(())
     })
     .map_err(|e| anyhow!("parse claude sse: {e}"))?;
+
+    if let Some(usage) = pending_usage {
+        emit(Event::Usage(usage))?;
+    }
+    if let Some(reason) = pending_stop {
+        emit(Event::Stop(StopEvent { reason }))?;
+    }
 
     Ok(())
 }

@@ -98,7 +98,17 @@ impl StreamClient {
                             body: text.trim().to_string(),
                         }.into());
                     }
-                    return StreamBody::from_response(resp, DEFAULT_IDLE_TIMEOUT).map_err(|e| e.into());
+                    return StreamBody::new(
+                        self.client.clone(),
+                        url.to_string(),
+                        h.clone(),
+                        body.to_vec(),
+                        resp,
+                        DEFAULT_IDLE_TIMEOUT,
+                        DEFAULT_RETRY_COUNT,
+                        DEFAULT_RETRY_DELAY,
+                        start,
+                    );
                 }
                 Err(err) => {
                     if should_retry_attempt(attempt, start) {
@@ -117,6 +127,16 @@ impl StreamClient {
 }
 
 pub struct StreamBody {
+    // Retry context
+    client: Client,
+    url: String,
+    headers: HeaderMap,
+    request_body: Vec<u8>,
+    max_retries: u32,
+    retry_delay: Duration,
+    start: Instant,
+    attempt: u32,
+    // Current response stream
     rx: Receiver<Vec<u8>>,
     buf: std::io::Cursor<Vec<u8>>,
     done: bool,
@@ -124,29 +144,72 @@ pub struct StreamBody {
 }
 
 impl StreamBody {
-    fn from_response(mut resp: Response, idle_timeout: Duration) -> std::io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
-        let _handle = thread::spawn(move || {
-            let mut buf = [0u8; 8192];
-            loop {
-                match resp.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if tx.send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+    fn new(
+        client: Client,
+        url: String,
+        headers: HeaderMap,
+        request_body: Vec<u8>,
+        resp: Response,
+        idle_timeout: Duration,
+        max_retries: u32,
+        retry_delay: Duration,
+        start: Instant,
+    ) -> Result<Self> {
+        let rx = spawn_reader(resp);
         Ok(Self {
+            client,
+            url,
+            headers,
+            request_body,
+            max_retries,
+            retry_delay,
+            start,
+            attempt: 0,
             rx,
             buf: std::io::Cursor::new(Vec::new()),
             done: false,
             idle_timeout,
         })
     }
+
+    fn try_retry(&mut self) -> std::io::Result<()> {
+        sleep(self.retry_delay);
+        let resp = self.client
+            .post(&self.url)
+            .headers(self.headers.clone())
+            .body(self.request_body.clone())
+            .send()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let code = resp.status().as_u16();
+        if code >= 400 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("HTTP {} on retry", code),
+            ));
+        }
+        self.rx = spawn_reader(resp);
+        self.done = false;
+        Ok(())
+    }
+}
+
+fn spawn_reader(mut resp: Response) -> Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    let _ = thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match resp.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    rx
 }
 
 impl Read for StreamBody {
@@ -163,8 +226,30 @@ impl Read for StreamBody {
                     self.buf = std::io::Cursor::new(chunk);
                 }
                 Err(RecvTimeoutError::Timeout) => {
+                    if self.attempt < self.max_retries
+                        && should_retry_attempt(self.attempt, self.start)
+                    {
+                        self.attempt += 1;
+                        match self.try_retry() {
+                            Ok(()) => {
+                                self.buf =
+                                    std::io::Cursor::new(b"RETRY:\n".to_vec());
+                                continue;
+                            }
+                            Err(_) => {
+                                self.done = true;
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::TimedOut,
+                                    "idle timeout",
+                                ));
+                            }
+                        }
+                    }
                     self.done = true;
-                    return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "idle timeout"));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "idle timeout",
+                    ));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     self.done = true;
