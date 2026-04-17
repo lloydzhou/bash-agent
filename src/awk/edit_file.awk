@@ -37,11 +37,6 @@ BEGIN {
         exit 2
     }
 
-    if (meta_file != "") {
-        print path > meta_file
-        close(meta_file)
-    }
-
     printf "%s%s%s", substr(data, 1, i - 1), new, substr(data, i + length(old))
     exit 0
 }

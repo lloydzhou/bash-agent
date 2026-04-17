@@ -99,7 +99,6 @@ if idx != -1:
 # --- Replace each awk function to use variable concatenation ---
 functions = [
     ("json_escape", "_AWK_JSON", "", ""),
-    ("run_edit_file_awk", "_AWK_JSON", "_AWK_EDIT_FILE", r'-v max_bytes="$max_bytes" -v meta_file="$meta_file"'),
     ("parse_sse", "_AWK_JSON", "", ""),
     ("load_tool_defs", "", "", ""),
 ]
@@ -110,13 +109,6 @@ for func_name, json_var, specific_var, extra_args in functions:
             "json_escape() {\n"
             "    local input=\"${1:-}\"\n"
             "    printf '%s' \"$input\" | awk -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
-            "}\n"
-        )
-    elif func_name == "run_edit_file_awk":
-        replacement = (
-            "run_edit_file_awk() {\n"
-            "    local input=\"$1\" max_bytes=\"$2\" meta_file=\"$3\"\n"
-            "    printf '%s' \"$input\" | awk -v max_bytes=\"$max_bytes\" -v meta_file=\"$meta_file\" \"${_AWK_JSON}\n${_AWK_EDIT_FILE}\"\n"
             "}\n"
         )
     elif func_name == "parse_sse":
@@ -176,6 +168,7 @@ content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
 content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk "${_AWK_HTTP_STREAM}"')
+content = content.replace('awk -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'awk -v max_bytes="$FILE_WRITE_MAX_BYTES" "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
 # --- Inline convert_messages.awk and convert_tools.awk references in build_openai_request ---
 content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_MESSAGES}"')
 content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_TOOLS}"')

@@ -1030,43 +1030,26 @@ tool_write() {
 
 tool_edit() {
     local path="$1" old_string="$2" new_string="$3"
-    local input tmp meta diff_output
-    input=$(printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
-        "$(json_escape "$path")" \
-        "$(json_escape "$old_string")" \
-        "$(json_escape "$new_string")")
+    local tmp diff_output added removed
+    [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
+    [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
-    meta=$(mktemp "${AGENT_TMPDIR}/edit.meta.XXXXXX")
-    local edit_err=""
-    if ! run_edit_file_awk "$input" "$FILE_WRITE_MAX_BYTES" "$meta" > "$tmp"; then
-        edit_err="Error: edit_file awk failed"
+    if ! printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
+            "$(json_escape "$path")" "$(json_escape "$old_string")" "$(json_escape "$new_string")" \
+         | awk -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk" > "$tmp" 2>&1; then
+        cat "$tmp"; rm -f "$tmp"; return 1
     fi
-    if [[ -z "$edit_err" ]]; then
-        path=$(<"$meta")
-        [[ -n "$path" ]] || edit_err="Error: no path provided"
-    fi
-    if [[ -z "$edit_err" ]] && (( $(wc -c < "$tmp") > 0 )); then
-        local diff_path="${path#/}"
-        local added removed plain_diff_output
-        plain_diff_output=$(diff -u --label "a/$diff_path" --label "b/$diff_path" "$path" "$tmp" 2>&1)
-        diff_output=$(diff -u --color=always --label "a/$diff_path" --label "b/$diff_path" "$path" "$tmp" 2>&1)
-        if [[ "$diff_output" == *"unsupported --color"* || "$diff_output" == *"unrecognized option '--color'"* ]]; then
-            diff_output="$plain_diff_output"
-        fi
-        added=$(printf '%s\n' "$plain_diff_output" | awk '/^\+[^+]/ { n++ } END { print n+0 }')
-        removed=$(printf '%s\n' "$plain_diff_output" | awk '/^-[^-]/ { n++ } END { print n+0 }')
-        cat "$tmp" > "$path"
-        printf 'Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"
-        if [[ -n "$diff_output" ]]; then
-            printf '%s\n' "$diff_output"
-        else
-            printf 'Edit(%s) [no changes]\n' "$path"
-        fi
-    elif [[ -z "$edit_err" ]]; then
-        edit_err="Error: edit produced empty result, reverted"
-    fi
-    rm -f "$tmp" "$meta"
-    [[ -z "$edit_err" ]] || { echo "$edit_err"; return 1; }
+    (( $(wc -c < "$tmp") > 0 )) || { echo "Error: edit produced empty result"; rm -f "$tmp"; return 1; }
+    local label="${path#/}"
+    diff_output=$(diff -u --color=always --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
+    [[ "$diff_output" == *"unsupported --color"* || "$diff_output" == *"unrecognized option '--color'"* ]] \
+        && diff_output=$(diff -u --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
+    added=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)?\+[^+]') || added=0
+    removed=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)?-[^-]') || removed=0
+    cat "$tmp" > "$path"
+    rm -f "$tmp"
+    printf 'Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"
+    [[ -n "$diff_output" ]] && printf '%s\n' "$diff_output"
 }
 
 tool_bash() {
@@ -1224,15 +1207,6 @@ build_request() {
 # ============================================================================
 # SSE Parsers (call awk/*.awk)
 # ============================================================================
-
-run_edit_file_awk() {
-    local input="$1" max_bytes="$2" meta_file="$3"
-    printf '%s' "$input" | awk \
-        -v max_bytes="$max_bytes" \
-        -v meta_file="$meta_file" \
-        -f "$AWK_DIR/json.awk" \
-        -f "$AWK_DIR/edit_file.awk"
-}
 
 parse_sse() {
     case "$PROVIDER" in
