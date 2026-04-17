@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/lloydzhou/bash-agent/internal/httpclient"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -306,4 +308,89 @@ func TestRunClaudeApiErrorReturnsError(t *testing.T) {
 			t.Fatalf("expected rate limited error, got %v", err)
 		}
 	})
+}
+
+// stalledReader delivers some data then returns a timeout error.
+type stalledReader struct {
+	data   []byte
+	offset int
+}
+
+func (r *stalledReader) Read(b []byte) (int, error) {
+	if r.offset < len(r.data) {
+		n := copy(b, r.data[r.offset:])
+		r.offset += n
+		return n, nil
+	}
+	return 0, httpclient.ErrStreamRetryable
+}
+
+func (r *stalledReader) Close() error { return nil }
+
+func TestRetryOnStreamTimeout(t *testing.T) {
+	project := t.TempDir()
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+	_ = os.Setenv("HOME", home)
+	oldWD, _ := os.Getwd()
+	defer os.Chdir(oldWD)
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	firstSSE := strings.Join([]string{
+		"event: content_block_start",
+		`data: {"content_block":{"type":"text"}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"delta":{"text":"Partial"}}`,
+		"",
+	}, "\n")
+
+	secondSSE := strings.Join([]string{
+		"event: content_block_start",
+		`data: {"content_block":{"type":"text"}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"delta":{"text":"After retry"}}`,
+		"",
+		"event: message_delta",
+		`data: {"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":5}}`,
+		"",
+		"event: message_stop",
+		`data: {}`,
+		"",
+	}, "\n")
+
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch calls.Add(1) {
+		case 1:
+			return &http.Response{
+				StatusCode: 200,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &stalledReader{data: []byte(firstSSE)},
+			}, nil
+		default:
+			return sseResponse(secondSSE), nil
+		}
+	})}
+
+	var out strings.Builder
+	var errOut strings.Builder
+	withTestHTTPClient(client, func() {
+		err := Run([]string{"--base-url", "http://example.invalid", "test retry"}, strings.NewReader(""), &out, &errOut)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	got := out.String()
+	if !strings.Contains(got, "Partial") {
+		t.Errorf("missing text from first response: %q", got)
+	}
+	if !strings.Contains(got, "After retry") {
+		t.Errorf("missing text from retry response: %q", got)
+	}
 }

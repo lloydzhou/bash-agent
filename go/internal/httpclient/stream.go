@@ -3,10 +3,11 @@ package httpclient
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net"
+	"net/http"
 	"time"
 )
 
@@ -115,6 +116,11 @@ func (c *deadlineConn) Read(b []byte) (int, error) {
 	if n > 0 && c.idleTimeout > 0 {
 		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
 	}
+	if err != nil && n == 0 {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return 0, ErrStreamRetryable
+		}
+	}
 	return n, err
 }
 
@@ -132,4 +138,20 @@ func shouldRetryStatus(code int) bool {
 	default:
 		return false
 	}
+}
+
+// ErrStreamRetryable indicates a stream-level error that can be retried
+// (e.g. idle timeout mid-transfer). The caller may issue a new request.
+var ErrStreamRetryable = errors.New("stream interrupted: retryable")
+
+// IsRetryableStreamError returns true if the error is a retryable stream failure
+// (idle timeout, connection reset during transfer).
+func IsRetryableStreamError(err error) bool {
+	if errors.Is(err, ErrStreamRetryable) {
+		return true
+	}
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		return true
+	}
+	return false
 }

@@ -16,6 +16,7 @@ const (
 	EventUsage    EventKind = "USAGE"
 	EventStop     EventKind = "STOP"
 	EventError    EventKind = "ERROR"
+	EventRetry    EventKind = "RETRY"
 )
 
 type Event interface {
@@ -42,6 +43,11 @@ type ErrorEvent struct{ Message string }
 
 func (e ErrorEvent) Kind() EventKind { return EventError }
 func (e ErrorEvent) Render() string  { return "ERROR:" + e.Message }
+
+type RetryEvent struct{}
+
+func (e RetryEvent) Kind() EventKind { return EventRetry }
+func (e RetryEvent) Render() string  { return "RETRY:" }
 
 type UsageEvent struct {
 	InputTokens      int

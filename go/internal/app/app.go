@@ -375,6 +375,11 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				stop = "error"
 				_ = rt.displayEvent(&state, e)
 				return fmt.Errorf("%s", e.Message)
+			case protocol.RetryEvent:
+				_ = rt.displayEvent(&state, e)
+				text = ""
+				calls = calls[:0]
+				toolResults = toolResults[:0]
 			}
 			return nil
 		})
@@ -443,21 +448,43 @@ func (rt *runtime) llmCall(emit func(protocol.Event) error) error {
 	if err != nil {
 		return err
 	}
-	respBody, err := rt.postLLMRequest(body)
-	if err != nil {
-		return err
-	}
-	defer respBody.Close()
-	done := make(chan struct{})
-	defer close(done)
-	events, streamErr := rt.streamLLMEvents(respBody, done)
-	for evt := range events {
-		if err := emit(evt); err != nil {
+
+	const maxRetries = 2
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		respBody, err := rt.postLLMRequest(body)
+		if err != nil {
+			if attempt < maxRetries {
+				continue
+			}
 			return err
 		}
-	}
-	if err := <-streamErr; err != nil {
-		return err
+
+		done := make(chan struct{})
+		events, streamErr := rt.streamLLMEvents(respBody, done)
+
+		for evt := range events {
+			if err := emit(evt); err != nil {
+				close(done)
+				respBody.Close()
+				return err
+			}
+		}
+
+		streamError := <-streamErr
+		close(done)
+		respBody.Close()
+
+		if streamError == nil {
+			return nil
+		}
+
+		// Stream error: retry if retryable and attempts remain
+		if httpclient.IsRetryableStreamError(streamError) && attempt < maxRetries {
+			_ = emit(protocol.RetryEvent{})
+			continue
+		}
+
+		return streamError
 	}
 	return nil
 }
@@ -622,6 +649,10 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 			_ = rt.emitStream(map[string]any{"type": "error", "message": e.Message})
 		}
 		return fmt.Errorf("%s", e.Message)
+	case protocol.RetryEvent:
+		if rt.isStreamJSONMode() {
+			_ = rt.emitStream(map[string]any{"type": "retry"})
+		}
 	case conversation.ToolResult:
 		if rt.isStreamJSONMode() {
 			return rt.emitStream(map[string]any{
