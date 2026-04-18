@@ -78,6 +78,9 @@ jobs:
         if: matrix.goos == 'linux'
         run: make test-go
 
+      - name: Patch go-prompt dependency
+        run: bash scripts/patch-go-prompt.sh "$(go -C go env GOMODCACHE)"
+
       - name: Build goagent
         run: |
           mkdir -p dist

@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/reeflective/readline"
+	goprompt "github.com/joeycumines/go-prompt"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
@@ -217,35 +217,49 @@ func (rt *runtime) cleanup() {
 func (rt *runtime) interactiveMode() error {
 	_, _ = fmt.Fprintln(rt.stdout, "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)")
 
-	shell := readline.NewShell()
-	shell.Prompt.Primary(func() string { return "\033[32m> \033[0m" })
-
 	historyPath := filepath.Join(rt.home, ".bash-agent", "history")
 	_ = os.MkdirAll(filepath.Dir(historyPath), 0o755)
-	shell.History.AddFromFile("default", historyPath)
 
-	for {
-		input, err := shell.Readline()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
+	// Load history
+	var history []string
+	if data, err := os.ReadFile(historyPath); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				history = append(history, line)
 			}
-			if errors.Is(err, readline.ErrInterrupt) {
-				continue
-			}
-			return err
 		}
-		if input == "" {
-			continue
+	}
+
+	executor := func(in string) {
+		input := strings.TrimSpace(in)
+		if input == "" || input == "exit" || input == "quit" {
+			return
 		}
-		if input == "exit" || input == "quit" {
-			break
+		// Append to history file
+		if f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			_, _ = fmt.Fprintln(f, input)
+			f.Close()
 		}
 		if err := rt.agentLoop(input); err != nil {
 			rt.error("%v", err)
-			// continue REPL on error
 		}
 	}
+
+	p := goprompt.New(
+		executor,
+		goprompt.WithPrefix("> "),
+		goprompt.WithPrefixTextColor(goprompt.Green),
+		goprompt.WithHistory(history),
+		goprompt.WithExecuteOnEnterCallback(func(p *goprompt.Prompt, indentSize int) (int, bool) {
+			return 0, true
+		}),
+		goprompt.WithExitChecker(func(in string, breakline bool) bool {
+			return strings.TrimSpace(in) == "exit" || strings.TrimSpace(in) == "quit"
+		}),
+	)
+
+	_ = p.RunNoExit()
 	_, _ = fmt.Fprintln(rt.stdout, "Goodbye!")
 	return nil
 }
