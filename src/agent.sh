@@ -1587,7 +1587,7 @@ interactive_mode() {
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     while true; do
         stty echo 2>/dev/null || true
-        IFS= read -e -r -p $'\033[32m> \033[0m' user_input || break
+        IFS= read -e -r -p $'\001\033[32m\002> \001\033[0m\002' user_input || break
         [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
         [[ -z "$user_input" ]] && continue
         history -s -- "$user_input" 2>/dev/null || true
