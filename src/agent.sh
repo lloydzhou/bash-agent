@@ -34,6 +34,7 @@ SESSION_ID=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 TODO_FILE=""
+PLAN_FILE=""
 
 # ============================================================================
 # Internal Runtime State
@@ -511,15 +512,17 @@ display_event() {
 
 build_system_prompt() {
     local output=""
-    local agent_identity core_rules tool_guidance todo_guidance instruction_files skill_index selected_skills stable_context todo
+    local agent_identity core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context todo
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.'
     tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Use Glob and Grep for one pattern at a time.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
+    plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Step-by-step**:\n  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. After user confirms, create TodoWrite checklist based on plan\n  4. Execute tasks following todo checklist (update progress in TodoWrite)\n  5. When all tasks complete, clear plan: Bash ": > PLAN_FILE"\n- **Plan vs Todo separation**:\n  - PLAN_FILE: planning document for analysis and strategy\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan file\n- **PLAN_FILE**: '${PLAN_FILE:-<not set>}
 
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
     selected_skills=$(build_selected_skills_section)
+    plan=$(read_optional_file "${PLAN_FILE:-}")
     stable_context=$(read_optional_file "${CONTEXT_SUMMARY_FILE:-}")
     todo=$(read_optional_file "${TODO_FILE:-}")
 
@@ -527,9 +530,11 @@ build_system_prompt() {
     append_section output "rules" "$core_rules"
     append_section output "using-your-tools" "$tool_guidance"
     append_section output "todo-guidance" "$todo_guidance"
+    append_section output "plan-lifecycle-guidance" "$plan_lifecycle_guidance"
     append_section output "instruction-files" "$instruction_files"
     append_section output "skill-index" "$skill_index"
     append_section output "selected-skills" "$selected_skills"
+    append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     append_section output "context-summary" "$stable_context"
     append_section output "current-todo" "$todo"
 
@@ -819,12 +824,14 @@ conv_init() {
         SESSION_EVENT_FILE="${session_dir}/${SESSION_ID}.events.jsonl"
         CONTEXT_SUMMARY_FILE="${session_dir}/${SESSION_ID}.summary.txt"
         TODO_FILE="${session_dir}/${SESSION_ID}.todo.md"
+        PLAN_FILE="${session_dir}/${SESSION_ID}.plan.md"
         local new_session=false
         [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
         touch "$CONV_FILE"
         touch "$SESSION_EVENT_FILE"
         touch "$CONTEXT_SUMMARY_FILE"
         touch "$TODO_FILE"
+        touch "$PLAN_FILE"
         if [[ "$new_session" == true ]]; then
             session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
         fi
@@ -833,6 +840,7 @@ conv_init() {
         CONV_FILE=$(mktemp "${AGENT_TMPDIR}/conv.XXXXXX")
         CONTEXT_SUMMARY_FILE=$(mktemp "${AGENT_TMPDIR}/summary.XXXXXX")
         TODO_FILE=$(mktemp "${AGENT_TMPDIR}/todo.XXXXXX")
+        PLAN_FILE=$(mktemp "${AGENT_TMPDIR}/plan.XXXXXX")
     fi
 }
 
