@@ -1,25 +1,23 @@
 # openai_sse.awk — OpenAI Chat Completions SSE stream parser
 # Input: SSE lines (data:)
-# Output: Unified protocol (TEXT:, THINKING:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
+# Output: Unified protocol via emit1/emit/emit_flush
 # Requires: awk -f json.awk -f protocol.awk -f todo_protocol.awk -f openai_sse.awk
 
 BEGIN {
     stop_reason = ""
-    # Track tool calls: index -> {id, name, arguments}
     tc_count = 0
     tc_max_index = -1
     input_tokens = 0
     output_tokens = 0
     cache_input_tokens = 0
     saw_text = 0
-    pending_usage = ""
-    pending_stop = ""
+    pending_stop_reason = ""
 }
 
 /^:/ { next }
 
-# Pass through ERROR lines from _stream_curl
-/^ERROR:/ { print; fflush(); next }
+# Pass through ERROR lines from http_stream.awk
+/^ERROR:/ { emit1("ERROR"); emit(substr($0, 7)); emit_flush(); next }
 
 # Handle curl retry: reset all parser state for new response
 /^RETRY:/ {
@@ -30,32 +28,30 @@ BEGIN {
     output_tokens = 0
     cache_input_tokens = 0
     saw_text = 0
-    pending_usage = ""
-    pending_stop = ""
-    # Clear tool call arrays
+    pending_stop_reason = ""
     for (idx in tool_name) delete tool_name[idx]
     for (idx in tool_id) delete tool_id[idx]
     for (idx in tool_args) delete tool_args[idx]
-    print; fflush(); next
+    emit1("RETRY"); emit_flush()
+    next
 }
 
 /^data: \[DONE\]/ {
     emit_pending_tool_calls()
     if (stop_reason == "") stop_reason = "done"
-    # Buffer STOP/USAGE — emit at EOF to avoid premature output on curl retry
-    pending_usage = sprintf("USAGE:%d\t%d\t%d", input_tokens, output_tokens, cache_input_tokens)
-    pending_stop = sprintf("STOP:%s", stop_reason)
+    pending_input_tokens = input_tokens
+    pending_output_tokens = output_tokens
+    pending_cache_tokens = cache_input_tokens
+    pending_stop_reason = stop_reason
     next
 }
 
 /^data: / {
     json = substr($0, 7)
 
-    # Extract finish_reason
     fr = extract_str(json, "finish_reason", 1)
     if (fr != "" && fr != "null") stop_reason = fr
 
-    # Extract text content from delta
     content = extract_json_string(json, "content", 1)
     if (content != "") {
         content = unescape_json_string(content)
@@ -65,29 +61,24 @@ BEGIN {
         }
         if (content != "") {
             saw_text = 1
-            printf "TEXT:%s\n", escape_protocol_text(content)
-            fflush()
+            emit1("TEXT"); emit(content); emit_flush()
         }
     }
 
-    # Extract reasoning/thinking content from delta
     reasoning = extract_json_string(json, "reasoning_content", 1)
     if (reasoning == "") reasoning = extract_json_string(json, "reasoning", 1)
     if (reasoning != "") {
         reasoning = unescape_json_string(reasoning)
         if (reasoning != "") {
-            printf "THINKING:%s\n", escape_protocol_text(reasoning)
-            fflush()
+            emit1("THINKING"); emit(reasoning); emit_flush()
         }
     }
 
-    # Extract tool calls from delta
     if (extract_value(json, "tool_calls", 1) != "") {
         parse_tool_calls(json)
     }
     if (fr == "tool_calls") emit_pending_tool_calls()
 
-    # Extract usage if present
     pt = extract_num(json, "prompt_tokens", 1)
     if (pt != "") input_tokens = pt
     ct = extract_num(json, "completion_tokens", 1)
@@ -113,13 +104,11 @@ function parse_tool_calls(json,    arr, count, p, tc, idx, tc_id, func_raw, name
         name = extract_str(func_raw, "name")
         args = extract_json_string(func_raw, "arguments")
 
-        # If this is a new tool call (has id and name)
         if (tc_id != "" && name != "") {
             tool_name[idx] = name
             tool_id[idx] = tc_id
             tool_args[idx] = args
         } else if (args != "") {
-            # Continuation of arguments
             if (idx in tool_args) {
                 tool_args[idx] = tool_args[idx] args
             } else {
@@ -133,18 +122,13 @@ function emit_pending_tool_calls(    idx) {
     for (idx = 0; idx <= tc_max_index; idx++) {
         if (tool_args[idx] == "") continue
         emit_tool_call_record(tool_name[idx], tool_id[idx], unescape_json_string(tool_args[idx]))
-        fflush()
         tool_args[idx] = ""
     }
 }
 
 END {
-    if (pending_usage != "") {
-        printf "%s\n", pending_usage
-        fflush()
-    }
-    if (pending_stop != "") {
-        printf "%s\n", pending_stop
-        fflush()
+    if (pending_stop_reason != "") {
+        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_tokens + 0); emit_flush()
+        emit1("STOP"); emit(pending_stop_reason); emit_flush()
     }
 }

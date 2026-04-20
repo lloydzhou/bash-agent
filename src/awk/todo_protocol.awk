@@ -1,4 +1,5 @@
 # todo_protocol.awk — TodoWrite-specific protocol formatting helpers.
+# Uses positional wire format via emit1/emit/emit_flush from protocol.awk.
 
 function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, out, bs) {
     out = ""
@@ -77,7 +78,15 @@ function emit_tool_call_record(name, id, input_json,    todos, checklist, summar
         return
     }
     todos = extract_value(input_json, "todos")
-    checklist = escape_protocol_text(parse_todos_array(todos))
-    summary = escape_protocol_text(sprintf("%d/%d", todo_completed_count, todo_total_count))
-    printf "TOOL_CALL:%s\t%s\t%s\tchecklist\t%s\tsummary\t%s\n", name, id, escape_protocol_text(input_json), checklist, summary
+    checklist = parse_todos_array(todos)
+    summary = sprintf("%d/%d", todo_completed_count, todo_total_count)
+    emit1("TOOL_CALL")
+    emit(name)
+    emit(id)
+    emit(input_json)
+    emit("checklist")
+    emit(checklist)
+    emit("summary")
+    emit(summary)
+    emit_flush()
 }

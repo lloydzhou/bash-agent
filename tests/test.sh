@@ -35,6 +35,80 @@ green() { printf '\033[32m✓ PASS: %s\033[0m\n' "$1"; }
 red()   { printf '\033[31m✗ FAIL: %s\033[0m\n' "$1"; }
 info()  { printf '\033[36m→ %s\033[0m\n' "$1"; }
 
+# ===== Message Decoder (for AWK parser tests) =====
+# Decodes binary-safe N:len:val0:len:val1:... positional format back to readable TYPE:val format.
+_decode_read_len() {
+    local _rl_char _rl_str=""
+    while IFS= read -r -d '' -n 1 _rl_char; do
+        [[ "$_rl_char" == ":" ]] && break
+        _rl_str+="$_rl_char"
+    done
+    [[ -n "$_rl_str" ]] || return 1
+    printf -v "$1" '%s' "$((_rl_str))"
+}
+
+_decode_read_message() {
+    DECODE_MSG=()
+    local nfields len field
+    _decode_read_len nfields || return 1
+    local i remaining chunk
+    for ((i = 0; i < nfields; i++)); do
+        _decode_read_len len || return 1
+        field=""
+        if (( len > 0 )); then
+            remaining=$len
+            while (( remaining > 0 )); do
+                IFS= read -r -d '' -n 1 chunk || return 1
+                field+="$chunk"
+                remaining=$(( remaining - 1 ))
+            done
+        fi
+        DECODE_MSG+=("$field")
+    done
+    # consume optional trailing newline
+    local _nl
+    IFS= read -r -d '' -n 1 _nl -t 0.01 2>/dev/null || true
+    return 0
+}
+
+# decode_awk_output — pipe AWK binary-safe output → readable TYPE:val lines
+decode_awk_output() {
+    while _decode_read_message; do
+        local type="${DECODE_MSG[0]}"
+        local n=${#DECODE_MSG[@]}
+        case "$type" in
+            TEXT|THINKING|STOP|ERROR)
+                printf '%s:%s\n' "$type" "${DECODE_MSG[1]}"
+                ;;
+            USAGE)
+                printf '%s:%s\t%s\t%s\n' "$type" "${DECODE_MSG[1]}" "${DECODE_MSG[2]}" "${DECODE_MSG[3]}"
+                ;;
+            TOOL_CALL)
+                # [0]=TOOL_CALL [1]=name [2]=id [3]=input [4..]=key,val pairs
+                local out="${DECODE_MSG[1]}"$'\t'"${DECODE_MSG[2]}"$'\t'"${DECODE_MSG[3]}"
+                local i
+                for (( i = 4; i + 1 < n; i += 2 )); do
+                    out+=$'\t'"${DECODE_MSG[i]}"$'\t'"${DECODE_MSG[i+1]}"
+                done
+                printf '%s:%s\n' "$type" "$out"
+                ;;
+            RETRY)
+                printf 'RETRY:\n'
+                ;;
+            *)
+                # Generic: TYPE:field1\tfield2...
+                local rest="" first=true
+                for (( i = 1; i < n; i++ )); do
+                    $first || rest+=$'\t'
+                    first=false
+                    rest+="${DECODE_MSG[i]}"
+                done
+                printf '%s:%s\n' "$type" "$rest"
+                ;;
+        esac
+    done
+}
+
 # ===== Mock Server (Python) =====
 start_mock() {
     python3 -c "
@@ -274,7 +348,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'LONG_READ_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'READ-LONG-HEAD' in body and b'READ-LONG-TAIL' in body and b'omitted, original result was' in body:
+                if b'READ-LONG-HEAD' in body and b'READ-LONG-TAIL' in body and b'truncated' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_read_long_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -725,7 +799,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'LONG_BASH_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'BASH-LONG-HEAD' in body and b'BASH-LONG-TAIL' in body and b'omitted, original result was' in body:
+                if b'BASH-LONG-HEAD' in body and b'BASH-LONG-TAIL' in body and b'truncated' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_bash_long_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -868,7 +942,7 @@ stop_mock() {
 test_claude_sse() {
     info "Test 1: Claude SSE awk parser"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -902,7 +976,7 @@ SSE
 test_claude_tool_use() {
     info "Test 2: Claude SSE tool_use parsing"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -933,7 +1007,7 @@ SSE
 test_claude_todowrite_tool_use() {
     info "Test 2b: Claude SSE TodoWrite parsing"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_todo","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -953,7 +1027,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq $'TOOL_CALL:TodoWrite\ttoolu_todo\t{"todos":[{"content":"inspect repository","status":"completed"},{"content":"run tests","status":"pending"}]}\tchecklist\t- [x] inspect repository\\n- [ ] run tests\tsummary\t1/2' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:TodoWrite\ttoolu_todo\t{"todos":[{"content":"inspect repository","status":"completed"},{"content":"run tests","status":"pending"}]}\tchecklist\t- [x] inspect repository' && echo "$output" | grep -q "summary\t1/2" && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude TodoWrite tool_use"; ((PASS++)) || true
     else
         red "Claude TodoWrite tool_use"; echo "  Output: $output"; ((FAIL++)) || true
@@ -964,7 +1038,7 @@ SSE
 test_claude_usage_cache_tokens() {
     info "Test 3: Claude SSE usage cache tokens"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_cache","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":2,"cache_read_input_tokens":4}}}
 
@@ -995,7 +1069,7 @@ SSE
 test_claude_tool_use_quoted_command() {
     info "Test 4: Claude SSE tool_use quoted command"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_test","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -1015,7 +1089,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_quoted\t{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \\\\"not found\\\\""}\tcommand\tcd /tmp && ls generate.mjs 2>/dev/null || echo "not found"' && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:Bash\ttoolu_quoted\t{"command":"cd /tmp && ls generate.mjs 2>/dev/null || echo \\"not found\\""}\tcommand\tcd /tmp && ls generate.mjs 2>/dev/null || echo "not found"' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude tool_use quoted command"; ((PASS++)) || true
     else
         red "Claude tool_use quoted command"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1026,7 +1100,7 @@ SSE
 test_claude_sse_unicode() {
     info "Test 5: Claude SSE unicode parsing"
     local output
-    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE'
+    output=$(awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_unicode","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}
 
@@ -1066,7 +1140,7 @@ SSE
 test_openai_sse() {
     info "Test 5: OpenAI SSE awk parser"
     local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello from"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" OpenAI mock!"},"finish_reason":null}]}
@@ -1087,7 +1161,7 @@ SSE
 test_openai_usage_cache_tokens() {
     info "Test 6: OpenAI SSE usage cache tokens"
     local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Cache usage"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":5}}}
@@ -1106,7 +1180,7 @@ SSE
 test_openai_sse_leading_newline() {
     info "Test 7: OpenAI SSE trims initial leading newlines"
     local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
 data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"\n\nHello"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
@@ -1126,7 +1200,7 @@ SSE
 test_openai_sse_tool_calls() {
     info "Test 7b: OpenAI SSE tool_calls parser"
     local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE'
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
 data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_openai_1","type":"function","function":{"name":"Write","arguments":"{\"path\":\"/tmp/test.txt\""}}]},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"content\":\"AbC\"}"}}]},"finish_reason":null}]}
@@ -1554,7 +1628,7 @@ test_agent_bash_long_result() {
     if [[ "$output" == *"Long bash complete."* ]] && \
        [[ "$output" == *"BASH-LONG-HEAD"* ]] && \
        [[ "$output" == *"BASH-LONG-TAIL"* ]] && \
-       [[ "$output" == *"omitted, original result was"* ]]; then
+       [[ "$output" == *"truncated"* ]]; then
         green "Agent bash long result formatting"; ((PASS++)) || true
     else
         red "Agent bash long result formatting"; echo "  Output: $output"; ((FAIL++)) || true

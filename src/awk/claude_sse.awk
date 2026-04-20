@@ -1,6 +1,6 @@
 # claude_sse.awk — Anthropic Claude SSE stream parser
 # Input: SSE lines (event:, data:)
-# Output: Unified protocol (TEXT:, THINKING:, TOOL_CALL:, USAGE:, STOP:, ERROR:)
+# Output: Unified protocol via emit1/emit/emit_flush
 # Requires: awk -v verbose=true/false -f json.awk -f protocol.awk -f todo_protocol.awk -f claude_sse.awk
 
 BEGIN {
@@ -13,14 +13,13 @@ BEGIN {
     input_tokens = 0
     output_tokens = 0
     cache_input_tokens = 0
-    pending_usage = ""
-    pending_stop = ""
+    pending_stop_reason = ""
 }
 
 /^:/ { next }
 
 # Pass through ERROR lines from http_stream.awk
-/^ERROR:/ { print; fflush(); next }
+/^ERROR:/ { emit1("ERROR"); emit(substr($0, 7)); emit_flush(); next }
 
 # Handle curl retry: reset all parser state for new response
 /^RETRY:/ {
@@ -33,9 +32,9 @@ BEGIN {
     input_tokens = 0
     output_tokens = 0
     cache_input_tokens = 0
-    pending_usage = ""
-    pending_stop = ""
-    print; fflush(); next
+    pending_stop_reason = ""
+    emit1("RETRY"); emit_flush()
+    next
 }
 
 /^event: / {
@@ -65,35 +64,28 @@ BEGIN {
         if (block_type == "text") {
             text = extract_str(json, "text", 1)
             if (text != "") {
-                printf "TEXT:%s\n", escape_protocol_text(text)
-                fflush()
+                emit1("TEXT"); emit(text); emit_flush()
             }
         }
         else if (block_type == "thinking") {
             text = extract_str(json, "thinking", 1)
             if (text != "") {
-                printf "THINKING:%s\n", escape_protocol_text(text)
-                fflush()
+                emit1("THINKING"); emit(text); emit_flush()
             }
         }
         else if (block_type == "tool") {
-            # Claude streams tool input as partial_json, which is itself a JSON string
-            # embedded inside the outer SSE JSON payload. Accumulate the escaped string
-            # fragments here and decode that outer string exactly once at block stop.
             partial_json = partial_json extract_json_string(json, "partial_json", 1)
         }
     }
     else if (event == "content_block_stop") {
         if (block_type == "tool") {
             emit_tool_call_record(tool_name, tool_id, unescape_json_string(partial_json))
-            fflush()
         }
         block_type = ""
     }
     else if (event == "message_delta") {
         sr = extract_str(json, "stop_reason", 1)
         if (sr != "") stop_reason = sr
-        # Extract usage (both input and output tokens may appear here)
         it = extract_num(json, "input_tokens", 1)
         if (it != "") input_tokens = it
         ot = extract_num(json, "output_tokens", 1)
@@ -103,38 +95,30 @@ BEGIN {
         if (crt != "") cache_input_tokens = crt
     }
     else if (event == "message_start") {
-        it = extract_num_from_nested(json, "input_tokens")
+        it = extract_num(json, "input_tokens", 1)
         if (it != "") input_tokens = it
-        crt = extract_num_from_nested(json, "cache_read_input_tokens")
-        if (crt == "") crt = extract_num_from_nested(json, "cache_creation_input_tokens")
+        crt = extract_num(json, "cache_read_input_tokens", 1)
+        if (crt == "") crt = extract_num(json, "cache_creation_input_tokens", 1)
         if (crt != "") cache_input_tokens = crt
     }
     else if (event == "message_stop") {
-        # Buffer STOP/USAGE — emit at EOF to avoid premature output on curl retry
-        pending_usage = sprintf("USAGE:%d\t%d\t%d", input_tokens, output_tokens, cache_input_tokens)
-        pending_stop = sprintf("STOP:%s", stop_reason)
+        pending_input_tokens = input_tokens
+        pending_output_tokens = output_tokens
+        pending_cache_tokens = cache_input_tokens
+        pending_stop_reason = stop_reason
     }
     else if (event == "error") {
         msg = extract_str(json, "message", 1)
-        printf "ERROR:%s\n", msg
-        fflush()
+        emit1("ERROR"); emit(msg); emit_flush()
     }
 
     next
 }
 
 END {
-    if (pending_usage != "") {
-        printf "%s\n", pending_usage
-        fflush()
-    }
-    if (pending_stop != "") {
-        printf "%s\n", pending_stop
-        fflush()
+    if (pending_stop_reason != "") {
+        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_tokens + 0); emit_flush()
+        emit1("STOP"); emit(pending_stop_reason); emit_flush()
     }
 }
 
-# Extract number from nested JSON (kept for call-site clarity)
-function extract_num_from_nested(json, key) {
-    return extract_num(json, key, 1)
-}

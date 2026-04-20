@@ -5,9 +5,7 @@
 
 set -uo pipefail
 
-# ============================================================================
-# User Options
-# ============================================================================
+# --- User Options ---
 PROVIDER="claude"
 MODEL=""
 MAX_TOKENS=4096
@@ -26,9 +24,7 @@ MAX_CONTEXT_KEEP_PCT=25
 declare -a SKILL_NAMES=()
 : "${THINKING_BUDGET:=2048}"
 
-# ============================================================================
-# Runtime Mode & Session State
-# ============================================================================
+# --- Runtime Mode & Session State ---
 INTERACTIVE=false
 SESSION_ID=""
 SESSION_EVENT_FILE=""
@@ -36,9 +32,7 @@ CONTEXT_SUMMARY_FILE=""
 TODO_FILE=""
 PLAN_FILE=""
 
-# ============================================================================
-# Internal Runtime State
-# ============================================================================
+# --- Internal Runtime State ---
 CONV_FILE=""
 TOOL_DEF_JSON=""
 AGENT_TMPDIR=""
@@ -50,17 +44,64 @@ ESC_LISTENER_FLAG=""
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
 
-# ============================================================================
-# Environment Defaults
-# ============================================================================
+# --- Environment Defaults ---
 : "${ANTHROPIC_API_KEY:=}"
 : "${OPENAI_API_KEY:=}"
 : "${ANTHROPIC_BASE_URL:=}"
 : "${OPENAI_BASE_URL:=}"
 
-# ============================================================================
-# Utility Functions
-# ============================================================================
+# --- Utility Functions ---
+write_message() {
+    # Args: field0 field1 field2 ...
+    # Wire format: nfields:len0:val0:len1:val1:...
+    local nfields=$#
+    printf '%s:' "$nfields"
+    local field byte_len
+    for field in "$@"; do
+        byte_len=$(LC_ALL=C printf '%s' "$field" | wc -c)
+        byte_len=${byte_len//[[:space:]]/}
+        printf '%s:%s' "$byte_len" "$field"
+    done
+}
+
+_read_len() {
+    local _rl_char _rl_str=""
+    while IFS= read -r -d '' -n 1 _rl_char; do
+        [[ "$_rl_char" == ":" ]] && break
+        _rl_str+="$_rl_char"
+    done
+    [[ -n "$_rl_str" ]] || return 1
+    printf -v "$1" '%s' "$((_rl_str))"
+}
+
+read_message() {
+    # REPLY_MESSAGE is a positional indexed array: [0]=type, [1]=field1, [2]=field2, ...
+    REPLY_MESSAGE=()
+    local nfields len field
+
+    _read_len nfields || return 1
+
+    local i remaining chunk
+    for ((i = 0; i < nfields; i++)); do
+        _read_len len || return 1
+        field=""
+        if (( len > 0 )); then
+            remaining=$len
+            while (( remaining > 0 )); do
+                IFS= read -r -d '' -n 1 chunk || return 1
+                field+="$chunk"
+                remaining=$(( remaining - 1 ))
+            done
+        fi
+        REPLY_MESSAGE+=("$field")
+    done
+
+    # Consume optional trailing newline (AWK emit functions append \n)
+    local _nl
+    IFS= read -r -d '' -n 1 _nl -t 0.01 2>/dev/null || true
+
+    return 0
+}
 
 deny_bash_command_reason() {
     local cmd="$1"
@@ -95,23 +136,6 @@ deny_bash_command_reason() {
     return 1
 }
 
-tool_call_arg() {
-    local payload="$1" key="$2" __outvar="$3"
-    local fields=() i field_name field_value
-    IFS=$'\t' read -r -a fields <<< "$payload"
-    for (( i = 0; i + 1 < ${#fields[@]}; i += 2 )); do
-        field_name="${fields[i]}"
-        field_value="${fields[i+1]}"
-        if [[ "$field_name" == "$key" ]]; then
-            unescape_protocol_to_var field_value "$field_value"
-            printf -v "$__outvar" '%s' "$field_value"
-            return 0
-        fi
-    done
-    printf -v "$__outvar" '%s' ""
-    return 1
-}
-
 tool_param_keys() {
     case "$1" in
         Read) printf 'path' ;;
@@ -128,29 +152,23 @@ tool_param_keys() {
     esac
 }
 
-tool_summary_key() {
-    case "$1" in
-        Read|Write|Edit) printf 'path' ;;
-        Bash) printf 'command' ;;
-        Glob|Grep) printf 'pattern' ;;
-        TodoWrite) printf 'summary' ;;
-        Skill) printf 'name' ;;
-        WebSearch) printf 'query' ;;
-        WebFetch) printf 'url' ;;
-        *) printf '' ;;
-    esac
-}
-
-tool_args_from_kv() {
-    local name="$1" kv="$2" __arg1="$3" __arg2="$4" __arg3="$5"
+tool_args_from_msg() {
+    local name="$1" __arg1="$2" __arg2="$3" __arg3="$4"
+    # Extract known params from flattened KV pairs at REPLY_MESSAGE[4..]
     local param_key_string="" param_keys=() idx param_value="" out1="" out2="" out3=""
+    local _n=${#REPLY_MESSAGE[@]}
 
     param_key_string=$(tool_param_keys "$name")
     if [[ -n "$param_key_string" ]]; then
         IFS=' ' read -r -a param_keys <<< "$param_key_string"
         for idx in "${!param_keys[@]}"; do
-            param_value=""
-            tool_call_arg "$kv" "${param_keys[idx]}" param_value || true
+            local _pkey="${param_keys[idx]}" i
+            for (( i = 4; i + 1 < _n; i += 2 )); do
+                if [[ "${REPLY_MESSAGE[i]}" == "$_pkey" ]]; then
+                    param_value="${REPLY_MESSAGE[i+1]}"
+                    break
+                fi
+            done
             case "$idx" in
                 0) out1="$param_value" ;;
                 1) out2="$param_value" ;;
@@ -165,20 +183,30 @@ tool_args_from_kv() {
 }
 
 tool_call_summary() {
-    local name="$1" payload="${2:-}" label="" value="" summary_key=""
-    summary_key=$(tool_summary_key "$name")
-    if [[ "$name" == "Bash" && -n "$summary_key" ]]; then
-        tool_call_arg "$payload" "$summary_key" value || true
-        if [[ -n "$value" ]]; then
-            value="${value//$'\n'/ }"
-            if (( ${#value} > 80 )); then
-                value="${value:0:77}..."
+    local name="$1" label="" key=""
+    shift
+    case "$name" in
+        Read|Write|Edit) key="path" ;;
+        Bash) key="command" ;;
+        Glob|Grep) key="pattern" ;;
+        TodoWrite) key="summary" ;;
+        Skill) key="name" ;;
+        WebSearch) key="query" ;;
+        WebFetch) key="url" ;;
+    esac
+    if [[ -n "$key" && $# -gt 0 ]]; then
+        local i value=""
+        for (( i = 1; i + 1 <= $#; i += 2 )); do
+            if [[ "${!i}" == "$key" ]]; then
+                local _vi=$(( i + 1 ))
+                value="${!_vi}"
+                break
             fi
-            label="$value"
+        done
+        if [[ "$name" == "Bash" && -n "$value" ]]; then
+            value="${value//$'\n'/ }"
+            (( ${#value} > 80 )) && value="${value:0:77}..."
         fi
-    fi
-    if [[ -n "$summary_key" && -z "$label" ]]; then
-        tool_call_arg "$payload" "$summary_key" value || true
         [[ -n "$value" ]] && label="$value"
     fi
     if [[ -n "$label" ]]; then
@@ -186,35 +214,6 @@ tool_call_summary() {
     else
         printf '%s' "$name"
     fi
-}
-
-escape_protocol_text() {
-    local value="$1"
-    value="${value//\\/\\\\}"
-    value="${value//$'\n'/\\n}"
-    value="${value//$'\r'/\\r}"
-    value="${value//$'\t'/\\t}"
-    printf '%s' "$value"
-}
-
-parse_tool_call_record() {
-    local payload="$1" __namevar="$2" __idvar="$3" __inputvar="$4" __kvvar="$5"
-    local name="" id="" input_value="" kv_value=""
-    IFS=$'\t' read -r name id input_value kv_value <<< "$payload"
-    unescape_protocol_to_var input_value "$input_value"
-    printf -v "$__namevar" '%s' "$name"
-    printf -v "$__idvar" '%s' "$id"
-    printf -v "$__inputvar" '%s' "$input_value"
-    printf -v "$__kvvar" '%s' "$kv_value"
-}
-
-parse_usage_fields() {
-    local payload="$1" __inputvar="$2" __outputvar="$3" __cachevar="$4"
-    local input_value="" output_value="" cache_value=""
-    IFS=$'\t' read -r input_value output_value cache_value <<< "$payload"
-    printf -v "$__inputvar" '%s' "${input_value:-0}"
-    printf -v "$__outputvar" '%s' "${output_value:-0}"
-    printf -v "$__cachevar" '%s' "${cache_value:-0}"
 }
 
 clear_interrupt_state() {
@@ -319,29 +318,24 @@ json_escape() {
 
 format_tool_result() {
     local output="$1"
-    local size marker marker_bytes available head_chars tail_chars
-
-    size=$(printf '%s' "$output" | wc -c)
-    size=${size//[[:space:]]/}
-    if (( size <= TOOL_RESULT_MAX_BYTES )); then
+    if (( ${#output} <= TOOL_RESULT_MAX_BYTES )); then
         printf '%s' "$output"
         return 0
     fi
 
-    marker=$'\n[... omitted, original result was '"$size"$' bytes ...]\n'
-    marker_bytes=$(printf '%s' "$marker" | wc -c)
-    marker_bytes=${marker_bytes//[[:space:]]/}
-    available=$(( TOOL_RESULT_MAX_BYTES - marker_bytes ))
-    if (( available < 2 )); then
-        printf '%s' "${output:0:TOOL_RESULT_MAX_BYTES}"
-        return 0
-    fi
+    local size=${#output}
+    local marker=$'\n\n[... truncated: showing first/last portions of %d bytes ...]\n\n'
+    local marker_len=$(( ${#marker} + 20 ))
+    local tail_lines=5
+    local tail_text
+    tail_text=$(printf '%s' "$output" | tail -n "$tail_lines")
+    local tail_len=${#tail_text}
+    local head_len=$(( TOOL_RESULT_MAX_BYTES - marker_len - tail_len ))
+    (( head_len > 0 )) || head_len=$(( TOOL_RESULT_MAX_BYTES / 2 ))
 
-    head_chars=$(( available / 2 ))
-    tail_chars=$(( available - head_chars ))
-    printf '%s' "${output:0:head_chars}"
-    printf '%s' "$marker"
-    printf '%s' "${output: -tail_chars}"
+    printf '%s' "${output:0:$head_len}"
+    printf "$marker" "$size"
+    printf '%s' "$tail_text"
 }
 
 tool_file_summary() {
@@ -374,7 +368,7 @@ wrap_section() {
 append_section() {
     local __outvar="$1" tag="$2" content="$3" name="${4:-}"
     [[ -n "$content" ]] || return 0
-    printf -v "$__outvar" '%s%s%s\n' "${!__outvar}" "$(wrap_section "$tag" "$content" "$name")" ""
+    printf -v "$__outvar" '%s%s\n' "${!__outvar}" "$(wrap_section "$tag" "$content" "$name")"
 }
 
 session_append_line() {
@@ -401,75 +395,62 @@ display_human_text() {
 }
 
 display_event() {
-    local line="$1"
-    local payload="" tc_name="" tc_id="" tc_input="" tc_kv=""
-    local msg="" id="" escaped="" result="" tool_name="" tool_fields=""
-    local in_tok=0 out_tok=0 cache_tok=0
+    # REPLY_MESSAGE[0]=type, rest varies by type
     local stream_event="" human_text="" human_kind=""
+    local _type="${REPLY_MESSAGE[0]}"
 
-    case "$line" in
-        TEXT:*)
-            msg="${line#TEXT:}"
-            unescape_protocol_to_var msg "$msg"
-            stream_event="{\"type\":\"text\",\"content\":\"$(json_escape "$msg")\"}"
+    case "$_type" in
+        TEXT)
+            stream_event="{\"type\":\"text\",\"content\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
             human_kind="text"
-            human_text="$msg"
+            human_text="${REPLY_MESSAGE[1]}"
             ;;
-        THINKING:*)
-            msg="${line#THINKING:}"
-            unescape_protocol_to_var msg "$msg"
-            stream_event="{\"type\":\"thinking\",\"content\":\"$(json_escape "$msg")\"}"
+        THINKING)
+            stream_event="{\"type\":\"thinking\",\"content\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
             human_kind="thinking"
-            human_text="$msg"
+            human_text="${REPLY_MESSAGE[1]}"
             ;;
-        TOOL_CALL:*)
-            payload="${line#TOOL_CALL:}"
-            parse_tool_call_record "$payload" tc_name tc_id tc_input tc_kv
-            stream_event="{\"type\":\"tool_call\",\"name\":\"$(json_escape "$tc_name")\",\"id\":\"$(json_escape "$tc_id")\",\"input\":$tc_input}"
+        TOOL_CALL)
+            stream_event="{\"type\":\"tool_call\",\"name\":\"$(json_escape "${REPLY_MESSAGE[1]}")\",\"id\":\"$(json_escape "${REPLY_MESSAGE[2]}")\",\"input\":${REPLY_MESSAGE[3]}}"
             human_kind="tool_call"
-            human_text="$(tool_call_summary "$tc_name" "$tc_kv")"
-            ;;
-        USAGE:*)
-            parse_usage_fields "${line#USAGE:}" in_tok out_tok cache_tok
-            stream_event="{\"type\":\"usage\",\"input_tokens\":${in_tok:-0},\"output_tokens\":${out_tok:-0},\"cache_input_tokens\":${cache_tok:-0}}"
-            ;;
-        STOP:*)
-            msg="${line#STOP:}"
-            stream_event="{\"type\":\"stop\",\"reason\":\"$(json_escape "$msg")\"}"
-            human_kind="stop"
-            ;;
-        TOOL_RESULT:*)
-            payload="${line#TOOL_RESULT:}"
-            IFS=$'\t' read -r id tool_name tool_fields escaped <<< "$payload"
-            unescape_protocol_to_var tool_fields "$tool_fields"
-            result="$escaped"
-            unescape_protocol_to_var result "$result"
-            stream_event="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "$id")\",\"content\":\"$(json_escape "$result")\"}"
-            human_kind="text"
-            if [[ "$tool_name" == "Edit" ]]; then
-                human_text="$(format_tool_result "$result")"$'\n'
-            elif [[ "$tool_name" == "Read" ]]; then
-                tool_call_arg "$tool_fields" "path" tool_path || true
-                human_text="$(tool_file_summary "Read" "$tool_path")"$'\n'
-            elif [[ "$tool_name" == "Write" ]]; then
-                tool_call_arg "$tool_fields" "path" tool_path || true
-                human_text="$(tool_file_summary "Write" "$tool_path")"$'\n'
+            local _tc_kv=() i _n=${#REPLY_MESSAGE[@]}
+            for (( i = 4; i + 1 < _n; i += 2 )); do
+                _tc_kv+=("${REPLY_MESSAGE[i]}" "${REPLY_MESSAGE[i+1]}")
+            done
+            if (( ${#_tc_kv[@]} > 0 )); then
+                human_text="$(tool_call_summary "${REPLY_MESSAGE[1]}" "${_tc_kv[@]}")"
             else
-                human_text="$(format_tool_result "$result")"$'\n'
+                human_text="$(tool_call_summary "${REPLY_MESSAGE[1]}")"
             fi
             ;;
-        TODO_UPDATE:*)
-            msg="${line#TODO_UPDATE:}"
-            unescape_protocol_to_var msg "$msg"
-            stream_event="$(build_todo_event_json "$msg")"
+        USAGE)
+            stream_event="{\"type\":\"usage\",\"input_tokens\":${REPLY_MESSAGE[1]:-0},\"output_tokens\":${REPLY_MESSAGE[2]:-0},\"cache_input_tokens\":${REPLY_MESSAGE[3]:-0}}"
             ;;
-        ERROR:*)
-            msg="${line#ERROR:}"
-            stream_event="{\"type\":\"error\",\"message\":\"$(json_escape "$msg")\"}"
+        STOP)
+            stream_event="{\"type\":\"stop\",\"reason\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
+            human_kind="stop"
+            ;;
+        TOOL_RESULT)
+            stream_event="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "${REPLY_MESSAGE[1]}")\",\"content\":\"$(json_escape "${REPLY_MESSAGE[3]}")\"}"
+            human_kind="text"
+            local _tr_name="${REPLY_MESSAGE[2]}"
+            if [[ "$_tr_name" == "Edit" ]]; then
+                human_text="${REPLY_MESSAGE[3]}"$'\n'
+            elif [[ "$_tr_name" == "Read" || "$_tr_name" == "Write" ]]; then
+                human_text="$(tool_file_summary "$_tr_name" "${REPLY_MESSAGE[4]}")"$'\n'
+            else
+                human_text="${REPLY_MESSAGE[3]}"$'\n'
+            fi
+            ;;
+        TODO_UPDATE)
+            stream_event="$(build_todo_event_json "${REPLY_MESSAGE[1]}")"
+            ;;
+        ERROR)
+            stream_event="{\"type\":\"error\",\"message\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
             human_kind="error"
-            human_text="$msg"
+            human_text="${REPLY_MESSAGE[1]}"
             ;;
-        RETRY:*)
+        RETRY)
             stream_event="{\"type\":\"retry\"}"
             ;;
         *)
@@ -545,9 +526,7 @@ read_optional_file() {
     local path="$1"
     if [[ -n "$path" && -s "$path" ]]; then
         printf '%s' "$(<"$path")"
-        return 0
     fi
-    printf ''
 }
 
 find_skill_base_dirs() {
@@ -668,22 +647,8 @@ Tool evidence:
 EOF
 }
 
-# Unescape the single-line protocol escaping used between awk and bash.
-unescape_protocol_to_var() {
-    local __outvar="$1" value="$2" backslash_placeholder=$'\001'
-    value="${value//\\\\/$backslash_placeholder}"
-    value="${value//\\n/$'\n'}"
-    value="${value//\\r/$'\r'}"
-    value="${value//\\t/$'\t'}"
-    value="${value//\\\"/\"}"
-    value="${value//$backslash_placeholder/\\}"
-    printf -v "$__outvar" '%s' "$value"
-}
-
 build_tool_call_json_object() {
-    local name="$1" id="$2" input_escaped="$3" type="${4:-tool_use}"
-    local input
-    unescape_protocol_to_var input "$input_escaped"
+    local name="$1" id="$2" input="$3" type="${4:-tool_use}"
     if [[ "$type" == "tool_use" ]]; then
         printf '{"type":"tool_use","id":"%s","name":"%s","input":%s}' \
             "$(json_escape "$id")" \
@@ -705,21 +670,18 @@ build_tool_result_json_object() {
         "$result"
 }
 
-tool_result_first_line() {
-    local result="$1"
-    printf '%s' "$result" | sed -n '1p'
-}
+
 
 build_tool_calls_json() {
     local calls="$1"
     local tool_json="[" first=true
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input_escaped
-        IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
+        local name id input
+        IFS=$'\t' read -r name id input _ <<< "$tc"
         $first || tool_json+=","
         first=false
-        tool_json+="$(build_tool_call_json_object "$name" "$id" "$input_escaped" "tool_call")"
+        tool_json+="$(build_tool_call_json_object "$name" "$id" "$input" "tool_call")"
     done <<< "$calls"
     tool_json+="]"
     printf '%s' "$tool_json"
@@ -736,11 +698,11 @@ build_assistant_content_json() {
 
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input_escaped
-        IFS=$'\t' read -r name id input_escaped _ <<< "$tc"
+        local name id input
+        IFS=$'\t' read -r name id input _ <<< "$tc"
         $first || content+=","
         first=false
-        content+="$(build_tool_call_json_object "$name" "$id" "$input_escaped")"
+        content+="$(build_tool_call_json_object "$name" "$id" "$input")"
     done <<< "$calls"
 
     content+="]"
@@ -810,9 +772,7 @@ resolve_continue_session_id() {
     fi
 }
 
-# ============================================================================
-# Conversation Management (temp file, one JSON message per line)
-# ============================================================================
+# --- Conversation Management (temp file, one JSON message per line) ---
 
 conv_init() {
     if [[ -n "$SESSION_ID" ]]; then
@@ -997,9 +957,7 @@ session_log_assistant() {
     session_append_line "$payload"
 }
 
-# ============================================================================
-# Tool Definitions (auto-generated JSON)
-# ============================================================================
+# --- Tool Definitions (auto-generated JSON) ---
 
 load_tool_defs() {
     local tools_file script_dir
@@ -1009,9 +967,7 @@ load_tool_defs() {
     TOOL_DEF_JSON=$(<"$tools_file")
 }
 
-# ============================================================================
-# Tool Implementations
-# ============================================================================
+# --- Tool Implementations ---
 
 tool_read() {
     local path="$1"
@@ -1148,13 +1104,7 @@ dispatch_tool() {
     esac
 }
 
-# ============================================================================
-# Format Conversion (call awk/*.awk)
-# ============================================================================
-
-# ============================================================================
-# API Request Builders
-# ============================================================================
+# --- API Request Builders ---
 
 build_claude_request() {
     local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-0}"
@@ -1215,20 +1165,18 @@ build_request() {
     esac
 }
 
-# ============================================================================
-# SSE Parsers (call awk/*.awk)
-# ============================================================================
+# --- SSE Parsers (call awk/*.awk) ---
 
 parse_sse() {
+    # LC_ALL=C ensures AWK length() returns byte counts (needed for _wm_cat in protocol.awk).
+    # Safe for SSE/JSON parsing: all delimiters are ASCII, UTF-8 continuation bytes never match ASCII.
     case "$PROVIDER" in
-        claude) awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" ;;
-        openai) awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" ;;
+        claude) LC_ALL=C awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" ;;
+        openai) LC_ALL=C awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" ;;
     esac
 }
 
-# ============================================================================
-# API Calls (curl)
-# ============================================================================
+# --- API Calls (curl) ---
 
 _stream_curl() {
     local body="$1"
@@ -1237,8 +1185,6 @@ _stream_curl() {
 
     $VERBOSE && printf '\033[90m[verbose] POST %s (%dKB body)\033[0m\n' "$API_URL" "$((${#body}/1024))" >&2
 
-    # Merge stderr to stdout: curl errors come through same pipe
-    # Handles: network errors, HTTP errors, and API JSON errors in body
     curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk -f "$AWK_DIR/http_stream.awk"
 }
 
@@ -1259,9 +1205,7 @@ call_api() {
     esac
 }
 
-# ============================================================================
-# LLM Call (internal)
-# ============================================================================
+# --- LLM Call (internal) ---
 
 llm_call() {
     local messages="$1"
@@ -1276,22 +1220,18 @@ llm_call() {
 
 run_summary_call() {
     local messages="$1"
-    # Disable thinking for summary calls (not needed, saves tokens)
-    local body text line
+    local body text
     body=$(build_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS" 0)
     $VERBOSE && printf '\033[90m[verbose] Summary request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
 
     text=""
-    while IFS= read -r line; do
-        case "$line" in
-            TEXT:*)
-                local t="${line#TEXT:}"
-                local d="$t"
-                unescape_protocol_to_var d "$d"
-                text+="$d"
+    while read_message; do
+        case "${REPLY_MESSAGE[0]}" in
+            TEXT)
+                text+="${REPLY_MESSAGE[1]}"
                 ;;
-            ERROR:*)
-                die "${line#ERROR:}"
+            ERROR)
+                die "${REPLY_MESSAGE[1]}"
                 ;;
         esac
     done < <(call_api "$body" | parse_sse)
@@ -1300,9 +1240,7 @@ run_summary_call() {
     printf '%s' "$text"
 }
 
-# ============================================================================
-# Agent Loop
-# ============================================================================
+# --- Agent Loop ---
 
 agent_loop_stream() {
     local user_input="$1"
@@ -1314,65 +1252,77 @@ agent_loop_stream() {
 
         local text="" tool_calls="" stop="" loop_error=""
         local tool_conv_results=""  # collected: id<TAB>json_escaped_result per line
-        local line
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
-        while IFS= read -r line; do
+        while read_message; do
             if interrupt_requested; then
                 stop="interrupted"
                 break
             fi
-            [[ "$VERBOSE" == true ]] && printf '[debug] <%s>\n' "$line" >&2
-            printf '%s\n' "$line"
-            case "$line" in
-                RETRY:*)
-                    # curl retry detected — reset collection state for new LLM response.
-                    # Already-executed tools from first response remain (side effects can't be undone),
-                    # but text/tool_calls/tool_conv_results must restart so the conversation store
-                    # only reflects the final successful response.
+            [[ "$VERBOSE" == true ]] && printf '[debug] type=<%s> nfields=%d\n' "${REPLY_MESSAGE[0]}" "${#REPLY_MESSAGE[@]}" >&2
+            # Forward to display
+            write_message "${REPLY_MESSAGE[@]}"
+            printf '\n'
+
+            case "${REPLY_MESSAGE[0]}" in
+                RETRY)
                     text=""
                     tool_calls=""
                     tool_conv_results=""
                     ;;
-                TEXT:*)
-                    local d="${line#TEXT:}"
-                    unescape_protocol_to_var d "$d"
-                    text+="$d"
+                TEXT)
+                    text+="${REPLY_MESSAGE[1]}"
                     ;;
-                THINKING:*)
-                    # Thinking content: pass through for display, but don't accumulate into text
+                THINKING)
                     ;;
-                TOOL_CALL:*)
-                    local cur_tool_name="" cur_tool_id="" input="" tool_kv=""
-                    parse_tool_call_record "${line#TOOL_CALL:}" cur_tool_name cur_tool_id input tool_kv
-                    tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"$(escape_protocol_text "$input")"$'\t'"${tool_kv}"$'\n'
+                TOOL_CALL)
+                    local cur_tool_name cur_tool_id input
+                    cur_tool_name="${REPLY_MESSAGE[1]}"
+                    cur_tool_id="${REPLY_MESSAGE[2]}"
+                    input="${REPLY_MESSAGE[3]}"
 
-                    # Inline dispatch: execute tool immediately, output result, collect for conv
+                    tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
+
+                    # Execute tool immediately, output result
                     local arg1="" arg2="" arg3=""
-                    tool_args_from_kv "$cur_tool_name" "$tool_kv" arg1 arg2 arg3
+                    tool_args_from_msg "$cur_tool_name" arg1 arg2 arg3
+
                     local output
                     output=$(dispatch_tool "$cur_tool_name" "$arg1" "$arg2" "$arg3" 2>&1)
                     local tool_rc=$?
+
                     if (( tool_rc != 0 )); then
                         output="Error: tool execution failed: $output"
                     fi
                     output=$(format_tool_result "$output")
+
                     if [[ "$cur_tool_name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
-                        printf 'TODO_UPDATE:%s\n' "$(escape_protocol_text "$(<"$TODO_FILE")")"
+                        write_message "TODO_UPDATE" "$(<"$TODO_FILE")"
+                        printf '\n'
                     fi
                     local result_for_conv="$output"
                     if [[ "$cur_tool_name" == "Edit" ]]; then
-                        result_for_conv="$(tool_result_first_line "$output")"
+                        result_for_conv="$(printf '%s' "$output" | sed -n '1p')"
                     fi
-                    # Collect for conv write (after conv_add_assistant)
                     tool_conv_results+="${cur_tool_id}"$'\t'"$(json_escape "$result_for_conv")"$'\n'
-                    # Output TOOL_RESULT immediately for display
-                    printf 'TOOL_RESULT:%s\t%s\t%s\t%s\n' "$cur_tool_id" "$cur_tool_name" "$(escape_protocol_text "$tool_kv")" "$(escape_protocol_text "$output")"
+
+                    # TOOL_RESULT: [0]=type [1]=id [2]=name [3]=output [4..]=checklist/summary
+                    local _tr_args=("TOOL_RESULT" "$cur_tool_id" "$cur_tool_name" "$output")
+                    [[ -n "$arg1" ]] && _tr_args+=("$arg1")
+                    [[ -n "$arg2" ]] && _tr_args+=("$arg2")
+                    # Search for checklist/summary in TOOL_CALL flattened KV pairs
+                    local i _n=${#REPLY_MESSAGE[@]}
+                    for (( i = 4; i + 1 < _n; i += 2 )); do
+                        if [[ "${REPLY_MESSAGE[i]}" == "checklist" ]]; then _tr_args+=("checklist" "${REPLY_MESSAGE[i+1]}"); fi
+                        if [[ "${REPLY_MESSAGE[i]}" == "summary" ]]; then _tr_args+=("summary" "${REPLY_MESSAGE[i+1]}"); fi
+                    done
+                    write_message "${_tr_args[@]}"
+                    printf '\n'
                     ;;
-                STOP:*)
-                    stop="${line#STOP:}"
+                STOP)
+                    stop="${REPLY_MESSAGE[1]}"
                     ;;
-                ERROR:*)
-                    loop_error="${line#ERROR:}"
+                ERROR)
+                    loop_error="${REPLY_MESSAGE[1]}"
                     stop="error"
                     break
                     ;;
@@ -1382,7 +1332,7 @@ agent_loop_stream() {
         # Fatal stop reasons exit immediately
         case "$stop" in
             error|max_tokens|length)
-                [[ "$stop" != "error" ]] && printf '%s\n' "ERROR:Response truncated (max_tokens reached)"
+                [[ "$stop" != "error" ]] && { write_message "ERROR" "Response truncated (max_tokens reached)"; printf '\n'; }
                 return 1
                 ;;
         esac
@@ -1397,34 +1347,36 @@ agent_loop_stream() {
             # tool_use/tool_calls → loop continues; anything else → break
             [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
         else
-            printf '%s\n' "STOP:interrupted"
+            write_message "STOP" "interrupted"
+            printf '\n'
             break
         fi
     done
 
     if (( turn >= MAX_TURNS )); then
-        printf '%s\n' "ERROR:Max turns ($MAX_TURNS) reached"
+        write_message "ERROR" "Max turns ($MAX_TURNS) reached"
+        printf '\n'
     fi
 }
 
 agent_loop() {
     local user_input="$1"
-    local stream_line had_error=false
+    local had_error=false
     clear_interrupt_state
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
     start_esc_interrupt_listener
 
-    while IFS= read -r stream_line; do
-        [[ "$stream_line" == ERROR:* ]] && had_error=true
-        if [[ "$stream_line" == STOP:interrupted ]]; then
-            display_event "$stream_line"
+    while read_message; do
+        [[ "${REPLY_MESSAGE[0]}" == "ERROR" ]] && had_error=true
+        if [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]]; then
+            display_event
             if [[ "$OUTPUT_FORMAT" == "human" ]]; then
                 printf '\033[36mInterrupted.\033[0m\n'
             fi
             break
         fi
-        display_event "$stream_line"
+        display_event
     done < <(agent_loop_stream "$user_input")
 
     stop_esc_interrupt_listener
@@ -1432,9 +1384,7 @@ agent_loop() {
     return 0
 }
 
-# ============================================================================
-# CLI
-# ============================================================================
+# --- CLI ---
 
 usage() {
     cat <<'EOF'
