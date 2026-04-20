@@ -436,27 +436,38 @@ func (r Runner) WebFetch(url string) (string, error) {
 }
 
 func FormatToolResult(s string, max int) string {
-	if len([]byte(s)) <= max {
+	b := []byte(s)
+	if len(b) <= max {
 		return s
 	}
-	size := len([]byte(s))
-	marker := fmt.Sprintf("\n[... omitted, original result was %d bytes ...]\n", size)
-	available := max - len([]byte(marker))
-	if available < 2 {
-		if len(s) > max {
-			return s[:max]
+	size := len(b)
+	marker := fmt.Sprintf("\n\n[... truncated: showing first/last portions of %d bytes ...]\n\n", size)
+	markerLen := len(marker) + 20 // extra room for size digits
+	tailLines := 5
+	tailText := lastNLines(s, tailLines)
+	tailLen := len(tailText)
+	headLen := max - markerLen - tailLen
+	if headLen <= 0 {
+		headLen = max / 2
+	}
+	if headLen > size {
+		headLen = size
+	}
+	headText := string(b[:headLen])
+	return headText + marker + tailText
+}
+
+func lastNLines(s string, n int) string {
+	count := 0
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '\n' {
+			count++
+			if count >= n {
+				return s[i+1:]
+			}
 		}
-		return s
 	}
-	head := available / 2
-	tail := available - head
-	if head > len(s) {
-		head = len(s)
-	}
-	if tail > len(s)-head {
-		tail = len(s) - head
-	}
-	return s[:head] + marker + s[len(s)-tail:]
+	return s
 }
 
 type ioDiscard struct{}

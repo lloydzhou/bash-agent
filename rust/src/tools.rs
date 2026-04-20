@@ -448,20 +448,34 @@ pub fn format_tool_result(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
+    let size = s.len();
     let marker = format!(
-        "\n[... omitted, original result was {} bytes ...]\n",
-        s.len()
+        "\n\n[... truncated: showing first/last portions of {} bytes ...]\n\n",
+        size
     );
-    let marker_len = marker.len();
-    let available = max.saturating_sub(marker_len);
-    if available < 2 {
-        return utf8_prefix_by_bytes(s, max).to_string();
+    let marker_len = marker.len() + 20; // extra room for size digits
+    let tail_lines = 5;
+    let tail_text = last_n_lines(s, tail_lines);
+    let tail_len = tail_text.len();
+    let mut head_len = max.saturating_sub(marker_len + tail_len);
+    if head_len == 0 {
+        head_len = max / 2;
     }
-    let head = available / 2;
-    let tail = available - head;
-    let left = utf8_prefix_by_bytes(s, head);
-    let right = utf8_suffix_by_bytes(s, tail);
-    format!("{left}{marker}{right}")
+    let head_text = utf8_prefix_by_bytes(s, head_len);
+    format!("{head_text}{marker}{tail_text}")
+}
+
+fn last_n_lines(s: &str, n: usize) -> &str {
+    let mut count = 0usize;
+    for (i, ch) in s.char_indices().rev() {
+        if ch == '\n' {
+            count += 1;
+            if count >= n {
+                return &s[i + ch.len_utf8()..];
+            }
+        }
+    }
+    s
 }
 
 fn utf8_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {
@@ -477,21 +491,6 @@ fn utf8_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {
         end = next;
     }
     &s[..end]
-}
-
-fn utf8_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
-    if max_bytes >= s.len() {
-        return s;
-    }
-    let len = s.len();
-    let mut start = len;
-    for (i, _) in s.char_indices() {
-        if len.saturating_sub(i) <= max_bytes {
-            start = i;
-            break;
-        }
-    }
-    &s[start..]
 }
 
 #[cfg(test)]
