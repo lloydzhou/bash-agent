@@ -162,7 +162,7 @@ impl Runtime {
             cfg.session_id = sid.clone();
             let p = session::paths_for(&home, &cwd, &sid);
             session::ensure_dir(&p.base_dir)?;
-            for f in [&p.conversation, &p.events, &p.summary, &p.todo] {
+            for f in [&p.conversation, &p.events, &p.summary, &p.todo, &p.plan] {
                 touch(f)?;
             }
             p
@@ -173,8 +173,9 @@ impl Runtime {
                 events: tmp_dir.join("events.jsonl"),
                 summary: tmp_dir.join("summary.txt"),
                 todo: tmp_dir.join("todo.md"),
+                plan: tmp_dir.join("plan.md"),
             };
-            for f in [&p.conversation, &p.events, &p.summary, &p.todo] {
+            for f in [&p.conversation, &p.events, &p.summary, &p.todo, &p.plan] {
                 touch(f)?;
             }
             p
@@ -583,6 +584,7 @@ impl Runtime {
             skills: self.cfg.skills.clone(),
             summary_file: self.paths.summary.clone(),
             todo_file: self.paths.todo.clone(),
+            plan_file: self.paths.plan.clone(),
         }
         .build_system_prompt()?;
 

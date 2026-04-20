@@ -182,7 +182,7 @@ func (rt *runtime) initState() error {
 			return err
 		}
 		newSession := !fileExists(rt.paths.Events)
-		for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo} {
+		for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan} {
 			if err := touch(path); err != nil {
 				return err
 			}
@@ -198,8 +198,9 @@ func (rt *runtime) initState() error {
 		Conversation: filepath.Join(rt.tmpDir, "conv.jsonl"),
 		Summary:      filepath.Join(rt.tmpDir, "summary.txt"),
 		Todo:         filepath.Join(rt.tmpDir, "todo.md"),
+		Plan:         filepath.Join(rt.tmpDir, "plan.md"),
 	}
-	for _, path := range []string{rt.paths.Conversation, rt.paths.Summary, rt.paths.Todo} {
+	for _, path := range []string{rt.paths.Conversation, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan} {
 		if err := touch(path); err != nil {
 			return err
 		}
@@ -508,6 +509,7 @@ func (rt *runtime) buildLLMRequest() ([]byte, error) {
 		Skills:      rt.cfg.Skills,
 		SummaryFile: rt.paths.Summary,
 		TodoFile:    rt.paths.Todo,
+		PlanFile:    rt.paths.Plan,
 	}.BuildSystemPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("build_request: %w", err)

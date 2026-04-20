@@ -114,9 +114,11 @@ for func_name, json_var, specific_var, extra_args in functions:
     elif func_name == "parse_sse":
         replacement = (
             "parse_sse() {\n"
+            "    # LC_ALL=C ensures AWK length() returns byte counts (needed for _wm_cat in protocol.awk).\n"
+            "    # Safe for SSE/JSON parsing: all delimiters are ASCII, UTF-8 continuation bytes never match ASCII.\n"
             "    case \"$PROVIDER\" in\n"
-            "        claude) awk -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}\" ;;\n"
-            "        openai) awk \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_OPENAI_SSE}\" ;;\n"
+            "        claude) LC_ALL=C awk -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}\" ;;\n"
+            "        openai) LC_ALL=C awk \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_OPENAI_SSE}\" ;;\n"
             "    esac\n"
             "}\n"
         )

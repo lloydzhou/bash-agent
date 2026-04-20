@@ -9,6 +9,7 @@ pub struct Paths {
     pub events: PathBuf,
     pub summary: PathBuf,
     pub todo: PathBuf,
+    pub plan: PathBuf,
 }
 
 pub fn project_key(cwd: &Path) -> String {
@@ -39,6 +40,7 @@ pub fn paths_for(home: &Path, cwd: &Path, session_id: &str) -> Paths {
         events: base.with_extension("events.jsonl"),
         summary: base.with_extension("summary.txt"),
         todo: base.with_extension("todo.md"),
+        plan: base.with_extension("plan.md"),
     }
 }
 

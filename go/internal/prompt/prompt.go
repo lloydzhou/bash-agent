@@ -13,6 +13,7 @@ type Builder struct {
 	Skills      []string
 	SummaryFile string
 	TodoFile    string
+	PlanFile    string
 }
 
 func (b Builder) BuildSystemPrompt() (string, error) {
@@ -21,6 +22,23 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	sections = appendSection(sections, "rules", "- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.", "")
 	sections = appendSection(sections, "using-your-tools", "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Use Glob and Grep for one pattern at a time.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.", "")
 	sections = appendSection(sections, "todo-guidance", "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.", "")
+	planFile := b.PlanFile
+	if planFile == "" {
+		planFile = "<not set>"
+	}
+	planLifecycleGuidance := fmt.Sprintf(`- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)
+- **Step-by-step**:
+  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)
+  2. Ask user to confirm the plan before execution
+  3. After user confirms, create TodoWrite checklist based on plan
+  4. Execute tasks following todo checklist (update progress in TodoWrite)
+  5. When all tasks complete, clear plan: Bash ": > PLAN_FILE"
+- **Plan vs Todo separation**:
+  - PLAN_FILE: planning document for analysis and strategy
+  - TodoWrite: execution checklist for real-time progress tracking
+  - Do NOT mix todo checkboxes into plan file
+- **PLAN_FILE**: %s`, planFile)
+	sections = appendSection(sections, "plan-lifecycle-guidance", planLifecycleGuidance, "")
 	if section, err := b.buildInstructionFilesSection(); err != nil {
 		return "", err
 	} else {
@@ -35,6 +53,11 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 		return "", err
 	} else {
 		sections = appendSection(sections, "selected-skills", section, "")
+	}
+	if section, err := readOptionalFile(b.PlanFile); err != nil {
+		return "", err
+	} else {
+		sections = appendSection(sections, "current-plan", section, b.PlanFile)
 	}
 	if section, err := readOptionalFile(b.SummaryFile); err != nil {
 		return "", err

@@ -13,6 +13,7 @@ type Paths struct {
 	Events       string
 	Summary      string
 	Todo         string
+	Plan         string
 }
 
 func ProjectKey(cwd string) string {
@@ -48,6 +49,7 @@ func PathsFor(home, cwd, sessionID string) Paths {
 		Events:       base + ".events.jsonl",
 		Summary:      base + ".summary.txt",
 		Todo:         base + ".todo.md",
+		Plan:         base + ".plan.md",
 	}
 }
 

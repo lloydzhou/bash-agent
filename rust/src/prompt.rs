@@ -9,6 +9,7 @@ pub struct Builder {
     pub skills: Vec<String>,
     pub summary_file: PathBuf,
     pub todo_file: PathBuf,
+    pub plan_file: PathBuf,
 }
 
 impl Builder {
@@ -34,6 +35,31 @@ impl Builder {
             "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.",
             None,
         ));
+        let plan_file_display = if self.plan_file.as_os_str().is_empty() {
+            "<not set>".to_string()
+        } else {
+            self.plan_file.display().to_string()
+        };
+        let plan_lifecycle_guidance = format!(
+            "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n\
+             - **Step-by-step**:\n\
+               1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n\
+               2. Ask user to confirm the plan before execution\n\
+               3. After user confirms, create TodoWrite checklist based on plan\n\
+               4. Execute tasks following todo checklist (update progress in TodoWrite)\n\
+               5. When all tasks complete, clear plan: Bash \": > PLAN_FILE\"\n\
+             - **Plan vs Todo separation**:\n\
+               - PLAN_FILE: planning document for analysis and strategy\n\
+               - TodoWrite: execution checklist for real-time progress tracking\n\
+               - Do NOT mix todo checkboxes into plan file\n\
+             - **PLAN_FILE**: {}",
+            plan_file_display
+        );
+        sections.push(wrap_section(
+            "plan-lifecycle-guidance",
+            &plan_lifecycle_guidance,
+            None,
+        ));
         if let Some(s) = self.build_instruction_files_section()? {
             sections.push(wrap_section("instruction-files", &s, None));
         }
@@ -42,6 +68,13 @@ impl Builder {
         }
         if let Some(s) = self.build_selected_skills_section()? {
             sections.push(wrap_section("selected-skills", &s, None));
+        }
+        if let Some(s) = read_optional_file(&self.plan_file)? {
+            sections.push(wrap_section(
+                "current-plan",
+                &s,
+                Some(&self.plan_file.display().to_string()),
+            ));
         }
         if let Some(s) = read_optional_file(&self.summary_file)? {
             sections.push(wrap_section("context-summary", &s, None));
