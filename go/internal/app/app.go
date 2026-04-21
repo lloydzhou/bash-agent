@@ -41,7 +41,6 @@ type runtime struct {
 	toolsJSON   []byte
 	paths       session.Paths
 	conv        conversation.Store
-	tmpDir      string
 	http        httpclient.StreamClient
 	escTTY      *os.File
 	escState    *term.State
@@ -128,8 +127,6 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err := rt.initState(); err != nil {
 		return err
 	}
-	defer rt.cleanup()
-
 	if rt.cfg.Interactive || (rt.cfg.Prompt == "" && isTTY(os.Stdin)) {
 		rt.cfg.Interactive = true
 		return rt.interactiveMode()
@@ -159,60 +156,33 @@ func (rt *runtime) applyProviderDefaults() error {
 }
 
 func (rt *runtime) initState() error {
-	tmpDir, err := os.MkdirTemp("", "goagent.")
-	if err != nil {
-		return err
-	}
-	rt.tmpDir = tmpDir
 	rt.toolsJSON = append([]byte(nil), assets.ToolsJSON...)
 
-	if rt.cfg.SessionMode {
-		sessionID := rt.cfg.SessionID
-		if sessionID == "" && rt.cfg.ContinueSession {
-			if id, err := session.ContinueSession(rt.home, rt.cwd); err == nil {
-				sessionID = id
-			}
+	sessionID := rt.cfg.SessionID
+	if sessionID == "" && rt.cfg.ContinueSession {
+		if id, err := session.ContinueSession(rt.home, rt.cwd); err == nil {
+			sessionID = id
 		}
-		if sessionID == "" {
-			sessionID = time.Now().Format("20060102-150405")
-		}
-		rt.cfg.SessionID = sessionID
-		rt.paths = session.PathsFor(rt.home, rt.cwd, sessionID)
-		if err := session.EnsureDir(rt.paths.BaseDir); err != nil {
-			return err
-		}
-		newSession := !fileExists(rt.paths.Events)
-		for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan} {
-			if err := touch(path); err != nil {
-				return err
-			}
-		}
-		if newSession {
-			_ = rt.appendEvent(map[string]any{"type": "session_start", "session_id": sessionID})
-		}
-		rt.conv = conversation.Store{Path: rt.paths.Conversation}
-		return nil
 	}
-
-	rt.paths = session.Paths{
-		Conversation: filepath.Join(rt.tmpDir, "conv.jsonl"),
-		Summary:      filepath.Join(rt.tmpDir, "summary.txt"),
-		Todo:         filepath.Join(rt.tmpDir, "todo.md"),
-		Plan:         filepath.Join(rt.tmpDir, "plan.md"),
+	if sessionID == "" {
+		sessionID = time.Now().Format("20060102-150405")
 	}
-	for _, path := range []string{rt.paths.Conversation, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan} {
+	rt.cfg.SessionID = sessionID
+	rt.paths = session.PathsFor(rt.home, rt.cwd, sessionID)
+	if err := session.EnsureDir(rt.paths.BaseDir); err != nil {
+		return err
+	}
+	newSession := !fileExists(rt.paths.Events)
+	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan} {
 		if err := touch(path); err != nil {
 			return err
 		}
 	}
+	if newSession {
+		_ = rt.appendEvent(map[string]any{"type": "session_start", "session_id": sessionID})
+	}
 	rt.conv = conversation.Store{Path: rt.paths.Conversation}
 	return nil
-}
-
-func (rt *runtime) cleanup() {
-	if rt.tmpDir != "" {
-		_ = os.RemoveAll(rt.tmpDir)
-	}
 }
 
 func (rt *runtime) interactiveMode() error {
@@ -262,6 +232,9 @@ func (rt *runtime) interactiveMode() error {
 
 	_ = p.RunNoExit()
 	_, _ = fmt.Fprintln(rt.stdout, "Goodbye!")
+	if rt.cfg.SessionID != "" {
+		_, _ = fmt.Fprintf(rt.stdout, "\033[90mResume with: --session %s  or  --continue\033[0m\n", rt.cfg.SessionID)
+	}
 	return nil
 }
 
@@ -1060,8 +1033,9 @@ func listSessions(home, cwd string, w io.Writer) error {
 		return nil
 	}
 	type row struct {
-		name string
-		mod  time.Time
+		name    string
+		mod     time.Time
+		summary string
 	}
 	var rows []row
 	for _, entry := range entries {
@@ -1073,19 +1047,37 @@ func listSessions(home, cwd string, w io.Writer) error {
 		if err != nil {
 			continue
 		}
+		sessionName := strings.TrimSuffix(name, ".jsonl")
+		summaryFile := filepath.Join(dir, sessionName+".summary.txt")
+		var summary string
+		if data, err := os.ReadFile(summaryFile); err == nil {
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line != "" {
+					summary = line
+					break
+				}
+			}
+		}
 		rows = append(rows, row{
-			name: strings.TrimSuffix(name, ".jsonl"),
-			mod:  info.ModTime(),
+			name:    sessionName,
+			mod:     info.ModTime(),
+			summary: summary,
 		})
 	}
 	if len(rows) == 0 {
 		fmt.Fprintln(w, "No sessions found.")
 		return nil
 	}
-	fmt.Fprintf(w, "%-40s %s\n", "NAME", "MODIFIED")
+	fmt.Fprintf(w, "%-40s %-16s %s\n", "NAME", "MODIFIED", "PREVIEW")
 	sort.Slice(rows, func(i, j int) bool { return rows[i].mod.After(rows[j].mod) })
 	for _, row := range rows {
-		fmt.Fprintf(w, "%-40s %s\n", row.name, row.mod.Format("2006-01-02 15:04"))
+		preview := row.summary
+		if len(preview) > 60 {
+			preview = preview[:57] + "..."
+		}
+		fmt.Fprintf(w, "%-40s %-16s %s\n", row.name, row.mod.Format("2006-01-02 15:04"), preview)
 	}
 	return nil
 }

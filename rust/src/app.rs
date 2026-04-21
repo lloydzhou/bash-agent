@@ -64,7 +64,6 @@ struct Runtime {
     api_url: String,
     paths: Paths,
     conv: Store,
-    tmp_dir: PathBuf,
     tools_json: Vec<Value>,
     http: StreamClient,
     interrupted: Arc<AtomicBool>,
@@ -145,41 +144,19 @@ enum DisplayEvent {
 
 impl Runtime {
     fn new(mut cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<Self> {
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "rustagent.{}",
-            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-        ));
-        fs::create_dir_all(&tmp_dir)?;
-
-        let paths = if cfg.session_mode {
-            let mut sid = cfg.session_id.clone();
-            if sid.is_empty() && cfg.continue_session {
-                sid = session::continue_session(&home, &cwd).unwrap_or_default();
-            }
-            if sid.is_empty() {
-                sid = chrono_like_now();
-            }
-            cfg.session_id = sid.clone();
-            let p = session::paths_for(&home, &cwd, &sid);
-            session::ensure_dir(&p.base_dir)?;
-            for f in [&p.conversation, &p.events, &p.summary, &p.todo, &p.plan] {
-                touch(f)?;
-            }
-            p
-        } else {
-            let p = Paths {
-                base_dir: tmp_dir.clone(),
-                conversation: tmp_dir.join("conv.jsonl"),
-                events: tmp_dir.join("events.jsonl"),
-                summary: tmp_dir.join("summary.txt"),
-                todo: tmp_dir.join("todo.md"),
-                plan: tmp_dir.join("plan.md"),
-            };
-            for f in [&p.conversation, &p.events, &p.summary, &p.todo, &p.plan] {
-                touch(f)?;
-            }
-            p
-        };
+        let mut sid = cfg.session_id.clone();
+        if sid.is_empty() && cfg.continue_session {
+            sid = session::continue_session(&home, &cwd).unwrap_or_default();
+        }
+        if sid.is_empty() {
+            sid = chrono_like_now();
+        }
+        cfg.session_id = sid.clone();
+        let paths = session::paths_for(&home, &cwd, &sid);
+        session::ensure_dir(&paths.base_dir)?;
+        for f in [&paths.conversation, &paths.events, &paths.summary, &paths.todo, &paths.plan] {
+            touch(f)?;
+        }
 
         let conv = Store {
             path: paths.conversation.clone(),
@@ -197,7 +174,6 @@ impl Runtime {
             api_url,
             paths,
             conv,
-            tmp_dir,
             tools_json,
             http: StreamClient::new()?,
             interrupted,
@@ -247,6 +223,9 @@ impl Runtime {
             }
         }
         self.info("Goodbye!");
+        if !self.cfg.session_id.is_empty() {
+            eprintln!("\x1b[90mResume with: --session {}  or  --continue\x1b[0m", self.cfg.session_id);
+        }
         Ok(())
     }
 
@@ -854,13 +833,6 @@ impl Runtime {
     }
 }
 
-impl Drop for Runtime {
-    fn drop(&mut self) {
-        self.stop_esc_interrupt_listener();
-        let _ = fs::remove_dir_all(&self.tmp_dir);
-    }
-}
-
 fn normalize_display_text(s: &str, interactive: bool) -> String {
     let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
     if interactive {
@@ -894,6 +866,17 @@ fn touch(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn format_system_time(st: &SystemTime) -> String {
+    use time::macros::format_description;
+    let dt: time::OffsetDateTime = match (*st).try_into() {
+        Ok(dt) => dt,
+        Err(_) => return format!("{:?}", st),
+    };
+    static FMT: &[time::format_description::FormatItem<'_>] =
+        format_description!("[year]-[month]-[day] [hour]:[minute]");
+    dt.format(FMT).unwrap_or_else(|_| format!("{:?}", st))
+}
+
 fn chrono_like_now() -> String {
     // Format: YYYYMMDD-HHmmss  (matches Go's "20060102-150405" and Bash's date +%Y%m%d-%H%M%S)
     use time::format_description::FormatItem;
@@ -908,35 +891,55 @@ fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {
     let dir = home
         .join(".bash-agent/projects")
         .join(session::project_key(cwd));
-    let entries = fs::read_dir(dir);
+    let entries = fs::read_dir(&dir);
     if entries.is_err() {
         println!("No sessions found.");
         return Ok(());
     }
-    let mut rows: Vec<(String, SystemTime)> = Vec::new();
+    struct Row {
+        name: String,
+        ts: SystemTime,
+        summary: String,
+    }
+    let mut rows: Vec<Row> = Vec::new();
     for e in entries? {
         let e = e?;
         let name = e.file_name().to_string_lossy().to_string();
         if !name.ends_with(".jsonl") || name.ends_with(".events.jsonl") {
             continue;
         }
-        rows.push((
-            name.trim_end_matches(".jsonl").to_string(),
-            e.metadata()?.modified().unwrap_or(UNIX_EPOCH),
-        ));
+        let session_name = name.trim_end_matches(".jsonl").to_string();
+        let summary_path = dir.join(format!("{}.summary.txt", session_name));
+        let mut summary = String::new();
+        if let Ok(data) = fs::read_to_string(&summary_path) {
+            for line in data.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    summary = trimmed.to_string();
+                    break;
+                }
+            }
+        }
+        rows.push(Row {
+            name: session_name,
+            ts: e.metadata()?.modified().unwrap_or(UNIX_EPOCH),
+            summary,
+        });
     }
     if rows.is_empty() {
         println!("No sessions found.");
         return Ok(());
     }
-    rows.sort_by(|a, b| b.1.cmp(&a.1));
-    println!("{:<40} MODIFIED", "NAME");
-    for (name, ts) in rows {
-        let secs = ts
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        println!("{:<40} {}", name, secs);
+    rows.sort_by(|a, b| b.ts.cmp(&a.ts));
+    println!("{:<40} {:<16} PREVIEW", "NAME", "MODIFIED");
+    for row in rows {
+        let mut preview = row.summary;
+        if preview.len() > 60 {
+            preview.truncate(57);
+            preview.push_str("...");
+        }
+        let formatted = format_system_time(&row.ts);
+        println!("{:<40} {:<16} {}", row.name, formatted, preview);
     }
     Ok(())
 }

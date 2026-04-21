@@ -35,7 +35,6 @@ PLAN_FILE=""
 # --- Internal Runtime State ---
 CONV_FILE=""
 TOOL_DEF_JSON=""
-AGENT_TMPDIR=""
 API_URL=""
 AWK_DIR=""
 INTERRUPT_REQUESTED=false
@@ -225,7 +224,7 @@ run_with_timeout() {
     shift
 
     local tmp_out pid rc elapsed=0 use_process_group=false
-    tmp_out=$(mktemp "${AGENT_TMPDIR}/tool.XXXXXX")
+    tmp_out=$(mktemp "${TMPDIR:-/tmp}/tool.XXXXXX")
 
     if command -v setsid >/dev/null 2>&1; then
         setsid "$@" >"$tmp_out" 2>&1 &
@@ -706,8 +705,6 @@ build_todo_event_json() {
 cleanup() {
     stop_esc_interrupt_listener
     clear_interrupt_state
-    # Only clean tmpdir, not session files
-    [[ -n "${AGENT_TMPDIR:-}" && -d "${AGENT_TMPDIR:-}" ]] && rm -rf "$AGENT_TMPDIR"
 }
 trap cleanup EXIT
 trap 'INTERRUPT_REQUESTED=true; [[ -n "${ESC_LISTENER_FLAG:-}" ]] && printf 1 > "$ESC_LISTENER_FLAG"' USR1
@@ -763,32 +760,27 @@ resolve_continue_session_id() {
 # --- Conversation Management (temp file, one JSON message per line) ---
 
 conv_init() {
-    if [[ -n "$SESSION_ID" ]]; then
-        local session_dir
-        session_dir="$(get_session_dir)"
-        mkdir -p "$session_dir"
+    if [[ -z "$SESSION_ID" ]]; then
+        SESSION_ID="$(date +%Y%m%d-%H%M%S)"
+    fi
+    local session_dir
+    session_dir="$(get_session_dir)"
+    mkdir -p "$session_dir"
 
-        CONV_FILE="${session_dir}/${SESSION_ID}.jsonl"
-        SESSION_EVENT_FILE="${session_dir}/${SESSION_ID}.events.jsonl"
-        CONTEXT_SUMMARY_FILE="${session_dir}/${SESSION_ID}.summary.txt"
-        TODO_FILE="${session_dir}/${SESSION_ID}.todo.md"
-        PLAN_FILE="${session_dir}/${SESSION_ID}.plan.md"
-        local new_session=false
-        [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
-        touch "$CONV_FILE"
-        touch "$SESSION_EVENT_FILE"
-        touch "$CONTEXT_SUMMARY_FILE"
-        touch "$TODO_FILE"
-        touch "$PLAN_FILE"
-        if [[ "$new_session" == true ]]; then
-            session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
-        fi
-    else
-        # Ephemeral: use tmpdir (cleaned on exit)
-        CONV_FILE=$(mktemp "${AGENT_TMPDIR}/conv.XXXXXX")
-        CONTEXT_SUMMARY_FILE=$(mktemp "${AGENT_TMPDIR}/summary.XXXXXX")
-        TODO_FILE=$(mktemp "${AGENT_TMPDIR}/todo.XXXXXX")
-        PLAN_FILE=$(mktemp "${AGENT_TMPDIR}/plan.XXXXXX")
+    CONV_FILE="${session_dir}/${SESSION_ID}.jsonl"
+    SESSION_EVENT_FILE="${session_dir}/${SESSION_ID}.events.jsonl"
+    CONTEXT_SUMMARY_FILE="${session_dir}/${SESSION_ID}.summary.txt"
+    TODO_FILE="${session_dir}/${SESSION_ID}.todo.md"
+    PLAN_FILE="${session_dir}/${SESSION_ID}.plan.md"
+    local new_session=false
+    [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
+    touch "$CONV_FILE"
+    touch "$SESSION_EVENT_FILE"
+    touch "$CONTEXT_SUMMARY_FILE"
+    touch "$TODO_FILE"
+    touch "$PLAN_FILE"
+    if [[ "$new_session" == true ]]; then
+        session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
 }
 
@@ -904,7 +896,7 @@ compact_context_window() {
     drop=$(( total_lines - keep_lines ))
     [[ $drop -gt 0 ]] || return 1
 
-    tmp_dropped=$(mktemp "${AGENT_TMPDIR}/dropped.XXXXXX")
+    tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
     dropped_messages=$(<"$tmp_dropped")
     current_summary=""
@@ -922,7 +914,7 @@ compact_context_window() {
     context_append_summary "$summary_response"
 
     if (( keep_lines < total_lines )); then
-        tmp=$(mktemp "${AGENT_TMPDIR}/conv_trim.XXXXXX")
+        tmp=$(mktemp "${TMPDIR:-/tmp}/conv_trim.XXXXXX")
         tail -n "$keep_lines" "$CONV_FILE" > "$tmp"
         mv "$tmp" "$CONV_FILE"
     fi
@@ -988,7 +980,7 @@ tool_edit() {
     local tmp diff_output added removed
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
-    tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
+    tmp=$(mktemp "${TMPDIR:-/tmp}/edit.XXXXXX")
     if ! printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
             "$(json_escape "$path")" "$(json_escape "$old_string")" "$(json_escape "$new_string")" \
          | awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk" > "$tmp" 2>&1; then
@@ -1018,7 +1010,7 @@ tool_bash() {
         return 1
     fi
 
-    script_file=$(mktemp "${AGENT_TMPDIR}/bash.XXXXXX.sh")
+    script_file=$(mktemp "${TMPDIR:-/tmp}/bash.XXXXXX.sh")
     printf '%s\n' "$cmd" > "$script_file"
     chmod 700 "$script_file" 2>/dev/null || true
     output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file")
@@ -1476,12 +1468,18 @@ list_sessions() {
         echo "No sessions found."
         return
     fi
-    printf "%-40s %s\n" "NAME" "MODIFIED"
+    printf "%-40s %-16s %s\n" "NAME" "MODIFIED" "PREVIEW"
     while IFS= read -r f; do
-        local name mod
+        local name mod preview summary_file
         name=$(basename "$f" .jsonl)
         mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$f" 2>/dev/null || stat -c "%y" "$f" 2>/dev/null | cut -d. -f1)
-        printf "%-40s %s\n" "$name" "$mod"
+        summary_file="${dir}/${name}.summary.txt"
+        preview=""
+        if [[ -s "$summary_file" ]]; then
+            preview=$(grep -m1 -v '^[[:space:]]*$' "$summary_file" 2>/dev/null || true)
+        fi
+        [[ ${#preview} -gt 60 ]] && preview="${preview:0:57}..."
+        printf "%-40s %-16s %s\n" "$name" "$mod" "$preview"
     done <<< "$files"
 }
 
@@ -1538,6 +1536,9 @@ interactive_mode() {
     done
     history -w "$history_file" 2>/dev/null || true
     printf '\033[36mGoodbye!\033[0m\n'
+    if [[ -n "${SESSION_ID:-}" ]]; then
+        printf '\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
+    fi
 }
 
 start_esc_interrupt_listener() {
@@ -1570,7 +1571,6 @@ stop_esc_interrupt_listener() {
 main() {
     parse_args "$@"
 
-    AGENT_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/agent.XXXXXX")
     find_awk_dir
     conv_init
     load_tool_defs
