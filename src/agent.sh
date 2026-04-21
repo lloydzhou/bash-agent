@@ -66,7 +66,6 @@ write_message() {
 
 _read_len() {
     local _rl_char _rl_str=""
-    # LC_ALL=C: force byte-level reads (bash 5 reads chars in UTF-8 locales)
     while IFS= LC_ALL=C read -r -d '' -n 1 _rl_char; do
         [[ "$_rl_char" == ":" ]] && break
         _rl_str+="$_rl_char"
@@ -77,30 +76,24 @@ _read_len() {
 
 read_message() {
     # REPLY_MESSAGE is a positional indexed array: [0]=type, [1]=field1, [2]=field2, ...
-    # LC_ALL=C: ensures read -n 1 reads bytes, matching byte-length wire protocol
+    # Uses dd for byte-exact field reads (locale-independent, works on all bash versions)
     REPLY_MESSAGE=()
     local nfields len field
 
     _read_len nfields || return 1
 
-    local i remaining chunk
+    local i
     for ((i = 0; i < nfields; i++)); do
         _read_len len || return 1
         field=""
         if (( len > 0 )); then
-            remaining=$len
-            while (( remaining > 0 )); do
-                IFS= LC_ALL=C read -r -d '' -n 1 chunk || return 1
-                field+="$chunk"
-                remaining=$(( remaining - 1 ))
-            done
+            field=$(dd bs=1 count="$len" 2>/dev/null) || return 1
         fi
         REPLY_MESSAGE+=("$field")
     done
 
     # Consume optional trailing newline (AWK emit functions append \n)
-    local _nl
-    LC_ALL=C IFS= read -r -d '' -n 1 _nl -t 0.01 2>/dev/null || true
+    dd bs=1 count=1 2>/dev/null | LC_ALL=C read -r -d '' -n 1 -t 0.01 _nl 2>/dev/null || true
 
     return 0
 }
