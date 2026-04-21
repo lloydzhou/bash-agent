@@ -57,48 +57,40 @@ awk_run() {
 
 write_message() {
     # Args: field0 field1 field2 ...
-    # Wire format: nfields:len0:val0:len1:val1:...
-    local nfields=$#
-    printf '%s:' "$nfields"
-    local field byte_len
+    # Wire format (RESP-like, CRLF): *N\r\n$len0\r\ndata0\r\n$len1\r\ndata1\r\n...
+    local nfields=$# field byte_len
+    printf '*%s\r\n' "$nfields"
     for field in "$@"; do
         byte_len=$(LC_ALL=C printf '%s' "$field" | wc -c)
         byte_len=${byte_len//[[:space:]]/}
-        printf '%s:%s' "$byte_len" "$field"
+        printf '$%s\r\n%s\r\n' "$byte_len" "$field"
     done
-}
-
-_read_len() {
-    local _rl_char _rl_str=""
-    while IFS= LC_ALL=C read -r -n 1 _rl_char; do
-        [[ "$_rl_char" == ":" ]] && break
-        _rl_str+="$_rl_char"
-    done
-    [[ -n "$_rl_str" ]] || return 1
-    printf -v "$1" '%s' "$((_rl_str))"
 }
 
 read_message() {
-    # REPLY_MESSAGE is a positional indexed array: [0]=type, [1]=field1, [2]=field2, ...
-    # Read length prefixes under LC_ALL=C so read -n uses byte semantics on ASCII headers.
+    # Reads RESP-like CRLF format: *N\r\n$len0\r\ndata0\r\n...
     REPLY_MESSAGE=()
-    local nfields len field
+    local nfields i _hdr _len _field
 
-    _read_len nfields || return 1
+    IFS= LC_ALL=C read -r _hdr || [[ -n "$_hdr" ]]
+    _hdr="${_hdr%$'\r'}"
+    [[ -n "$_hdr" && "$_hdr" == \** ]] || return 1
+    nfields="${_hdr:1}"
 
-    local i
     for ((i = 0; i < nfields; i++)); do
-        _read_len len || return 1
-        field=""
-        if (( len > 0 )); then
-            field=$(dd bs=1 count="$len" 2>/dev/null) || return 1
+        IFS= LC_ALL=C read -r _hdr || [[ -n "$_hdr" ]]
+        _hdr="${_hdr%$'\r'}"
+        [[ -n "$_hdr" && "$_hdr" == \$* ]] || return 1
+        _len="${_hdr:1}"
+        _field=""
+        if (( _len > 0 )); then
+            _field=$(dd bs=1 count="$((_len + 2))" 2>/dev/null)
+            _field="${_field%$'\r'}"
+        else
+            IFS= LC_ALL=C read -r -n 2 _crlf 2>/dev/null || true
         fi
-        REPLY_MESSAGE+=("$field")
+        REPLY_MESSAGE+=("$_field")
     done
-
-    # Consume optional trailing newline (AWK emit functions append \n)
-    IFS= LC_ALL=C read -r -n 1 -t 0.01 _nl 2>/dev/null || true
-
     return 0
 }
 
@@ -669,8 +661,6 @@ build_tool_result_json_object() {
         "$result"
 }
 
-
-
 build_tool_calls_json() {
     local calls="$1"
     local tool_json="[" first=true
@@ -723,12 +713,11 @@ trap cleanup EXIT
 trap 'INTERRUPT_REQUESTED=true; [[ -n "${ESC_LISTENER_FLAG:-}" ]] && printf 1 > "$ESC_LISTENER_FLAG"' USR1
 
 find_awk_dir() {
-    # If already set via env, use it
     if [[ -n "${AWK_DIR:-}" ]]; then
         [[ -d "$AWK_DIR" ]] && return
         die "AWK_DIR not found: $AWK_DIR"
     fi
-    # Try same directory as agent.sh
+    # Fallback: awk/ alongside agent.sh
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [[ -d "$script_dir/awk" ]]; then
@@ -1261,7 +1250,6 @@ agent_loop_stream() {
             [[ "$VERBOSE" == true ]] && printf '[debug] type=<%s> nfields=%d\n' "${REPLY_MESSAGE[0]}" "${#REPLY_MESSAGE[@]}" >&2
             # Forward to display
             write_message "${REPLY_MESSAGE[@]}"
-            printf '\n'
 
             case "${REPLY_MESSAGE[0]}" in
                 RETRY)
@@ -1297,7 +1285,6 @@ agent_loop_stream() {
 
                     if [[ "$cur_tool_name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
                         write_message "TODO_UPDATE" "$(<"$TODO_FILE")"
-                        printf '\n'
                     fi
                     local result_for_conv="$output"
                     if [[ "$cur_tool_name" == "Edit" ]]; then
@@ -1316,7 +1303,6 @@ agent_loop_stream() {
                         if [[ "${REPLY_MESSAGE[i]}" == "summary" ]]; then _tr_args+=("summary" "${REPLY_MESSAGE[i+1]}"); fi
                     done
                     write_message "${_tr_args[@]}"
-                    printf '\n'
                     ;;
                 STOP)
                     stop="${REPLY_MESSAGE[1]}"
@@ -1332,7 +1318,7 @@ agent_loop_stream() {
         # Fatal stop reasons exit immediately
         case "$stop" in
             error|max_tokens|length)
-                [[ "$stop" != "error" ]] && { write_message "ERROR" "Response truncated (max_tokens reached)"; printf '\n'; }
+                [[ "$stop" != "error" ]] && { write_message "ERROR" "Response truncated (max_tokens reached)"; }
                 return 1
                 ;;
         esac
@@ -1348,14 +1334,12 @@ agent_loop_stream() {
             [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
         else
             write_message "STOP" "interrupted"
-            printf '\n'
             break
         fi
     done
 
     if (( turn >= MAX_TURNS )); then
         write_message "ERROR" "Max turns ($MAX_TURNS) reached"
-        printf '\n'
     fi
 }
 

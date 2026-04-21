@@ -47,32 +47,38 @@ protocol_awk() {
 }
 
 # ===== Message Decoder (for AWK parser tests) =====
-# Decodes binary-safe N:len:val0:len:val1:... positional format back to readable TYPE:val format.
-_decode_read_len() {
-    local _rl_char _rl_str=""
-    while IFS= LC_ALL=C read -r -n 1 _rl_char; do
-        [[ "$_rl_char" == ":" ]] && break
-        _rl_str+="$_rl_char"
-    done
-    [[ -n "$_rl_str" ]] || return 1
-    printf -v "$1" '%s' "$((_rl_str))"
+# Decodes RESP-like CRLF format: *N\r\n$len0\r\ndata0\r\n...
+_decode_read_header() {
+    local _line
+    IFS= LC_ALL=C read -r _line || return 1
+    _line="${_line%$'\r'}"
+    printf -v "$1" '%s' "$_line"
+}
+
+_decode_read_field() {
+    _decode_read_header _hdr || return 1
+    [[ "$_hdr" == \$* ]] || return 1
+    local _len="${_hdr:1}"
+    DECODE_FIELD=""
+    if (( _len > 0 )); then
+        DECODE_FIELD=$(dd bs=1 count="$((_len + 2))" 2>/dev/null)
+        DECODE_FIELD="${DECODE_FIELD%$'\r'}"
+    else
+        IFS= LC_ALL=C read -r -n 2 _crlf 2>/dev/null || true
+    fi
+    return 0
 }
 
 _decode_read_message() {
     DECODE_MSG=()
-    local nfields len field
-    _decode_read_len nfields || return 1
-    local i
+    local _hdr nfields i
+    _decode_read_header _hdr || return 1
+    [[ "$_hdr" == \** ]] || return 1
+    nfields="${_hdr:1}"
     for ((i = 0; i < nfields; i++)); do
-        _decode_read_len len || return 1
-        field=""
-        if (( len > 0 )); then
-            field=$(dd bs=1 count="$len" 2>/dev/null) || return 1
-        fi
-        DECODE_MSG+=("$field")
+        _decode_read_field || return 1
+        DECODE_MSG+=("$DECODE_FIELD")
     done
-    # consume optional trailing newline
-    IFS= LC_ALL=C read -r -n 1 -t 0.01 _nl 2>/dev/null || true
     return 0
 }
 

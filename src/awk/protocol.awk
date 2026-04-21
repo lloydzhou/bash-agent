@@ -1,12 +1,10 @@
 # protocol.awk — Shared protocol formatting helpers for SSE parsers.
-# Wire format: <total_fields>:<len0>:<val0>:<len1>:<val1>:...
+# Wire format (RESP-like, CRLF):
+#   *N\r\n          — array marker + field count + CRLF
+#   $len\r\n        — per-field: $ + byte length + CRLF
+#   data_bytes\r\n  — exact len bytes (may contain internal \n) + CRLF
 # Binary-safe: no escaping needed. Length-prefix for every field.
-# Each line is one message. First field is always the type.
-
-# _wm_cat(out, field) — append "<len>:<field>" to out
-function _wm_cat(out, field) {
-    return out length(field) ":" field
-}
+# First field is always the event type.
 
 # emit1(type) — start a message with type as first field
 function emit1(type) {
@@ -19,13 +17,11 @@ function emit(field) {
     _EM_V[++_EM_N] = field
 }
 
-# emit_flush() — write the message to stdout
-function emit_flush(    out, i) {
-    out = _EM_N ":"
-    for (i = 1; i <= _EM_N; i++) {
-        out = _wm_cat(out, _EM_V[i])
-    }
-    printf "%s\n", out
+# emit_flush() — write the message to stdout in RESP-like format
+function emit_flush(    i) {
+    printf "*%d\r\n", _EM_N
+    for (i = 1; i <= _EM_N; i++)
+        printf "$%d\r\n%s\r\n", length(_EM_V[i]), _EM_V[i]
     fflush()
 }
 
