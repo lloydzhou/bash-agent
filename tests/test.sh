@@ -51,23 +51,17 @@ _decode_read_message() {
     DECODE_MSG=()
     local nfields len field
     _decode_read_len nfields || return 1
-    local i remaining chunk
+    local i
     for ((i = 0; i < nfields; i++)); do
         _decode_read_len len || return 1
         field=""
         if (( len > 0 )); then
-            remaining=$len
-            while (( remaining > 0 )); do
-                IFS= read -r -d '' -n 1 chunk || return 1
-                field+="$chunk"
-                remaining=$(( remaining - 1 ))
-            done
+            field=$(dd bs=1 count="$len" 2>/dev/null) || return 1
         fi
         DECODE_MSG+=("$field")
     done
     # consume optional trailing newline
-    local _nl
-    IFS= read -r -d '' -n 1 _nl -t 0.01 2>/dev/null || true
+    dd bs=1 count=1 2>/dev/null | IFS= read -r -d '' -n 1 -t 0.01 _nl 2>/dev/null || true
     return 0
 }
 
