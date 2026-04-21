@@ -767,15 +767,11 @@ impl Runtime {
     }
 
     fn headers(&self) -> Vec<(String, String)> {
-        let mut h = vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("User-Agent".to_string(), "claude-cli/1.0.33 (max, cli)".to_string()),
-        ];
+        let mut h = vec![("Content-Type".to_string(), "application/json".to_string())];
         match self.cfg.provider.as_str() {
             "claude" => {
                 h.push(("x-api-key".to_string(), self.cfg.api_key.clone()));
                 h.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
-                h.push(("x-app".to_string(), "cli".to_string()));
             }
             "openai" => {
                 h.push((
