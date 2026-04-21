@@ -179,11 +179,8 @@ function hex_to_int(hex,    i, c, d, value) {
 }
 
 function utf8_from_codepoint(cp,    b1, b2, b3, b4, out) {
-    # gawk is Unicode-aware; manual UTF-8 byte assembly would get
-    # re-encoded and produce mojibake (e.g. 中文 -> ä¸­æ).
-    if ("version" in PROCINFO) {
-        return sprintf("%c", cp)
-    }
+    # Protocol/JSON decoding runs under LC_ALL=C so sprintf("%c") emits raw bytes.
+    # Build UTF-8 bytes manually to avoid locale-dependent codepoint handling.
     out = ""
     if (cp <= 127) {
         out = sprintf("%c", cp)
