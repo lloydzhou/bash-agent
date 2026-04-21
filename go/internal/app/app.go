@@ -913,8 +913,11 @@ func (rt *runtime) headers() map[string]string {
 	case "claude":
 		headers["x-api-key"] = rt.cfg.APIKey
 		headers["anthropic-version"] = "2023-06-01"
+		headers["x-app"] = "cli"
+		headers["User-Agent"] = "claude-cli/1.0.33 (max, cli)"
 	case "openai":
 		headers["Authorization"] = "Bearer " + rt.cfg.APIKey
+		headers["User-Agent"] = "claude-cli/1.0.33 (max, cli)"
 	}
 	return headers
 }

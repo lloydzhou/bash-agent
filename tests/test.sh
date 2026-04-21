@@ -45,10 +45,12 @@ info()  { printf '\033[36m→ %s\033[0m\n' "$1"; }
 # ===== Message Decoder (for AWK parser tests) =====
 # Decodes binary-safe N:len:val0:len:val1:... positional format back to readable TYPE:val format.
 _decode_read_len() {
-    local _rl_char _rl_str=""
-    while IFS= read -r -d '' -n 1 _rl_char; do
-        [[ "$_rl_char" == ":" ]] && break
-        _rl_str+="$_rl_char"
+    local _rl_byte _rl_str=""
+    while true; do
+        _rl_byte=$(dd bs=1 count=1 2>/dev/null) || return 1
+        [[ -n "$_rl_byte" ]] || return 1
+        [[ "$_rl_byte" == ":" ]] && break
+        _rl_str+="$_rl_byte"
     done
     [[ -n "$_rl_str" ]] || return 1
     printf -v "$1" '%s' "$((_rl_str))"
@@ -68,7 +70,7 @@ _decode_read_message() {
         DECODE_MSG+=("$field")
     done
     # consume optional trailing newline
-    dd bs=1 count=1 2>/dev/null | IFS= read -r -d '' -n 1 -t 0.01 _nl 2>/dev/null || true
+    dd bs=1 count=1 2>/dev/null || true
     return 0
 }
 

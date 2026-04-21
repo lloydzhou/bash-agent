@@ -65,10 +65,12 @@ write_message() {
 }
 
 _read_len() {
-    local _rl_char _rl_str=""
-    while IFS= LC_ALL=C read -r -d '' -n 1 _rl_char; do
-        [[ "$_rl_char" == ":" ]] && break
-        _rl_str+="$_rl_char"
+    local _rl_byte _rl_str=""
+    while true; do
+        _rl_byte=$(dd bs=1 count=1 2>/dev/null) || return 1
+        [[ -n "$_rl_byte" ]] || return 1
+        [[ "$_rl_byte" == ":" ]] && break
+        _rl_str+="$_rl_byte"
     done
     [[ -n "$_rl_str" ]] || return 1
     printf -v "$1" '%s' "$((_rl_str))"
@@ -93,7 +95,7 @@ read_message() {
     done
 
     # Consume optional trailing newline (AWK emit functions append \n)
-    dd bs=1 count=1 2>/dev/null | LC_ALL=C read -r -d '' -n 1 -t 0.01 _nl 2>/dev/null || true
+    dd bs=1 count=1 2>/dev/null || true
 
     return 0
 }
