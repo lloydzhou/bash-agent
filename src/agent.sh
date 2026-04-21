@@ -51,6 +51,10 @@ PREV_WAS_THINKING=false
 : "${OPENAI_BASE_URL:=}"
 
 # --- Utility Functions ---
+awk_run() {
+    LC_ALL=C LANG=C awk "$@"
+}
+
 write_message() {
     # Args: field0 field1 field2 ...
     # Wire format: nfields:len0:val0:len1:val1:...
@@ -305,7 +309,7 @@ parse_size_bytes() {
 
 json_escape() {
     local input="${1:-}"
-    printf '%s' "$input" | awk \
+    printf '%s' "$input" | awk_run \
         -v json_mode="escape_string" \
         -f "$AWK_DIR/json.awk" \
         -f "$AWK_DIR/json_cli.awk"
@@ -338,7 +342,7 @@ tool_file_summary() {
     [[ -n "$path" && -f "$path" ]] || { printf '%s(%s)' "$kind" "$path"; return 0; }
     bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
     bytes=${bytes//[[:space:]]/}
-    lines=$(awk 'END { print NR }' "$path" 2>/dev/null || echo 0)
+    lines=$(awk_run 'END { print NR }' "$path" 2>/dev/null || echo 0)
     lines=${lines//[[:space:]]/}
     printf '%s(%s) [%s lines, %s bytes]' "$kind" "$path" "$lines" "$bytes"
 }
@@ -565,7 +569,7 @@ build_skill_index_section() {
                 continue
             fi
             seen+="$skill_name"$'\n'
-            summary=$(awk -f "$AWK_DIR/skill_summary.awk" "$skill_file")
+            summary=$(awk_run -f "$AWK_DIR/skill_summary.awk" "$skill_file")
             output+="- ${skill_name}"
             [[ -n "$summary" ]] && output+=": ${summary}"
             output+=$'\n'
@@ -737,7 +741,7 @@ get_session_dir() {
     local cwd="${PWD:-$(pwd)}"
     local project_key
     cwd="$(cd "$cwd" && pwd -P)"
-    project_key="$(printf '%s' "$cwd" | awk '
+    project_key="$(printf '%s' "$cwd" | awk_run '
     {
         sub(/^\/+/, "", $0)
         gsub(/\//, "-", $0)
@@ -858,7 +862,7 @@ EOF
 
 compact_keep_lines() {
     local target_keep_bytes="$1"
-    awk -v target_bytes="$target_keep_bytes" '
+    awk_run -v target_bytes="$target_keep_bytes" '
         {
             sizes[NR] = length($0) + 1
             turn_start[NR] = ($0 ~ /^\{"role":"user","content":"/)
@@ -998,7 +1002,7 @@ tool_edit() {
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
     if ! printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
             "$(json_escape "$path")" "$(json_escape "$old_string")" "$(json_escape "$new_string")" \
-         | LC_ALL=C awk -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk" > "$tmp" 2>&1; then
+         | awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk" > "$tmp" 2>&1; then
         cat "$tmp"; rm -f "$tmp"; return 1
     fi
     (( $(wc -c < "$tmp") > 0 )) || { echo "Error: edit produced empty result"; rm -f "$tmp"; return 1; }
@@ -1124,7 +1128,7 @@ build_claude_request() {
 build_openai_request() {
     local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-0}"
     local msgs
-    msgs=$(printf '%s' "$messages" | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
+    msgs=$(printf '%s' "$messages" | awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
     if [[ -z "$system_prompt" ]]; then
         system_prompt=$(build_system_prompt)
     fi
@@ -1144,7 +1148,7 @@ build_openai_request() {
 
     if [[ -n "$tools" ]]; then
         local openai_tools
-        openai_tools=$(printf '%s' "$tools" | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
+        openai_tools=$(printf '%s' "$tools" | awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
         body+=",\"tools\":${openai_tools}"
     fi
 
@@ -1163,11 +1167,9 @@ build_request() {
 # --- SSE Parsers (call awk/*.awk) ---
 
 parse_sse() {
-    # LC_ALL=C ensures AWK length() returns byte counts (needed for _wm_cat in protocol.awk).
-    # Safe for SSE/JSON parsing: all delimiters are ASCII, UTF-8 continuation bytes never match ASCII.
     case "$PROVIDER" in
-        claude) LC_ALL=C awk -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" ;;
-        openai) LC_ALL=C awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" ;;
+        claude) awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" ;;
+        openai) awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" ;;
     esac
 }
 
@@ -1180,7 +1182,7 @@ _stream_curl() {
 
     $VERBOSE && printf '\033[90m[verbose] POST %s (%dKB body)\033[0m\n' "$API_URL" "$((${#body}/1024))" >&2
 
-    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk -f "$AWK_DIR/http_stream.awk"
+    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"
 }
 
 call_api() {

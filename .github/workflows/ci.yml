@@ -22,7 +22,7 @@ jobs:
           mkdir -p .ci-bin
           cat > .ci-bin/awk <<'EOF'
           #!/usr/bin/env bash
-          exec gawk "$@"
+          exec env LC_ALL=C LANG=C gawk "$@"
           EOF
           chmod +x .ci-bin/awk
           echo "$PWD/.ci-bin" >> "$GITHUB_PATH"

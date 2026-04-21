@@ -108,17 +108,15 @@ for func_name, json_var, specific_var, extra_args in functions:
         replacement = (
             "json_escape() {\n"
             "    local input=\"${1:-}\"\n"
-            "    printf '%s' \"$input\" | awk -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
+            "    printf '%s' \"$input\" | awk_run -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
             "}\n"
         )
     elif func_name == "parse_sse":
         replacement = (
             "parse_sse() {\n"
-            "    # LC_ALL=C ensures AWK length() returns byte counts (needed for _wm_cat in protocol.awk).\n"
-            "    # Safe for SSE/JSON parsing: all delimiters are ASCII, UTF-8 continuation bytes never match ASCII.\n"
             "    case \"$PROVIDER\" in\n"
-            "        claude) LC_ALL=C awk -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}\" ;;\n"
-            "        openai) LC_ALL=C awk \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_OPENAI_SSE}\" ;;\n"
+            "        claude) awk_run -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}\" ;;\n"
+            "        openai) awk_run \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_OPENAI_SSE}\" ;;\n"
             "    esac\n"
             "}\n"
         )
@@ -129,9 +127,9 @@ for func_name, json_var, specific_var, extra_args in functions:
             "}\n"
         )
     else:
-        # Build: awk [-v ...] "${_AWK_JSON}
+        # Build: awk_run [-v ...] "${_AWK_JSON}
         # ${_AWK_XXX}"
-        awk_call = '    awk '
+        awk_call = '    awk_run '
         if extra_args:
             awk_call += extra_args + ' '
         # Double-quoted string with embedded newline concatenates two variables
@@ -168,12 +166,12 @@ if idx != -1:
 
 content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
-content = content.replace('awk -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk "${_AWK_SKILL_SUMMARY}" "$skill_file"')
-content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk "${_AWK_HTTP_STREAM}"')
-content = content.replace('awk -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'awk -v max_bytes="$FILE_WRITE_MAX_BYTES" "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
+content = content.replace('awk_run -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk_run "${_AWK_SKILL_SUMMARY}" "$skill_file"')
+content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk_run "${_AWK_HTTP_STREAM}"')
+content = content.replace('awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
 # --- Inline convert_messages.awk and convert_tools.awk references in build_openai_request ---
-content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_MESSAGES}"')
-content = content.replace('awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"', 'awk "${_AWK_JSON}\n${_AWK_CONVERT_TOOLS}"')
+content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_CONVERT_MESSAGES}"')
+content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_CONVERT_TOOLS}"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)
