@@ -878,13 +878,18 @@ fn format_system_time(st: &SystemTime) -> String {
 }
 
 fn chrono_like_now() -> String {
-    // Format: YYYYMMDD-HHmmss  (matches Go's "20060102-150405" and Bash's date +%Y%m%d-%H%M%S)
+    // Format: YYYYMMDD-HHmmss-XXXX (random 4-hex suffix to avoid collisions in fast tests)
     use time::format_description::FormatItem;
     use time::macros::format_description;
     static FMT: &[FormatItem<'_>] = format_description!("[year][month][day]-[hour][minute][second]");
-    time::OffsetDateTime::now_utc()
+    let base = time::OffsetDateTime::now_utc()
         .format(FMT)
-        .unwrap_or_else(|_| format!("{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)))
+        .unwrap_or_else(|_| format!("{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)));
+    let rand_suffix = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u16)
+        .unwrap_or(0);
+    format!("{}-{:04x}", base, rand_suffix)
 }
 
 fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {

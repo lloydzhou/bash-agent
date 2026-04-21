@@ -165,7 +165,8 @@ func (rt *runtime) initState() error {
 		}
 	}
 	if sessionID == "" {
-		sessionID = time.Now().Format("20060102-150405")
+		now := time.Now()
+		sessionID = fmt.Sprintf("%s-%04x", now.Format("20060102-150405"), now.Nanosecond()%0xffff)
 	}
 	rt.cfg.SessionID = sessionID
 	rt.paths = session.PathsFor(rt.home, rt.cwd, sessionID)

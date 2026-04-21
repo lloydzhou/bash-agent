@@ -12,6 +12,12 @@ export LANG="${LANG:-en_US.UTF-8}"
 export LC_ALL="${LC_ALL:-en_US.UTF-8}"
 export PYTHONUTF8="${PYTHONUTF8:-1}"
 
+# Redirect session data to a temp dir so tests don't pollute $HOME
+_TEST_HOME=$(mktemp -d "${TMPDIR:-/tmp}/bash-agent-test.XXXXXX")
+export BASH_AGENT_HOME="$_TEST_HOME"
+cleanup_test_home() { rm -rf "$_TEST_HOME"; }
+trap cleanup_test_home EXIT
+
 START_SERVER=true
 PORT=9888
 for arg in "$@"; do
@@ -1407,7 +1413,7 @@ test_agent_todo_state() {
     todo_file="$project_dir/demo.todo.md"
     event_file="$project_dir/demo.events.jsonl"
 
-    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"text"' && \
        echo "$output" | grep -q '"type":"todo_update"' && \
        [[ -f "$todo_file" ]] && \
@@ -1424,7 +1430,7 @@ test_agent_todo_state() {
     fi
 
     human_home=$(mktemp -d)
-    output=$(cd "$ROOT_DIR" && HOME="$human_home" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$human_home" HOME="$human_home" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
     rm -rf "$home_dir" "$human_home"
     if echo "$output" | grep -Fq "[tool] TodoWrite(0/3)" && echo "$output" | grep -q "Todo initialized."; then
         green "Agent session todo state"; ((PASS++)) || true

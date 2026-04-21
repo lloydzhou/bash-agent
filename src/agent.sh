@@ -93,6 +93,10 @@ read_message() {
     return 0
 }
 
+new_session_id() {
+    printf '%s-%04x' "$(date +%Y%m%d-%H%M%S)" "$(( RANDOM << 1 | (RANDOM & 1) ))"
+}
+
 deny_bash_command_reason() {
     local cmd="$1"
     local device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
@@ -725,7 +729,7 @@ find_awk_dir() {
 }
 get_session_dir() {
     local cwd="${PWD:-$(pwd)}"
-    local project_key
+    local project_key base="${BASH_AGENT_HOME:-${HOME}}"
     cwd="$(cd "$cwd" && pwd -P)"
     project_key="$(printf '%s' "$cwd" | awk_run '
     {
@@ -737,7 +741,7 @@ get_session_dir() {
         sub(/-+$/, "", $0)
         print "-" $0
     }')"
-    printf '%s/.bash-agent/projects/%s' "${HOME}" "$project_key"
+    printf '%s/.bash-agent/projects/%s' "$base" "$project_key"
 }
 
 get_latest_session_file() {
@@ -753,7 +757,7 @@ resolve_continue_session_id() {
     if [[ -n "$latest_file" ]]; then
         SESSION_ID="$(basename "$latest_file" .jsonl)"
     else
-        SESSION_ID="$(date +%Y%m%d-%H%M%S)"
+        SESSION_ID="$(new_session_id)"
     fi
 }
 
@@ -761,7 +765,7 @@ resolve_continue_session_id() {
 
 conv_init() {
     if [[ -z "$SESSION_ID" ]]; then
-        SESSION_ID="$(date +%Y%m%d-%H%M%S)"
+        SESSION_ID="$(new_session_id)"
     fi
     local session_dir
     session_dir="$(get_session_dir)"
@@ -1390,6 +1394,7 @@ Environment:
   OPENAI_API_KEY          API key for OpenAI
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
+  BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
@@ -1425,7 +1430,7 @@ parse_args() {
                 if [[ $# -gt 1 && ! "$2" =~ ^- ]]; then
                     SESSION_ID="$2"; shift 2
                 else
-                    SESSION_ID="$(date +%Y%m%d-%H%M%S)"
+                    SESSION_ID="$(new_session_id)"
                     shift
                 fi
                 ;;
@@ -1516,7 +1521,7 @@ setup_api_url() {
 }
 
 interactive_mode() {
-    local history_file="${HOME:-$PWD}/.bash-agent/history"
+    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history"
 
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
     touch "$history_file" 2>/dev/null || true
