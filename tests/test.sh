@@ -1032,7 +1032,7 @@ event: message_stop
 data: {"type":"message_stop"}
 SSE
 )
-    if echo "$output" | grep -Fq $'TOOL_CALL:TodoWrite\ttoolu_todo\t{"todos":[{"content":"inspect repository","status":"completed"},{"content":"run tests","status":"pending"}]}\tchecklist\t- [x] inspect repository' && echo "$output" | grep -q "summary\t1/2" && echo "$output" | grep -q "STOP:tool_use"; then
+    if echo "$output" | grep -Fq $'TOOL_CALL:TodoWrite\ttoolu_todo\t{"todos":[{"content":"inspect repository","status":"completed"},{"content":"run tests","status":"pending"}]}\tchecklist\t- [x] inspect repository' && echo "$output" | grep -Fq $'summary\t1/2' && echo "$output" | grep -q "STOP:tool_use"; then
         green "Claude TodoWrite tool_use"; ((PASS++)) || true
     else
         red "Claude TodoWrite tool_use"; echo "  Output: $output"; ((FAIL++)) || true
