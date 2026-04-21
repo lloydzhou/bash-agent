@@ -13,7 +13,7 @@
 它不是一个完整平台，而是一个尽量小、边界清晰、可以真正执行工作的 agent core。目标是：
 
 - 运行时依赖尽量少
-- 协议边界明确
+- 协议边界明确（awk → bash 使用 RESP-like 二进制安全协议）
 - 状态可预测
 - 在终端里可直接使用
 - 也可以作为上层客户端后面的执行内核
@@ -31,7 +31,7 @@
 `bash-agent` 主线反过来做：
 
 - `bash` 负责流程编排、文件、进程、HTTP 请求、session 生命周期
-- `awk` 负责 JSON/SSE 解析、文本抽取、规范化和轻量协议转换
+- `awk` 负责 JSON/SSE 解析、文本抽取、规范化和 RESP-like 协议输出
 
 `goagent` 则保留同样的行为模型，但把：
 
@@ -361,14 +361,14 @@ skills 主要从这些位置加载：
 
 ## 事件协议
 
-内部会先把 SSE 归一化成一层轻量 line protocol：
+内部 SSE 解析结果通过 RESP-like 协议传递（`awk → bash`），使用 `CRLF` 行结尾、`length-prefix` 编码：
 
 ```text
-TEXT:Hello
-THINKING:Let me analyze this...
-TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tcommand\tpwd
-USAGE:25\t42\t8
-STOP:end_turn
+*2\r\n$4\r\nTEXT\r\n$5\r\nHello\r\n
+*2\r\n$8\r\nTHINKING\r\n$22\r\nLet me analyze this...\r\n
+*6\r\n$9\r\nTOOL_CALL\r\n$4\r\nBash\r\n$8\r\ncall_123\r\n$17\r\n{"command":"pwd"}\r\n$7\r\ncommand\r\n$3\r\npwd\r\n
+*4\r\n$5\r\nUSAGE\r\n$2\r\n25\r\n$2\r\n42\r\n$1\r\n8\r\n
+*2\r\n$4\r\nSTOP\r\n$8\r\nend_turn\r\n
 ```
 
 对外的 `stream-json` 会输出这些结构化事件：
@@ -471,7 +471,7 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 
 - compact 已按真实 context 大小处理，不再按消息条数
 - session 状态按项目隔离
-- tool 协议已经结构化，适合机器消费
+- tool 协议已经结构化，二进制安全（RESP-like length-prefix），适合机器消费
 - `TodoWrite` 负责维护 session 级 todo 状态
 - CI 会构建并上传 `agent.sh` / `goagent` / `rustagent` 产物（`dist/agent.sh` 会先跑测试）
 - Go 版可以编译运行，并保留当前主线的 agent loop / tool / session / compact 语义

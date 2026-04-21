@@ -31,7 +31,7 @@ Most agent runtimes grow by adding layers:
 The `bash-agent` line takes the opposite path:
 
 - `bash` handles orchestration, files, processes, HTTP calls, and session lifecycle
-- `awk` handles JSON/SSE parsing, text extraction, normalization, and small protocol transforms
+- `awk` handles JSON/SSE parsing, text extraction, normalization, and RESP-like protocol output
 
 The `goagent` line keeps the same behavior model, but rewrites:
 
@@ -55,7 +55,7 @@ in native Rust.
 The goal is not “few files at any cost”. The goal is:
 
 - minimal runtime dependencies
-- clear protocol boundaries
+- clear protocol boundaries (RESP-like wire format between awk and bash)
 - predictable state
 - enough functionality to do real work
 
@@ -367,14 +367,14 @@ These are injected into the stable prompt prefix.
 
 ## Event Protocol
 
-Internally, SSE output is normalized into a lightweight line protocol:
+Internally, SSE output is normalized into a RESP-like protocol (awk → bash), using CRLF line endings and length-prefix encoding:
 
 ```text
-TEXT:Hello
-THINKING:Let me analyze this...
-TOOL_CALL:Bash\tcall_123\t{"command":"pwd"}\tcommand\tpwd
-USAGE:25\t42\t8
-STOP:end_turn
+*2\r\n$4\r\nTEXT\r\n$5\r\nHello\r\n
+*2\r\n$8\r\nTHINKING\r\n$22\r\nLet me analyze this...\r\n
+*6\r\n$9\r\nTOOL_CALL\r\n$4\r\nBash\r\n$8\r\ncall_123\r\n$17\r\n{"command":"pwd"}\r\n$7\r\ncommand\r\n$3\r\npwd\r\n
+*4\r\n$5\r\nUSAGE\r\n$2\r\n25\r\n$2\r\n42\r\n$1\r\n8\r\n
+*2\r\n$4\r\nSTOP\r\n$8\r\nend_turn\r\n
 ```
 
 `stream-json` exposes machine-readable events such as:
@@ -479,7 +479,7 @@ Current status:
 
 - compact uses real context size, not message count
 - session state is project-scoped
-- tool protocol is structured and machine-readable
+- tool protocol is structured and binary-safe (RESP-like length-prefix), suitable for machine consumption
 - `TodoWrite` maintains session-scoped todo state
 - CI builds and uploads `agent.sh` / `goagent` / `rustagent` artifacts (with tests run before publishing `dist/agent.sh`)
 - the Go port builds successfully and preserves the main agent loop / tool / session / compact semantics

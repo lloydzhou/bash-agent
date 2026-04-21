@@ -9,7 +9,7 @@
 - 可在终端独立运行的 agent
 - 可被其他程序嵌入和编排的命令行内核
 - 运行时依赖尽量少
-- 协议和状态边界清楚
+- 协议和状态边界清楚（awk → bash 使用 RESP-like 二进制安全协议）
 
 当前核心方向是：
 
@@ -24,6 +24,7 @@
 
 - 保持单 agent、单进程主循环
 - 机器协议优先，human 输出只是薄包装
+- awk → bash 通信使用 RESP-like length-prefix 协议（CRLF 行结尾，二进制安全）
 - session 是一等公民
 - context budget 是硬约束
 - tool 边界必须可预测
@@ -51,7 +52,7 @@ src/awk/*
 ├─ JSON helper CLI entrypoints
 ├─ SSE parser
 ├─ 格式转换
-├─ 协议 flatten / 文本抽取
+├─ RESP-like 协议输出 / 文本抽取
 └─ tool 专用变换
 ```
 
@@ -291,8 +292,8 @@ skills 当前优先读取：
 消息转换时，assistant 的 `thinking` content block 会被跳过（OpenAI 格式不支持 thinking block）。
 
 SSE 流中：
-- Claude 的 `content_block_delta` + `type=thinking` → `THINKING:` 协议行
-- OpenAI 的 `reasoning_content` / `reasoning` delta → `THINKING:` 协议行
+- Claude 的 `content_block_delta` + `type=thinking` → `THINKING` 协议事件
+- OpenAI 的 `reasoning_content` / `reasoning` delta → `THINKING` 协议事件
 
 human 模式下 thinking 文本以灰色（`\033[90m`）显示，thinking→text 转换时自动插入换行。
 
@@ -300,27 +301,32 @@ human 模式下 thinking 文本以灰色（`\033[90m`）显示，thinking→text
 
 运行时内部和 `stream-json` 输出共用一套轻量事件边界。
 
-### 内部 line protocol
+### 内部 RESP-like 协议
 
-内部 SSE 解析结果会先转成单行协议，例如：
+`awk` 解析 SSE 后通过 RESP-like 协议传递给 `bash`，格式：
 
-- `TEXT:...`
-- `THINKING:...`
-- `TOOL_CALL:<tool>\t<id>\t<raw_input_json>\t<key>\t<value>...`
-- `USAGE:<input_tokens>\t<output_tokens>\t<cache_input_tokens>`
-- `STOP:...`
-- `ERROR:...`
+- `*N\r\n` — 数组标记 + 字段数 + CRLF
+- `$len\r\ndata\r\n` — 每个字段：`$` + 字节长度 + CRLF + 数据 + CRLF
+- 二进制安全：不需要转义，每个字段用 length-prefix 标定边界
+- 第一个字段总是事件类型
 
-规则：
+事件类型：
 
-- 文本类事件先编码成单行
-- 消费端再做反转义
+- `TEXT` — 文本内容（1 字段：文本）
+- `THINKING` — 思考内容（1 字段：文本）
+- `TOOL_CALL` — 工具调用（≥3 字段：name, id, raw_input_json, key/value pairs...）
+- `USAGE` — 用量统计（3 字段：input_tokens, output_tokens, cache_input_tokens）
+- `STOP` — 结束原因（1 字段：reason）
+- `ERROR` — 错误（1 字段：message）
+- `RETRY` — 重试（0 附加字段）
 
-当前已经统一的点：
+示例（TOOL_CALL）：
 
-- `TOOL_CALL` 保留原始 input JSON，同时由 awk 展平出 tool-specific args
-- `USAGE` 走固定顺序的 typed fields
-- `TEXT` 仍然走转义后的单行文本
+```text
+*6\r\n$9\r\nTOOL_CALL\r\n$4\r\nBash\r\n$8\r\ncall_123\r\n$17\r\n{"command":"pwd"}\r\n$7\r\ncommand\r\n$3\r\npwd\r\n
+```
+
+awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 端使用 `read_message()` 消费。
 
 ### `stream-json`
 
@@ -390,7 +396,7 @@ human 模式下 thinking 文本以灰色（`\033[90m`）显示，thinking→text
 - JSON 提取
 - Unicode 解码
 - SSE parser
-- `protocol.awk` 负责中间协议 flatten
+- `protocol.awk` 负责 RESP-like 协议输出（emit/emit_flush）
 - `todo_protocol.awk` 负责 `TodoWrite` 规范化
 - `Edit` 内容替换
 - `skill`/plan 这类文本抽取逻辑
