@@ -66,7 +66,7 @@ write_message() {
 
 _read_len() {
     local _rl_char _rl_str=""
-    while IFS= LC_ALL=C read -r -d '' -n 1 _rl_char; do
+    while IFS= LC_ALL=C read -r -n 1 _rl_char; do
         [[ "$_rl_char" == ":" ]] && break
         _rl_str+="$_rl_char"
     done
@@ -76,7 +76,7 @@ _read_len() {
 
 read_message() {
     # REPLY_MESSAGE is a positional indexed array: [0]=type, [1]=field1, [2]=field2, ...
-    # Uses dd for byte-exact field reads (locale-independent, works on all bash versions)
+    # Read length prefixes under LC_ALL=C so read -n uses byte semantics on ASCII headers.
     REPLY_MESSAGE=()
     local nfields len field
 
@@ -93,7 +93,7 @@ read_message() {
     done
 
     # Consume optional trailing newline (AWK emit functions append \n)
-    dd bs=1 count=1 2>/dev/null | LC_ALL=C read -r -d '' -n 1 -t 0.01 _nl 2>/dev/null || true
+    IFS= LC_ALL=C read -r -n 1 -t 0.01 _nl 2>/dev/null || true
 
     return 0
 }
@@ -998,7 +998,7 @@ tool_edit() {
     tmp=$(mktemp "${AGENT_TMPDIR}/edit.XXXXXX")
     if ! printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
             "$(json_escape "$path")" "$(json_escape "$old_string")" "$(json_escape "$new_string")" \
-         | awk -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk" > "$tmp" 2>&1; then
+         | LC_ALL=C awk -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk" > "$tmp" 2>&1; then
         cat "$tmp"; rm -f "$tmp"; return 1
     fi
     (( $(wc -c < "$tmp") > 0 )) || { echo "Error: edit produced empty result"; rm -f "$tmp"; return 1; }

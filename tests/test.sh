@@ -46,7 +46,7 @@ info()  { printf '\033[36m→ %s\033[0m\n' "$1"; }
 # Decodes binary-safe N:len:val0:len:val1:... positional format back to readable TYPE:val format.
 _decode_read_len() {
     local _rl_char _rl_str=""
-    while IFS= read -r -d '' -n 1 _rl_char; do
+    while IFS= LC_ALL=C read -r -n 1 _rl_char; do
         [[ "$_rl_char" == ":" ]] && break
         _rl_str+="$_rl_char"
     done
@@ -68,7 +68,7 @@ _decode_read_message() {
         DECODE_MSG+=("$field")
     done
     # consume optional trailing newline
-    dd bs=1 count=1 2>/dev/null | IFS= read -r -d '' -n 1 -t 0.01 _nl 2>/dev/null || true
+    IFS= LC_ALL=C read -r -n 1 -t 0.01 _nl 2>/dev/null || true
     return 0
 }
 
