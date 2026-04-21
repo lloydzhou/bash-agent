@@ -1190,12 +1190,15 @@ call_api() {
             _stream_curl "$body" \
                 -H "Content-Type: application/json" \
                 -H "x-api-key: ${API_KEY}" \
-                -H "anthropic-version: 2023-06-01"
+                -H "anthropic-version: 2023-06-01" \
+                -H "User-Agent: claude-cli/1.0.33 (max, cli)" \
+                -H "x-app: cli"
             ;;
         openai)
             _stream_curl "$body" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer ${API_KEY}"
+                -H "Authorization: Bearer ${API_KEY}" \
+                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
             ;;
     esac
 }

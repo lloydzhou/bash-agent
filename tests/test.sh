@@ -5,6 +5,13 @@
 
 set -uo pipefail
 
+# Keep all shell, awk, and Python subprocesses on the same UTF-8 locale.
+# CI already sets this in the workflow, but exporting here makes the test
+# behavior stable when the script is run directly as well.
+export LANG="${LANG:-en_US.UTF-8}"
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+export PYTHONUTF8="${PYTHONUTF8:-1}"
+
 START_SERVER=true
 PORT=9888
 for arg in "$@"; do
