@@ -900,7 +900,6 @@ compact_context_window() {
     prompt=$(build_compact_summary_user_prompt "$current_summary" "$dropped_messages")
     if [[ "$trigger" == "manual" && -z "${API_URL:-}" ]]; then
         validate_config
-        setup_api_url
     fi
     summary_request="[{\"role\":\"user\",\"content\":\"$(json_escape "$prompt")\"}]"
     summary_response=$(run_summary_call "$summary_request")
@@ -1474,11 +1473,13 @@ validate_config() {
             : "${API_KEY:=$ANTHROPIC_API_KEY}"
             : "${BASE_URL:=${ANTHROPIC_BASE_URL:-}}"
             : "${MODEL:=claude-sonnet-4-20250514}"
+            API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages"
             ;;
         openai)
             : "${API_KEY:=$OPENAI_API_KEY}"
             : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
             : "${MODEL:=gpt-4o}"
+            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
             ;;
         *)
             die "Unknown provider: $PROVIDER (use claude|openai)"
@@ -1491,13 +1492,6 @@ validate_config() {
             openai) die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
         esac
     fi
-}
-
-setup_api_url() {
-    case "$PROVIDER" in
-        claude)            API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages" ;;
-        openai)            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions" ;;
-    esac
 }
 
 interactive_mode() {
@@ -1578,7 +1572,6 @@ main() {
     load_tool_defs
 
     validate_config
-    setup_api_url
 
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode
