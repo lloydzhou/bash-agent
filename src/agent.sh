@@ -281,25 +281,10 @@ parse_size_bytes() {
     local raw="${1:-}" lower num
     lower=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
     case "$lower" in
-        *k)
-            num="${lower%k}"
-            [[ "$num" =~ ^[0-9]+$ ]] || return 1
-            printf '%s' $(( num * 1000 ))
-            ;;
-        *m)
-            num="${lower%m}"
-            [[ "$num" =~ ^[0-9]+$ ]] || return 1
-            printf '%s' $(( num * 1000 * 1000 ))
-            ;;
-        *g)
-            num="${lower%g}"
-            [[ "$num" =~ ^[0-9]+$ ]] || return 1
-            printf '%s' $(( num * 1000 * 1000 * 1000 ))
-            ;;
-        *)
-            [[ "$lower" =~ ^[0-9]+$ ]] || return 1
-            printf '%s' "$lower"
-            ;;
+        *k) num="${lower%k}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 )) ;;
+        *m) num="${lower%m}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 * 1000 )) ;;
+        *g) num="${lower%g}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 * 1000 * 1000 )) ;;
+        *)  [[ "$lower" =~ ^[0-9]+$ ]] || return 1; printf '%s' "$lower" ;;
     esac
 }
 
@@ -394,12 +379,8 @@ display_human_text() {
 msg_to_stream_event() {
     local _type="${REPLY_MESSAGE[0]}"
     case "$_type" in
-        TEXT)
-            printf '{"type":"text","content":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
-            ;;
-        THINKING)
-            printf '{"type":"thinking","content":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
-            ;;
+        TEXT)        printf '{"type":"text","content":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
+        THINKING)    printf '{"type":"thinking","content":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
         TOOL_CALL)
             printf '{"type":"tool_call","name":"%s","id":"%s","input":%s}' \
                 "$(json_escape "${REPLY_MESSAGE[1]}")" \
@@ -427,25 +408,12 @@ msg_to_stream_event() {
                     "$(json_escape "${REPLY_MESSAGE[3]}")"
             fi
             ;;
-        USAGE)
-            printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_input_tokens":%s}' \
-                "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}"
-            ;;
-        STOP)
-            printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
-            ;;
-        TODO_UPDATE)
-            build_todo_event_json "${REPLY_MESSAGE[1]}"
-            ;;
-        ERROR)
-            printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
-            ;;
-        RETRY)
-            printf '{"type":"retry"}'
-            ;;
-        *)
-            return 1
-            ;;
+        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" ;;
+        STOP)        printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
+        TODO_UPDATE) build_todo_event_json "${REPLY_MESSAGE[1]}" ;;
+        ERROR)       printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
+        RETRY)       printf '{"type":"retry"}' ;;
+        *)           return 1 ;;
     esac
     return 0
 }
@@ -517,16 +485,9 @@ display_event() {
             printf '\033[32m> %s\033[0m\n' "$_um_text"
             DISPLAY_LAST_CHAR=$'\n'
             ;;
-        STOP)
-            display_ensure_newline
-            ;;
-        ERROR)
-            display_ensure_newline
-            printf '\033[31mError: %s\033[0m\n' "${REPLY_MESSAGE[1]}" >&2
-            ;;
-        *)
-            return 0
-            ;;
+        STOP)  display_ensure_newline ;;
+        ERROR) display_ensure_newline; printf '\033[31mError: %s\033[0m\n' "${REPLY_MESSAGE[1]}" >&2 ;;
+        *)     return 0 ;;
     esac
 }
 
@@ -1231,12 +1192,8 @@ run_summary_call() {
     text=""
     while read_message; do
         case "${REPLY_MESSAGE[0]}" in
-            TEXT)
-                text+="${REPLY_MESSAGE[1]}"
-                ;;
-            ERROR)
-                die "${REPLY_MESSAGE[1]}"
-                ;;
+            TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
+            ERROR) die "${REPLY_MESSAGE[1]}" ;;
         esac
     done < <(call_api "$body" | parse_sse)
 
@@ -1267,16 +1224,9 @@ agent_loop_stream() {
             write_message "${REPLY_MESSAGE[@]}"
 
             case "${REPLY_MESSAGE[0]}" in
-                RETRY)
-                    text=""
-                    tool_calls=""
-                    tool_conv_results=""
-                    ;;
-                TEXT)
-                    text+="${REPLY_MESSAGE[1]}"
-                    ;;
-                THINKING)
-                    ;;
+                RETRY)    text="" tool_calls="" tool_conv_results="" ;;
+                TEXT)     text+="${REPLY_MESSAGE[1]}" ;;
+                THINKING) ;;
                 TOOL_CALL)
                     local cur_tool_name cur_tool_id input
                     cur_tool_name="${REPLY_MESSAGE[1]}"
@@ -1319,14 +1269,8 @@ agent_loop_stream() {
                     done
                     write_message "${_tr_args[@]}"
                     ;;
-                STOP)
-                    stop="${REPLY_MESSAGE[1]}"
-                    ;;
-                ERROR)
-                    loop_error="${REPLY_MESSAGE[1]}"
-                    stop="error"
-                    break
-                    ;;
+                STOP)  stop="${REPLY_MESSAGE[1]}" ;;
+                ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
             esac
         done < <(llm_call "$(conv_get_messages)")
 
