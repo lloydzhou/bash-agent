@@ -1239,9 +1239,7 @@ agent_loop_stream() {
 
                     # Prepend file summary header for Read/Write so events.jsonl captures it
                     if [[ "$cur_tool_name" == "Read" || "$cur_tool_name" == "Write" ]]; then
-                        local _fs
-                        _fs="$(tool_file_summary "$cur_tool_name" "$arg1")"
-                        output="$_fs"$'\n'"$output"
+                        output="$(tool_file_summary "$cur_tool_name" "$arg1")"$'\n'"$output"
                     fi
 
                     # TOOL_RESULT: [0]=type [1]=id [2]=name [3]=output [4..]=checklist/summary
