@@ -31,6 +31,7 @@ SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 TODO_FILE=""
 PLAN_FILE=""
+LOG_EVENTS=true
 
 # --- Internal Runtime State ---
 CONV_FILE=""
@@ -388,101 +389,145 @@ display_human_text() {
     fi
 }
 
+# Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output).
+# Prints JSON to stdout; returns 1 if type has no event representation.
+msg_to_stream_event() {
+    local _type="${REPLY_MESSAGE[0]}"
+    case "$_type" in
+        TEXT)
+            printf '{"type":"text","content":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
+            ;;
+        THINKING)
+            printf '{"type":"thinking","content":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
+            ;;
+        TOOL_CALL)
+            printf '{"type":"tool_call","name":"%s","id":"%s","input":%s}' \
+                "$(json_escape "${REPLY_MESSAGE[1]}")" \
+                "$(json_escape "${REPLY_MESSAGE[2]}")" \
+                "${REPLY_MESSAGE[3]}"
+            ;;
+        TOOL_RESULT)
+            local _tr_json='{"type":"tool_result","tool_use_id":"%s","name":"%s","content":"%s"'
+            # For Read/Write, include pre-computed file_summary so replay doesn't need the file
+            if [[ "${REPLY_MESSAGE[2]}" == "Read" || "${REPLY_MESSAGE[2]}" == "Write" ]]; then
+                local _tr_summary
+                _tr_summary="$(tool_file_summary "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[4]:-}")"
+                _tr_json+=',"file_summary":"%s"'
+                _tr_json+="}"
+                printf "$_tr_json" \
+                    "$(json_escape "${REPLY_MESSAGE[1]}")" \
+                    "$(json_escape "${REPLY_MESSAGE[2]}")" \
+                    "$(json_escape "${REPLY_MESSAGE[3]}")" \
+                    "$(json_escape "$_tr_summary")"
+            else
+                _tr_json+="}"
+                printf "$_tr_json" \
+                    "$(json_escape "${REPLY_MESSAGE[1]}")" \
+                    "$(json_escape "${REPLY_MESSAGE[2]}")" \
+                    "$(json_escape "${REPLY_MESSAGE[3]}")"
+            fi
+            ;;
+        USAGE)
+            printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_input_tokens":%s}' \
+                "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}"
+            ;;
+        STOP)
+            printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
+            ;;
+        TODO_UPDATE)
+            build_todo_event_json "${REPLY_MESSAGE[1]}"
+            ;;
+        ERROR)
+            printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")"
+            ;;
+        RETRY)
+            printf '{"type":"retry"}'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 display_event() {
     # REPLY_MESSAGE[0]=type, rest varies by type
-    local stream_event="" human_text="" human_kind=""
+    # Pure human-text rendering only. JSON event construction is in msg_to_stream_event().
     local _type="${REPLY_MESSAGE[0]}"
 
     case "$_type" in
         TEXT)
-            stream_event="{\"type\":\"text\",\"content\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
-            human_kind="text"
-            human_text="${REPLY_MESSAGE[1]}"
+            # Insert newline when transitioning from thinking to text
+            if [[ "$PREV_WAS_THINKING" == true && "$DISPLAY_LAST_CHAR" != $'\n' ]]; then
+                printf '\n'
+                DISPLAY_LAST_CHAR=$'\n'
+            fi
+            PREV_WAS_THINKING=false
+            [[ -n "${REPLY_MESSAGE[1]}" ]] && display_human_text "${REPLY_MESSAGE[1]}"
             ;;
         THINKING)
-            stream_event="{\"type\":\"thinking\",\"content\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
-            human_kind="thinking"
-            human_text="${REPLY_MESSAGE[1]}"
+            [[ -n "${REPLY_MESSAGE[1]}" ]] && printf '\033[90m%s\033[0m' "${REPLY_MESSAGE[1]}"
+            if [[ "${REPLY_MESSAGE[1]}" == *$'\n' ]]; then
+                DISPLAY_LAST_CHAR=$'\n'
+            else
+                DISPLAY_LAST_CHAR="${REPLY_MESSAGE[1]: -1}"
+            fi
+            PREV_WAS_THINKING=true
             ;;
         TOOL_CALL)
-            stream_event="{\"type\":\"tool_call\",\"name\":\"$(json_escape "${REPLY_MESSAGE[1]}")\",\"id\":\"$(json_escape "${REPLY_MESSAGE[2]}")\",\"input\":${REPLY_MESSAGE[3]}}"
-            human_kind="tool_call"
-            local _tc_kv=() i _n=${#REPLY_MESSAGE[@]}
+            local _tc_kv=() i _n=${#REPLY_MESSAGE[@]} _tc_summary=""
             for (( i = 4; i + 1 < _n; i += 2 )); do
                 _tc_kv+=("${REPLY_MESSAGE[i]}" "${REPLY_MESSAGE[i+1]}")
             done
             if (( ${#_tc_kv[@]} > 0 )); then
-                human_text="$(tool_call_summary "${REPLY_MESSAGE[1]}" "${_tc_kv[@]}")"
+                _tc_summary="$(tool_call_summary "${REPLY_MESSAGE[1]}" "${_tc_kv[@]}")"
             else
-                human_text="$(tool_call_summary "${REPLY_MESSAGE[1]}")"
+                _tc_summary="$(tool_call_summary "${REPLY_MESSAGE[1]}")"
             fi
-            ;;
-        USAGE)
-            stream_event="{\"type\":\"usage\",\"input_tokens\":${REPLY_MESSAGE[1]:-0},\"output_tokens\":${REPLY_MESSAGE[2]:-0},\"cache_input_tokens\":${REPLY_MESSAGE[3]:-0}}"
-            ;;
-        STOP)
-            stream_event="{\"type\":\"stop\",\"reason\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
-            human_kind="stop"
+            display_ensure_newline
+            printf '\033[33m[tool] %s\033[0m\n' "$_tc_summary"
+            DISPLAY_LAST_CHAR=$'\n'
             ;;
         TOOL_RESULT)
-            stream_event="{\"type\":\"tool_result\",\"tool_use_id\":\"$(json_escape "${REPLY_MESSAGE[1]}")\",\"content\":\"$(json_escape "${REPLY_MESSAGE[3]}")\"}"
-            human_kind="text"
-            local _tr_name="${REPLY_MESSAGE[2]}"
+            local _tr_name="${REPLY_MESSAGE[2]}" _tr_path="${REPLY_MESSAGE[4]:-}" _tr_text=""
             if [[ "$_tr_name" == "Edit" ]]; then
-                human_text="${REPLY_MESSAGE[3]}"$'\n'
+                _tr_text="${REPLY_MESSAGE[3]}"$'\n'
             elif [[ "$_tr_name" == "Read" || "$_tr_name" == "Write" ]]; then
-                human_text="$(tool_file_summary "$_tr_name" "${REPLY_MESSAGE[4]}")"$'\n'
+                # If [4] is a pre-computed file_summary (contains " bytes]"), use directly
+                if [[ "$_tr_path" == *" bytes]"* ]]; then
+                    _tr_text="$_tr_path"$'\n'
+                else
+                    _tr_text="$(tool_file_summary "$_tr_name" "$_tr_path")"$'\n'
+                fi
             else
-                human_text="${REPLY_MESSAGE[3]}"$'\n'
+                _tr_text="${REPLY_MESSAGE[3]}"$'\n'
             fi
+            # Insert newline when transitioning from thinking to text
+            if [[ "$PREV_WAS_THINKING" == true && "$DISPLAY_LAST_CHAR" != $'\n' ]]; then
+                printf '\n'
+                DISPLAY_LAST_CHAR=$'\n'
+            fi
+            PREV_WAS_THINKING=false
+            [[ -n "$_tr_text" ]] && display_human_text "$_tr_text"
             ;;
-        TODO_UPDATE)
-            stream_event="$(build_todo_event_json "${REPLY_MESSAGE[1]}")"
+        USER_MESSAGE)
+            display_ensure_newline
+            local _um_text="${REPLY_MESSAGE[1]%%$'\n'*}"
+            (( ${#_um_text} > 80 )) && _um_text="${_um_text:0:77}..."
+            printf '\033[32m> %s\033[0m\n' "$_um_text"
+            DISPLAY_LAST_CHAR=$'\n'
+            ;;
+        STOP)
+            display_ensure_newline
             ;;
         ERROR)
-            stream_event="{\"type\":\"error\",\"message\":\"$(json_escape "${REPLY_MESSAGE[1]}")\"}"
-            human_kind="error"
-            human_text="${REPLY_MESSAGE[1]}"
-            ;;
-        RETRY)
-            stream_event="{\"type\":\"retry\"}"
+            display_ensure_newline
+            printf '\033[31mError: %s\033[0m\n' "${REPLY_MESSAGE[1]}" >&2
             ;;
         *)
             return 0
             ;;
     esac
-
-    if is_stream_json_mode; then
-        [[ -n "$stream_event" ]] && printf '%s\n' "$stream_event"
-        return 0
-    fi
-
-    if [[ "$human_kind" == "text" ]]; then
-        # Insert newline when transitioning from thinking to text
-        if [[ "$PREV_WAS_THINKING" == true && "$DISPLAY_LAST_CHAR" != $'\n' ]]; then
-            printf '\n'
-            DISPLAY_LAST_CHAR=$'\n'
-        fi
-        PREV_WAS_THINKING=false
-        [[ -n "$human_text" ]] && display_human_text "$human_text"
-    elif [[ "$human_kind" == "thinking" ]]; then
-        [[ -n "$human_text" ]] && printf '\033[90m%s\033[0m' "$human_text"
-        if [[ "$human_text" == *$'\n' ]]; then
-            DISPLAY_LAST_CHAR=$'\n'
-        else
-            DISPLAY_LAST_CHAR="${human_text: -1}"
-        fi
-        PREV_WAS_THINKING=true
-    elif [[ "$human_kind" == "tool_call" ]]; then
-        display_ensure_newline
-        printf '\033[33m[tool] %s\033[0m\n' "$human_text"
-        DISPLAY_LAST_CHAR=$'\n'
-    elif [[ "$human_kind" == "stop" ]]; then
-        display_ensure_newline
-    elif [[ "$human_kind" == "error" ]]; then
-        display_ensure_newline
-        printf '\033[31mError: %s\033[0m\n' "$human_text" >&2
-    fi
 }
 
 build_system_prompt() {
@@ -664,21 +709,6 @@ build_tool_result_json_object() {
         "$result"
 }
 
-build_tool_calls_json() {
-    local calls="$1"
-    local tool_json="[" first=true
-    while IFS= read -r tc; do
-        [[ -z "$tc" ]] && continue
-        local name id input
-        IFS=$'\t' read -r name id input _ <<< "$tc"
-        $first || tool_json+=","
-        first=false
-        tool_json+="$(build_tool_call_json_object "$name" "$id" "$input" "tool_call")"
-    done <<< "$calls"
-    tool_json+="]"
-    printf '%s' "$tool_json"
-}
-
 build_assistant_content_json() {
     local text="$1" calls="$2"
     local content="[" first=true
@@ -792,7 +822,6 @@ conv_add_user() {
     local content
     content=$(json_escape "$1")
     printf '{"role":"user","content":"%s"}\n' "$content" >> "$CONV_FILE"
-    session_append_line "{\"type\":\"user_message\",\"content\":\"$content\"}"
 }
 
 conv_add_assistant() {
@@ -800,7 +829,6 @@ conv_add_assistant() {
     local content
     content=$(build_assistant_content_json "$text" "$calls")
     printf '{"role":"assistant","content":%s}\n' "$content" >> "$CONV_FILE"
-    session_log_assistant "$text" "$calls"
 }
 
 conv_add_tool_results() {
@@ -932,15 +960,6 @@ compact_context_window() {
     return 0
 }
 
-session_log_assistant() {
-    local text="$1" calls="$2"
-    local payload="{\"type\":\"assistant_message\",\"text\":\"$(json_escape "$text")\""
-    local tool_json
-    tool_json=$(build_tool_calls_json "$calls")
-    payload+=",\"tool_calls\":${tool_json}}"
-    session_append_line "$payload"
-}
-
 # --- Tool Definitions (auto-generated JSON) ---
 
 load_tool_defs() {
@@ -1051,7 +1070,7 @@ tool_grep() {
 tool_todo() {
     local checklist="$1"
     printf '%s\n' "$checklist" > "$TODO_FILE"
-    session_append_line "$(build_todo_event_json "$checklist")"
+    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$(build_todo_event_json "$checklist")"
     printf '%s' "$checklist"
 }
 
@@ -1342,21 +1361,38 @@ agent_loop_stream() {
 agent_loop() {
     local user_input="$1"
     local had_error=false
-    clear_interrupt_state
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
-    start_esc_interrupt_listener
+    start_esc_interrupt_listener  # stop/clear before start
 
+    # Record user input event
+    [[ "$LOG_EVENTS" != "false" ]] && \
+        session_append_line "{\"type\":\"user_input\",\"content\":\"$(json_escape "$user_input")\"}"
+
+    local _se=""
     while read_message; do
         [[ "${REPLY_MESSAGE[0]}" == "ERROR" ]] && had_error=true
+
+        # Layer 1: Always convert and write to events.jsonl
+        _se=$(msg_to_stream_event) && [[ -n "$_se" ]] && {
+            [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_se"
+        }
+
+        # Layer 2: stdout — stream-json or human display
         if [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]]; then
-            display_event
-            if [[ "$OUTPUT_FORMAT" == "human" ]]; then
+            if is_stream_json_mode; then
+                [[ -n "$_se" ]] && printf '%s\n' "$_se"
+            else
+                display_event
                 printf '\033[36mInterrupted.\033[0m\n'
             fi
             break
         fi
-        display_event
+        if is_stream_json_mode; then
+            [[ -n "$_se" ]] && printf '%s\n' "$_se"
+        else
+            display_event
+        fi
     done < <(agent_loop_stream "$user_input")
 
     stop_esc_interrupt_listener
@@ -1530,6 +1566,22 @@ interactive_mode() {
     trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
 
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
+    # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
+    if [[ -s "${SESSION_EVENT_FILE:-}" ]]; then
+        local _saved_log_events="${LOG_EVENTS:-true}"
+        LOG_EVENTS=false
+        local _efile="${SESSION_EVENT_FILE:-}" _match _from_line
+        _match=$(grep -n '"type":"user_input"' "$_efile" 2>/dev/null | tail -n 10 | head -n 1) || true
+        _from_line="${_match%%:*}"
+        [[ -n "$_from_line" && "$_from_line" -ge 1 ]] || _from_line=1
+        tail -n +"$_from_line" "$_efile" \
+            | awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk" \
+            | while read_message; do
+                display_event
+            done
+        LOG_EVENTS="$_saved_log_events"
+        printf "\n"
+    fi
     while true; do
         stty echo 2>/dev/null || true
         IFS= read -e -r -p $'\001\033[32m\002> \001\033[0m\002' user_input || break
@@ -1549,6 +1601,7 @@ interactive_mode() {
 start_esc_interrupt_listener() {
     [[ "$INTERACTIVE" == true ]] || return 0
     [[ -r /dev/tty ]] || return 0
+    clear_interrupt_state
     stop_esc_interrupt_listener
     ESC_LISTENER_FLAG=$(mktemp "${TMPDIR:-/tmp}/agent-esc.XXXXXX")
     (

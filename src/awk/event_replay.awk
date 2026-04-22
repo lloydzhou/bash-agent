@@ -1,0 +1,194 @@
+# event_replay.awk — Convert events.jsonl lines to RESP wire format
+# Usage: awk -f json.awk -f protocol.awk -f event_replay.awk events.jsonl
+# Input: one JSON object per line (events.jsonl format)
+# Output: RESP wire format messages (consumable by read_message + display_event)
+#
+# Supports both new format (per-token text/thinking/tool_call/tool_result/stop)
+# and legacy format (user_message/assistant_message/todo_update).
+
+BEGIN {
+    _acc_text = ""
+    _acc_thinking = ""
+}
+
+{
+    # Extract event type
+    _type = extract_str($0, "type")
+
+    # Skip session_start and usage
+    if (_type == "session_start" || _type == "usage") next
+
+    # --- New format: per-token events ---
+
+    # user_input → USER_MESSAGE
+    if (_type == "user_input") {
+        _flush_accumulated()
+        _content = extract_str($0, "content")
+        if (_content != "") {
+            emit1("USER_MESSAGE")
+            emit(_content)
+            emit_flush()
+        }
+        next
+    }
+
+    # text (per token) — accumulate, flush on non-text
+    if (_type == "text") {
+        _flush_thinking()
+        _t = extract_str($0, "content")
+        if (_t != "") _acc_text = _acc_text _t
+        next
+    }
+
+    # thinking (per token) — accumulate, flush on non-thinking
+    if (_type == "thinking") {
+        _flush_text()
+        _t = extract_str($0, "content")
+        if (_t != "") _acc_thinking = _acc_thinking _t
+        next
+    }
+
+    # tool_call
+    if (_type == "tool_call") {
+        _flush_accumulated()
+        _tc_name = extract_str($0, "name")
+        _tc_id = extract_str($0, "id")
+        _tc_input = extract_value($0, "input")
+        if (_tc_input == "") _tc_input = "{}"
+        protocol_emit_tool_call_record(_tc_name, _tc_id, _tc_input)
+        next
+    }
+
+    # tool_result
+    if (_type == "tool_result") {
+        _flush_accumulated()
+        _tr_id = extract_str($0, "tool_use_id")
+        _tr_name = extract_str($0, "name")
+        _tr_content = extract_str($0, "content")
+        _tr_file_summary = extract_str($0, "file_summary")
+
+        # Truncate content to 200 chars for replay to avoid flooding terminal
+        if (length(_tr_content) > 200) {
+            _tr_content = substr(_tr_content, 1, 200) "..."
+        }
+
+        emit1("TOOL_RESULT")
+        emit(_tr_id)
+        emit(_tr_name)
+        emit(_tr_content)
+        # Include file_summary as [4] for Read/Write tools
+        if (_tr_file_summary != "") {
+            emit(_tr_file_summary)
+        }
+        emit_flush()
+        next
+    }
+
+    # stop
+    if (_type == "stop") {
+        _flush_accumulated()
+        # Don't emit STOP for replay — display_event just ensures newline
+        next
+    }
+
+    # retry
+    if (_type == "retry") {
+        _flush_accumulated()
+        next
+    }
+
+    # error
+    if (_type == "error") {
+        _flush_accumulated()
+        _msg = extract_str($0, "message")
+        emit1("ERROR")
+        emit(_msg)
+        emit_flush()
+        next
+    }
+
+    # --- Legacy format ---
+
+    # user_message → USER_MESSAGE
+    if (_type == "user_message") {
+        _flush_accumulated()
+        _content = extract_str($0, "content")
+        emit1("USER_MESSAGE")
+        emit(_content)
+        emit_flush()
+        next
+    }
+
+    # todo_update → TODO_UPDATE
+    if (_type == "todo_update") {
+        _flush_accumulated()
+        _content = extract_str($0, "content")
+        emit1("TODO_UPDATE")
+        emit(_content)
+        emit_flush()
+        next
+    }
+
+    # assistant_message → TEXT + TOOL_CALL per tool_call
+    if (_type == "assistant_message") {
+        _flush_accumulated()
+        _text = extract_str($0, "text")
+        if (_text != "") {
+            emit1("TEXT")
+            emit(_text)
+            emit_flush()
+        }
+
+        # Extract tool_calls array
+        _tc_raw = extract_value($0, "tool_calls")
+        if (_tc_raw != "" && substr(_tc_raw, 1, 1) == "[") {
+            _tc_count = split_top_level_objects(_tc_raw, _tc_blocks)
+            for (_i = 1; _i <= _tc_count; _i++) {
+                _tc_name = extract_str(_tc_blocks[_i], "name")
+                _tc_id = extract_str(_tc_blocks[_i], "id")
+                _tc_input = extract_value(_tc_blocks[_i], "input")
+                if (_tc_input == "") _tc_input = "{}"
+                protocol_emit_tool_call_record(_tc_name, _tc_id, _tc_input)
+            }
+        }
+        next
+    }
+
+    # legacy thinking (whole chunk, not per-token)
+    if (_type == "thinking") {
+        _flush_text()
+        _content = extract_str($0, "content")
+        if (_content != "") _acc_thinking = _acc_thinking _content
+        next
+    }
+}
+
+END {
+    _flush_accumulated()
+}
+
+# Flush accumulated text as a single TEXT message
+function _flush_text() {
+    if (_acc_text != "") {
+        emit1("TEXT")
+        emit(_acc_text)
+        emit_flush()
+        _acc_text = ""
+    }
+}
+
+# Flush accumulated thinking as a single THINKING message
+function _flush_thinking() {
+    if (_acc_thinking != "") {
+        emit1("THINKING")
+        emit(_acc_thinking)
+        emit_flush()
+        _acc_thinking = ""
+    }
+}
+
+# Flush both
+function _flush_accumulated() {
+    _flush_thinking()
+    _flush_text()
+}

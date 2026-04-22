@@ -68,6 +68,7 @@ awk_files = {
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
     "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
     "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
+    "event_replay": ("event_replay.awk", "_AWK_EVENT_REPLAY"),
 }
 
 awk_bodies = {}
@@ -172,6 +173,8 @@ content = content.replace('awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK
 # --- Inline convert_messages.awk and convert_tools.awk references in build_openai_request ---
 content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_CONVERT_MESSAGES}"')
 content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_CONVERT_TOOLS}"')
+# --- Inline event_replay.awk reference in interactive_mode ---
+content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_EVENT_REPLAY}"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)
