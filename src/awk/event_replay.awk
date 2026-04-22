@@ -65,7 +65,6 @@ BEGIN {
         _tr_id = extract_str($0, "tool_use_id")
         _tr_name = extract_str($0, "name")
         _tr_content = extract_str($0, "content")
-        _tr_file_summary = extract_str($0, "file_summary")
 
         # Truncate content to 200 chars for replay to avoid flooding terminal
         if (length(_tr_content) > 200) {
@@ -76,10 +75,6 @@ BEGIN {
         emit(_tr_id)
         emit(_tr_name)
         emit(_tr_content)
-        # Include file_summary as [4] for Read/Write tools
-        if (_tr_file_summary != "") {
-            emit(_tr_file_summary)
-        }
         emit_flush()
         next
     }

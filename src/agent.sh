@@ -388,25 +388,10 @@ msg_to_stream_event() {
                 "${REPLY_MESSAGE[3]}"
             ;;
         TOOL_RESULT)
-            local _tr_json='{"type":"tool_result","tool_use_id":"%s","name":"%s","content":"%s"'
-            # For Read/Write, include pre-computed file_summary so replay doesn't need the file
-            if [[ "${REPLY_MESSAGE[2]}" == "Read" || "${REPLY_MESSAGE[2]}" == "Write" ]]; then
-                local _tr_summary
-                _tr_summary="$(tool_file_summary "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[4]:-}")"
-                _tr_json+=',"file_summary":"%s"'
-                _tr_json+="}"
-                printf "$_tr_json" \
-                    "$(json_escape "${REPLY_MESSAGE[1]}")" \
-                    "$(json_escape "${REPLY_MESSAGE[2]}")" \
-                    "$(json_escape "${REPLY_MESSAGE[3]}")" \
-                    "$(json_escape "$_tr_summary")"
-            else
-                _tr_json+="}"
-                printf "$_tr_json" \
-                    "$(json_escape "${REPLY_MESSAGE[1]}")" \
-                    "$(json_escape "${REPLY_MESSAGE[2]}")" \
-                    "$(json_escape "${REPLY_MESSAGE[3]}")"
-            fi
+            printf '{"type":"tool_result","tool_use_id":"%s","name":"%s","content":"%s"}' \
+                "$(json_escape "${REPLY_MESSAGE[1]}")" \
+                "$(json_escape "${REPLY_MESSAGE[2]}")" \
+                "$(json_escape "${REPLY_MESSAGE[3]}")"
             ;;
         USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
@@ -457,16 +442,12 @@ display_event() {
             DISPLAY_LAST_CHAR=$'\n'
             ;;
         TOOL_RESULT)
-            local _tr_name="${REPLY_MESSAGE[2]}" _tr_path="${REPLY_MESSAGE[4]:-}" _tr_text=""
+            local _tr_name="${REPLY_MESSAGE[2]}" _tr_text=""
             if [[ "$_tr_name" == "Edit" ]]; then
                 _tr_text="${REPLY_MESSAGE[3]}"$'\n'
             elif [[ "$_tr_name" == "Read" || "$_tr_name" == "Write" ]]; then
-                # If [4] is a pre-computed file_summary (contains " bytes]"), use directly
-                if [[ "$_tr_path" == *" bytes]"* ]]; then
-                    _tr_text="$_tr_path"$'\n'
-                else
-                    _tr_text="$(tool_file_summary "$_tr_name" "$_tr_path")"$'\n'
-                fi
+                # Summary is already prepended to content (by agent_loop_stream)
+                _tr_text="${REPLY_MESSAGE[3]%%$'\n'*}"$'\n'
             else
                 _tr_text="${REPLY_MESSAGE[3]}"$'\n'
             fi
@@ -1255,6 +1236,13 @@ agent_loop_stream() {
                         result_for_conv="$(printf '%s' "$output" | sed -n '1p')"
                     fi
                     tool_conv_results+="${cur_tool_id}"$'\t'"$(json_escape "$result_for_conv")"$'\n'
+
+                    # Prepend file summary header for Read/Write so events.jsonl captures it
+                    if [[ "$cur_tool_name" == "Read" || "$cur_tool_name" == "Write" ]]; then
+                        local _fs
+                        _fs="$(tool_file_summary "$cur_tool_name" "$arg1")"
+                        output="$_fs"$'\n'"$output"
+                    fi
 
                     # TOOL_RESULT: [0]=type [1]=id [2]=name [3]=output [4..]=checklist/summary
                     local _tr_args=("TOOL_RESULT" "$cur_tool_id" "$cur_tool_name" "$output")
