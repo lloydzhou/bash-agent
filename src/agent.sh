@@ -1504,7 +1504,7 @@ interactive_mode() {
                 display_event
             done
         LOG_EVENTS="$_saved_log_events"
-        printf "\n"
+        [[ -n "$_match" ]] && printf "\n"
     fi
     while true; do
         stty echo 2>/dev/null || true
