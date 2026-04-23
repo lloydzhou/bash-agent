@@ -271,7 +271,19 @@ impl Runtime {
                     home: self.home.clone(),
                 };
 
-                let mut stream = self.llm_stream()?;
+                let mut stream = match self.llm_stream() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // Pre-stream HTTP/network error — record to events.jsonl before returning
+                        let err_msg = e.to_string();
+                        let _ = self.emit_and_append_event(json!({"type":"error","message":&err_msg}));
+                        let _ = self.emit_and_append_event(json!({"type":"stop","reason":"error"}));
+                        if !self.is_stream_json_mode() {
+                            self.error(&err_msg);
+                        }
+                        return Err(e);
+                    }
+                };
                 while let Some(evt) = stream.next_event()? {
                     if self.interrupted.load(Ordering::SeqCst) {
                         stop = "interrupted".to_string();

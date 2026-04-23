@@ -621,6 +621,12 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			if errors.Is(err, errInterrupted) {
 				stop = "interrupted"
 			} else if loopError == "" {
+				// Pre-stream HTTP/network error — record to events.jsonl before returning
+				_ = rt.emitAndAppendEvent(map[string]any{"type": "error", "message": err.Error()})
+				_ = rt.emitAndAppendEvent(map[string]any{"type": "stop", "reason": "error"})
+				if !rt.isStreamJSONMode() {
+					rt.error("%s", err.Error())
+				}
 				return err
 			}
 		}
