@@ -32,7 +32,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
     };
 
     let cwd = std::env::current_dir()?;
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| String::from(".")));
+    let home = PathBuf::from(std::env::var("BASH_AGENT_HOME")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| String::from(".")));
 
     if cfg.list_sessions {
         list_sessions(&home, &cwd)?;

@@ -90,9 +90,13 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
+	home := os.Getenv("BASH_AGENT_HOME")
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return err
+		}
 	}
 	if cfg.ListSessions {
 		return listSessions(home, cwd, stdout)
