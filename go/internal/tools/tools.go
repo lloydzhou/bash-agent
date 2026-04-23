@@ -211,20 +211,23 @@ func (r Runner) Edit(path, oldString, newString string) (string, error) {
 		return "", fmt.Errorf("Error: cannot stat file: %s", path)
 	}
 	perm := info.Mode().Perm()
-	diffOut, diffErr := unifiedDiff(path, content, updated)
+	diffOut, diffErr := unifiedDiffColor(path, content, updated)
 	if err := os.WriteFile(path, []byte(updated), perm); err != nil {
 		return "", err
 	}
 	if diffErr != nil {
 		return "", diffErr
 	}
+	// Match bash tool_edit: output = summary_line + "\n" + colorized_diff + "\n"
+	added, removed := countDiffLines(diffOut)
+	summary := fmt.Sprintf("Edit(%s) [+%d -%d lines]", path, added, removed)
 	if diffOut == "" {
 		return fmt.Sprintf("Edit(%s) [no changes]", path), nil
 	}
-	return diffOut, nil
+	return summary + "\n" + diffOut + "\n", nil
 }
 
-func unifiedDiff(path, oldContent, newContent string) (string, error) {
+func unifiedDiffColor(path, oldContent, newContent string) (string, error) {
 	oldFile, err := os.CreateTemp("", "edit-old-*")
 	if err != nil {
 		return "", err
@@ -243,14 +246,67 @@ func unifiedDiff(path, oldContent, newContent string) (string, error) {
 	if _, err := newFile.WriteString(newContent); err != nil {
 		return "", err
 	}
-	out, err := exec.Command("diff", "-u", "--label", "a/"+strings.TrimPrefix(path, "/"), "--label", "b/"+strings.TrimPrefix(path, "/"), oldFile.Name(), newFile.Name()).CombinedOutput()
+	label := strings.TrimPrefix(path, "/")
+	// Try with --color=always first (match bash tool_edit behavior)
+	out, err := exec.Command("diff", "-u", "--color=always", "--label", "a/"+label, "--label", "b/"+label, oldFile.Name(), newFile.Name()).CombinedOutput()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			// diff returns 1 when differences found — check if --color was unsupported
+			if strings.Contains(string(out), "unsupported --color") || strings.Contains(string(out), "unrecognized option '--color'") {
+				// Fallback: no color
+				out2, err2 := exec.Command("diff", "-u", "--label", "a/"+label, "--label", "b/"+label, oldFile.Name(), newFile.Name()).CombinedOutput()
+				if err2 != nil {
+					if exitErr2, ok := err2.(*exec.ExitError); ok && exitErr2.ExitCode() == 1 {
+						return string(out2), nil
+					}
+					return "", fmt.Errorf("Error: diff failed")
+				}
+				return string(out2), nil
+			}
 			return string(out), nil
 		}
 		return "", fmt.Errorf("Error: diff failed")
 	}
 	return string(out), nil
+}
+
+// countDiffLines counts added/removed lines in unified diff output (works with ANSI color codes).
+func countDiffLines(diff string) (added, removed int) {
+	for _, line := range strings.Split(diff, "\n") {
+		// Strip ANSI escape sequences for prefix check
+		stripped := stripAnsi(line)
+		if strings.HasPrefix(stripped, "+") && !strings.HasPrefix(stripped, "+++") {
+			added++
+		}
+		if strings.HasPrefix(stripped, "-") && !strings.HasPrefix(stripped, "---") {
+			removed++
+		}
+	}
+	return
+}
+
+// stripAnsi removes ANSI escape sequences from a string.
+func stripAnsi(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		if s[i] == '\033' && i+1 < len(s) && s[i+1] == '[' {
+			// Skip CSI sequence: ESC [ ... final_byte
+			j := i + 2
+			for j < len(s) && ((s[j] >= 0x30 && s[j] <= 0x3f) || (s[j] >= 0x20 && s[j] <= 0x2f)) {
+				j++
+			}
+			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e {
+				j++
+			}
+			i = j
+		} else {
+			out.WriteByte(s[i])
+			i++
+		}
+	}
+	return out.String()
 }
 
 func (r Runner) Bash(command string) (string, error) {

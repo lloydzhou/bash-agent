@@ -71,20 +71,7 @@ func normalizeDisplayText(s string) string {
 	return s
 }
 
-func colorizeDiff(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		switch {
-		case strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "), strings.HasPrefix(line, "@@ "):
-			lines[i] = "\033[36m" + line + "\033[0m"
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-			lines[i] = "\033[32m" + line + "\033[0m"
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-			lines[i] = "\033[31m" + line + "\033[0m"
-		}
-	}
-	return strings.Join(lines, "\n")
-}
+
 
 var newHTTPClient = func() *http.Client {
 	return &http.Client{Timeout: 0}
@@ -189,6 +176,9 @@ func (rt *runtime) initState() error {
 func (rt *runtime) interactiveMode() error {
 	_, _ = fmt.Fprintln(rt.stdout, "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)")
 
+	// Replay recent turns for resumed sessions
+	rt.replayLastTurns()
+
 	historyPath := filepath.Join(rt.home, ".bash-agent", "history")
 	_ = os.MkdirAll(filepath.Dir(historyPath), 0o755)
 
@@ -239,6 +229,260 @@ func (rt *runtime) interactiveMode() error {
 	return nil
 }
 
+// replayEvent is a simplified event from events.jsonl used for session replay.
+type replayEvent struct {
+	Type      string          `json:"type"`
+	Content   string          `json:"content,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	Text      string          `json:"text,omitempty"`
+	ToolCalls []struct {
+		Name  string          `json:"name"`
+		ID    string          `json:"id"`
+		Input json.RawMessage `json:"input"`
+	} `json:"tool_calls,omitempty"`
+}
+
+// displayReplayEvent mirrors bash's display_event exactly for replay purposes.
+// It handles: USER_MESSAGE, TEXT, THINKING, TOOL_CALL, TOOL_RESULT, STOP, ERROR
+func (rt *runtime) displayReplayEvent(state *displayState, evtType string, fields map[string]string) {
+	switch evtType {
+	case "TEXT":
+		content := fields["content"]
+		// Insert newline when transitioning from thinking to text
+		if state.prevWasThinking && state.lastChar != "\n" {
+			_, _ = rt.writeHuman(rt.nl())
+			state.lastChar = "\n"
+		}
+		state.prevWasThinking = false
+		if content != "" {
+			displayContent := normalizeDisplayText(content)
+			_, _ = rt.writeHuman(displayContent)
+			if strings.HasSuffix(displayContent, "\n") {
+				state.lastChar = "\n"
+			} else {
+				state.lastChar = displayContent[len(displayContent)-1:]
+			}
+		}
+	case "THINKING":
+		content := fields["content"]
+		if content != "" {
+			displayContent := normalizeDisplayText(content)
+			_, _ = rt.writeHuman(fmt.Sprintf("\033[90m%s\033[0m", displayContent))
+			if strings.HasSuffix(displayContent, "\n") {
+				state.lastChar = "\n"
+			} else {
+				state.lastChar = displayContent[len(displayContent)-1:]
+			}
+		}
+		state.prevWasThinking = true
+	case "TOOL_CALL":
+		// display_ensure_newline
+		if state.lastChar != "\n" {
+			_, _ = rt.writeHuman(rt.nl())
+		}
+		name := fields["name"]
+		summary := conversation.BuildToolCallSummary(name, fields)
+		_, _ = fmt.Fprintf(rt.stdout, "\033[33m[tool] %s\033[0m\n", summary)
+		state.lastChar = "\n"
+		state.prevWasThinking = false
+	case "TOOL_RESULT":
+		name := fields["name"]
+		content := fields["content"]
+		var trText string
+		if name == "Edit" {
+			// Content already has colorized diff from tool layer — use as-is
+			trText = normalizeDisplayText(content)
+			if !strings.HasSuffix(trText, "\n") {
+				trText += "\n"
+			}
+		} else if name == "Read" || name == "Write" {
+			// Summary already prepended; use first line
+			trText = conversation.FirstLine(normalizeDisplayText(content)) + "\n"
+		} else {
+			trText = normalizeDisplayText(content) + "\n"
+		}
+		// Insert newline when transitioning from thinking to text
+		if state.prevWasThinking && state.lastChar != "\n" {
+			_, _ = rt.writeHuman(rt.nl())
+			state.lastChar = "\n"
+		}
+		state.prevWasThinking = false
+		if trText != "" {
+			_, _ = rt.writeHuman(trText)
+			if strings.HasSuffix(trText, "\n") {
+				state.lastChar = "\n"
+			} else {
+				state.lastChar = trText[len(trText)-1:]
+			}
+		}
+	case "USER_MESSAGE":
+		// display_ensure_newline
+		if state.lastChar != "\n" {
+			_, _ = rt.writeHuman(rt.nl())
+		}
+		content := fields["content"]
+		if len(content) > 80 {
+			content = content[:77] + "..."
+		}
+		_, _ = fmt.Fprintf(rt.stdout, "\033[32m> %s\033[0m\n", content)
+		state.lastChar = "\n"
+		state.prevWasThinking = false
+	case "STOP":
+		if state.lastChar != "\n" {
+			_, _ = rt.writeHuman(rt.nl())
+			state.lastChar = "\n"
+		}
+	case "ERROR":
+		if state.lastChar != "\n" {
+			_, _ = rt.writeHuman(rt.nl())
+		}
+		_, _ = fmt.Fprintf(rt.stderr, "\033[31mError: %s\033[0m\n", fields["message"])
+	}
+}
+
+func (rt *runtime) replayLastTurns() {
+	if rt.paths.Events == "" {
+		return
+	}
+	data, err := os.ReadFile(rt.paths.Events)
+	if err != nil || len(data) == 0 {
+		return
+	}
+
+	lines := strings.Split(string(data), "\n")
+	// Find line positions of user_input events (which mark turn boundaries)
+	var userInputLines []int
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, `"type":"user_input"`) || strings.Contains(line, `"type":"user_message"`) {
+			userInputLines = append(userInputLines, i)
+		}
+	}
+	if len(userInputLines) == 0 {
+		return
+	}
+
+	// Take last 10 user turns (match bash)
+	fromIdx := 0
+	if len(userInputLines) > 10 {
+		fromIdx = userInputLines[len(userInputLines)-10]
+	}
+
+	state := displayState{lastChar: "\n"}
+	var accText string
+	var accThinking string
+	var hadTurns bool
+
+	// Flush accumulated text/thinking through displayReplayEvent (matches bash event_replay.awk)
+	flushAccumulated := func() {
+		if accThinking != "" {
+			rt.displayReplayEvent(&state, "THINKING", map[string]string{"content": accThinking})
+			accThinking = ""
+		}
+		if accText != "" {
+			rt.displayReplayEvent(&state, "TEXT", map[string]string{"content": accText})
+			accText = ""
+		}
+	}
+
+	for _, line := range lines[fromIdx:] {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var evt replayEvent
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			continue
+		}
+
+		switch evt.Type {
+		case "session_start", "usage", "stop", "retry":
+			continue
+		case "user_input", "user_message":
+			flushAccumulated()
+			content := evt.Content
+			if content == "" {
+				continue
+			}
+			hadTurns = true
+			rt.displayReplayEvent(&state, "USER_MESSAGE", map[string]string{"content": content})
+		case "thinking":
+			// Flush text, accumulate thinking (match bash event_replay.awk)
+			if accText != "" {
+				rt.displayReplayEvent(&state, "TEXT", map[string]string{"content": accText})
+				accText = ""
+			}
+			accThinking += evt.Content
+		case "text":
+			// Flush thinking, accumulate text (match bash event_replay.awk)
+			if accThinking != "" {
+				rt.displayReplayEvent(&state, "THINKING", map[string]string{"content": accThinking})
+				accThinking = ""
+			}
+			accText += evt.Content
+		case "tool_call":
+			flushAccumulated()
+			fields := parseInputFields(evt.Input)
+			fields["name"] = evt.Name
+			rt.displayReplayEvent(&state, "TOOL_CALL", fields)
+		case "tool_result":
+			flushAccumulated()
+			displayContent := evt.Content
+			// Truncate for replay (match bash: 200 chars)
+			if len(displayContent) > 200 {
+				displayContent = displayContent[:200] + "..."
+			}
+			rt.displayReplayEvent(&state, "TOOL_RESULT", map[string]string{
+				"name":    evt.Name,
+				"content": displayContent,
+			})
+		case "error":
+			flushAccumulated()
+			rt.displayReplayEvent(&state, "ERROR", map[string]string{"message": evt.Content})
+		case "assistant_message":
+			// Legacy format: emit TEXT + TOOL_CALL per tool_call (match bash event_replay.awk)
+			flushAccumulated()
+			if evt.Text != "" {
+				rt.displayReplayEvent(&state, "TEXT", map[string]string{"content": evt.Text})
+			}
+			for _, tc := range evt.ToolCalls {
+				fields := parseInputFields(tc.Input)
+				fields["name"] = tc.Name
+				rt.displayReplayEvent(&state, "TOOL_CALL", fields)
+			}
+		}
+	}
+	flushAccumulated()
+	if hadTurns {
+		_, _ = fmt.Fprintln(rt.stdout)
+	}
+}
+
+// parseInputFields extracts key-value pairs from a tool call input JSON object.
+func parseInputFields(input json.RawMessage) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(input, &m); err != nil {
+		return nil
+	}
+	fields := make(map[string]string, len(m))
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			fields[k] = val
+		default:
+			b, _ := json.Marshal(val)
+			fields[k] = string(b)
+		}
+	}
+	return fields
+}
+
 func (rt *runtime) agentLoop(userInput string) error {
 	return rt.agentLoopStream(userInput)
 }
@@ -256,7 +500,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 	if err := rt.conv.AddUser(userInput); err != nil {
 		return err
 	}
-	_ = rt.appendEvent(map[string]any{"type": "user_message", "content": userInput})
+	_ = rt.appendEvent(map[string]any{"type": "user_input", "content": userInput})
 
 	turn := 0
 	state := displayState{lastChar: "\n"}
@@ -316,19 +560,22 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
 				}
 				output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
-				displayOutput := output
+				var convContent string
 				if e.Name == "Edit" {
-					editDiff := output
-					summary := conversation.BuildEditDiffSummary(e.Fields["path"], output)
-					output = summary
-					displayOutput = editDiff
+					// Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
+					// Conv file gets summary only (matches bash: result_for_conv = first line)
+					convContent = conversation.FirstLine(output)
+				} else if e.Name == "Read" || e.Name == "Write" {
+					// Prepend file summary to content (matches bash behavior)
+					fileSummary := conversation.BuildFileToolResultSummary(e.Name, e.Fields["path"])
+					output = fileSummary + "\n" + output
 				}
 				toolResults = append(toolResults, conversation.ToolResult{
-					ToolUseID:      e.ID,
-					ToolName:       e.Name,
-					ToolArgs:       e.Fields,
-					Content:        output,
-					DisplayContent: displayOutput,
+					ToolUseID:   e.ID,
+					ToolName:    e.Name,
+					ToolArgs:    e.Fields,
+					Content:     output,
+					ConvContent: convContent,
 				})
 				// Display tool result immediately
 				if err := rt.displayEvent(&state, toolResults[len(toolResults)-1]); err != nil {
@@ -394,18 +641,11 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			if err := rt.conv.AddAssistant(text, calls); err != nil {
 				return err
 			}
-			_ = rt.appendEvent(rt.buildAssistantEvent(text, calls))
 			if len(toolResults) > 0 {
 				if err := rt.conv.AddToolResults(toolResults); err != nil {
 					return err
 				}
-				for _, result := range toolResults {
-					_ = rt.appendEvent(map[string]any{
-						"type":        "tool_result",
-						"tool_use_id": result.ToolUseID,
-						"content":     result.Content,
-					})
-				}
+				// Note: granular tool_result events already written by displayEvent inline
 			}
 			_, _ = rt.compactContextWindow("auto", false)
 			// tool_use/tool_calls → loop continues; anything else → break
@@ -413,7 +653,12 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				return nil
 			}
 		} else {
-			if rt.cfg.OutputFormat == config.OutputHuman {
+			// Match bash: write stop interrupted event to events.jsonl (always)
+			// and to stdout if stream-json mode
+			_ = rt.emitAndAppendEvent(map[string]any{"type": "stop", "reason": "interrupted"})
+			if rt.isStreamJSONMode() {
+				// In stream-json mode the JSON was already printed by emitAndAppendEvent
+			} else {
 				if state.lastChar != "\n" {
 					_, _ = fmt.Fprint(rt.stdout, rt.nl())
 				}
@@ -544,11 +789,25 @@ func (rt *runtime) streamLLMEvents(respBody io.Reader, done <-chan struct{}) (<-
 	return events, errCh
 }
 
+// emitAndAppendEvent writes an event to events.jsonl (always) and to stdout (only in stream-json mode).
+// Mirrors bash's agent_loop which does: session_append_line + (stream-json || human display).
+func (rt *runtime) emitAndAppendEvent(v map[string]any) error {
+	_ = rt.appendEvent(v)
+	if rt.isStreamJSONMode() {
+		return rt.emitStream(v)
+	}
+	return nil
+}
+
 func (rt *runtime) displayEvent(state *displayState, evt any) error {
 	switch e := evt.(type) {
 	case protocol.TextEvent:
+		// Always write to events.jsonl, and to stdout if stream-json mode
+		if err := rt.emitAndAppendEvent(map[string]any{"type": "text", "content": e.Content}); err != nil {
+			return err
+		}
 		if rt.isStreamJSONMode() {
-			return rt.emitStream(map[string]any{"type": "text", "content": e.Content})
+			return nil
 		}
 		// Insert newline when transitioning from thinking to text
 		if state.prevWasThinking && state.lastChar != "\n" {
@@ -570,8 +829,11 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 			}
 		}
 	case protocol.ThinkingEvent:
+		if err := rt.emitAndAppendEvent(map[string]any{"type": "thinking", "content": e.Content}); err != nil {
+			return err
+		}
 		if rt.isStreamJSONMode() {
-			return rt.emitStream(map[string]any{"type": "thinking", "content": e.Content})
+			return nil
 		}
 		displayContent := normalizeDisplayText(e.Content)
 		if _, err := rt.writeHuman(fmt.Sprintf("\033[90m%s\033[0m", displayContent)); err != nil {
@@ -586,41 +848,45 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 		}
 		state.prevWasThinking = true
 	case protocol.ToolCallEvent:
-		if !rt.isStreamJSONMode() {
-			if state.lastChar != "\n" {
-				if _, err := rt.writeHuman(rt.nl()); err != nil {
-					return err
-				}
-			} else {
-				if _, err := rt.writeHuman("\r"); err != nil {
-					return err
-				}
-			}
-			state.lastChar = "\n"
+		toolCallEvt := map[string]any{
+			"type":  "tool_call",
+			"name":  e.Name,
+			"id":    e.ID,
+			"input": json.RawMessage(e.InputJSON),
+		}
+		if err := rt.emitAndAppendEvent(toolCallEvt); err != nil {
+			return err
 		}
 		if rt.isStreamJSONMode() {
-			return rt.emitStream(map[string]any{
-				"type":  "tool_call",
-				"name":  e.Name,
-				"id":    e.ID,
-				"input": json.RawMessage(e.InputJSON),
-			})
+			return nil
 		}
+		// display_ensure_newline (match bash)
+		if state.lastChar != "\n" {
+			if _, err := rt.writeHuman(rt.nl()); err != nil {
+				return err
+			}
+		}
+		state.lastChar = "\n"
 		if _, err := rt.writeHuman(fmt.Sprintf("\033[33m[tool] %s\033[0m\n", conversation.BuildToolCallSummary(e.Name, e.Fields))); err != nil {
 			return err
 		}
 	case protocol.UsageEvent:
-		if rt.isStreamJSONMode() {
-			return rt.emitStream(map[string]any{
-				"type":               "usage",
-				"input_tokens":       e.InputTokens,
-				"output_tokens":      e.OutputTokens,
-				"cache_input_tokens": e.CacheInputTokens,
-			})
+		usageEvt := map[string]any{
+			"type":               "usage",
+			"input_tokens":       e.InputTokens,
+			"output_tokens":      e.OutputTokens,
+			"cache_input_tokens": e.CacheInputTokens,
 		}
+		if err := rt.emitAndAppendEvent(usageEvt); err != nil {
+			return err
+		}
+		// No human display for usage events
 	case protocol.StopEvent:
+		if err := rt.emitAndAppendEvent(map[string]any{"type": "stop", "reason": e.Reason}); err != nil {
+			return err
+		}
 		if rt.isStreamJSONMode() {
-			return rt.emitStream(map[string]any{"type": "stop", "reason": e.Reason})
+			return nil
 		}
 		if state.lastChar != "\n" {
 			if _, err := rt.writeHuman(rt.nl()); err != nil {
@@ -629,50 +895,55 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 			state.lastChar = "\n"
 		}
 	case protocol.ErrorEvent:
-		if rt.isStreamJSONMode() {
-			_ = rt.emitStream(map[string]any{"type": "error", "message": e.Message})
-		}
+		_ = rt.emitAndAppendEvent(map[string]any{"type": "error", "message": e.Message})
 		return fmt.Errorf("%s", e.Message)
 	case protocol.RetryEvent:
-		if rt.isStreamJSONMode() {
-			_ = rt.emitStream(map[string]any{"type": "retry"})
-		}
+		_ = rt.emitAndAppendEvent(map[string]any{"type": "retry"})
 	case conversation.ToolResult:
-		if rt.isStreamJSONMode() {
-			return rt.emitStream(map[string]any{
-				"type":        "tool_result",
-				"tool_use_id": e.ToolUseID,
-				"content":     e.Content,
-			})
+		toolResultEvt := map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": e.ToolUseID,
+			"name":        e.ToolName,
+			"content":     e.Content,
 		}
-		if e.Content != "" {
-			displayOutput := normalizeDisplayText(e.DisplayContent)
-			if e.ToolName == "Edit" {
-				displayOutput = normalizeDisplayText(e.Content)
-				if e.DisplayContent != "" {
-					displayOutput += "\n" + colorizeDiff(normalizeDisplayText(e.DisplayContent))
-				}
-			} else if displayOutput == "" {
-				displayOutput = normalizeDisplayText(e.Content)
+		if err := rt.emitAndAppendEvent(toolResultEvt); err != nil {
+			return err
+		}
+		if rt.isStreamJSONMode() {
+			return nil
+		}
+		// Match bash display_event TOOL_RESULT exactly:
+		// All tools: content already finalized at stream layer — just use as-is
+		var trText string
+		if e.ToolName == "Edit" {
+			// Content = summary_line + "\n" + colorized_diff + "\n" (from tool layer)
+			trText = normalizeDisplayText(e.Content)
+			// Ensure trailing newline
+			if !strings.HasSuffix(trText, "\n") {
+				trText += "\n"
 			}
-			if e.ToolName == "Read" {
-				displayOutput = conversation.BuildFileToolResultSummary("Read", e.ToolArgs["path"])
-			} else if e.ToolName == "Write" {
-				displayOutput = conversation.BuildFileToolResultSummary("Write", e.ToolArgs["path"])
-			}
-			suffix := "\n"
-			if strings.HasSuffix(displayOutput, "\n") {
-				suffix = ""
-			}
-			if _, err := rt.writeHuman(displayOutput + suffix); err != nil {
+		} else if e.ToolName == "Read" || e.ToolName == "Write" {
+			// Summary is already prepended to content; use first line for display
+			trText = conversation.FirstLine(normalizeDisplayText(e.Content)) + "\n"
+		} else {
+			trText = normalizeDisplayText(e.Content) + "\n"
+		}
+		// Insert newline when transitioning from thinking to text
+		if state.prevWasThinking && state.lastChar != "\n" {
+			if _, err := rt.writeHuman(rt.nl()); err != nil {
 				return err
 			}
-			if displayOutput != "" {
-				if strings.HasSuffix(displayOutput, "\n") {
-					state.lastChar = "\n"
-				} else {
-					state.lastChar = displayOutput[len(displayOutput)-1:]
-				}
+			state.lastChar = "\n"
+		}
+		state.prevWasThinking = false
+		if trText != "" {
+			if _, err := rt.writeHuman(trText); err != nil {
+				return err
+			}
+			if strings.HasSuffix(trText, "\n") {
+				state.lastChar = "\n"
+			} else if trText != "" {
+				state.lastChar = trText[len(trText)-1:]
 			}
 		}
 	}
@@ -882,11 +1153,13 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 func (rt *runtime) headers() map[string]string {
 	headers := map[string]string{
 		"Content-Type": "application/json",
+		"User-Agent":   "claude-cli/1.0.33 (max, cli)",
 	}
 	switch rt.cfg.Provider {
 	case "claude":
 		headers["x-api-key"] = rt.cfg.APIKey
 		headers["anthropic-version"] = "2023-06-01"
+		headers["x-app"] = "cli"
 	case "openai":
 		headers["Authorization"] = "Bearer " + rt.cfg.APIKey
 	}

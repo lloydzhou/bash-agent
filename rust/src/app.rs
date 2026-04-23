@@ -1,6 +1,6 @@
 use crate::assets::TOOLS_JSON;
 use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, parse_args};
-use crate::conversation::{Store, ToolResult, build_tool_call_summary, edit_diff_summary};
+use crate::conversation::{Store, ToolResult, build_tool_call_summary, first_line};
 use crate::httpclient::{HTTPError, StreamClient};
 use crate::prompt;
 use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent};
@@ -154,6 +154,7 @@ impl Runtime {
         cfg.session_id = sid.clone();
         let paths = session::paths_for(&home, &cwd, &sid);
         session::ensure_dir(&paths.base_dir)?;
+        let new_session = !paths.events.exists();
         for f in [&paths.conversation, &paths.events, &paths.summary, &paths.todo, &paths.plan] {
             touch(f)?;
         }
@@ -167,7 +168,7 @@ impl Runtime {
         let api_url = api_url(&cfg);
         let interrupted = Arc::new(AtomicBool::new(false));
 
-        Ok(Self {
+        let rt = Self {
             cfg,
             cwd,
             home,
@@ -179,11 +180,18 @@ impl Runtime {
             interrupted,
             esc_stop: None,
             esc_thread: None,
-        })
+        };
+
+        if new_session {
+            let _ = rt.append_event(json!({"type":"session_start","session_id":sid}));
+        }
+
+        Ok(rt)
     }
 
     fn interactive_mode(&mut self) -> Result<()> {
         self.info("bash-agent interactive mode (type 'exit' or Ctrl+D to quit)");
+        self.replay_last_turns();
         let history_path = self.home.join(".bash-agent/history");
         if let Some(parent) = history_path.parent() {
             fs::create_dir_all(parent)?;
@@ -238,8 +246,7 @@ impl Runtime {
         self.start_esc_interrupt_listener();
         let result = (|| -> Result<()> {
             self.conv.add_user(&user_input)?;
-            self.append_event(json!({"type":"session_start"}))?;
-            self.append_event(json!({"type":"user_message","content":user_input}))?;
+            self.append_event(json!({"type":"user_input","content":user_input}))?;
 
             let mut turn = 0;
             let mut ds = DisplayState {
@@ -306,15 +313,18 @@ impl Runtime {
                                 Err(e) => format!("Error: tool execution failed: {e}"),
                             };
                             output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
-                            let mut display_content = output.clone();
+                            let mut conv_content = String::new();
                             if call.name == "Edit" {
-                                let edit_diff = output.clone();
-                                let summary = edit_diff_summary(
+                                // Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
+                                // Conv file gets summary only (matches bash: result_for_conv = first line)
+                                conv_content = first_line(&output).to_string();
+                            } else if call.name == "Read" || call.name == "Write" {
+                                // Prepend file summary to content (matches bash behavior)
+                                let file_summary = Store::file_tool_result_summary(
+                                    &call.name,
                                     call.fields.get("path").map(String::as_str).unwrap_or(""),
-                                    &output,
                                 );
-                                output = summary;
-                                display_content = edit_diff;
+                                output = format!("{}\n{}", file_summary, output);
                             }
 
                             let tool_result = ToolResult {
@@ -326,7 +336,7 @@ impl Runtime {
                                     .map(|(k, v)| (k.clone(), v.clone()))
                                     .collect(),
                                 content: output.clone(),
-                                display_content,
+                                conv_content,
                             };
                             self.display_event(
                                 &mut ds,
@@ -364,9 +374,8 @@ impl Runtime {
                             text.clear();
                             calls.clear();
                             tool_results.clear();
-                            if self.is_stream_json_mode() {
-                                self.emit_stream(json!({"type":"retry"}))?;
-                            }
+                            // Always write to events.jsonl, and to stdout if stream-json mode
+                            self.emit_and_append_event(json!({"type":"retry"}))?;
                         }
                     }
                 }
@@ -391,16 +400,9 @@ impl Runtime {
                 // Tools already executed inline; persist unless interrupted
                 if !self.interrupted.load(Ordering::SeqCst) {
                     self.conv.add_assistant(&text, &calls)?;
-                    self.append_event(self.build_assistant_event(&text, &calls))?;
                     if !tool_results.is_empty() {
                         self.conv.add_tool_results(&tool_results)?;
-                        for r in &tool_results {
-                            self.append_event(json!({
-                                "type":"tool_result",
-                                "tool_use_id":r.tool_use_id,
-                                "content":r.content,
-                            }))?;
-                        }
+                        // Note: granular tool_result events already written by display_event via emit_and_append_event
                     }
                     let _ = self.compact_context_window("auto", false);
                     // tool_use/tool_calls → loop continues; anything else → break
@@ -408,7 +410,12 @@ impl Runtime {
                         return Ok(());
                     }
                 } else {
-                    if !self.is_stream_json_mode() {
+                    // Match bash: write stop interrupted event to events.jsonl (always)
+                    // and to stdout if stream-json mode
+                    let _ = self.emit_and_append_event(json!({"type":"stop","reason":"interrupted"}));
+                    if self.is_stream_json_mode() {
+                        // In stream-json mode the JSON was already printed by emit_and_append_event
+                    } else {
                         if ds.last_char != "\n" {
                             self.write_human("\n")?;
                         }
@@ -424,12 +431,23 @@ impl Runtime {
         result
     }
 
+    /// emit_and_append_event writes an event to events.jsonl (always) and to
+    /// stdout (only in stream-json mode). Mirrors Go's emitAndAppendEvent and
+    /// bash's session_append_line + (stream-json || human display) pattern.
+    fn emit_and_append_event(&self, value: Value) -> Result<()> {
+        self.append_event(value.clone())?;
+        if self.is_stream_json_mode() {
+            self.emit_stream(value)?;
+        }
+        Ok(())
+    }
+
     fn display_event(&self, ds: &mut DisplayState, evt: DisplayEvent) -> Result<()> {
         match evt {
             DisplayEvent::Thinking(content) => {
-                if self.is_stream_json_mode() {
-                    self.emit_stream(json!({"type":"thinking","content":content}))?;
-                } else {
+                // Always write to events.jsonl, and to stdout if stream-json mode
+                self.emit_and_append_event(json!({"type":"thinking","content":content.clone()}))?;
+                if !self.is_stream_json_mode() {
                     // Gray color for thinking output
                     self.write_human(&format!("\x1b[90m{}\x1b[0m", content))?;
                     let display_content = normalize_display_text(&content, self.cfg.interactive);
@@ -442,9 +460,9 @@ impl Runtime {
                 ds.prev_was_thinking = true;
             }
             DisplayEvent::Text(content) => {
-                if self.is_stream_json_mode() {
-                    self.emit_stream(json!({"type":"text","content":content}))?;
-                } else {
+                // Always write to events.jsonl, and to stdout if stream-json mode
+                self.emit_and_append_event(json!({"type":"text","content":content.clone()}))?;
+                if !self.is_stream_json_mode() {
                     // Insert newline when transitioning from thinking to text
                     if ds.prev_was_thinking && ds.last_char != "\n" {
                         self.write_human("\n")?;
@@ -461,22 +479,19 @@ impl Runtime {
                 ds.prev_was_thinking = false;
             }
             DisplayEvent::ToolCall(call) => {
+                // Always write to events.jsonl, and to stdout if stream-json mode
+                self.emit_and_append_event(json!({
+                    "type":"tool_call",
+                    "name": call.name,
+                    "id": call.id,
+                    "input": call.input_json,
+                }))?;
                 if !self.is_stream_json_mode() {
+                    // display_ensure_newline (match bash)
                     if ds.last_char != "\n" {
                         self.write_human("\n")?;
-                    } else {
-                        self.write_carriage_return()?;
                     }
                     ds.last_char = "\n".to_string();
-                }
-                if self.is_stream_json_mode() {
-                    self.emit_stream(json!({
-                        "type":"tool_call",
-                        "name": call.name,
-                        "id": call.id,
-                        "input": call.input_json,
-                    }))?;
-                } else {
                     self.write_human(&format!(
                         "\x1b[33m[tool] {}\x1b[0m\n",
                         build_tool_call_summary(&call.name, &call.fields)
@@ -488,66 +503,65 @@ impl Runtime {
                 output_tokens,
                 cache_input_tokens,
             }) => {
-                if self.is_stream_json_mode() {
-                    self.emit_stream(json!({
-                        "type":"usage",
-                        "input_tokens":input_tokens,
-                        "output_tokens":output_tokens,
-                        "cache_input_tokens":cache_input_tokens
-                    }))?;
-                }
+                // Always write to events.jsonl, and to stdout if stream-json mode
+                self.emit_and_append_event(json!({
+                    "type":"usage",
+                    "input_tokens":input_tokens,
+                    "output_tokens":output_tokens,
+                    "cache_input_tokens":cache_input_tokens
+                }))?;
+                // No human display for usage events
             }
             DisplayEvent::Stop(reason) => {
-                if self.is_stream_json_mode() {
-                    self.emit_stream(json!({"type":"stop","reason":reason}))?;
-                } else if ds.last_char != "\n" {
+                // Always write to events.jsonl, and to stdout if stream-json mode
+                self.emit_and_append_event(json!({"type":"stop","reason":&reason}))?;
+                if !self.is_stream_json_mode() && ds.last_char != "\n" {
                     self.write_human("\n")?;
                     ds.last_char = "\n".to_string();
                 }
             }
             DisplayEvent::Error(message) => {
-                if self.is_stream_json_mode() {
-                    let _ = self.emit_stream(json!({"type":"error","message":message}));
-                }
+                // Always write to events.jsonl, and to stdout if stream-json mode
+                let _ = self.emit_and_append_event(json!({"type":"error","message":&message}));
                 return Err(anyhow!(message));
             }
             DisplayEvent::ToolResult(result) => {
-                if self.is_stream_json_mode() {
-                    self.emit_stream(json!({
-                        "type":"tool_result",
-                        "tool_use_id": result.tool_use_id,
-                        "content": result.content,
-                    }))?;
-                } else if !result.content.is_empty() {
-                    let display_output = if result.tool_name == "Edit" {
-                        let mut out = result.content.clone();
-                        if !result.display_content.is_empty() {
+                // Always write to events.jsonl, and to stdout if stream-json mode
+                self.emit_and_append_event(json!({
+                    "type":"tool_result",
+                    "tool_use_id": result.tool_use_id,
+                    "name": result.tool_name,
+                    "content": result.content,
+                }))?;
+                if !self.is_stream_json_mode() && !result.content.is_empty() {
+                    // Match bash display_event TOOL_RESULT exactly:
+                    // Content already finalized at stream layer — just use as-is
+                    let tr_text = if result.tool_name == "Edit" {
+                        // Content = summary_line + "\n" + colorized_diff + "\n" (from tool layer)
+                        let mut out = normalize_display_text(&result.content, self.cfg.interactive);
+                        if !out.ends_with('\n') {
                             out.push('\n');
-                            out.push_str(&colorize_diff(&result.display_content));
                         }
-                        normalize_display_text(&out, self.cfg.interactive)
-                    } else if result.tool_name == "Read" {
-                        Store::file_tool_result_summary(
-                            "Read",
-                            result.tool_args.get("path").map(String::as_str).unwrap_or(""),
-                        )
-                    } else if result.tool_name == "Write" {
-                        Store::file_tool_result_summary(
-                            "Write",
-                            result.tool_args.get("path").map(String::as_str).unwrap_or(""),
-                        )
+                        out
+                    } else if result.tool_name == "Read" || result.tool_name == "Write" {
+                        // Summary already prepended; use first line for display
+                        first_line(&result.content).to_string() + "\n"
                     } else {
-                        normalize_display_text(&result.content, self.cfg.interactive)
+                        normalize_display_text(&result.content, self.cfg.interactive) + "\n"
                     };
-                    if display_output.ends_with('\n') {
-                        self.write_human(&display_output)?;
+                    // Insert newline when transitioning from thinking to text
+                    if ds.prev_was_thinking && ds.last_char != "\n" {
+                        self.write_human("\n")?;
                         ds.last_char = "\n".to_string();
-                    } else {
-                        let last = display_output.chars().last();
-                        self.write_human(&format!("{display_output}\n"))?;
-                        ds.last_char = last
-                            .map(|c| c.to_string())
-                            .unwrap_or_else(|| "\n".to_string());
+                    }
+                    ds.prev_was_thinking = false;
+                    if !tr_text.is_empty() {
+                        self.write_human(&tr_text)?;
+                        if tr_text.ends_with('\n') {
+                            ds.last_char = "\n".to_string();
+                        } else {
+                            ds.last_char = tr_text.chars().last().map(|c| c.to_string()).unwrap_or_else(|| "\n".to_string());
+                        }
                     }
                 }
             }
@@ -746,11 +760,15 @@ impl Runtime {
     }
 
     fn headers(&self) -> Vec<(String, String)> {
-        let mut h = vec![("Content-Type".to_string(), "application/json".to_string())];
+        let mut h = vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("User-Agent".to_string(), "claude-cli/1.0.33 (max, cli)".to_string()),
+        ];
         match self.cfg.provider.as_str() {
             "claude" => {
                 h.push(("x-api-key".to_string(), self.cfg.api_key.clone()));
                 h.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
+                h.push(("x-app".to_string(), "cli".to_string()));
             }
             "openai" => {
                 h.push((
@@ -800,20 +818,280 @@ impl Runtime {
         Ok(())
     }
 
-    fn write_carriage_return(&self) -> Result<()> {
-        if self.cfg.interactive {
-            print!("\r");
-            io::stdout().flush()?;
-        }
-        Ok(())
-    }
-
     fn info(&self, msg: &str) {
         if self.cfg.interactive {
             eprint!("\x1b[36m{msg}\x1b[0m\r\n");
             let _ = io::stderr().flush();
         } else {
             eprintln!("\x1b[36m{msg}\x1b[0m");
+        }
+    }
+
+    /// display_replay_event mirrors bash's display_event exactly for replay purposes.
+    fn display_replay_event(&self, ds: &mut DisplayState, evt_type: &str, fields: &std::collections::HashMap<&str, &str>) {
+        match evt_type {
+            "TEXT" => {
+                let content = fields.get("content").copied().unwrap_or("");
+                // Insert newline when transitioning from thinking to text
+                if ds.prev_was_thinking && ds.last_char != "\n" {
+                    self.write_human("\n").ok();
+                    ds.last_char = "\n".to_string();
+                }
+                ds.prev_was_thinking = false;
+                if !content.is_empty() {
+                    self.write_human(content).ok();
+                    if content.ends_with('\n') {
+                        ds.last_char = "\n".to_string();
+                    } else {
+                        ds.last_char = content.chars().last().map(|c| c.to_string()).unwrap_or("\n".to_string());
+                    }
+                }
+            }
+            "THINKING" => {
+                let content = fields.get("content").copied().unwrap_or("");
+                if !content.is_empty() {
+                    self.write_human(&format!("\x1b[90m{}\x1b[0m", content)).ok();
+                    if content.ends_with('\n') {
+                        ds.last_char = "\n".to_string();
+                    } else {
+                        ds.last_char = content.chars().last().map(|c| c.to_string()).unwrap_or("\n".to_string());
+                    }
+                }
+                ds.prev_was_thinking = true;
+            }
+            "TOOL_CALL" => {
+                // display_ensure_newline
+                if ds.last_char != "\n" {
+                    self.write_human("\n").ok();
+                }
+                let name = fields.get("name").copied().unwrap_or("");
+                let mut summary_fields = std::collections::BTreeMap::new();
+                for (k, v) in fields {
+                    if *k != "name" {
+                        summary_fields.insert(k.to_string(), v.to_string());
+                    }
+                }
+                let summary = build_tool_call_summary(name, &summary_fields);
+                self.write_human(&format!("\x1b[33m[tool] {}\x1b[0m\n", summary)).ok();
+                ds.last_char = "\n".to_string();
+                ds.prev_was_thinking = false;
+            }
+            "TOOL_RESULT" => {
+                let name = fields.get("name").copied().unwrap_or("");
+                let content = fields.get("content").copied().unwrap_or("");
+                // Content already has colorized diff from tool layer — use as-is
+                let tr_text = if name == "Edit" {
+                    content.to_string() + "\n"
+                } else if name == "Read" || name == "Write" {
+                    // Summary already prepended; use first line
+                    content.lines().next().unwrap_or("").to_string() + "\n"
+                } else {
+                    content.to_string() + "\n"
+                };
+                // Insert newline when transitioning from thinking to text
+                if ds.prev_was_thinking && ds.last_char != "\n" {
+                    self.write_human("\n").ok();
+                    ds.last_char = "\n".to_string();
+                }
+                ds.prev_was_thinking = false;
+                if !tr_text.is_empty() {
+                    self.write_human(&tr_text).ok();
+                    if tr_text.ends_with('\n') {
+                        ds.last_char = "\n".to_string();
+                    } else {
+                        ds.last_char = tr_text.chars().last().map(|c| c.to_string()).unwrap_or("\n".to_string());
+                    }
+                }
+            }
+            "USER_MESSAGE" => {
+                // display_ensure_newline
+                if ds.last_char != "\n" {
+                    self.write_human("\n").ok();
+                }
+                let mut content = fields.get("content").copied().unwrap_or("");
+                if content.chars().count() > 80 {
+                    content = &content[..content.char_indices().take(77).last().map(|(i, _)| i).unwrap_or(0)];
+                    // Can't easily truncate by chars, use owned
+                }
+                let display = if content.chars().count() > 80 {
+                    let truncated: String = content.chars().take(77).collect();
+                    format!("{}...", truncated)
+                } else {
+                    content.to_string()
+                };
+                self.write_human(&format!("\x1b[32m> {}\x1b[0m\n", display)).ok();
+                ds.last_char = "\n".to_string();
+                ds.prev_was_thinking = false;
+            }
+            "STOP" => {
+                if ds.last_char != "\n" {
+                    self.write_human("\n").ok();
+                    ds.last_char = "\n".to_string();
+                }
+            }
+            "ERROR" => {
+                if ds.last_char != "\n" {
+                    self.write_human("\n").ok();
+                }
+                let msg = fields.get("message").copied().unwrap_or("");
+                eprintln!("\x1b[31mError: {}\x1b[0m", msg);
+            }
+            _ => {}
+        }
+    }
+
+    fn replay_last_turns(&self) {
+        let events_path = &self.paths.events;
+        if !events_path.exists() {
+            return;
+        }
+        let data = match fs::read_to_string(events_path) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let events: Vec<Value> = data
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        if events.is_empty() {
+            return;
+        }
+
+        // Find boundaries of "turns" — each user_input event starts a turn
+        let mut turn_starts: Vec<usize> = Vec::new();
+        for (i, evt) in events.iter().enumerate() {
+            let t = evt.get("type").and_then(Value::as_str).unwrap_or("");
+            if t == "user_input" || t == "user_message" {
+                turn_starts.push(i);
+            }
+        }
+        if turn_starts.is_empty() {
+            return;
+        }
+
+        // Keep last 10 turns (match bash)
+        let keep = turn_starts.len().saturating_sub(10);
+        let start_idx = if keep < turn_starts.len() { turn_starts[keep] } else { 0 };
+        let had_turns = turn_starts.len().saturating_sub(keep) > 0;
+
+        let mut ds = DisplayState {
+            last_char: "\n".to_string(),
+            prev_was_thinking: false,
+        };
+        let mut acc_text = String::new();
+        let mut acc_thinking = String::new();
+
+        for evt in &events[start_idx..] {
+            let evt_type = evt.get("type").and_then(Value::as_str).unwrap_or("");
+            match evt_type {
+                "session_start" | "usage" | "stop" | "retry" => continue,
+                "user_input" | "user_message" => {
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+                    if content.is_empty() {
+                        continue;
+                    }
+                    self.display_replay_event(&mut ds, "USER_MESSAGE", &std::collections::HashMap::from([("content", content)]));
+                }
+                "thinking" => {
+                    // Flush text, accumulate thinking (match bash event_replay.awk)
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "text");
+                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+                    acc_thinking.push_str(content);
+                }
+                "text" => {
+                    // Flush thinking, accumulate text (match bash event_replay.awk)
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "thinking");
+                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+                    acc_text.push_str(content);
+                }
+                "tool_call" => {
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+                    let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
+                    let default_input = json!({});
+                    let input = evt.get("input").unwrap_or(&default_input);
+                    let fields = parse_input_fields(input);
+                    let mut map = std::collections::HashMap::new();
+                    map.insert("name", name.to_string());
+                    for (k, v) in &fields {
+                        map.insert(k.as_str(), v.as_str().to_string());
+                    }
+                    let str_map: std::collections::HashMap<&str, &str> = map.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                    self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
+                }
+                "tool_result" => {
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+                    let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
+                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+                    let mut display = content.to_string();
+                    // Truncate for replay (match bash: 200 chars)
+                    if display.len() > 200 {
+                        display.truncate(200);
+                        display.push_str("...");
+                    }
+                    self.display_replay_event(&mut ds, "TOOL_RESULT", &std::collections::HashMap::from([
+                        ("name", name),
+                        ("content", display.as_str()),
+                    ]));
+                }
+                "error" => {
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+                    let msg = evt.get("message").and_then(Value::as_str).unwrap_or("");
+                    self.display_replay_event(&mut ds, "ERROR", &std::collections::HashMap::from([("message", msg)]));
+                }
+                "assistant_message" => {
+                    // Legacy format: emit TEXT + TOOL_CALL per tool_call (match bash event_replay.awk)
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+                    let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
+                    if !text.is_empty() {
+                        self.display_replay_event(&mut ds, "TEXT", &std::collections::HashMap::from([("content", text)]));
+                    }
+                    if let Some(tool_calls) = evt.get("tool_calls").and_then(Value::as_array) {
+                        for tc in tool_calls {
+                            let name = tc.get("name").and_then(Value::as_str).unwrap_or("");
+                            let default_input = json!({});
+                            let input = tc.get("input").unwrap_or(&default_input);
+                            let fields = parse_input_fields(input);
+                            let mut map = std::collections::HashMap::new();
+                            map.insert("name", name.to_string());
+                            for (k, v) in &fields {
+                                map.insert(k.as_str(), v.as_str().to_string());
+                            }
+                            let str_map: std::collections::HashMap<&str, &str> = map.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                            self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+        if had_turns {
+            self.write_human("\n").ok();
+        }
+    }
+
+    /// Flush accumulated text/thinking through display_replay_event.
+    /// `which`: "thinking" = flush thinking only, "text" = flush text only, "both" = flush both.
+    fn flush_acc(
+        this: &Self,
+        acc_thinking: &mut String,
+        acc_text: &mut String,
+        ds: &mut DisplayState,
+        which: &str,
+    ) {
+        if which == "thinking" || which == "both" {
+            if !acc_thinking.is_empty() {
+                let content = std::mem::take(acc_thinking);
+                this.display_replay_event(ds, "THINKING", &std::collections::HashMap::from([("content", content.as_str())]));
+            }
+        }
+        if which == "text" || which == "both" {
+            if !acc_text.is_empty() {
+                let content = std::mem::take(acc_text);
+                this.display_replay_event(ds, "TEXT", &std::collections::HashMap::from([("content", content.as_str())]));
+            }
         }
     }
 
@@ -842,22 +1120,7 @@ fn normalize_display_text(s: &str, interactive: bool) -> String {
     }
 }
 
-fn colorize_diff(s: &str) -> String {
-    let mut out = Vec::new();
-    for line in s.lines() {
-        let colored = if line.starts_with("--- ") || line.starts_with("+++ ") || line.starts_with("@@ ") {
-            format!("\x1b[36m{line}\x1b[0m")
-        } else if line.starts_with('+') && !line.starts_with("+++") {
-            format!("\x1b[32m{line}\x1b[0m")
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            format!("\x1b[31m{line}\x1b[0m")
-        } else {
-            line.to_string()
-        };
-        out.push(colored);
-    }
-    out.join("\n")
-}
+
 
 fn touch(path: &Path) -> Result<()> {
     if !path.exists() {
@@ -972,4 +1235,17 @@ fn print_usage() {
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
     println!("  -h, --help              Show this help");
+}
+
+fn parse_input_fields(input: &Value) -> std::collections::BTreeMap<String, String> {
+    let mut fields = std::collections::BTreeMap::new();
+    if let Some(obj) = input.as_object() {
+        for (k, v) in obj {
+            match v {
+                Value::String(s) => { fields.insert(k.clone(), s.clone()); }
+                _ => { fields.insert(k.clone(), v.to_string()); }
+            }
+        }
+    }
+    fields
 }

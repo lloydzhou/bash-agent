@@ -15,8 +15,8 @@ pub struct ToolResult {
     pub tool_use_id: String,
     pub tool_name: String,
     pub tool_args: std::collections::BTreeMap<String, String>,
-    pub content: String,
-    pub display_content: String,
+    pub content: String,      // Full output for events.jsonl TOOL_RESULT (matches bash)
+    pub conv_content: String, // Summary only for conv file (matches bash: result_for_conv = first line of Edit output)
 }
 
 impl Store {
@@ -45,7 +45,14 @@ impl Store {
     pub fn add_tool_results(&self, results: &[ToolResult]) -> Result<()> {
         let content: Vec<Value> = results
             .iter()
-            .map(|r| json!({"type":"tool_result","tool_use_id":r.tool_use_id,"content":r.content}))
+            .map(|r| {
+                let conv_content = if r.conv_content.is_empty() {
+                    &r.content
+                } else {
+                    &r.conv_content
+                };
+                json!({"type":"tool_result","tool_use_id":r.tool_use_id,"content":conv_content})
+            })
             .collect();
         self.append_line(&json!({"role":"user","content":content}))
     }

@@ -189,12 +189,15 @@ impl Runner {
         if updated.is_empty() {
             bail!("Error: edit produced empty result, reverted");
         }
-        let diff = unified_diff(path, &content, &updated)?;
+        let diff = unified_diff_color(path, &content, &updated)?;
         fs::write(path, updated)?;
         if diff.is_empty() {
             Ok(format!("Edit({path}) [no changes]"))
         } else {
-            Ok(diff)
+            // Match bash tool_edit: output = summary_line + "\n" + colorized_diff + "\n"
+            let (added, removed) = count_diff_lines(&diff);
+            let summary = format!("Edit({path}) [+{added} -{removed} lines]");
+            Ok(format!("{summary}\n{diff}\n"))
         }
     }
 
@@ -419,29 +422,106 @@ fn stream_reader<R: std::io::Read>(pipe: R, buf: Arc<Mutex<String>>) {
     }
 }
 
-fn unified_diff(path: &str, old_content: &str, new_content: &str) -> Result<String> {
+fn unified_diff_color(path: &str, old_content: &str, new_content: &str) -> Result<String> {
     let old_path = std::env::temp_dir().join(format!("edit-old-{}", std::process::id()));
     let new_path = std::env::temp_dir().join(format!("edit-new-{}", std::process::id()));
     fs::write(&old_path, old_content)?;
     fs::write(&new_path, new_content)?;
+    let label = path.trim_start_matches('/');
+    // Try with --color=always first (match bash tool_edit behavior)
     let diff = Command::new("diff")
         .args([
             "-u",
+            "--color=always",
             "--label",
-            &format!("a/{}", path.trim_start_matches('/')),
+            &format!("a/{label}"),
             "--label",
-            &format!("b/{}", path.trim_start_matches('/')),
+            &format!("b/{label}"),
             old_path.to_str().unwrap_or(""),
             new_path.to_str().unwrap_or(""),
         ])
-        .output()?;
+        .output();
     let _ = fs::remove_file(&old_path);
     let _ = fs::remove_file(&new_path);
-    if diff.status.success() || diff.status.code() == Some(1) {
-        Ok(String::from_utf8_lossy(&diff.stdout).to_string())
-    } else {
-        bail!("Error: diff failed");
+    match diff {
+        Ok(output) => {
+            if output.status.success() || output.status.code() == Some(1) {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                // Check if --color was unsupported
+                if stdout.contains("unsupported --color") || stdout.contains("unrecognized option '--color'") {
+                    // Fallback: no color
+                    let old_path2 = std::env::temp_dir().join(format!("edit-old2-{}", std::process::id()));
+                    let new_path2 = std::env::temp_dir().join(format!("edit-new2-{}", std::process::id()));
+                    fs::write(&old_path2, old_content)?;
+                    fs::write(&new_path2, new_content)?;
+                    let diff2 = Command::new("diff")
+                        .args([
+                            "-u",
+                            "--label",
+                            &format!("a/{label}"),
+                            "--label",
+                            &format!("b/{label}"),
+                            old_path2.to_str().unwrap_or(""),
+                            new_path2.to_str().unwrap_or(""),
+                        ])
+                        .output();
+                    let _ = fs::remove_file(&old_path2);
+                    let _ = fs::remove_file(&new_path2);
+                    match diff2 {
+                        Ok(o) if o.status.success() || o.status.code() == Some(1) => {
+                            Ok(String::from_utf8_lossy(&o.stdout).to_string())
+                        }
+                        _ => bail!("Error: diff failed"),
+                    }
+                } else {
+                    Ok(stdout)
+                }
+            } else {
+                bail!("Error: diff failed")
+            }
+        }
+        Err(_) => bail!("Error: diff failed"),
     }
+}
+
+/// Count added/removed lines in unified diff output (works with ANSI color codes).
+fn count_diff_lines(diff: &str) -> (usize, usize) {
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    for line in diff.lines() {
+        let stripped = strip_ansi(line);
+        if stripped.starts_with('+') && !stripped.starts_with("+++") {
+            added += 1;
+        }
+        if stripped.starts_with('-') && !stripped.starts_with("---") {
+            removed += 1;
+        }
+    }
+    (added, removed)
+}
+
+/// Strip ANSI escape sequences from a string.
+fn strip_ansi(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // Skip CSI sequence: ESC [ ... final_byte
+            let mut j = i + 2;
+            while j < bytes.len() && ((bytes[j] >= 0x30 && bytes[j] <= 0x3f) || (bytes[j] >= 0x20 && bytes[j] <= 0x2f)) {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] >= 0x40 && bytes[j] <= 0x7e {
+                j += 1;
+            }
+            i = j;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
 }
 
 pub fn format_tool_result(s: &str, max: usize) -> String {

@@ -62,10 +62,14 @@ func (s Store) AddAssistant(text string, calls []protocol.ToolCallEvent) error {
 func (s Store) AddToolResults(results []ToolResult) error {
 	content := make([]any, 0, len(results))
 	for _, result := range results {
+		convContent := result.ConvContent
+		if convContent == "" {
+			convContent = result.Content
+		}
 		content = append(content, map[string]any{
 			"type":        "tool_result",
 			"tool_use_id": result.ToolUseID,
-			"content":     result.Content,
+			"content":     convContent,
 		})
 	}
 	line, err := json.Marshal(map[string]any{
@@ -212,11 +216,11 @@ func appendLine(path string, line []byte) error {
 }
 
 type ToolResult struct {
-	ToolUseID      string
-	ToolName       string
-	ToolArgs       map[string]string
-	Content        string
-	DisplayContent string
+	ToolUseID   string
+	ToolName    string
+	ToolArgs    map[string]string
+	Content     string // Full output for events.jsonl TOOL_RESULT (matches bash: write_message("TOOL_RESULT", id, name, output))
+	ConvContent string // Summary only for conv file (matches bash: result_for_conv = first line of Edit output)
 }
 
 func BuildToolResultJSON(id, content string) ([]byte, error) {

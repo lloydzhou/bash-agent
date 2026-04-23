@@ -276,7 +276,7 @@ func TestRunSessionWritesConversationAndEvents(t *testing.T) {
 	if !strings.Contains(string(convData), `"role":"user"`) || !strings.Contains(string(convData), `"content":"hello"`) || !strings.Contains(string(convData), `"role":"assistant"`) {
 		t.Fatalf("unexpected conversation file: %s", string(convData))
 	}
-	if !strings.Contains(string(eventsData), `"type":"session_start"`) || !strings.Contains(string(eventsData), `"type":"assistant_message"`) {
+	if !strings.Contains(string(eventsData), `"type":"session_start"`) {
 		t.Fatalf("unexpected events file: %s", string(eventsData))
 	}
 }
