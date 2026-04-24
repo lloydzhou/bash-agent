@@ -941,17 +941,21 @@ tool_bash() {
         return 1
     fi
 
+    local tmpout
+    tmpout=$(mktemp)
+
     if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
-        output=$(run_with_timeout "$timeout_secs" bash -lc "$cmd" 2>&1)
+        run_with_timeout "$timeout_secs" bash -lc "$cmd" > "$tmpout" 2>&1
         tool_rc=$?
         if (( tool_rc == 124 )); then
-            output+=$'\n[... command timed out after '"$timeout_secs"' seconds ...]'
+            printf '\n[... command timed out after %s seconds ...]' "$timeout_secs" >> "$tmpout"
         fi
     else
-        output=$(bash -lc "$cmd" 2>&1)
+        bash -lc "$cmd" > "$tmpout" 2>&1
         tool_rc=$?
     fi
-    printf '%s' "$output"
+    cat "$tmpout"
+    rm -f "$tmpout"
     return "$tool_rc"
 }
 
