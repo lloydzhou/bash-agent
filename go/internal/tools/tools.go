@@ -155,24 +155,19 @@ func (r Runner) Read(path string, offset, limit *int) (string, error) {
 		}
 		return "", err
 	}
-	content := string(data)
-	lines := strings.Split(content, "\n")
+	// No offset/limit → return raw file content (match bash: cat)
+	if offset == nil && limit == nil {
+		return string(data), nil
+	}
+
+	lines := strings.Split(string(data), "\n")
 	// Handle trailing newline: Split produces an extra empty string
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	totalLines := len(lines)
 
-	// If no offset/limit, return full file with line numbers
-	if offset == nil && limit == nil {
-		var buf strings.Builder
-		for i, line := range lines {
-			fmt.Fprintf(&buf, "%6d\t%s\n", i+1, line)
-		}
-		return buf.String(), nil
-	}
-
-	// Apply offset (1-indexed, default 1)
+	// offset: 1-indexed, default 1
 	start := 0
 	if offset != nil && *offset > 1 {
 		start = *offset - 1
@@ -181,18 +176,14 @@ func (r Runner) Read(path string, offset, limit *int) (string, error) {
 		return "", fmt.Errorf("Error: offset %d exceeds total lines %d in %s", *offset, totalLines, path)
 	}
 
-	// Apply limit
+	// limit: 0 means no limit
 	end := totalLines
 	if limit != nil && *limit > 0 && start+*limit < end {
 		end = start + *limit
 	}
 
-	var buf strings.Builder
-	fmt.Fprintf(&buf, "(showing lines %d-%d of %d)\n", start+1, end, totalLines)
-	for i := start; i < end; i++ {
-		fmt.Fprintf(&buf, "%6d\t%s\n", i+1, lines[i])
-	}
-	return buf.String(), nil
+	selected := lines[start:end]
+	return strings.Join(selected, "\n"), nil
 }
 
 func (r Runner) Write(path, content string) (string, error) {

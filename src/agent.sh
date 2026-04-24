@@ -979,10 +979,8 @@ tool_grep() {
 }
 
 tool_todo() {
-    local checklist="$1"
-    printf '%s\n' "$checklist" > "$TODO_FILE"
-    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$(build_todo_event_json "$checklist")"
-    printf '%s' "$checklist"
+    printf '%s\n' "$1" > "$TODO_FILE"
+    printf '%s' "$1"
 }
 
 tool_skill() {

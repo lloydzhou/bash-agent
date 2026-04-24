@@ -151,6 +151,11 @@ impl Runner {
         }
         let data = fs::read_to_string(path)
             .map_err(|_| anyhow!("Error: file not found or unreadable: {path}"))?;
+        // No offset/limit → return raw file content (match bash: cat)
+        if offset.is_none() && limit.is_none() {
+            return Ok(data);
+        }
+
         let mut lines: Vec<&str> = data.split('\n').collect();
         // Handle trailing newline: split produces an extra empty string
         if !lines.is_empty() && lines.last().map(|l| l.is_empty()).unwrap_or(false) {
@@ -158,16 +163,7 @@ impl Runner {
         }
         let total_lines = lines.len();
 
-        // If no offset/limit, return full file with line numbers
-        if offset.is_none() && limit.is_none() {
-            let mut buf = String::new();
-            for (i, line) in lines.iter().enumerate() {
-                buf.push_str(&format!("{:>6}\t{}\n", i + 1, line));
-            }
-            return Ok(buf);
-        }
-
-        // Apply offset (1-indexed, default 1)
+        // offset: 1-indexed, default 1
         let start = match offset {
             Some(o) if o > 1 => {
                 if o > total_lines {
@@ -178,18 +174,14 @@ impl Runner {
             _ => 0,
         };
 
-        // Apply limit
+        // limit: 0 means no limit
         let end = match limit {
             Some(l) if l > 0 => (start + l).min(total_lines),
             _ => total_lines,
         };
 
-        let mut buf = String::new();
-        buf.push_str(&format!("(showing lines {}-{} of {})\n", start + 1, end, total_lines));
-        for i in start..end {
-            buf.push_str(&format!("{:>6}\t{}\n", i + 1, lines[i]));
-        }
-        Ok(buf)
+        let selected = &lines[start..end];
+        Ok(selected.join("\n"))
     }
 
     fn write(&self, path: &str, content: &str) -> Result<String> {
