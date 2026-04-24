@@ -83,7 +83,7 @@ func ParseArgs(args []string) (Config, error) {
 			if err != nil {
 				return cfg, err
 			}
-			n, err := strconv.Atoi(val)
+			n, err := ParseSizeBytes(val)
 			if err != nil {
 				return cfg, fmt.Errorf("invalid --max-tokens value: %s", val)
 			}

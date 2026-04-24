@@ -77,7 +77,7 @@ pub fn parse_args(args: Vec<String>) -> Result<Config> {
                 i += 2;
             }
             "--max-tokens" => {
-                cfg.max_tokens = require_value(&args, i)?.parse()?;
+                cfg.max_tokens = parse_size_bytes(&require_value(&args, i)?)? as i32;
                 i += 2;
             }
             "--tool-timeout" => {
