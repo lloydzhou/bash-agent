@@ -243,6 +243,7 @@ History is stored in:
 ### `Read`
 
 - reads file content as text
+- supports `offset` (starting line number) and `limit` (number of lines) for reading specific line ranges
 - default result cap: `50KB`
 - returns truncated content when the file is larger
 
@@ -261,7 +262,8 @@ History is stored in:
 ### `Bash`
 
 - runs shell commands
-- default timeout: `600s`
+- supports per-command `timeout` parameter (in seconds)
+- default timeout: `600s` (configurable globally via `--tool-timeout`)
 - captures and truncates large output
 
 ### `Glob`
@@ -271,7 +273,9 @@ History is stored in:
 
 ### `Grep`
 
-- content search using `rg -n`
+- content search using `rg -n`, supports regex patterns
+- supports `path` (search directory), `glob` (file filter), and `context` (surrounding lines)
+- `context` shows N lines before/after each match, useful for direct editing
 - requires `rg`
 
 ### `TodoWrite`

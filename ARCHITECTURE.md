@@ -275,9 +275,16 @@ skills 当前优先读取：
 
 - `Glob`
   - 用 `rg --files -g`
+  - 支持 `path` 参数指定搜索目录
 - `Grep`
   - 用 `rg -n`
+  - 支持 `path`（搜索路径）、`glob`（文件过滤）、`context`（上下文行数）
+  - `context` 可显示匹配行前后 N 行
 - 没有 `rg` 就报错，不做复杂 fallback
+
+`Read` 支持通过 `offset` 和 `limit` 参数读取文件指定行范围，避免大文件整文件读取。
+
+`Bash` 支持通过 `timeout` 参数为单条命令设置独立超时，覆盖全局 `--tool-timeout`。
 
 ### 后续不该做什么
 

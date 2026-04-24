@@ -226,7 +226,10 @@ run_with_timeout() {
     elif command -v timeout >/dev/null 2>&1; then
         timeout "${timeout_secs}s" "$@" 2>&1
     else
-        "$@" 2>&1
+        # pure shell fallback (no timeout/gtimeout available)
+        "$@" 2>&1 & local pid=$!
+        ( sleep "$timeout_secs" && kill -TERM $pid 2>/dev/null ) & local watcher=$!
+        wait $pid 2>/dev/null; local rc=$?; kill $watcher 2>/dev/null; return $(( rc == 143 ? 124 : rc ))
     fi
 }
 
