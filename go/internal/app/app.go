@@ -164,6 +164,9 @@ func (rt *runtime) initState() error {
 	if err := session.EnsureDir(rt.paths.BaseDir); err != nil {
 		return err
 	}
+	if err := session.EnsureDir(rt.paths.SessionDir); err != nil {
+		return err
+	}
 	newSession := !fileExists(rt.paths.Events)
 	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan} {
 		if err := touch(path); err != nil {
@@ -1326,16 +1329,15 @@ func listSessions(home, cwd string, w io.Writer) error {
 	}
 	var rows []row
 	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".events.jsonl") {
+		if !entry.IsDir() {
 			continue
 		}
+		sessionName := entry.Name()
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
-		sessionName := strings.TrimSuffix(name, ".jsonl")
-		summaryFile := filepath.Join(dir, sessionName+".summary.txt")
+		summaryFile := filepath.Join(dir, sessionName, "summary.txt")
 		var summary string
 		if data, err := os.ReadFile(summaryFile); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(data)), "\n")

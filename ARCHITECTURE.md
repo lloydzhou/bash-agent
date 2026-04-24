@@ -118,22 +118,26 @@ Go 和 Rust 版本当前也保持和 bash 一致的两层结构：
 session 数据按当前项目目录归档：
 
 ```text
-~/.bash-agent/projects/<project_key>/<session_id>.jsonl
-~/.bash-agent/projects/<project_key>/<session_id>.events.jsonl
-~/.bash-agent/projects/<project_key>/<session_id>.summary.txt
-~/.bash-agent/projects/<project_key>/<session_id>.todo.md
+~/.bash-agent/projects/<project_key>/<session_id>/
+    conversation.jsonl
+    events.jsonl
+    summary.txt
+    todo.md
+    plan.md
 ```
 
 职责分工：
 
-- `*.jsonl`
+- `conversation.jsonl`
   - 当前真正发给模型的消息窗口
-- `*.events.jsonl`
+- `events.jsonl`
   - session 内部事件日志
-- `*.summary.txt`
+- `summary.txt`
   - compact 后留下的历史摘要
-- `*.todo.md`
+- `todo.md`
   - 当前 session 的待办清单，由 `TodoWrite` 维护
+- `plan.md`
+  - 当前 session 的计划文档，由 `plan-lifecycle-guidance` 机制维护
 
 ### 2. Context / compact
 
@@ -161,6 +165,22 @@ compact 现在按 **context 实际大小** 触发，而不是按消息条数：
 - 自动 compact 不应重复做 provider/API 初始化检查
 - 手动 compact 入口已移除，compact 仅在主循环内自动触发
 
+### 3. Session Replay
+
+当恢复已有 session（`--continue` 或 `--session`）时，交互模式会回放最近 10 轮对话。
+
+实现机制：
+
+- 读取 `events.jsonl`，按 `user_input` / `user_message` 事件标记 turn 边界
+- 取最后 10 个 turn 的事件序列
+- 使用 `display_replay_event()`（Go/Rust）或 `event_replay.awk`（bash）将事件转为 REPL 兼容的 RESP 协议输出
+- 回放文本/思考内容时累计延迟 flush，保证 thinking→text 边界处正确插入换行
+- bash 版使用独立的 `src/awk/event_replay.awk` 文件，build 时内联到单文件发布版
+- event_replay 依赖 TOOL_RESULT 事件中已附带的 file_summary 前缀（Read/Write 工具结果），因此回放时不需访问原始文件
+- `session_start` / `usage` / `retry` 事件不回放
+
+回放完成后输出一个空行分隔，再接交互提示符。
+
 ### 3. Prompt 组装
 
 system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
@@ -169,13 +189,15 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 
 1. `agent-identity`
 2. `rules`
-3. `todo-guidance`
-4. `instruction-files`
-5. `skill-index`
-6. `selected-skills`
-7. `context-summary`
-8. `current-todo`
-9. `instructions`
+3. `using-your-tools`
+4. `todo-guidance`
+5. `plan-lifecycle-guidance`
+6. `instruction-files`
+7. `skill-index`
+8. `selected-skills`
+9. `current-plan`
+10. `context-summary`
+11. `current-todo`
 
 实现策略：
 
@@ -183,6 +205,10 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 - `append_section()` 负责按顺序累加
 - 稳定内容尽量前置
 - 动态内容尽量后置
+
+`using-your-tools` 指导模型如何正确使用各内置 tool。
+
+`plan-lifecycle-guidance` 为复杂多步任务提供规划工作流（写 PLAN_FILE → 确认 → TodoWrite checklist → 执行 → 清空 plan），由 `PLAN_FILE` 环境变量标识当前 session 的 plan 路径。
 
 ### 4. Skills
 
@@ -235,6 +261,8 @@ skills 当前优先读取：
 - `Grep`
 - `TodoWrite`
 - `Skill`
+- `WebSearch`
+- `WebFetch`
 
 设计原则：
 
@@ -334,6 +362,7 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
 
 当前事件类型：
 
+- `session_start`
 - `text`
 - `thinking`
 - `tool_call`

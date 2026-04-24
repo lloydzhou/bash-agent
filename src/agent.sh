@@ -711,18 +711,24 @@ get_session_dir() {
     printf '%s/.bash-agent/projects/%s' "$base" "$project_key"
 }
 
-get_latest_session_file() {
-    local session_dir
-    session_dir="$(get_session_dir)"
-    [[ -d "$session_dir" ]] || return 1
-    ls -t "${session_dir}"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$' | head -1
+get_latest_session_dir() {
+    local project_dir
+    project_dir="$(get_session_dir)"
+    [[ -d "$project_dir" ]] || return 1
+    local latest="" latest_ts=0 dir ts
+    for dir in "$project_dir"/*/; do
+        [[ -d "$dir" ]] || continue
+        ts=$(stat -f "%m" "$dir" 2>/dev/null || echo 0)
+        (( ts > latest_ts )) && { latest_ts=$ts; latest="$dir"; }
+    done
+    [[ -n "$latest" ]] && basename "$latest" || return 1
 }
 
 resolve_continue_session_id() {
-    local latest_file=""
-    latest_file="$(get_latest_session_file || true)"
-    if [[ -n "$latest_file" ]]; then
-        SESSION_ID="$(basename "$latest_file" .jsonl)"
+    local latest_id=""
+    latest_id="$(get_latest_session_dir || true)"
+    if [[ -n "$latest_id" ]]; then
+        SESSION_ID="$latest_id"
     else
         SESSION_ID="$(new_session_id)"
     fi
@@ -734,15 +740,16 @@ conv_init() {
     if [[ -z "$SESSION_ID" ]]; then
         SESSION_ID="$(new_session_id)"
     fi
-    local session_dir
-    session_dir="$(get_session_dir)"
+    local project_dir session_dir
+    project_dir="$(get_session_dir)"
+    session_dir="${project_dir}/${SESSION_ID}"
     mkdir -p "$session_dir"
 
-    CONV_FILE="${session_dir}/${SESSION_ID}.jsonl"
-    SESSION_EVENT_FILE="${session_dir}/${SESSION_ID}.events.jsonl"
-    CONTEXT_SUMMARY_FILE="${session_dir}/${SESSION_ID}.summary.txt"
-    TODO_FILE="${session_dir}/${SESSION_ID}.todo.md"
-    PLAN_FILE="${session_dir}/${SESSION_ID}.plan.md"
+    CONV_FILE="${session_dir}/conversation.jsonl"
+    SESSION_EVENT_FILE="${session_dir}/events.jsonl"
+    CONTEXT_SUMMARY_FILE="${session_dir}/summary.txt"
+    TODO_FILE="${session_dir}/todo.md"
+    PLAN_FILE="${session_dir}/plan.md"
     local new_session=false
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
     touch "$CONV_FILE"
@@ -1427,25 +1434,20 @@ list_sessions() {
         echo "No sessions found."
         return
     fi
-    local files
-    files=$(ls -t "$dir"/*.jsonl 2>/dev/null | grep -Ev '\.(events\.jsonl|summary\.txt)$')
-    if [[ -z "$files" ]]; then
-        echo "No sessions found."
-        return
-    fi
     printf "%-40s %-16s %s\n" "NAME" "MODIFIED" "PREVIEW"
-    while IFS= read -r f; do
-        local name mod preview summary_file
-        name=$(basename "$f" .jsonl)
-        mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$f" 2>/dev/null || stat -c "%y" "$f" 2>/dev/null | cut -d. -f1)
-        summary_file="${dir}/${name}.summary.txt"
+    local session_dir name mod preview summary_file
+    for session_dir in "$dir"/*/; do
+        [[ -d "$session_dir" ]] || continue
+        name=$(basename "$session_dir")
+        mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$session_dir" 2>/dev/null || stat -c "%y" "$session_dir" 2>/dev/null | cut -d. -f1)
+        summary_file="${session_dir}/summary.txt"
         preview=""
         if [[ -s "$summary_file" ]]; then
             preview=$(grep -m1 -v '^[[:space:]]*$' "$summary_file" 2>/dev/null || true)
         fi
         [[ ${#preview} -gt 60 ]] && preview="${preview:0:57}..."
         printf "%-40s %-16s %s\n" "$name" "$mod" "$preview"
-    done <<< "$files"
+    done
 }
 
 validate_config() {

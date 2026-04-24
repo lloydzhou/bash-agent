@@ -259,12 +259,12 @@ func TestRunSessionWritesConversationAndEvents(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	matches, err := filepath.Glob(filepath.Join(home, ".bash-agent", "projects", "*", "demo.jsonl"))
+	matches, err := filepath.Glob(filepath.Join(home, ".bash-agent", "projects", "*", "demo", "conversation.jsonl"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("expected one session file, got %v %v", len(matches), matches)
 	}
 	conv := matches[0]
-	events := strings.TrimSuffix(conv, ".jsonl") + ".events.jsonl"
+	events := filepath.Join(filepath.Dir(conv), "events.jsonl")
 	convData, err := os.ReadFile(conv)
 	if err != nil {
 		t.Fatal(err)

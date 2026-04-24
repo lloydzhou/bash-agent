@@ -9,6 +9,7 @@ import (
 
 type Paths struct {
 	BaseDir      string
+	SessionDir   string
 	Conversation string
 	Events       string
 	Summary      string
@@ -42,14 +43,15 @@ func ProjectKey(cwd string) string {
 
 func PathsFor(home, cwd, sessionID string) Paths {
 	projectDir := filepath.Join(home, ".bash-agent", "projects", ProjectKey(cwd))
-	base := filepath.Join(projectDir, sessionID)
+	sessionDir := filepath.Join(projectDir, sessionID)
 	return Paths{
 		BaseDir:      projectDir,
-		Conversation: base + ".jsonl",
-		Events:       base + ".events.jsonl",
-		Summary:      base + ".summary.txt",
-		Todo:         base + ".todo.md",
-		Plan:         base + ".plan.md",
+		SessionDir:   sessionDir,
+		Conversation: filepath.Join(sessionDir, "conversation.jsonl"),
+		Events:       filepath.Join(sessionDir, "events.jsonl"),
+		Summary:      filepath.Join(sessionDir, "summary.txt"),
+		Todo:         filepath.Join(sessionDir, "todo.md"),
+		Plan:         filepath.Join(sessionDir, "plan.md"),
 	}
 }
 
@@ -66,8 +68,7 @@ func ContinueSession(home, cwd string) (string, error) {
 	var newest string
 	var newestMod int64 = -1
 	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, ".events.jsonl") {
+		if !entry.IsDir() {
 			continue
 		}
 		info, err := entry.Info()
@@ -76,7 +77,7 @@ func ContinueSession(home, cwd string) (string, error) {
 		}
 		if mod := info.ModTime().UnixNano(); mod > newestMod {
 			newestMod = mod
-			newest = strings.TrimSuffix(name, ".jsonl")
+			newest = entry.Name()
 		}
 	}
 	if newest == "" {

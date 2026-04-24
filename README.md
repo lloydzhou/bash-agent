@@ -71,6 +71,8 @@
   - `Grep`
   - `TodoWrite`
   - `Skill`
+  - `WebSearch`
+  - `WebFetch`
 - Prompt 分层：
   - instruction files
   - skill index
@@ -267,13 +269,25 @@ history 文件保存在：
 
 - 维护当前 session 的 todo checklist
 - 面向复杂多步任务
-- 状态保存在 `*.todo.md`
+- 状态保存在 session 目录下的 `todo.md`
 
 ### `Skill`
 
 - 先从 prompt 里的 `skill-index` 选择 skill 名
 - 再用 `Skill(name)` 读取对应 `SKILL.md`
 - 用户要求使用某个 skill 时，优先用它而不是直接 `Read` skill 文件
+
+### `WebSearch`
+
+- 基于 Jina AI Search API 进行网络搜索
+- 依赖 `curl` 和 `JINA_API_KEY` 环境变量
+- 默认超时：`30s`
+
+### `WebFetch`
+
+- 基于 Jina AI Reader API 获取网页内容
+- 依赖 `curl` 和 `JINA_API_KEY` 环境变量
+- 默认超时：`60s`
 
 ## Session 与状态文件
 
@@ -283,23 +297,25 @@ history 文件保存在：
 ~/.bash-agent/projects/<project_key>/
 ```
 
-每个 session 的主要文件：
+每个 session 的主要文件存在其目录下：
 
 ```text
-<session_id>.jsonl
-<session_id>.events.jsonl
-<session_id>.summary.txt
-<session_id>.todo.md
+<session_id>/conversation.jsonl
+<session_id>/events.jsonl
+<session_id>/summary.txt
+<session_id>/todo.md
+<session_id>/plan.md
 ```
 
 含义：
 
-- `jsonl`：真正发给模型的当前会话窗口
+- `conversation.jsonl`：真正发给模型的当前会话窗口
 - `events.jsonl`：内部 session 事件日志
 - `summary.txt`：compact 后的历史摘要
 - `todo.md`：当前 session 的 todo 状态
+- `plan.md`：当前 session 的计划文档
 
-如果不传 `--session`，会话状态只在当前进程内临时存在，退出后清理。
+所有会话都会持久化到 `~/.bash-agent/projects/<project_key>/` 目录中，即使不传 `--session` 也会生成一个 session_id 并保存。可以使用 `--continue` 恢复最近一次会话。
 
 ## Context Compact
 
@@ -408,6 +424,7 @@ src/
     convert_tools.awk
     edit_file.awk
     skill_summary.awk
+    event_replay.awk
 scripts/
   build.sh
 tests/
@@ -415,6 +432,7 @@ tests/
 dist/
   agent.sh
   goagent
+  rustagent
 go/
   cmd/
     goagent/
@@ -433,6 +451,22 @@ go/
     tools/
   go.mod
   go.sum
+rust/
+  src/
+    main.rs
+    app.rs
+    config.rs
+    conversation.rs
+    httpclient.rs
+    prompt.rs
+    protocol.rs
+    provider.rs
+    session.rs
+    sse.rs
+    tools.rs
+    assets.rs
+  Cargo.toml
+  Cargo.lock
 ```
 
 ## 开发

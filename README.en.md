@@ -80,6 +80,8 @@ The goal is not “few files at any cost”. The goal is:
   - `Grep`
   - `TodoWrite`
   - `Skill`
+  - `WebSearch`
+  - `WebFetch`
 - Prompt layers:
   - instruction files
   - skill index
@@ -276,13 +278,25 @@ History is stored in:
 
 - writes the session todo checklist
 - intended for complex multi-step tasks
-- stores checklist state in `*.todo.md`
+- stores checklist state in `todo.md` in the session directory
 
 ### `Skill`
 
 - first select a skill name from the prompt's `skill-index`
 - then use `Skill(name)` to read the matching `SKILL.md`
 - when the user asks to use a skill, prefer this over reading skill files directly with `Read`
+
+### `WebSearch`
+
+- searches the web using the Jina AI Search API
+- requires `curl` and the `JINA_API_KEY` environment variable
+- default timeout: `30s`
+
+### `WebFetch`
+
+- fetches web page content using the Jina AI Reader API
+- requires `curl` and the `JINA_API_KEY` environment variable
+- default timeout: `60s`
 
 ## Sessions and State
 
@@ -292,23 +306,25 @@ State is stored per project under:
 ~/.bash-agent/projects/<project_key>/
 ```
 
-Per-session files:
+Per-session files (inside each session directory):
 
 ```text
-<session_id>.jsonl
-<session_id>.events.jsonl
-<session_id>.summary.txt
-<session_id>.todo.md
+<session_id>/conversation.jsonl
+<session_id>/events.jsonl
+<session_id>/summary.txt
+<session_id>/todo.md
+<session_id>/plan.md
 ```
 
 Meaning:
 
-- `jsonl`: current conversation window actually sent to the model
+- `conversation.jsonl`: current conversation window actually sent to the model
 - `events.jsonl`: internal session event log
 - `summary.txt`: compacted history summary
 - `todo.md`: current session todo checklist
+- `plan.md`: current session plan document
 
-Without `--session`, conversation state is temporary and cleaned up when the process exits.
+All sessions are persisted under `~/.bash-agent/projects/<project_key>/`, even without `--session` (a session ID is auto-generated). Use `--continue` to resume the most recent session.
 
 ## Context Compaction
 
@@ -414,6 +430,7 @@ src/
     convert_tools.awk
     edit_file.awk
     skill_summary.awk
+    event_replay.awk
 scripts/
   build.sh
 tests/
@@ -421,6 +438,7 @@ tests/
 dist/
   agent.sh
   goagent
+  rustagent
 go/
   cmd/
     goagent/
@@ -439,6 +457,22 @@ go/
     tools/
   go.mod
   go.sum
+rust/
+  src/
+    main.rs
+    app.rs
+    config.rs
+    conversation.rs
+    httpclient.rs
+    prompt.rs
+    protocol.rs
+    provider.rs
+    session.rs
+    sse.rs
+    tools.rs
+    assets.rs
+  Cargo.toml
+  Cargo.lock
 ```
 
 ## Development

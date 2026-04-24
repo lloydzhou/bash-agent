@@ -156,6 +156,7 @@ impl Runtime {
         cfg.session_id = sid.clone();
         let paths = session::paths_for(&home, &cwd, &sid);
         session::ensure_dir(&paths.base_dir)?;
+        session::ensure_dir(&paths.session_dir)?;
         let new_session = !paths.events.exists();
         for f in [&paths.conversation, &paths.events, &paths.summary, &paths.todo, &paths.plan] {
             touch(f)?;
@@ -1189,12 +1190,12 @@ fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {
     let mut rows: Vec<Row> = Vec::new();
     for e in entries? {
         let e = e?;
-        let name = e.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".jsonl") || name.ends_with(".events.jsonl") {
+        let path = e.path();
+        if !path.is_dir() {
             continue;
         }
-        let session_name = name.trim_end_matches(".jsonl").to_string();
-        let summary_path = dir.join(format!("{}.summary.txt", session_name));
+        let session_name = e.file_name().to_string_lossy().to_string();
+        let summary_path = path.join("summary.txt");
         let mut summary = String::new();
         if let Ok(data) = fs::read_to_string(&summary_path) {
             for line in data.lines() {

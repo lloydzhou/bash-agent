@@ -1409,9 +1409,10 @@ test_agent_todo_state() {
     local home_dir project_dir output session_file todo_file event_file human_home
     home_dir=$(mktemp -d)
     project_dir="$home_dir/.bash-agent/projects/$(project_key)"
-    session_file="$project_dir/demo.jsonl"
-    todo_file="$project_dir/demo.todo.md"
-    event_file="$project_dir/demo.events.jsonl"
+    session_dir="$project_dir/demo"
+    session_file="$session_dir/conversation.jsonl"
+    todo_file="$session_dir/todo.md"
+    event_file="$session_dir/events.jsonl"
 
     output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"text"' && \
