@@ -133,7 +133,7 @@ deny_bash_command_reason() {
 
 tool_param_keys() {
     case "$1" in
-        Read) printf 'path' ;;
+        Read) printf 'path offset limit' ;;
         Write) printf 'path content' ;;
         Edit) printf 'path old_string new_string' ;;
         Bash) printf 'command timeout' ;;
@@ -435,7 +435,7 @@ build_system_prompt() {
     local agent_identity core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context todo
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.'
-    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Use Glob and Grep for one pattern at a time.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
+    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- For large files, use Read with offset/limit instead of reading the whole file.\n- Use Glob and Grep for one pattern at a time.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit, Read first and copy old_string exactly (including whitespace/indent/newlines).\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
     plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Step-by-step**:\n  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. After user confirms, create TodoWrite checklist based on plan\n  4. Execute tasks following todo checklist (update progress in TodoWrite)\n  5. When all tasks complete, clear plan: Bash ": > PLAN_FILE"\n- **Plan vs Todo separation**:\n  - PLAN_FILE: planning document for analysis and strategy\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan file\n- **PLAN_FILE**: '${PLAN_FILE:-<not set>}
 
@@ -874,13 +874,17 @@ load_tool_defs() {
 # --- Tool Implementations ---
 
 tool_read() {
-    local path="$1"
+    local path="$1" offset="${2:-1}" limit="${3:-0}"
 
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
 
-    cat "$path"
+    if (( limit > 0 )); then
+        sed -n "${offset},$((offset + limit - 1))p" "$path"
+    else
+        sed -n "${offset},\$p" "$path"
+    fi
 }
 
 tool_write() {
@@ -997,7 +1001,7 @@ tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlenco
 dispatch_tool() {
     local name="$1" arg1="${2:-}" arg2="${3:-}" arg3="${4:-}" arg4="${5:-}"
     case "$name" in
-        Read)      tool_read "$arg1" ;;
+        Read)      tool_read "$arg1" "$arg2" "$arg3" ;;
         Write)     tool_write "$arg1" "$arg2" ;;
         Edit)      tool_edit "$arg1" "$arg2" "$arg3" ;;
         Bash)      tool_bash "$arg1" "$arg2" ;;

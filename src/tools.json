@@ -1,13 +1,21 @@
 [
   {
     "name": "Read",
-    "description": "Read a single file from the local filesystem. Use multiple Read calls if you need multiple files.",
+    "description": "Read a single file from the local filesystem. Use multiple Read calls if you need multiple files.\n\nFor large files, use offset and limit to read specific line ranges instead of reading the entire file.",
     "input_schema": {
       "type": "object",
       "properties": {
         "path": {
           "type": "string",
           "description": "Path to the file to read"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Line number to start reading from (1-based). Useful for reading specific sections of large files."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of lines to read. Useful for reading specific sections of large files."
         }
       },
       "required": ["path"]
