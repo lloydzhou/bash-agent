@@ -1345,7 +1345,7 @@ parse_args() {
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
             -m|--model)      MODEL="$2"; shift 2 ;;
-            --max-tokens)    MAX_TOKENS="$2"; shift 2 ;;
+            --max-tokens)    MAX_TOKENS=$(parse_size_bytes "$2") || { die "Invalid --max-tokens: $2"; }; shift 2 ;;
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
