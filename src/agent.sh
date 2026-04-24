@@ -136,9 +136,9 @@ tool_param_keys() {
         Read) printf 'path' ;;
         Write) printf 'path content' ;;
         Edit) printf 'path old_string new_string' ;;
-        Bash) printf 'command' ;;
+        Bash) printf 'command timeout' ;;
         Glob) printf 'pattern path' ;;
-        Grep) printf 'pattern path glob' ;;
+        Grep) printf 'pattern path glob context' ;;
         TodoWrite) printf 'checklist' ;;
         Skill) printf 'name' ;;
         WebSearch) printf 'query' ;;
@@ -148,9 +148,10 @@ tool_param_keys() {
 }
 
 tool_args_from_msg() {
-    local name="$1" __arg1="$2" __arg2="$3" __arg3="$4"
+    local name="$1"
     # Extract known params from flattened KV pairs at REPLY_MESSAGE[4..]
-    local param_key_string="" param_keys=() idx param_value="" out1="" out2="" out3=""
+    local param_key_string="" param_keys=() idx param_value=""
+    local -a _outvars=("$2" "$3" "$4" "$5")
     local _n=${#REPLY_MESSAGE[@]}
 
     param_key_string=$(tool_param_keys "$name")
@@ -158,23 +159,16 @@ tool_args_from_msg() {
         IFS=' ' read -r -a param_keys <<< "$param_key_string"
         for idx in "${!param_keys[@]}"; do
             local _pkey="${param_keys[idx]}" i
+            param_value=""
             for (( i = 4; i + 1 < _n; i += 2 )); do
                 if [[ "${REPLY_MESSAGE[i]}" == "$_pkey" ]]; then
                     param_value="${REPLY_MESSAGE[i+1]}"
                     break
                 fi
             done
-            case "$idx" in
-                0) out1="$param_value" ;;
-                1) out2="$param_value" ;;
-                2) out3="$param_value" ;;
-            esac
+            printf -v "${_outvars[idx]}" '%s' "$param_value"
         done
     fi
-
-    printf -v "$__arg1" '%s' "$out1"
-    printf -v "$__arg2" '%s' "$out2"
-    printf -v "$__arg3" '%s' "$out3"
 }
 
 tool_call_summary() {
@@ -227,49 +221,13 @@ interrupt_requested() {
 run_with_timeout() {
     local timeout_secs="$1"
     shift
-
-    local tmp_out pid rc elapsed=0 use_process_group=false
-    tmp_out=$(mktemp "${TMPDIR:-/tmp}/tool.XXXXXX")
-
-    if command -v setsid >/dev/null 2>&1; then
-        setsid "$@" >"$tmp_out" 2>&1 &
-        pid=$!
-        use_process_group=true
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "${timeout_secs}s" "$@" 2>&1
+    elif command -v timeout >/dev/null 2>&1; then
+        timeout "${timeout_secs}s" "$@" 2>&1
     else
-        ( "$@" ) >"$tmp_out" 2>&1 &
-        pid=$!
+        "$@" 2>&1
     fi
-
-    while kill -0 "$pid" 2>/dev/null; do
-        if (( elapsed >= timeout_secs )); then
-            if $use_process_group; then
-                kill -TERM -- "-$pid" 2>/dev/null || true
-            else
-                kill -TERM "$pid" 2>/dev/null || true
-            fi
-            sleep 1
-            if kill -0 "$pid" 2>/dev/null; then
-                if $use_process_group; then
-                    kill -KILL -- "-$pid" 2>/dev/null || true
-                else
-                    kill -KILL "$pid" 2>/dev/null || true
-                fi
-            fi
-            wait "$pid" 2>/dev/null || true
-            cat "$tmp_out"
-            rm -f "$tmp_out"
-            printf '\n[... truncated, command timed out after %s seconds ...]' "$timeout_secs"
-            return 124
-        fi
-        sleep 1
-        ((elapsed++))
-    done
-
-    wait "$pid"
-    rc=$?
-    cat "$tmp_out"
-    rm -f "$tmp_out"
-    return "$rc"
 }
 
 die() {
@@ -966,7 +924,7 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" script_file
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}"
     local reason output tool_rc
 
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
@@ -976,12 +934,16 @@ tool_bash() {
         return 1
     fi
 
-    script_file=$(mktemp "${TMPDIR:-/tmp}/bash.XXXXXX.sh")
-    printf '%s\n' "$cmd" > "$script_file"
-    chmod 700 "$script_file" 2>/dev/null || true
-    output=$(run_with_timeout "$TOOL_TIMEOUT_SECS" bash "$script_file")
-    tool_rc=$?
-    rm -f "$script_file"
+    if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
+        output=$(run_with_timeout "$timeout_secs" bash -lc "$cmd" 2>&1)
+        tool_rc=$?
+        if (( tool_rc == 124 )); then
+            output+=$'\n[... command timed out after '"$timeout_secs"' seconds ...]'
+        fi
+    else
+        output=$(bash -lc "$cmd" 2>&1)
+        tool_rc=$?
+    fi
     printf '%s' "$output"
     return "$tool_rc"
 }
@@ -997,17 +959,19 @@ tool_glob() {
 }
 
 tool_grep() {
-    local pattern="$1" path="$2" glob="$3"
+    local pattern="$1" path="$2" glob="$3" context="$4"
 
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
     [[ -e "$path" ]] || { echo "Error: path not found: $path"; return 1; }
     command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for grep"; return 1; }
-    if [[ -n "$glob" ]]; then
-        rg -n --color never --glob "$glob" -- "$pattern" "$path" 2>/dev/null || true
-    else
-        rg -n --color never -- "$pattern" "$path" 2>/dev/null || true
-    fi
+
+    local args=(-n --color never)
+    [[ -n "$context" && "$context" =~ ^[0-9]+$ ]] && args+=(-C "$context")
+    [[ -n "$glob" ]] && args+=(--glob "$glob")
+    args+=("--" "$pattern" "$path")
+
+    rg "${args[@]}" 2>/dev/null || true
 }
 
 tool_todo() {
@@ -1031,14 +995,14 @@ tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlenc
 tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlencode "url=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/" 2>&1; }
 
 dispatch_tool() {
-    local name="$1" arg1="${2:-}" arg2="${3:-}" arg3="${4:-}"
+    local name="$1" arg1="${2:-}" arg2="${3:-}" arg3="${4:-}" arg4="${5:-}"
     case "$name" in
         Read)      tool_read "$arg1" ;;
         Write)     tool_write "$arg1" "$arg2" ;;
         Edit)      tool_edit "$arg1" "$arg2" "$arg3" ;;
-        Bash)      tool_bash "$arg1" ;;
+        Bash)      tool_bash "$arg1" "$arg2" ;;
         Glob)      tool_glob "$arg1" "$arg2" ;;
-        Grep)      tool_grep "$arg1" "$arg2" "$arg3" ;;
+        Grep)      tool_grep "$arg1" "$arg2" "$arg3" "$arg4" ;;
         TodoWrite) tool_todo "$arg1" ;;
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
@@ -1218,11 +1182,11 @@ agent_loop_stream() {
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
 
                     # Execute tool immediately, output result
-                    local arg1="" arg2="" arg3=""
-                    tool_args_from_msg "$cur_tool_name" arg1 arg2 arg3
+                    local arg1="" arg2="" arg3="" arg4=""
+                    tool_args_from_msg "$cur_tool_name" arg1 arg2 arg3 arg4
 
                     local output
-                    output=$(dispatch_tool "$cur_tool_name" "$arg1" "$arg2" "$arg3" 2>&1)
+                    output=$(dispatch_tool "$cur_tool_name" "$arg1" "$arg2" "$arg3" "$arg4" 2>&1)
                     local tool_rc=$?
 
                     if (( tool_rc != 0 )); then

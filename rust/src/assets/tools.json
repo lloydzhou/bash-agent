@@ -1,13 +1,21 @@
 [
   {
     "name": "Read",
-    "description": "Read a single file from the local filesystem. Use multiple Read calls if you need multiple files.",
+    "description": "Read a file from the local filesystem. Use multiple Read calls if you need multiple files. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.",
     "input_schema": {
       "type": "object",
       "properties": {
         "path": {
           "type": "string",
           "description": "Path to the file to read"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "Line number to start reading from (1-indexed). Only provide when reading a specific portion of the file."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Number of lines to read. Only provide when reading a specific portion of the file."
         }
       },
       "required": ["path"]
@@ -33,7 +41,7 @@
   },
   {
     "name": "Edit",
-    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Read the file first and copy exact text before calling Edit.",
+    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, read the relevant portion of the file — use Read with offset/limit if you know the location, or Grep with context to locate and capture the target text in one step. Copy the exact text before calling Edit.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -62,6 +70,10 @@
         "command": {
           "type": "string",
           "description": "The bash command to execute"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout in seconds. If the command exceeds this duration, it will be killed. Only use for commands expected to take a long time (e.g. build, test, server start). Default: no timeout."
         }
       },
       "required": ["command"]
@@ -87,21 +99,25 @@
   },
   {
     "name": "Grep",
-    "description": "Search file contents with a single pattern. Use multiple Grep calls if you need multiple patterns.",
+    "description": "Search file contents with ripgrep. Supports regex patterns.\n- Use context to show surrounding lines — often enough for Edit without a separate Read\n- Use multiple Grep calls if you need multiple patterns",
     "input_schema": {
       "type": "object",
       "properties": {
         "pattern": {
           "type": "string",
-          "description": "Text or regex pattern to search for"
+          "description": "The regular expression pattern to search for"
         },
         "path": {
           "type": "string",
-          "description": "Optional file or directory to search. Defaults to ."
+          "description": "File or directory to search in. Defaults to ."
         },
         "glob": {
           "type": "string",
-          "description": "Optional file glob filter, for example *.sh"
+          "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\")"
+        },
+        "context": {
+          "type": "integer",
+          "description": "Number of lines before and after each match. Useful for getting enough context to Edit directly from Grep output."
         }
       },
       "required": ["pattern"]

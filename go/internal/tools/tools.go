@@ -35,12 +35,14 @@ func (r Runner) Dispatch(name string, input json.RawMessage) Result {
 	switch name {
 	case "Read":
 		var args struct {
-			Path string `json:"path"`
+			Path   string `json:"path"`
+			Offset *int   `json:"offset"`
+			Limit  *int   `json:"limit"`
 		}
 		if err := json.Unmarshal(input, &args); err != nil {
 			return Result{Err: err}
 		}
-		out, err := r.Read(args.Path)
+		out, err := r.Read(args.Path, args.Offset, args.Limit)
 		return Result{Output: out, Err: err}
 	case "Write":
 		var args struct {
@@ -66,11 +68,12 @@ func (r Runner) Dispatch(name string, input json.RawMessage) Result {
 	case "Bash":
 		var args struct {
 			Command string `json:"command"`
+			Timeout *int   `json:"timeout"`
 		}
 		if err := json.Unmarshal(input, &args); err != nil {
 			return Result{Err: err}
 		}
-		out, err := r.Bash(args.Command)
+		out, err := r.Bash(args.Command, args.Timeout)
 		return Result{Output: out, Err: err}
 	case "Glob":
 		var args struct {
@@ -87,11 +90,12 @@ func (r Runner) Dispatch(name string, input json.RawMessage) Result {
 			Pattern string `json:"pattern"`
 			Path    string `json:"path"`
 			Glob    string `json:"glob"`
+			Context *int   `json:"context"`
 		}
 		if err := json.Unmarshal(input, &args); err != nil {
 			return Result{Err: err}
 		}
-		out, err := r.Grep(args.Pattern, args.Path, args.Glob)
+		out, err := r.Grep(args.Pattern, args.Path, args.Glob, args.Context)
 		return Result{Output: out, Err: err}
 	case "TodoWrite":
 		var args struct {
@@ -137,7 +141,7 @@ func (r Runner) Dispatch(name string, input json.RawMessage) Result {
 	}
 }
 
-func (r Runner) Read(path string) (string, error) {
+func (r Runner) Read(path string, offset, limit *int) (string, error) {
 	if path == "" {
 		return "", errors.New("Error: no path provided")
 	}
@@ -151,7 +155,44 @@ func (r Runner) Read(path string) (string, error) {
 		}
 		return "", err
 	}
-	return string(data), nil
+	content := string(data)
+	lines := strings.Split(content, "\n")
+	// Handle trailing newline: Split produces an extra empty string
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	totalLines := len(lines)
+
+	// If no offset/limit, return full file with line numbers
+	if offset == nil && limit == nil {
+		var buf strings.Builder
+		for i, line := range lines {
+			fmt.Fprintf(&buf, "%6d\t%s\n", i+1, line)
+		}
+		return buf.String(), nil
+	}
+
+	// Apply offset (1-indexed, default 1)
+	start := 0
+	if offset != nil && *offset > 1 {
+		start = *offset - 1
+	}
+	if start > totalLines {
+		return "", fmt.Errorf("Error: offset %d exceeds total lines %d in %s", *offset, totalLines, path)
+	}
+
+	// Apply limit
+	end := totalLines
+	if limit != nil && *limit > 0 && start+*limit < end {
+		end = start + *limit
+	}
+
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "(showing lines %d-%d of %d)\n", start+1, end, totalLines)
+	for i := start; i < end; i++ {
+		fmt.Fprintf(&buf, "%6d\t%s\n", i+1, lines[i])
+	}
+	return buf.String(), nil
 }
 
 func (r Runner) Write(path, content string) (string, error) {
@@ -199,7 +240,7 @@ func (r Runner) Edit(path, oldString, newString string) (string, error) {
 	content := string(data)
 	idx := strings.Index(content, oldString)
 	if idx < 0 {
-		return "", fmt.Errorf("Error: old_string not found in %s. Hint: Read the file and copy exact bytes (including whitespace/indent/newlines) before retrying Edit.", path)
+		return "", fmt.Errorf("Error: old_string not found in %s. Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit.", path)
 	}
 	updated := strings.Replace(content, oldString, newString, 1)
 	if updated == "" {
@@ -309,23 +350,50 @@ func stripAnsi(s string) string {
 	return out.String()
 }
 
-func (r Runner) Bash(command string) (string, error) {
+func (r Runner) Bash(command string, timeout *int) (string, error) {
 	if command == "" {
 		return "", errors.New("Error: no command provided")
 	}
 	if reason := safety.DenyBashCommandReason(command); reason != "" {
 		return "", fmt.Errorf("Error: command blocked by bash safety policy (%s)", reason)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(r.Config.ToolTimeoutSecs)*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-lc", command)
+
+	// Determine if system timeout command is available
+	timeoutBin := ""
+	if timeout != nil && *timeout > 0 {
+		if p, err := exec.LookPath("gtimeout"); err == nil {
+			timeoutBin = p
+		} else if p, err := exec.LookPath("timeout"); err == nil {
+			timeoutBin = p
+		}
+	}
+
+	var cmd *exec.Cmd
+	if timeout != nil && *timeout > 0 && timeoutBin != "" {
+		// Use system timeout (gtimeout on macOS, timeout on Linux)
+		cmd = exec.Command(timeoutBin, fmt.Sprintf("%ds", *timeout), "bash", "-lc", command)
+	} else if timeout != nil && *timeout > 0 {
+		// Fallback: Go context timeout
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeout)*time.Second)
+		defer cancel()
+		cmd = exec.CommandContext(ctx, "bash", "-lc", command)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		if ctx.Err() == context.DeadlineExceeded {
+			return out.String() + fmt.Sprintf("\n[... command timed out after %d seconds ...]", *timeout), nil
+		}
+		return out.String(), err
+	} else {
+		// No timeout
+		cmd = exec.Command("bash", "-lc", command)
+	}
+
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
-	if ctx.Err() == context.DeadlineExceeded {
-		return out.String() + fmt.Sprintf("\n[... truncated, command timed out after %d seconds ...]", r.Config.ToolTimeoutSecs), nil
-	}
 	return out.String(), err
 }
 
@@ -350,7 +418,8 @@ func (r Runner) Glob(pattern, path string) (string, error) {
 	return out.String(), nil
 }
 
-func (r Runner) Grep(pattern, path, glob string) (string, error) {
+func (r Runner) Grep(pattern, path, glob string, contextLines *int) (string, error) {
+
 	if pattern == "" {
 		return "", errors.New("Error: no pattern provided")
 	}
@@ -363,17 +432,34 @@ func (r Runner) Grep(pattern, path, glob string) (string, error) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		return "", errors.New("Error: rg is required for grep")
 	}
+
 	args := []string{"-n", "--color", "never"}
+
+	// Context lines
+	if contextLines != nil && *contextLines > 0 {
+		args = append(args, "-C", fmt.Sprintf("%d", *contextLines))
+	}
+
+	// Glob filter
 	if glob != "" {
 		args = append(args, "--glob", glob)
 	}
-	args = append(args, "--", pattern, path)
+
+	// Pattern (use -e if pattern starts with dash)
+	if strings.HasPrefix(pattern, "-") {
+		args = append(args, "-e", pattern)
+	} else {
+		args = append(args, "--", pattern)
+	}
+	args = append(args, path)
+
 	cmd := exec.Command("rg", args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = ioDiscard{}
 	_ = cmd.Run()
-	return out.String(), nil
+
+	return strings.TrimRight(out.String(), "\n"), nil
 }
 
 func (r Runner) TodoWrite(todos []struct {

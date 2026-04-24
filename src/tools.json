@@ -62,6 +62,10 @@
         "command": {
           "type": "string",
           "description": "The bash command to execute"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout in seconds. If the command exceeds this duration, it will be killed. Only use for commands expected to take a long time (e.g. build, test, server start). Default: uses --tool-timeout setting."
         }
       },
       "required": ["command"]
@@ -87,21 +91,25 @@
   },
   {
     "name": "Grep",
-    "description": "Search file contents with a single pattern. Use multiple Grep calls if you need multiple patterns.",
+    "description": "Search file contents with ripgrep. Supports regex patterns.\n- Use context to show surrounding lines — often enough for Edit without a separate Read\n- Use multiple Grep calls if you need multiple patterns",
     "input_schema": {
       "type": "object",
       "properties": {
         "pattern": {
           "type": "string",
-          "description": "Text or regex pattern to search for"
+          "description": "The regular expression pattern to search for"
         },
         "path": {
           "type": "string",
-          "description": "Optional file or directory to search. Defaults to ."
+          "description": "File or directory to search in. Defaults to ."
         },
         "glob": {
           "type": "string",
-          "description": "Optional file glob filter, for example *.sh"
+          "description": "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\")"
+        },
+        "context": {
+          "type": "integer",
+          "description": "Number of lines before and after each match. Useful for getting enough context to Edit directly from Grep output."
         }
       },
       "required": ["pattern"]

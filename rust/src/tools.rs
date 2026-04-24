@@ -32,9 +32,13 @@ impl Runner {
                 #[derive(Deserialize)]
                 struct Args {
                     path: String,
+                    #[serde(default)]
+                    offset: Option<usize>,
+                    #[serde(default)]
+                    limit: Option<usize>,
                 }
                 let args: Args = serde_json::from_value(input.clone())?;
-                self.read(&args.path)
+                self.read(&args.path, args.offset, args.limit)
             }
             "Write" => {
                 #[derive(Deserialize)]
@@ -59,9 +63,11 @@ impl Runner {
                 #[derive(Deserialize)]
                 struct Args {
                     command: String,
+                    #[serde(default)]
+                    timeout: Option<u64>,
                 }
                 let args: Args = serde_json::from_value(input.clone())?;
-                self.bash(&args.command)
+                self.bash(&args.command, args.timeout)
             }
             "Glob" => {
                 #[derive(Deserialize)]
@@ -88,6 +94,8 @@ impl Runner {
                     path: String,
                     #[serde(default)]
                     glob: String,
+                    #[serde(default)]
+                    context: Option<usize>,
                 }
                 let args: Args = serde_json::from_value(input.clone())?;
                 self.grep(
@@ -98,6 +106,7 @@ impl Runner {
                         &args.path
                     },
                     &args.glob,
+                    args.context,
                 )
             }
             "TodoWrite" => {
@@ -136,13 +145,51 @@ impl Runner {
         }
     }
 
-    fn read(&self, path: &str) -> Result<String> {
+    fn read(&self, path: &str, offset: Option<usize>, limit: Option<usize>) -> Result<String> {
         if path.is_empty() {
             bail!("Error: no path provided");
         }
         let data = fs::read_to_string(path)
             .map_err(|_| anyhow!("Error: file not found or unreadable: {path}"))?;
-        Ok(data)
+        let mut lines: Vec<&str> = data.split('\n').collect();
+        // Handle trailing newline: split produces an extra empty string
+        if !lines.is_empty() && lines.last().map(|l| l.is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
+        let total_lines = lines.len();
+
+        // If no offset/limit, return full file with line numbers
+        if offset.is_none() && limit.is_none() {
+            let mut buf = String::new();
+            for (i, line) in lines.iter().enumerate() {
+                buf.push_str(&format!("{:>6}\t{}\n", i + 1, line));
+            }
+            return Ok(buf);
+        }
+
+        // Apply offset (1-indexed, default 1)
+        let start = match offset {
+            Some(o) if o > 1 => {
+                if o > total_lines {
+                    bail!("Error: offset {} exceeds total lines {} in {}", o, total_lines, path);
+                }
+                o - 1
+            }
+            _ => 0,
+        };
+
+        // Apply limit
+        let end = match limit {
+            Some(l) if l > 0 => (start + l).min(total_lines),
+            _ => total_lines,
+        };
+
+        let mut buf = String::new();
+        buf.push_str(&format!("(showing lines {}-{} of {})\n", start + 1, end, total_lines));
+        for i in start..end {
+            buf.push_str(&format!("{:>6}\t{}\n", i + 1, lines[i]));
+        }
+        Ok(buf)
     }
 
     fn write(&self, path: &str, content: &str) -> Result<String> {
@@ -182,7 +229,7 @@ impl Runner {
         }
         if !content.contains(old_s) {
             bail!(
-                "Error: old_string not found in {path}. Hint: Read the file and copy exact bytes (including whitespace/indent/newlines) before retrying Edit."
+                "Error: old_string not found in {path}. Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit."
             );
         }
         let updated = content.replacen(old_s, new_s, 1);
@@ -201,15 +248,21 @@ impl Runner {
         }
     }
 
-    fn bash(&self, command: &str) -> Result<String> {
+    fn bash(&self, command: &str, timeout_secs: Option<u64>) -> Result<String> {
         if command.trim().is_empty() {
             bail!("Error: no command provided");
         }
         if let Some(reason) = safety::deny_bash_command_reason(command) {
             bail!("Error: command blocked by bash safety policy ({reason})");
         }
-        let timeout_secs = self.config.tool_timeout_secs as u64;
-        let timeout = Duration::from_secs(if timeout_secs > 0 { timeout_secs } else { 600 });
+        let timeout = match timeout_secs {
+            Some(t) if t > 0 => Duration::from_secs(t),
+            _ => Duration::from_secs(if self.config.tool_timeout_secs > 0 {
+                self.config.tool_timeout_secs as u64
+            } else {
+                600
+            }),
+        };
 
         let mut child = Command::new("bash")
             .arg("-lc")
@@ -290,7 +343,7 @@ impl Runner {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    fn grep(&self, pattern: &str, path: &str, glob: &str) -> Result<String> {
+    fn grep(&self, pattern: &str, path: &str, glob: &str, context: Option<usize>) -> Result<String> {
         if pattern.is_empty() {
             bail!("Error: no pattern provided");
         }
@@ -300,12 +353,25 @@ impl Runner {
             .map_err(|_| anyhow!("Error: rg is required for grep"))?;
         let mut cmd = Command::new("rg");
         cmd.args(["-n", "--color", "never"]);
+        if let Some(c) = context {
+            if c > 0 {
+                cmd.args(["-C", &c.to_string()]);
+            }
+        }
         if !glob.is_empty() {
             cmd.args(["--glob", glob]);
         }
-        cmd.args(["--", pattern, path]);
+        // Handle patterns that start with dash
+        if pattern.starts_with('-') {
+            cmd.args(["-e", pattern]);
+        } else {
+            cmd.args(["--", pattern]);
+        }
+        cmd.arg(path);
         let output = cmd.stdout(Stdio::piped()).stderr(Stdio::null()).output()?;
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let result = String::from_utf8_lossy(&output.stdout).to_string();
+        // Trim trailing newline to match Go/bash behavior
+        Ok(result.trim_end_matches('\n').to_string())
     }
 
     fn todo_write(&self, todos: Vec<TodoArg>) -> Result<String> {
