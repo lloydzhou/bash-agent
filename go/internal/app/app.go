@@ -511,6 +511,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 	for turn < rt.cfg.MaxTurns {
 		turn++
 		text := ""
+		thinking := ""
 		var calls []protocol.ToolCallEvent
 		var toolResults []conversation.ToolResult
 		stop := ""
@@ -545,6 +546,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				if err := rt.displayEvent(&state, e); err != nil {
 					return err
 				}
+				thinking += e.Content
 			case protocol.ToolCallEvent:
 				if err := rt.displayEvent(&state, e); err != nil {
 					return err
@@ -612,6 +614,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			case protocol.RetryEvent:
 				_ = rt.displayEvent(&state, e)
 				text = ""
+				thinking = ""
 				calls = calls[:0]
 				toolResults = toolResults[:0]
 			}
@@ -648,7 +651,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 
 		// Tools already executed inline; persist unless interrupted
 		if !rt.interrupted.Load() {
-			if err := rt.conv.AddAssistant(text, calls); err != nil {
+			if err := rt.conv.AddAssistant(text, thinking, calls); err != nil {
 				return err
 			}
 			if len(toolResults) > 0 {

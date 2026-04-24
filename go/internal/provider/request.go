@@ -120,21 +120,23 @@ func convertMessagesToOpenAI(lines []json.RawMessage) ([]any, error) {
 
 func convertAssistantMessage(raw json.RawMessage) (map[string]any, error) {
 	var blocks []struct {
-		Type  string          `json:"type"`
-		Text  string          `json:"text"`
-		ID    string          `json:"id"`
-		Name  string          `json:"name"`
-		Input json.RawMessage `json:"input"`
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		Thinking string          `json:"thinking"`
+		ID       string          `json:"id"`
+		Name     string          `json:"name"`
+		Input    json.RawMessage `json:"input"`
 	}
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return nil, err
 	}
 	text := ""
+	thinking := ""
 	toolCalls := make([]map[string]any, 0)
 	for _, block := range blocks {
 		switch block.Type {
 		case "thinking":
-			// Skip thinking blocks — not part of OpenAI message format
+			thinking += block.Thinking
 		case "text":
 			text += block.Text
 		case "tool_use":
@@ -148,11 +150,10 @@ func convertAssistantMessage(raw json.RawMessage) (map[string]any, error) {
 			})
 		}
 	}
-	msg := map[string]any{"role": "assistant"}
-	if text != "" {
-		msg["content"] = text
-	} else {
-		msg["content"] = nil
+	msg := map[string]any{
+		"role":              "assistant",
+		"reasoning_content": thinking,
+		"content":           text,
 	}
 	if len(toolCalls) > 0 {
 		msg["tool_calls"] = toolCalls

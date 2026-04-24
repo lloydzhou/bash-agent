@@ -7,12 +7,13 @@
 # Parse content array from an assistant message and convert to OpenAI format.
 # Claude: {"role":"assistant","content":[{"type":"text","text":"..."},{"type":"tool_use","id":"...","name":"...","input":{...}}]}
 # OpenAI: {"role":"assistant","content":"...","tool_calls":[{"id":"...","type":"function","function":{"name":"...","arguments":"..."}}]}
-function convert_assistant_msg(json,    role, content_val, text_parts, tool_parts, n, i, block, btype, t, tid, tname, tinput) {
+function convert_assistant_msg(json,    role, content_val, text_parts, tool_parts, n, i, block, btype, t, tid, tname, tinput, reasoning) {
     role = extract_str(json, "role")
     content_val = extract_value(json, "content")
 
     text_parts = ""
     tool_parts = ""
+    reasoning = ""
     n = 0
 
     # Parse content array: [{...},{...}]
@@ -23,8 +24,9 @@ function convert_assistant_msg(json,    role, content_val, text_parts, tool_part
             block = blocks[i]
             btype = extract_str(block, "type")
             if (btype == "thinking") {
-                # Skip thinking blocks — not part of OpenAI message format
-                continue
+                t = extract_value(block, "thinking")
+                if (substr(t, 1, 1) == "\"") t = substr(t, 2, length(t) - 2)
+                reasoning = unescape_json_string(t)
             } else if (btype == "text") {
                 t = extract_value(block, "text")
                 # Strip surrounding quotes
@@ -49,11 +51,9 @@ function convert_assistant_msg(json,    role, content_val, text_parts, tool_part
 
     # Build OpenAI message
     result_msg = "{\"role\":\"assistant\""
-    if (text_parts != "") {
-        result_msg = result_msg ",\"content\":\"" escape_json_string(text_parts) "\""
-    } else {
-        result_msg = result_msg ",\"content\":null"
-    }
+    result_msg = result_msg ",\"reasoning_content\":\"" escape_json_string(reasoning) "\""
+
+    result_msg = result_msg ",\"content\":\"" escape_json_string(text_parts) "\""
     if (tool_parts != "") {
         # Remove trailing comma
         tool_parts = substr(tool_parts, 1, length(tool_parts) - 1)
@@ -121,20 +121,15 @@ END {
 
         # Detect message type
         role = extract_str(msg, "role")
-        has_tool_content = 0
         has_tool_result = 0
 
-        if (role == "assistant" && is_content_array(msg)) {
-            content_val = extract_value(msg, "content")
-            if (content_has_block_type(content_val, "tool_use")) has_tool_content = 1
-        }
         if (role == "user" && is_content_array(msg)) {
             content_val = extract_value(msg, "content")
             if (content_has_block_type(content_val, "tool_result")) has_tool_result = 1
         }
 
         if (i > 1) result = result ","
-        if (has_tool_content) {
+        if (role == "assistant") {
             result = result convert_assistant_msg(msg)
         } else if (has_tool_result) {
             result = result convert_tool_result_msg(msg)

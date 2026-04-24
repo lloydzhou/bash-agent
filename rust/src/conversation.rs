@@ -31,11 +31,12 @@ impl Store {
         self.append_line(&json!({"role":"user","content":content}))
     }
 
-    pub fn add_assistant(&self, text: &str, calls: &[ToolCallEvent]) -> Result<()> {
+    pub fn add_assistant(&self, text: &str, thinking: &str, calls: &[ToolCallEvent]) -> Result<()> {
         let mut content = Vec::new();
-        if !text.is_empty() {
-            content.push(json!({"type":"text","text":text}));
-        }
+        // Always emit thinking block (matches bash build_assistant_content_json)
+        content.push(json!({"type":"thinking","thinking":thinking}));
+        // Always emit text block (matches bash build_assistant_content_json)
+        content.push(json!({"type":"text","text":text}));
         for c in calls {
             content.push(json!({"type":"tool_use","id":c.id,"name":c.name,"input":c.input_json}));
         }

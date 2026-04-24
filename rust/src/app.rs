@@ -259,6 +259,7 @@ impl Runtime {
             while turn < self.cfg.max_turns {
                 turn += 1;
                 let mut text = String::new();
+                let mut thinking = String::new();
                 let mut calls: Vec<ToolCallEvent> = Vec::new();
                 let mut tool_results: Vec<ToolResult> = Vec::new();
                 let mut stop = String::new();
@@ -298,6 +299,7 @@ impl Runtime {
                                 &mut ds,
                                 DisplayEvent::Thinking(content.clone()),
                             )?;
+                            thinking.push_str(&content);
                         }
                         Event::Text(TextEvent { content }) => {
                             self.display_event(
@@ -386,6 +388,7 @@ impl Runtime {
                         }
                         Event::Retry(RetryEvent {}) => {
                             text.clear();
+                            thinking.clear();
                             calls.clear();
                             tool_results.clear();
                             // Always write to events.jsonl, and to stdout if stream-json mode
@@ -413,7 +416,7 @@ impl Runtime {
 
                 // Tools already executed inline; persist unless interrupted
                 if !self.interrupted.load(Ordering::SeqCst) {
-                    self.conv.add_assistant(&text, &calls)?;
+                    self.conv.add_assistant(&text, &thinking, &calls)?;
                     if !tool_results.is_empty() {
                         self.conv.add_tool_results(&tool_results)?;
                         // Note: granular tool_result events already written by display_event via emit_and_append_event

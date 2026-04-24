@@ -652,21 +652,16 @@ build_tool_result_json_object() {
 }
 
 build_assistant_content_json() {
-    local text="$1" calls="$2"
-    local content="[" first=true
-
-    if [[ -n "$text" ]]; then
-        content+="{\"type\":\"text\",\"text\":\"$(json_escape "$text")\"}"
-        first=false
-    fi
+    local text="$1" thinking="$2" calls="$3"
+    local content="["
+    content+="{\"type\":\"thinking\",\"thinking\":\"$(json_escape "$thinking")\"}"
+    content+=",{\"type\":\"text\",\"text\":\"$(json_escape "$text")\"}"
 
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         local name id input
         IFS=$'\t' read -r name id input _ <<< "$tc"
-        $first || content+=","
-        first=false
-        content+="$(build_tool_call_json_object "$name" "$id" "$input")"
+        content+=",$(build_tool_call_json_object "$name" "$id" "$input")"
     done <<< "$calls"
 
     content+="]"
@@ -767,9 +762,9 @@ conv_add_user() {
 }
 
 conv_add_assistant() {
-    local text="$1" calls="$2"
+    local text="$1" thinking="$2" calls="$3"
     local content
-    content=$(build_assistant_content_json "$text" "$calls")
+    content=$(build_assistant_content_json "$text" "$thinking" "$calls")
     printf '{"role":"assistant","content":%s}\n' "$content" >> "$CONV_FILE"
 }
 
@@ -1191,7 +1186,7 @@ agent_loop_stream() {
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
 
-        local text="" tool_calls="" stop="" loop_error=""
+        local text="" thinking="" tool_calls="" stop="" loop_error=""
         local tool_conv_results=""  # collected: id<TAB>json_escaped_result per line
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
         while read_message; do
@@ -1204,9 +1199,9 @@ agent_loop_stream() {
             write_message "${REPLY_MESSAGE[@]}"
 
             case "${REPLY_MESSAGE[0]}" in
-                RETRY)    text="" tool_calls="" tool_conv_results="" ;;
+                RETRY)    text="" thinking="" tool_calls="" tool_conv_results="" ;;
                 TEXT)     text+="${REPLY_MESSAGE[1]}" ;;
-                THINKING) ;;
+                THINKING) thinking+="${REPLY_MESSAGE[1]}" ;;
                 TOOL_CALL)
                     local cur_tool_name cur_tool_id input
                     cur_tool_name="${REPLY_MESSAGE[1]}"
@@ -1269,7 +1264,7 @@ agent_loop_stream() {
 
         # Tools already executed inline; persist unless interrupted
         if ! interrupt_requested; then
-            conv_add_assistant "$text" "$tool_calls"
+            conv_add_assistant "$text" "$thinking" "$tool_calls"
             if [[ -n "$tool_conv_results" ]]; then
                 conv_add_tool_results "$tool_conv_results"
             fi

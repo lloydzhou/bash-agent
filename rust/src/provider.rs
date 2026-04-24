@@ -97,10 +97,11 @@ fn convert_messages_to_openai(lines: &[Value]) -> Result<Vec<Value>> {
 fn convert_assistant_message(content: &Value) -> Result<Value> {
     let blocks = content.as_array().cloned().unwrap_or_default();
     let mut text = String::new();
+    let mut reasoning = String::new();
     let mut tool_calls = Vec::new();
     for block in blocks {
         match block.get("type").and_then(Value::as_str).unwrap_or("") {
-            "thinking" => { /* skip thinking blocks — not part of OpenAI message format */ }
+            "thinking" => reasoning.push_str(block.get("thinking").and_then(Value::as_str).unwrap_or("")),
             "text" => text.push_str(block.get("text").and_then(Value::as_str).unwrap_or("")),
             "tool_use" => {
                 let args = block
@@ -119,7 +120,11 @@ fn convert_assistant_message(content: &Value) -> Result<Value> {
             _ => {}
         }
     }
-    let mut msg = json!({"role":"assistant","content":if text.is_empty(){Value::Null}else{Value::String(text)}});
+    let mut msg = json!({
+        "role": "assistant",
+        "reasoning_content": reasoning,
+        "content": text,
+    });
     if !tool_calls.is_empty() {
         msg["tool_calls"] = Value::Array(tool_calls);
     }

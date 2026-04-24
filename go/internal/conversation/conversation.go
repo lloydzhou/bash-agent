@@ -33,14 +33,18 @@ func (s Store) AddUser(content string) error {
 	return appendLine(s.Path, line)
 }
 
-func (s Store) AddAssistant(text string, calls []protocol.ToolCallEvent) error {
-	content := make([]any, 0, len(calls)+1)
-	if text != "" {
-		content = append(content, map[string]any{
-			"type": "text",
-			"text": text,
-		})
-	}
+func (s Store) AddAssistant(text string, thinking string, calls []protocol.ToolCallEvent) error {
+	content := make([]any, 0, len(calls)+2)
+	// Always emit thinking block (matches bash build_assistant_content_json)
+	content = append(content, map[string]any{
+		"type":     "thinking",
+		"thinking": thinking,
+	})
+	// Always emit text block (matches bash build_assistant_content_json)
+	content = append(content, map[string]any{
+		"type": "text",
+		"text": text,
+	})
 	for _, call := range calls {
 		content = append(content, map[string]any{
 			"type":  "tool_use",
