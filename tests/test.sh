@@ -1394,7 +1394,7 @@ EOF
     cat > "$project_file" <<'EOF'
 Project agent instruction marker
 EOF
-    output=$(cd "$ROOT_DIR" && HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'INSTRUCTION_FILE_MARKER' 2>&1) || true
+    output=$(cd "$ROOT_DIR" && HOME="$home_dir" BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'INSTRUCTION_FILE_MARKER' 2>&1) || true
     rm -rf "$home_dir"
     rm -f "$project_file"
     if echo "$output" | grep -q "Instruction files loaded."; then
