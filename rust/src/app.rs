@@ -813,14 +813,6 @@ impl Runtime {
         Ok(())
     }
 
-    fn build_assistant_event(&self, text: &str, calls: &[ToolCallEvent]) -> Value {
-        let tool_calls: Vec<Value> = calls
-            .iter()
-            .map(|c| json!({"name":c.name,"id":c.id,"input":c.input_json}))
-            .collect();
-        json!({"type":"assistant_message","text":text,"tool_calls":tool_calls})
-    }
-
     fn is_stream_json_mode(&self) -> bool {
         self.cfg.output_format == OutputFormat::StreamJson
     }
