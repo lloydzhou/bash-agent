@@ -38,6 +38,7 @@ CONV_FILE=""
 TOOL_DEF_JSON=""
 API_URL=""
 AWK_DIR=""
+declare -a HEADER_ARGS=()
 INTERRUPT_REQUESTED=false
 ESC_LISTENER_PID=""
 ESC_LISTENER_FLAG=""
@@ -1045,84 +1046,10 @@ build_claude_request() {
     printf '%s' "$body"
 }
 
-build_openai_request() {
-    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-0}"
-    local msgs
-    msgs=$(printf '%s' "$messages" | awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
-    if [[ -z "$system_prompt" ]]; then
-        system_prompt=$(build_system_prompt)
-    fi
-
-    if [[ -n "$system_prompt" ]]; then
-        local sys_msg="{\"role\":\"system\",\"content\":\"$(json_escape "$system_prompt")\"}"
-        msgs="${msgs%]}"
-        msgs="[${sys_msg},${msgs#\[}]"
-    fi
-
-    local body
-    body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
-
-    if (( thinking_budget > 0 )); then
-        body+=",\"reasoning_effort\":\"high\""
-    fi
-
-    if [[ -n "$tools" ]]; then
-        local openai_tools
-        openai_tools=$(printf '%s' "$tools" | awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
-        body+=",\"tools\":${openai_tools}"
-    fi
-
-    body+=",\"messages\":${msgs}}"
-    printf '%s' "$body"
-}
-
-build_request() {
-    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-$THINKING_BUDGET}"
-    case "$PROVIDER" in
-        claude)            build_claude_request "$messages" "$tools" "$system_prompt" "$max_tokens" "$thinking_budget" ;;
-        openai)            build_openai_request "$messages" "$tools" "$system_prompt" "$max_tokens" "$thinking_budget" ;;
-    esac
-}
-
-# --- SSE Parsers (call awk/*.awk) ---
-
-parse_sse() {
-    case "$PROVIDER" in
-        claude) awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" ;;
-        openai) awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" ;;
-    esac
-}
-
 # --- API Calls (curl) ---
 
 _stream_curl() {
-    local body="$1"
-    shift
-    local header_args=("$@")
-
-    $VERBOSE && printf '\033[90m[verbose] POST %s (%dKB body)\033[0m\n' "$API_URL" "$((${#body}/1024))" >&2
-
-    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"
-}
-
-call_api() {
-    local body="$1"
-    case "$PROVIDER" in
-        claude)
-            _stream_curl "$body" \
-                -H "Content-Type: application/json" \
-                -H "x-api-key: ${API_KEY}" \
-                -H "anthropic-version: 2023-06-01" \
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)" \
-                -H "x-app: cli"
-            ;;
-        openai)
-            _stream_curl "$body" \
-                -H "Content-Type: application/json" \
-                -H "Authorization: Bearer ${API_KEY}" \
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
-            ;;
-    esac
+    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"
 }
 
 # --- LLM Call (internal) ---
@@ -1132,16 +1059,16 @@ llm_call() {
     local tools="$TOOL_DEF_JSON"
 
     local body
-    body=$(build_request "$messages" "$tools")
+    body=$(build_claude_request "$messages" "$tools")
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
 
-    call_api "$body" | parse_sse
+    printf '%s' "$body" | body_convert | _stream_curl | sse_convert | sse_parse
 }
 
 run_summary_call() {
     local messages="$1"
     local body text
-    body=$(build_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS" 0)
+    body=$(build_claude_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS" 0)
     $VERBOSE && printf '\033[90m[verbose] Summary request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
 
     text=""
@@ -1150,7 +1077,7 @@ run_summary_call() {
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
             ERROR) die "${REPLY_MESSAGE[1]}" ;;
         esac
-    done < <(call_api "$body" | parse_sse)
+    done < <(printf '%s' "$body" | body_convert | _stream_curl | sse_convert | sse_parse)
 
     [[ -n "$text" ]] || die "Failed to generate context summary"
     printf '%s' "$text"
@@ -1430,12 +1357,28 @@ validate_config() {
             : "${BASE_URL:=${ANTHROPIC_BASE_URL:-}}"
             : "${MODEL:=claude-sonnet-4-20250514}"
             API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages"
+            HEADER_ARGS=(
+                -H "Content-Type: application/json"
+                -H "x-api-key: ${API_KEY}"
+                -H "anthropic-version: 2023-06-01"
+                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+                -H "x-app: cli"
+            )
+            body_convert() { cat; }
+            sse_convert()  { cat; }
             ;;
         openai)
             : "${API_KEY:=$OPENAI_API_KEY}"
             : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
             : "${MODEL:=gpt-4o}"
             API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
+            HEADER_ARGS=(
+                -H "Content-Type: application/json"
+                -H "Authorization: Bearer ${API_KEY}"
+                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+            )
+            body_convert() { awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
+            sse_convert()  { awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
             ;;
         *)
             die "Unknown provider: $PROVIDER (use claude|openai)"
@@ -1448,6 +1391,9 @@ validate_config() {
             openai) die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
         esac
     fi
+
+    # Unified SSE parser — same for all providers (sse_convert normalizes to Claude format)
+    sse_parse() { awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"; }
 }
 
 interactive_mode() {

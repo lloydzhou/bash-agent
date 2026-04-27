@@ -423,9 +423,8 @@ src/
     todo_protocol.awk
     http_stream.awk
     claude_sse.awk
-    openai_sse.awk
-    convert_messages.awk
-    convert_tools.awk
+    transport_openai_body.awk
+    transport_openai_sse.awk
     edit_file.awk
     skill_summary.awk
     event_replay.awk

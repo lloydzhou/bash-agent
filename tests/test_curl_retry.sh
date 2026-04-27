@@ -299,7 +299,8 @@ data: [DONE]
 '
 
 actual6=$(printf '%s\n' "$input6" | awk -f "$AWK_DIR/http_stream.awk" \
-    | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk")
+    | awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" \
+    | awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk")
 
 retry6=$(printf '%s\n' "$actual6" | grep -c '^RETRY:' || true)
 assert_output "RETRY in OpenAI pipeline" "1" "$retry6"

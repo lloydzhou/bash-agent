@@ -64,10 +64,9 @@ awk_files = {
     "http_stream": ("http_stream.awk", "_AWK_HTTP_STREAM"),
     "edit_file": ("edit_file.awk", "_AWK_EDIT_FILE"),
     "claude_sse": ("claude_sse.awk", "_AWK_CLAUDE_SSE"),
-    "openai_sse": ("openai_sse.awk", "_AWK_OPENAI_SSE"),
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
-    "convert_messages": ("convert_messages.awk", "_AWK_CONVERT_MESSAGES"),
-    "convert_tools": ("convert_tools.awk", "_AWK_CONVERT_TOOLS"),
+    "transport_openai_body": ("transport_openai_body.awk", "_AWK_TRANSPORT_OPENAI_BODY"),
+    "transport_openai_sse": ("transport_openai_sse.awk", "_AWK_TRANSPORT_OPENAI_SSE"),
     "event_replay": ("event_replay.awk", "_AWK_EVENT_REPLAY"),
 }
 
@@ -100,7 +99,6 @@ if idx != -1:
 # --- Replace each awk function to use variable concatenation ---
 functions = [
     ("json_escape", "_AWK_JSON", "", ""),
-    ("parse_sse", "_AWK_JSON", "", ""),
     ("load_tool_defs", "", "", ""),
 ]
 
@@ -110,15 +108,6 @@ for func_name, json_var, specific_var, extra_args in functions:
             "json_escape() {\n"
             "    local input=\"${1:-}\"\n"
             "    printf '%s' \"$input\" | awk_run -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
-            "}\n"
-        )
-    elif func_name == "parse_sse":
-        replacement = (
-            "parse_sse() {\n"
-            "    case \"$PROVIDER\" in\n"
-            "        claude) awk_run -v verbose=\"${VERBOSE:-false}\" \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}\" ;;\n"
-            "        openai) awk_run \"${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_OPENAI_SSE}\" ;;\n"
-            "    esac\n"
             "}\n"
         )
     elif func_name == "load_tool_defs":
@@ -168,11 +157,12 @@ if idx != -1:
 content = content.replace("    find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('awk_run -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk_run "${_AWK_SKILL_SUMMARY}" "$skill_file"')
-content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${header_args[@]}" -d "$body" "$API_URL" 2>&1 | awk_run "${_AWK_HTTP_STREAM}"')
+content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | awk_run "${_AWK_HTTP_STREAM}"')
 content = content.replace('awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
-# --- Inline convert_messages.awk and convert_tools.awk references in build_openai_request ---
-content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_CONVERT_MESSAGES}"')
-content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_CONVERT_TOOLS}"')
+# --- Inline transport awk references in validate_config ---
+content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_BODY}"')
+content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_SSE}"')
+content = content.replace('awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"', 'awk_run -v verbose="${VERBOSE:-false}" "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}"')
 # --- Inline event_replay.awk reference in interactive_mode ---
 content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_EVENT_REPLAY}"')
 # --- Write output ---
