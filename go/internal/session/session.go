@@ -71,11 +71,7 @@ func ContinueSession(home, cwd string) (string, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if mod := info.ModTime().UnixNano(); mod > newestMod {
+		if mod, ok := sessionActivityModTime(filepath.Join(dir, entry.Name())); ok && mod > newestMod {
 			newestMod = mod
 			newest = entry.Name()
 		}
@@ -84,4 +80,15 @@ func ContinueSession(home, cwd string) (string, error) {
 		return "", fmt.Errorf("no sessions found")
 	}
 	return newest, nil
+}
+
+func sessionActivityModTime(sessionDir string) (int64, bool) {
+	events := filepath.Join(sessionDir, "events.jsonl")
+	if info, err := os.Stat(events); err == nil {
+		return info.ModTime().UnixNano(), true
+	}
+	if info, err := os.Stat(sessionDir); err == nil {
+		return info.ModTime().UnixNano(), true
+	}
+	return 0, false
 }

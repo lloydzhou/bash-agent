@@ -72,8 +72,6 @@ func normalizeDisplayText(s string) string {
 	return s
 }
 
-
-
 var newHTTPClient = func() *http.Client {
 	return &http.Client{Timeout: 0}
 }
@@ -311,7 +309,7 @@ func (rt *runtime) displayReplayEvent(state *displayState, evtType string, field
 			// Summary already prepended; use first line
 			trText = conversation.FirstLine(normalizeDisplayText(content)) + "\n"
 		} else {
-			trText = normalizeDisplayText(content) + "\n"
+			trText = truncateRunes(normalizeDisplayText(content), 200) + "\n"
 		}
 		// Insert newline when transitioning from thinking to text
 		if state.prevWasThinking && state.lastChar != "\n" {
@@ -332,10 +330,7 @@ func (rt *runtime) displayReplayEvent(state *displayState, evtType string, field
 		if state.lastChar != "\n" {
 			_, _ = rt.writeHuman(rt.nl())
 		}
-		content := fields["content"]
-		if len(content) > 80 {
-			content = content[:77] + "..."
-		}
+		content := truncateRunes(firstLine(fields["content"]), 77)
 		_, _ = fmt.Fprintf(rt.stdout, "\033[32m> %s\033[0m\n", content)
 		state.lastChar = "\n"
 		state.prevWasThinking = false
@@ -418,6 +413,8 @@ func (rt *runtime) replayLastTurns() {
 			}
 			hadTurns = true
 			rt.displayReplayEvent(&state, "USER_MESSAGE", map[string]string{"content": content})
+		case "todo_update":
+			flushAccumulated()
 		case "thinking":
 			// Flush text, accumulate thinking (match bash event_replay.awk)
 			if accText != "" {
@@ -490,6 +487,24 @@ func parseInputFields(input json.RawMessage) map[string]string {
 		}
 	}
 	return fields
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func (rt *runtime) agentLoop(userInput string) error {
@@ -1044,8 +1059,6 @@ func (rt *runtime) stopEscInterruptListener() {
 		rt.escTTY = nil
 	}
 }
-
-
 
 func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error) {
 	totalBytes, err := rt.conv.TotalBytes()

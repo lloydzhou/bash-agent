@@ -394,3 +394,13 @@ func TestRetryOnStreamTimeout(t *testing.T) {
 		t.Errorf("missing text from retry response: %q", got)
 	}
 }
+
+func TestTruncateRunes(t *testing.T) {
+	got := truncateRunes("你好世界abc", 2)
+	if got != "你好..." {
+		t.Fatalf("unexpected truncation: %q", got)
+	}
+	if strings.ContainsRune(got, '\uFFFD') {
+		t.Fatalf("truncation broke UTF-8: %q", got)
+	}
+}

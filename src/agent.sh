@@ -680,7 +680,7 @@ get_latest_session_dir() {
     local latest="" latest_ts=0 dir ts
     for dir in "$project_dir"/*/; do
         [[ -d "$dir" ]] || continue
-        ts=$(stat -f "%m" "$dir" 2>/dev/null || echo 0)
+        ts=$(stat -f "%m" "$dir/events.jsonl" 2>/dev/null || stat -f "%m" "$dir" 2>/dev/null || echo 0)
         (( ts > latest_ts )) && { latest_ts=$ts; latest="$dir"; }
     done
     [[ -n "$latest" ]] && basename "$latest" || return 1

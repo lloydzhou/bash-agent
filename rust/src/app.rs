@@ -3,7 +3,9 @@ use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, pars
 use crate::conversation::{Store, ToolResult, build_tool_call_summary, first_line};
 use crate::httpclient::{HTTPError, StreamClient};
 use crate::prompt;
-use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent};
+use crate::protocol::{
+    ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent,
+};
 use crate::provider;
 use crate::session::{self, Paths};
 use crate::tools;
@@ -15,8 +17,8 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,9 +35,11 @@ pub fn run(args: Vec<String>) -> Result<()> {
     };
 
     let cwd = std::env::current_dir()?;
-    let home = PathBuf::from(std::env::var("BASH_AGENT_HOME")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_else(|_| String::from(".")));
+    let home = PathBuf::from(
+        std::env::var("BASH_AGENT_HOME")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| String::from(".")),
+    );
 
     if cfg.list_sessions {
         list_sessions(&home, &cwd)?;
@@ -99,11 +103,17 @@ struct CancelReader<R> {
 impl<R: Read> Read for CancelReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.cancel.load(Ordering::SeqCst) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled",
+            ));
         }
         let n = self.inner.read(buf)?;
         if self.cancel.load(Ordering::SeqCst) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled",
+            ));
         }
         Ok(n)
     }
@@ -127,7 +137,6 @@ impl LlmStream {
             }
         }
     }
-
 }
 
 impl Drop for LlmStream {
@@ -160,7 +169,13 @@ impl Runtime {
         session::ensure_dir(&paths.base_dir)?;
         session::ensure_dir(&paths.session_dir)?;
         let new_session = !paths.events.exists();
-        for f in [&paths.conversation, &paths.events, &paths.summary, &paths.todo, &paths.plan] {
+        for f in [
+            &paths.conversation,
+            &paths.events,
+            &paths.summary,
+            &paths.todo,
+            &paths.plan,
+        ] {
             touch(f)?;
         }
 
@@ -239,7 +254,10 @@ impl Runtime {
         }
         self.info("Goodbye!");
         if !self.cfg.session_id.is_empty() {
-            eprintln!("\x1b[90mResume with: --session {}  or  --continue\x1b[0m", self.cfg.session_id);
+            eprintln!(
+                "\x1b[90mResume with: --session {}  or  --continue\x1b[0m",
+                self.cfg.session_id
+            );
         }
         Ok(())
     }
@@ -282,7 +300,8 @@ impl Runtime {
                     Err(e) => {
                         // Pre-stream HTTP/network error — record to events.jsonl before returning
                         let err_msg = e.to_string();
-                        let _ = self.emit_and_append_event(json!({"type":"error","message":&err_msg}));
+                        let _ =
+                            self.emit_and_append_event(json!({"type":"error","message":&err_msg}));
                         let _ = self.emit_and_append_event(json!({"type":"stop","reason":"error"}));
                         if !self.is_stream_json_mode() {
                             self.error(&err_msg);
@@ -300,24 +319,15 @@ impl Runtime {
                     }
                     match evt {
                         Event::Thinking(ThinkingEvent { content }) => {
-                            self.display_event(
-                                &mut ds,
-                                DisplayEvent::Thinking(content.clone()),
-                            )?;
+                            self.display_event(&mut ds, DisplayEvent::Thinking(content.clone()))?;
                             thinking.push_str(&content);
                         }
                         Event::Text(TextEvent { content }) => {
-                            self.display_event(
-                                &mut ds,
-                                DisplayEvent::Text(content.clone()),
-                            )?;
+                            self.display_event(&mut ds, DisplayEvent::Text(content.clone()))?;
                             text.push_str(&content);
                         }
                         Event::ToolCall(call) => {
-                            self.display_event(
-                                &mut ds,
-                                DisplayEvent::ToolCall(call.clone()),
-                            )?;
+                            self.display_event(&mut ds, DisplayEvent::ToolCall(call.clone()))?;
                             calls.push(call.clone());
 
                             if self.interrupted.load(Ordering::SeqCst) {
@@ -333,7 +343,8 @@ impl Runtime {
                                 Ok(v) => v,
                                 Err(e) => format!("Error: tool execution failed: {e}"),
                             };
-                            output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
+                            output =
+                                tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
                             let mut conv_content = String::new();
                             if call.name == "Edit" {
                                 // Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
@@ -369,9 +380,13 @@ impl Runtime {
                                 if let Ok(data) = fs::read_to_string(&self.paths.todo) {
                                     if !data.trim().is_empty() {
                                         let trimmed = data.trim_end().to_string();
-                                        self.append_event(json!({"type":"todo_update","content":trimmed}))?;
+                                        self.append_event(
+                                            json!({"type":"todo_update","content":trimmed}),
+                                        )?;
                                         if self.is_stream_json_mode() {
-                                            self.emit_stream(json!({"type":"todo_update","content":trimmed}))?;
+                                            self.emit_stream(
+                                                json!({"type":"todo_update","content":trimmed}),
+                                            )?;
                                         }
                                     }
                                 }
@@ -434,7 +449,8 @@ impl Runtime {
                 } else {
                     // Match bash: write stop interrupted event to events.jsonl (always)
                     // and to stdout if stream-json mode
-                    let _ = self.emit_and_append_event(json!({"type":"stop","reason":"interrupted"}));
+                    let _ =
+                        self.emit_and_append_event(json!({"type":"stop","reason":"interrupted"}));
                     if self.is_stream_json_mode() {
                         // In stream-json mode the JSON was already printed by emit_and_append_event
                     } else {
@@ -582,7 +598,11 @@ impl Runtime {
                         if tr_text.ends_with('\n') {
                             ds.last_char = "\n".to_string();
                         } else {
-                            ds.last_char = tr_text.chars().last().map(|c| c.to_string()).unwrap_or_else(|| "\n".to_string());
+                            ds.last_char = tr_text
+                                .chars()
+                                .last()
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "\n".to_string());
                         }
                     }
                 }
@@ -613,7 +633,11 @@ impl Runtime {
         )?;
         let body = self.transport.convert_body(&claude_body)?;
         if self.cfg.verbose {
-            self.debug(&format!("Request body ({}KB): {:.200}...", body.len() / 1024, String::from_utf8_lossy(&body)));
+            self.debug(&format!(
+                "Request body ({}KB): {:.200}...",
+                body.len() / 1024,
+                String::from_utf8_lossy(&body)
+            ));
         }
 
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
@@ -631,15 +655,25 @@ impl Runtime {
         let cancel_thread = cancel.clone();
         let transport = self.transport.clone();
         let _reader_thread = std::thread::spawn(move || {
-            let reader = CancelReader { inner: resp, cancel: cancel_thread.clone() };
+            let reader = CancelReader {
+                inner: resp,
+                cancel: cancel_thread.clone(),
+            };
             let mut send = |evt: Event| -> Result<()> {
-                tx.send(StreamMsg::Event(evt)).map_err(|e| anyhow!(e.to_string()))
+                tx.send(StreamMsg::Event(evt))
+                    .map_err(|e| anyhow!(e.to_string()))
             };
             let parse_res = transport.parse_sse(Box::new(reader), &mut send);
-            let _ = tx.send(StreamMsg::Done(parse_res.map_err(|err| anyhow!("sse_parse: {err}"))));
+            let _ = tx.send(StreamMsg::Done(
+                parse_res.map_err(|err| anyhow!("sse_parse: {err}")),
+            ));
         });
 
-        Ok(LlmStream { rx, finished: false, cancel })
+        Ok(LlmStream {
+            rx,
+            finished: false,
+            cancel,
+        })
     }
 
     fn start_esc_interrupt_listener(&mut self) {
@@ -777,7 +811,10 @@ impl Runtime {
     fn headers(&self) -> Vec<(String, String)> {
         let mut h = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
-            ("User-Agent".to_string(), "claude-cli/1.0.33 (max, cli)".to_string()),
+            (
+                "User-Agent".to_string(),
+                "claude-cli/1.0.33 (max, cli)".to_string(),
+            ),
         ];
         match self.cfg.provider.as_str() {
             "claude" => {
@@ -835,7 +872,12 @@ impl Runtime {
     }
 
     /// display_replay_event mirrors bash's display_event exactly for replay purposes.
-    fn display_replay_event(&self, ds: &mut DisplayState, evt_type: &str, fields: &std::collections::HashMap<&str, &str>) {
+    fn display_replay_event(
+        &self,
+        ds: &mut DisplayState,
+        evt_type: &str,
+        fields: &std::collections::HashMap<&str, &str>,
+    ) {
         match evt_type {
             "TEXT" => {
                 let content = fields.get("content").copied().unwrap_or("");
@@ -850,18 +892,27 @@ impl Runtime {
                     if content.ends_with('\n') {
                         ds.last_char = "\n".to_string();
                     } else {
-                        ds.last_char = content.chars().last().map(|c| c.to_string()).unwrap_or("\n".to_string());
+                        ds.last_char = content
+                            .chars()
+                            .last()
+                            .map(|c| c.to_string())
+                            .unwrap_or("\n".to_string());
                     }
                 }
             }
             "THINKING" => {
                 let content = fields.get("content").copied().unwrap_or("");
                 if !content.is_empty() {
-                    self.write_human(&format!("\x1b[90m{}\x1b[0m", content)).ok();
+                    self.write_human(&format!("\x1b[90m{}\x1b[0m", content))
+                        .ok();
                     if content.ends_with('\n') {
                         ds.last_char = "\n".to_string();
                     } else {
-                        ds.last_char = content.chars().last().map(|c| c.to_string()).unwrap_or("\n".to_string());
+                        ds.last_char = content
+                            .chars()
+                            .last()
+                            .map(|c| c.to_string())
+                            .unwrap_or("\n".to_string());
                     }
                 }
                 ds.prev_was_thinking = true;
@@ -879,7 +930,8 @@ impl Runtime {
                     }
                 }
                 let summary = build_tool_call_summary(name, &summary_fields);
-                self.write_human(&format!("\x1b[33m[tool] {}\x1b[0m\n", summary)).ok();
+                self.write_human(&format!("\x1b[33m[tool] {}\x1b[0m\n", summary))
+                    .ok();
                 ds.last_char = "\n".to_string();
                 ds.prev_was_thinking = false;
             }
@@ -893,7 +945,7 @@ impl Runtime {
                     // Summary already prepended; use first line
                     content.lines().next().unwrap_or("").to_string() + "\n"
                 } else {
-                    content.to_string() + "\n"
+                    truncate_for_replay(content, 200) + "\n"
                 };
                 // Insert newline when transitioning from thinking to text
                 if ds.prev_was_thinking && ds.last_char != "\n" {
@@ -906,7 +958,11 @@ impl Runtime {
                     if tr_text.ends_with('\n') {
                         ds.last_char = "\n".to_string();
                     } else {
-                        ds.last_char = tr_text.chars().last().map(|c| c.to_string()).unwrap_or("\n".to_string());
+                        ds.last_char = tr_text
+                            .chars()
+                            .last()
+                            .map(|c| c.to_string())
+                            .unwrap_or("\n".to_string());
                     }
                 }
             }
@@ -915,18 +971,13 @@ impl Runtime {
                 if ds.last_char != "\n" {
                     self.write_human("\n").ok();
                 }
-                let mut content = fields.get("content").copied().unwrap_or("");
-                if content.chars().count() > 80 {
-                    content = &content[..content.char_indices().take(77).last().map(|(i, _)| i).unwrap_or(0)];
-                    // Can't easily truncate by chars, use owned
-                }
-                let display = if content.chars().count() > 80 {
-                    let truncated: String = content.chars().take(77).collect();
-                    format!("{}...", truncated)
-                } else {
-                    content.to_string()
-                };
-                self.write_human(&format!("\x1b[32m> {}\x1b[0m\n", display)).ok();
+                let content = truncate_for_replay(
+                    first_line(fields.get("content").copied().unwrap_or("")),
+                    77,
+                );
+                let display = content;
+                self.write_human(&format!("\x1b[32m> {}\x1b[0m\n", display))
+                    .ok();
                 ds.last_char = "\n".to_string();
                 ds.prev_was_thinking = false;
             }
@@ -979,7 +1030,11 @@ impl Runtime {
 
         // Keep last 10 turns (match bash)
         let keep = turn_starts.len().saturating_sub(10);
-        let start_idx = if keep < turn_starts.len() { turn_starts[keep] } else { 0 };
+        let start_idx = if keep < turn_starts.len() {
+            turn_starts[keep]
+        } else {
+            0
+        };
         let had_turns = turn_starts.len().saturating_sub(keep) > 0;
 
         let mut ds = DisplayState {
@@ -999,7 +1054,14 @@ impl Runtime {
                     if content.is_empty() {
                         continue;
                     }
-                    self.display_replay_event(&mut ds, "USER_MESSAGE", &std::collections::HashMap::from([("content", content)]));
+                    self.display_replay_event(
+                        &mut ds,
+                        "USER_MESSAGE",
+                        &std::collections::HashMap::from([("content", content)]),
+                    );
+                }
+                "todo_update" => {
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                 }
                 "thinking" => {
                     // Flush text, accumulate thinking (match bash event_replay.awk)
@@ -1024,35 +1086,43 @@ impl Runtime {
                     for (k, v) in &fields {
                         map.insert(k.as_str(), v.as_str().to_string());
                     }
-                    let str_map: std::collections::HashMap<&str, &str> = map.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                    let str_map: std::collections::HashMap<&str, &str> =
+                        map.iter().map(|(k, v)| (*k, v.as_str())).collect();
                     self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
                 }
                 "tool_result" => {
                     Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    let mut display = content.to_string();
-                    // Truncate for replay (match bash: 200 chars)
-                    if display.len() > 200 {
-                        display.truncate(200);
-                        display.push_str("...");
-                    }
-                    self.display_replay_event(&mut ds, "TOOL_RESULT", &std::collections::HashMap::from([
-                        ("name", name),
-                        ("content", display.as_str()),
-                    ]));
+                    let display = truncate_for_replay(content, 200);
+                    self.display_replay_event(
+                        &mut ds,
+                        "TOOL_RESULT",
+                        &std::collections::HashMap::from([
+                            ("name", name),
+                            ("content", display.as_str()),
+                        ]),
+                    );
                 }
                 "error" => {
                     Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let msg = evt.get("message").and_then(Value::as_str).unwrap_or("");
-                    self.display_replay_event(&mut ds, "ERROR", &std::collections::HashMap::from([("message", msg)]));
+                    self.display_replay_event(
+                        &mut ds,
+                        "ERROR",
+                        &std::collections::HashMap::from([("message", msg)]),
+                    );
                 }
                 "assistant_message" => {
                     // Legacy format: emit TEXT + TOOL_CALL per tool_call (match bash event_replay.awk)
                     Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
                     if !text.is_empty() {
-                        self.display_replay_event(&mut ds, "TEXT", &std::collections::HashMap::from([("content", text)]));
+                        self.display_replay_event(
+                            &mut ds,
+                            "TEXT",
+                            &std::collections::HashMap::from([("content", text)]),
+                        );
                     }
                     if let Some(tool_calls) = evt.get("tool_calls").and_then(Value::as_array) {
                         for tc in tool_calls {
@@ -1065,7 +1135,8 @@ impl Runtime {
                             for (k, v) in &fields {
                                 map.insert(k.as_str(), v.as_str().to_string());
                             }
-                            let str_map: std::collections::HashMap<&str, &str> = map.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                            let str_map: std::collections::HashMap<&str, &str> =
+                                map.iter().map(|(k, v)| (*k, v.as_str())).collect();
                             self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
                         }
                     }
@@ -1091,13 +1162,21 @@ impl Runtime {
         if which == "thinking" || which == "both" {
             if !acc_thinking.is_empty() {
                 let content = std::mem::take(acc_thinking);
-                this.display_replay_event(ds, "THINKING", &std::collections::HashMap::from([("content", content.as_str())]));
+                this.display_replay_event(
+                    ds,
+                    "THINKING",
+                    &std::collections::HashMap::from([("content", content.as_str())]),
+                );
             }
         }
         if which == "text" || which == "both" {
             if !acc_text.is_empty() {
                 let content = std::mem::take(acc_text);
-                this.display_replay_event(ds, "TEXT", &std::collections::HashMap::from([("content", content.as_str())]));
+                this.display_replay_event(
+                    ds,
+                    "TEXT",
+                    &std::collections::HashMap::from([("content", content.as_str())]),
+                );
             }
         }
     }
@@ -1127,7 +1206,15 @@ fn normalize_display_text(s: &str, interactive: bool) -> String {
     }
 }
 
-
+fn truncate_for_replay(s: &str, limit: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= limit {
+        return s.to_string();
+    }
+    let mut out: String = chars.into_iter().take(limit).collect();
+    out.push_str("...");
+    out
+}
 
 fn touch(path: &Path) -> Result<()> {
     if !path.exists() {
@@ -1151,10 +1238,19 @@ fn chrono_like_now() -> String {
     // Format: YYYYMMDD-HHmmss-XXXX (random 4-hex suffix to avoid collisions in fast tests)
     use time::format_description::FormatItem;
     use time::macros::format_description;
-    static FMT: &[FormatItem<'_>] = format_description!("[year][month][day]-[hour][minute][second]");
+    static FMT: &[FormatItem<'_>] =
+        format_description!("[year][month][day]-[hour][minute][second]");
     let base = time::OffsetDateTime::now_utc()
         .format(FMT)
-        .unwrap_or_else(|_| format!("{}", std::time::SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)));
+        .unwrap_or_else(|_| {
+            format!(
+                "{}",
+                std::time::SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            )
+        });
     let rand_suffix = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos() as u16)
@@ -1249,10 +1345,29 @@ fn parse_input_fields(input: &Value) -> std::collections::BTreeMap<String, Strin
     if let Some(obj) = input.as_object() {
         for (k, v) in obj {
             match v {
-                Value::String(s) => { fields.insert(k.clone(), s.clone()); }
-                _ => { fields.insert(k.clone(), v.to_string()); }
+                Value::String(s) => {
+                    fields.insert(k.clone(), s.clone());
+                }
+                _ => {
+                    fields.insert(k.clone(), v.to_string());
+                }
             }
         }
     }
     fields
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_for_replay_preserves_utf8() {
+        assert_eq!(truncate_for_replay("你好世界abc", 2), "你好...");
+    }
+
+    #[test]
+    fn first_line_splits_on_newline() {
+        assert_eq!(first_line("one\ntwo"), "one");
+    }
 }

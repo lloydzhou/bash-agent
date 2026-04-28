@@ -1,4 +1,6 @@
-use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
+use crate::protocol::{
+    ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, UsageEvent,
+};
 use crate::sse::toolcall::build_tool_call_event;
 use anyhow::Result;
 use serde_json::Value;

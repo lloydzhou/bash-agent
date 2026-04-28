@@ -15,7 +15,7 @@ pub struct ToolResult {
     pub tool_use_id: String,
     pub tool_name: String,
     pub tool_args: std::collections::BTreeMap<String, String>,
-    pub content: String,      // Full output for events.jsonl TOOL_RESULT (matches bash)
+    pub content: String, // Full output for events.jsonl TOOL_RESULT (matches bash)
     pub conv_content: String, // Summary only for conv file (matches bash: result_for_conv = first line of Edit output)
 }
 
@@ -63,7 +63,11 @@ impl Store {
             return kind.to_string();
         }
         match fs::read(path) {
-            Ok(data) => format!("{kind}({path}) [{} lines, {} bytes]", line_count(&data), data.len()),
+            Ok(data) => format!(
+                "{kind}({path}) [{} lines, {} bytes]",
+                line_count(&data),
+                data.len()
+            ),
             Err(_) => format!("{kind}({path})"),
         }
     }
@@ -215,9 +219,12 @@ pub fn build_tool_call_summary(
                     // todos is a JSON array string; parse it
                     if let Ok(arr) = serde_json::from_str::<Vec<Value>>(todos) {
                         let total = arr.len();
-                        let completed = arr.iter().filter(|item| {
-                            item.get("status").and_then(Value::as_str) == Some("completed")
-                        }).count();
+                        let completed = arr
+                            .iter()
+                            .filter(|item| {
+                                item.get("status").and_then(Value::as_str) == Some("completed")
+                            })
+                            .count();
                         label = format!("{completed}/{total}");
                     }
                 }

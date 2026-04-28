@@ -167,7 +167,12 @@ impl Runner {
         let start = match offset {
             Some(o) if o > 1 => {
                 if o > total_lines {
-                    bail!("Error: offset {} exceeds total lines {} in {}", o, total_lines, path);
+                    bail!(
+                        "Error: offset {} exceeds total lines {} in {}",
+                        o,
+                        total_lines,
+                        path
+                    );
                 }
                 o - 1
             }
@@ -335,7 +340,13 @@ impl Runner {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    fn grep(&self, pattern: &str, path: &str, glob: &str, context: Option<usize>) -> Result<String> {
+    fn grep(
+        &self,
+        pattern: &str,
+        path: &str,
+        glob: &str,
+        context: Option<usize>,
+    ) -> Result<String> {
         if pattern.is_empty() {
             bail!("Error: no pattern provided");
         }
@@ -506,10 +517,14 @@ fn unified_diff_color(path: &str, old_content: &str, new_content: &str) -> Resul
             if output.status.success() || output.status.code() == Some(1) {
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 // Check if --color was unsupported
-                if stdout.contains("unsupported --color") || stdout.contains("unrecognized option '--color'") {
+                if stdout.contains("unsupported --color")
+                    || stdout.contains("unrecognized option '--color'")
+                {
                     // Fallback: no color
-                    let old_path2 = std::env::temp_dir().join(format!("edit-old2-{}", std::process::id()));
-                    let new_path2 = std::env::temp_dir().join(format!("edit-new2-{}", std::process::id()));
+                    let old_path2 =
+                        std::env::temp_dir().join(format!("edit-old2-{}", std::process::id()));
+                    let new_path2 =
+                        std::env::temp_dir().join(format!("edit-new2-{}", std::process::id()));
                     fs::write(&old_path2, old_content)?;
                     fs::write(&new_path2, new_content)?;
                     let diff2 = Command::new("diff")
@@ -567,7 +582,10 @@ fn strip_ansi(s: &str) -> String {
         if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
             // Skip CSI sequence: ESC [ ... final_byte
             let mut j = i + 2;
-            while j < bytes.len() && ((bytes[j] >= 0x30 && bytes[j] <= 0x3f) || (bytes[j] >= 0x20 && bytes[j] <= 0x2f)) {
+            while j < bytes.len()
+                && ((bytes[j] >= 0x30 && bytes[j] <= 0x3f)
+                    || (bytes[j] >= 0x20 && bytes[j] <= 0x2f))
+            {
                 j += 1;
             }
             if j < bytes.len() && bytes[j] >= 0x40 && bytes[j] <= 0x7e {

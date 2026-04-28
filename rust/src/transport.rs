@@ -11,7 +11,11 @@ use std::io::Read;
 /// - parse_sse:    provider SSE stream → Event (always emits Claude semantics)
 pub trait Transport: Send + Sync {
     fn convert_body(&self, claude_body: &[u8]) -> Result<Vec<u8>>;
-    fn parse_sse(&self, reader: Box<dyn Read + Send>, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()>;
+    fn parse_sse(
+        &self,
+        reader: Box<dyn Read + Send>,
+        emit: &mut dyn FnMut(Event) -> Result<()>,
+    ) -> Result<()>;
 }
 
 /// Return the appropriate Transport for the configured provider.
@@ -31,7 +35,11 @@ impl Transport for ClaudeTransport {
         Ok(body.to_vec())
     }
 
-    fn parse_sse(&self, reader: Box<dyn Read + Send>, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
+    fn parse_sse(
+        &self,
+        reader: Box<dyn Read + Send>,
+        emit: &mut dyn FnMut(Event) -> Result<()>,
+    ) -> Result<()> {
         sse::claude::parse(reader, emit)
     }
 }
@@ -45,7 +53,11 @@ impl Transport for OpenAITransport {
         let raw: Value = serde_json::from_slice(claude_body)
             .map_err(|e| anyhow!("transport_openai_body: {e}"))?;
 
-        let model = raw.get("model").and_then(Value::as_str).unwrap_or("").to_string();
+        let model = raw
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let max_tokens = raw.get("max_tokens").and_then(Value::as_i64).unwrap_or(0);
         let system_val = raw.get("system").cloned();
         let thinking_val = raw.get("thinking").cloned();
@@ -100,7 +112,11 @@ impl Transport for OpenAITransport {
         Ok(serde_json::to_vec(&body)?)
     }
 
-    fn parse_sse(&self, reader: Box<dyn Read + Send>, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
+    fn parse_sse(
+        &self,
+        reader: Box<dyn Read + Send>,
+        emit: &mut dyn FnMut(Event) -> Result<()>,
+    ) -> Result<()> {
         sse::openai::parse(reader, &mut |evt: Event| -> Result<()> {
             // Map OpenAI stop reasons to Claude stop reasons (matches bash transport_openai_sse.awk)
             let mapped = match &evt {
@@ -111,7 +127,9 @@ impl Transport for OpenAITransport {
                         "length" => "max_tokens",
                         other => other,
                     };
-                    Event::Stop(crate::protocol::StopEvent { reason: reason.to_string() })
+                    Event::Stop(crate::protocol::StopEvent {
+                        reason: reason.to_string(),
+                    })
                 }
                 other => other.clone(),
             };
@@ -150,7 +168,9 @@ fn convert_assistant_message(content: &Value) -> Result<Value> {
     let mut tool_calls = Vec::new();
     for block in blocks {
         match block.get("type").and_then(Value::as_str).unwrap_or("") {
-            "thinking" => reasoning.push_str(block.get("thinking").and_then(Value::as_str).unwrap_or("")),
+            "thinking" => {
+                reasoning.push_str(block.get("thinking").and_then(Value::as_str).unwrap_or(""))
+            }
             "text" => text.push_str(block.get("text").and_then(Value::as_str).unwrap_or("")),
             "tool_use" => {
                 let args = block
