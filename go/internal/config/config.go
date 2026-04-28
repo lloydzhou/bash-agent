@@ -31,8 +31,9 @@ type Config struct {
 	BaseURL            string
 	Prompt             string
 	MaxTurns           int
-	MaxContextBytes    int
-	MaxContextKeepPct  int
+	MaxContextTokens  int
+	MaxContextKeepPct int
+	MaxTurnsBeforeCompact int
 	Skills             []string
 	ThinkingBudget     int
 
@@ -53,8 +54,9 @@ func Default() Config {
 		FileWriteMaxBytes:  1048576,
 		OutputFormat:       OutputHuman,
 		MaxTurns:           40,
-		MaxContextBytes:    200000,
-		MaxContextKeepPct:  25,
+		MaxContextTokens:  200000,
+		MaxContextKeepPct: 25,
+		MaxTurnsBeforeCompact: 100,
 		ThinkingBudget:     2048,
 	}
 }
@@ -125,9 +127,9 @@ func ParseArgs(args []string) (Config, error) {
 			}
 			n, err := ParseSizeBytes(val)
 			if err != nil {
-				return cfg, fmt.Errorf("invalid --max-context value: %s", val)
+				return cfg, fmt.Errorf("Invalid --max-context: %s", val)
 			}
-			cfg.MaxContextBytes = n
+			cfg.MaxContextTokens = n
 			i = next
 		case "--api-key":
 			val, next, err := requireValue(args, i)
@@ -205,6 +207,11 @@ func ParseArgs(args []string) (Config, error) {
 	if v := os.Getenv("THINKING_BUDGET"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.ThinkingBudget = n
+		}
+	}
+	if v := os.Getenv("MAX_TURNS_BEFORE_COMPACT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxTurnsBeforeCompact = n
 		}
 	}
 

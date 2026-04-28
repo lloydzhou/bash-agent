@@ -68,6 +68,7 @@ awk_files = {
     "transport_openai_body": ("transport_openai_body.awk", "_AWK_TRANSPORT_OPENAI_BODY"),
     "transport_openai_sse": ("transport_openai_sse.awk", "_AWK_TRANSPORT_OPENAI_SSE"),
     "event_replay": ("event_replay.awk", "_AWK_EVENT_REPLAY"),
+    "stats": ("stats.awk", "_AWK_STATS"),
 }
 
 awk_bodies = {}
@@ -165,6 +166,10 @@ content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport
 content = content.replace('awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"', 'awk_run -v verbose="${VERBOSE:-false}" "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}"')
 # --- Inline event_replay.awk reference in interactive_mode ---
 content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_EVENT_REPLAY}"')
+# --- Inline stats.awk references ---
+content = content.replace('awk_run -v action=update -f "$AWK_DIR/stats.awk"', 'awk_run -v action=update "${_AWK_STATS}"')
+content = content.replace('awk_run -v action=dump -f "$AWK_DIR/stats.awk"', 'awk_run -v action=dump "${_AWK_STATS}"')
+content = content.replace('awk_run -v action=sync -f "$AWK_DIR/stats.awk"', 'awk_run -v action=sync "${_AWK_STATS}"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)

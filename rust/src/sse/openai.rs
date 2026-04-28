@@ -20,7 +20,7 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
     let mut stop_reason = String::new();
     let mut input_tokens = 0i64;
     let mut output_tokens = 0i64;
-    let mut cache_input_tokens = 0i64;
+    let mut cache_read_input_tokens = 0i64;
     let mut saw_text = false;
     let mut pending_calls: BTreeMap<i64, PendingCall> = BTreeMap::new();
     let mut pending_usage: Option<UsageEvent> = None;
@@ -39,7 +39,7 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
             stop_reason.clear();
             input_tokens = 0;
             output_tokens = 0;
-            cache_input_tokens = 0;
+            cache_read_input_tokens = 0;
             saw_text = false;
             pending_calls.clear();
             pending_usage = None;
@@ -60,7 +60,8 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
             pending_usage = Some(UsageEvent {
                 input_tokens,
                 output_tokens,
-                cache_input_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens: 0,
             });
             pending_stop = Some(stop_reason.clone());
             break;
@@ -79,14 +80,19 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
         }
 
         let usage = body.get("usage").cloned().unwrap_or(Value::Null);
-        if let Some(v) = usage.get("prompt_tokens").and_then(Value::as_i64) {
-            input_tokens = v;
-        }
         if let Some(v) = usage.get("completion_tokens").and_then(Value::as_i64) {
             output_tokens = v;
         }
         if let Some(v) = usage.get("cached_tokens").and_then(Value::as_i64) {
-            cache_input_tokens = v;
+            cache_read_input_tokens = v;
+        }
+        // input_tokens = prompt_tokens - cached_tokens (actual processed tokens)
+        if let Some(v) = usage.get("prompt_tokens").and_then(Value::as_i64) {
+            if cache_read_input_tokens > 0 {
+                input_tokens = v - cache_read_input_tokens;
+            } else {
+                input_tokens = v;
+            }
         }
 
         let choice = body

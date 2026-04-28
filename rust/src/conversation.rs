@@ -93,6 +93,16 @@ impl Store {
         Ok(self.lines()?.len())
     }
 
+    /// Count user_input events in events.jsonl
+    pub fn count_user_inputs(&self) -> Result<usize> {
+        let events_path = self.path.to_string_lossy().replace("conversation.jsonl", "events.jsonl");
+        let data = fs::read_to_string(&events_path)?;
+        let count = data.lines()
+            .filter(|line| line.contains("\"type\":\"user_input\""))
+            .count();
+        Ok(count)
+    }
+
     pub fn trim_keep_last(&self, keep_lines: usize) -> Result<()> {
         let lines = self.lines()?;
         if keep_lines >= lines.len() {

@@ -50,14 +50,15 @@ func (e RetryEvent) Kind() EventKind { return EventRetry }
 func (e RetryEvent) Render() string  { return "RETRY:" }
 
 type UsageEvent struct {
-	InputTokens      int
-	OutputTokens     int
-	CacheInputTokens int
+	InputTokens             int
+	OutputTokens            int
+	CacheReadInputTokens    int
+	CacheCreationInputTokens int
 }
 
 func (e UsageEvent) Kind() EventKind { return EventUsage }
 func (e UsageEvent) Render() string {
-	return fmt.Sprintf("USAGE:%d\t%d\t%d", e.InputTokens, e.OutputTokens, e.CacheInputTokens)
+	return fmt.Sprintf("USAGE:%d\t%d\t%d\t%d", e.InputTokens, e.OutputTokens, e.CacheReadInputTokens, e.CacheCreationInputTokens)
 }
 
 type ToolCallEvent struct {
@@ -142,7 +143,7 @@ func UnescapeText(s string) string {
 
 func ParseUsagePayload(payload string) (UsageEvent, error) {
 	parts := strings.Split(payload, "\t")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		return UsageEvent{}, fmt.Errorf("invalid usage payload")
 	}
 	in, err := strconv.Atoi(parts[0])
@@ -153,9 +154,18 @@ func ParseUsagePayload(payload string) (UsageEvent, error) {
 	if err != nil {
 		return UsageEvent{}, err
 	}
-	cache, err := strconv.Atoi(parts[2])
+	cacheRead, err := strconv.Atoi(parts[2])
 	if err != nil {
 		return UsageEvent{}, err
 	}
-	return UsageEvent{InputTokens: in, OutputTokens: out, CacheInputTokens: cache}, nil
+	cacheCreation, err := strconv.Atoi(parts[3])
+	if err != nil {
+		return UsageEvent{}, err
+	}
+	return UsageEvent{
+		InputTokens:             in,
+		OutputTokens:            out,
+		CacheReadInputTokens:    cacheRead,
+		CacheCreationInputTokens: cacheCreation,
+	}, nil
 }

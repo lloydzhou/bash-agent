@@ -48,6 +48,10 @@ green() { printf '\033[32m✓ PASS: %s\033[0m\n' "$1"; }
 red()   { printf '\033[31m✗ FAIL: %s\033[0m\n' "$1"; }
 info()  { printf '\033[36m→ %s\033[0m\n' "$1"; }
 
+# Short test helpers
+multi_grep() { local o="$1"; shift; for p in "$@"; do grep -q "$p" <<< "$o" 2>/dev/null || return 1; done; return 0; }
+check() { local d="$1" o="$2"; shift 2; if multi_grep "$o" "$@"; then green "$d"; ((PASS++)) || true; else red "$d"; echo "  Output: $o"; ((FAIL++)) || true; fi; }
+
 protocol_awk() {
     LC_ALL=C awk "$@"
 }
@@ -98,7 +102,7 @@ decode_awk_output() {
                 printf '%s:%s\n' "$type" "${DECODE_MSG[1]}"
                 ;;
             USAGE)
-                printf '%s:%s\t%s\t%s\n' "$type" "${DECODE_MSG[1]}" "${DECODE_MSG[2]}" "${DECODE_MSG[3]}"
+                printf '%s:%s\t%s\t%s\t%s\n' "$type" "${DECODE_MSG[1]}" "${DECODE_MSG[2]}" "${DECODE_MSG[3]}" "${DECODE_MSG[4]}"
                 ;;
             TOOL_CALL)
                 # [0]=TOOL_CALL [1]=name [2]=id [3]=input [4..]=key,val pairs
@@ -1137,9 +1141,8 @@ SSE
 
 # Test 3: Claude SSE usage cache tokens
 test_claude_usage_cache_tokens() {
-    info "Test 3: Claude SSE usage cache tokens"
-    local output
-    output=$(protocol_awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
+    info "Test 3: Claude SSE usage cache tokens (cache_read/cache_creation)"
+    check "Claude usage cache tokens" "$(protocol_awk -v verbose=false -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" <<'SSE' | decode_awk_output
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_cache","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":2,"cache_read_input_tokens":4}}}
 
@@ -1158,12 +1161,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
 event: message_stop
 data: {"type":"message_stop"}
 SSE
-)
-    if echo "$output" | grep -q $'USAGE:10\t7\t4' && echo "$output" | grep -q "STOP:end_turn"; then
-        green "Claude usage cache tokens"; ((PASS++)) || true
-    else
-        red "Claude usage cache tokens"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
+    )" $'USAGE:10\t7\t4\t2' "STOP:end_turn"
 }
 
 # Test 4: Claude SSE tool_use parsing with quoted command
@@ -1240,8 +1238,7 @@ SSE
 # Test 5: OpenAI SSE awk parser
 test_openai_sse() {
     info "Test 5: OpenAI SSE awk parser"
-    local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
+    check "OpenAI SSE parser" "$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello from"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" OpenAI mock!"},"finish_reason":null}]}
@@ -1250,31 +1247,20 @@ data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":123456789
 
 data: [DONE]
 SSE
-)
-    if echo "$output" | grep -q "TEXT:Hello from" && echo "$output" | grep -q "TEXT:.*OpenAI" && echo "$output" | grep -q "STOP:end_turn"; then
-        green "OpenAI SSE parser"; ((PASS++)) || true
-    else
-        red "OpenAI SSE parser"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
+    )" "Hello from" "OpenAI" "STOP:end_turn"
 }
 
 # Test 6: OpenAI SSE usage cache tokens
 test_openai_usage_cache_tokens() {
     info "Test 6: OpenAI SSE usage cache tokens"
-    local output
-    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
+    check "OpenAI usage cache tokens" "$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Cache usage"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":5}}}
 
 data: [DONE]
 SSE
-)
-    if echo "$output" | grep -q $'USAGE:10\t12\t5' && echo "$output" | grep -q "STOP:end_turn"; then
-        green "OpenAI usage cache tokens"; ((PASS++)) || true
-    else
-        red "OpenAI usage cache tokens"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
+    )" $'USAGE:5\t12\t5\t0' "STOP:end_turn"
 }
 
 # Test 7: OpenAI SSE trims initial leading newlines
@@ -1323,12 +1309,7 @@ SSE
 test_http_stream_error_body() {
     info "Test 8: HTTP stream preserves error body"
     local output
-    output=$(printf 'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{"error":{"message":"bad request detail"}}\n' | protocol_awk -f "$AWK_DIR/http_stream.awk")
-    if echo "$output" | grep -q '^ERROR:400	HTTP 400:' && echo "$output" | grep -q 'bad request detail'; then
-        green "HTTP stream error body"; ((PASS++)) || true
-    else
-        red "HTTP stream error body"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
+    check "HTTP stream error body" "$(printf 'HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{"error":{"message":"bad request detail"}}\n' | protocol_awk -f "$AWK_DIR/http_stream.awk")" '^ERROR:400' 'bad request detail'
 }
 
 # Test 8: Transport body conversion (Claude request → OpenAI request)
@@ -1360,31 +1341,18 @@ test_transport_body_tools() {
 # Test 10: Agent.sh end-to-end with mock (Claude provider)
 test_agent_e2e_claude() {
     info "Test 10: Agent.sh e2e (Claude mock)"
-    local output
-    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1) || true
-    if echo "$output" | grep -q "Hello from" && echo "$output" | grep -q "mock"; then
-        green "Agent e2e Claude"; ((PASS++)) || true
-    else
-        red "Agent e2e Claude"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
+    check "Agent e2e Claude" "$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1 || true)" "Hello from" "mock"
 }
 
 # Test 11: Agent.sh end-to-end with mock (OpenAI provider)
 test_agent_e2e_openai() {
     info "Test 11: Agent.sh e2e (OpenAI mock)"
-    local output
-    output=$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1) || true
-    if echo "$output" | grep -q "Hello from" && echo "$output" | grep -q "mock"; then
-        green "Agent e2e OpenAI"; ((PASS++)) || true
-    else
-        red "Agent e2e OpenAI"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
+    check "Agent e2e OpenAI" "$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1 || true)" "Hello from" "mock"
 }
 
 # Test 13: Skill injection
 test_agent_skill_injection() {
-    info "Test 13: Agent.sh skill injection"
-    local skill_dir skill_file output
+    local skill_dir skill_file
     skill_dir="$ROOT_DIR/.claude/skills/test-skill"
     skill_file="$skill_dir/SKILL.md"
     mkdir -p "$skill_dir"
@@ -1394,18 +1362,12 @@ test_agent_skill_injection() {
 Skill marker for tests
 Skill path marker: ${BASH_AGENT_SKILL_DIR}/helper.sh
 EOF
-    output=$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --skill test-skill 'Hello' 2>&1) || true
+    check "Agent skill injection" "$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --skill test-skill 'Hello' 2>&1 || true)" "skill-path-aware" "mock"
     rm -rf "$skill_dir"
-    if echo "$output" | grep -q "skill-path-aware" && echo "$output" | grep -q "mock"; then
-        green "Agent skill injection"; ((PASS++)) || true
-    else
-        red "Agent skill injection"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
 }
 
 test_agent_skill_injection_from_repo_skills_dir() {
-    info "Test 13a: Agent.sh skill injection from repo skills dir"
-    local skill_dir skill_file output
+    local skill_dir skill_file
     skill_dir="$ROOT_DIR/skills/test-skill-repo"
     skill_file="$skill_dir/SKILL.md"
     mkdir -p "$skill_dir"
@@ -1415,13 +1377,8 @@ test_agent_skill_injection_from_repo_skills_dir() {
 Skill marker for tests
 Skill path marker: ${BASH_AGENT_SKILL_DIR}/helper.sh
 EOF
-    output=$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --skill test-skill-repo 'Hello' 2>&1) || true
+    check "Agent skill injection from repo skills dir" "$(cd "$ROOT_DIR" && "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --skill test-skill-repo 'Hello' 2>&1 || true)" "skill-path-aware" "mock"
     rm -rf "$ROOT_DIR/skills"
-    if echo "$output" | grep -q "skill-path-aware" && echo "$output" | grep -q "mock"; then
-        green "Agent skill injection from repo skills dir"; ((PASS++)) || true
-    else
-        red "Agent skill injection from repo skills dir"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
 }
 
 test_agent_skill_index() {
@@ -1791,7 +1748,7 @@ test_agent_stream_tool_call() {
     output=$("$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_QUOTE_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"tool_call"' && \
        echo "$output" | grep -Fq 'echo \"hello\"' && \
-       echo "$output" | grep -q '"cache_input_tokens":3'; then
+       echo "$output" | grep -q '"cache_read_input_tokens":3'; then
         green "Agent stream-json tool call"; ((PASS++)) || true
     else
         red "Agent stream-json tool call"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1805,7 +1762,8 @@ test_agent_stream_usage_event() {
     if echo "$output" | grep -q '"type":"usage"' && \
        echo "$output" | grep -q '"input_tokens":10' && \
        echo "$output" | grep -q '"output_tokens":7' && \
-       echo "$output" | grep -q '"cache_input_tokens":0'; then
+       echo "$output" | grep -q '"cache_read_input_tokens":0' && \
+       echo "$output" | grep -q '"cache_creation_input_tokens":0'; then
         green "Agent stream-json usage event"; ((PASS++)) || true
     else
         red "Agent stream-json usage event"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1958,6 +1916,49 @@ test_agent_edit_code_snippet() {
     rm -f "$target_file"
 }
 
+
+# Test 34: stats.awk dump/update round-trip
+test_stats_awk() {
+    info "Test 34: stats.awk dump/update round-trip"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    printf 'agent_request_count\t0\ntotal_input_tokens\t0\ntotal_output_tokens\t0\ntotal_cache_read_tokens\t0\ntotal_cache_creation_tokens\t0\ncurrent_context_tokens\t0\ncompact_request_count\t0\n' > "$tmpdir/test.json"
+    printf 'agent_request_count\t+1\ntotal_input_tokens\t+10\ntotal_output_tokens\t+20\ntotal_cache_read_tokens\t+3\ntotal_cache_creation_tokens\t+4\ncurrent_context_tokens\t30\n' |         protocol_awk -v action=update -f "$AWK_DIR/stats.awk" "$tmpdir/test.json"
+    local result
+    result=$(protocol_awk -v action=dump -f "$AWK_DIR/stats.awk" "$tmpdir/test.json" | sort)
+    check "stats.awk update/dump" "$result" \
+        $'agent_request_count\t1' $'total_input_tokens\t10' $'total_output_tokens\t20' \
+        $'total_cache_read_tokens\t3' $'total_cache_creation_tokens\t4' $'current_context_tokens\t30'
+    rm -rf "$tmpdir"
+}
+
+# Test 35: --max-context accepts k/m suffixes
+test_agent_max_context() {
+    info "Test 35: --max-context parse_size_bytes"
+    local maxctx_out
+    maxctx_out=$("$AGENT" --max-context invalid 2>&1) || true
+    if echo "$maxctx_out" | grep -q "Error:.*--max-context"; then
+        green "Agent --max-context k suffix"; ((PASS++)) || true
+    else
+        red "Agent --max-context k suffix"; echo "  Output: $maxctx_out"; ((FAIL++)) || true
+    fi
+}
+
+# Test 36: stats.json created on agent run
+test_agent_stats_json() {
+    info "Test 36: stats.json created on agent run"
+    local home_dir stats_file
+    home_dir=$(mktemp -d)
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' >/dev/null 2>&1 || true
+    stats_file=$(find "$home_dir" -name 'stats.json' 2>/dev/null | head -1)
+    if [[ -n "$stats_file" ]] && grep -q 'input_tokens' "$stats_file" 2>/dev/null; then
+        green "Agent stats.json created"; ((PASS++)) || true
+    else
+        red "Agent stats.json created"; echo "  Stats file: $stats_file (content: $(cat "$stats_file" 2>/dev/null || echo 'N/A'))"; ((FAIL++)) || true
+    fi
+    rm -rf "$home_dir"
+}
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -2014,6 +2015,9 @@ test_agent_edit_unicode
 test_agent_edit_special_chars
 test_agent_edit_multiline
 test_agent_edit_code_snippet
+test_stats_awk
+test_agent_max_context
+test_agent_stats_json
 
 echo ""
 echo "=============================="

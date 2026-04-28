@@ -37,8 +37,8 @@ impl Event {
                 out
             }
             Event::Usage(e) => format!(
-                "USAGE:{}\t{}\t{}",
-                e.input_tokens, e.output_tokens, e.cache_input_tokens
+                "USAGE:{}\t{}\t{}\t{}",
+                e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens
             ),
             Event::Stop(e) => format!("STOP:{}", e.reason),
             Event::Error(e) => format!("ERROR:{}", e.message),
@@ -74,7 +74,8 @@ pub struct RetryEvent {}
 pub struct UsageEvent {
     pub input_tokens: i64,
     pub output_tokens: i64,
-    pub cache_input_tokens: i64,
+    pub cache_read_input_tokens: i64,
+    pub cache_creation_input_tokens: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -151,12 +152,13 @@ pub fn parse_tool_call_payload(payload: &str) -> Result<ToolCallEvent> {
 
 pub fn parse_usage_payload(payload: &str) -> Result<UsageEvent> {
     let parts: Vec<&str> = payload.split('\t').collect();
-    if parts.len() != 3 {
+    if parts.len() != 4 {
         bail!("invalid usage payload")
     }
     Ok(UsageEvent {
         input_tokens: parts[0].parse()?,
         output_tokens: parts[1].parse()?,
-        cache_input_tokens: parts[2].parse()?,
+        cache_read_input_tokens: parts[2].parse()?,
+        cache_creation_input_tokens: parts[3].parse()?,
     })
 }

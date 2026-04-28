@@ -61,7 +61,8 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
     let mut stop_reason = String::new();
     let mut input_tokens = 0i64;
     let mut output_tokens = 0i64;
-    let mut cache_input_tokens = 0i64;
+    let mut cache_read_input_tokens = 0i64;
+    let mut cache_creation_input_tokens = 0i64;
     let mut pending_usage: Option<UsageEvent> = None;
     let mut pending_stop: Option<String> = None;
 
@@ -75,7 +76,8 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
             stop_reason.clear();
             input_tokens = 0;
             output_tokens = 0;
-            cache_input_tokens = 0;
+            cache_read_input_tokens = 0;
+            cache_creation_input_tokens = 0;
             pending_usage = None;
             pending_stop = None;
             emit(Event::Retry(RetryEvent {}))?;
@@ -161,13 +163,14 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
                 if let Some(v) = usage
                     .get("cache_read_input_tokens")
                     .and_then(Value::as_i64)
-                    .or_else(|| {
-                        usage
-                            .get("cache_creation_input_tokens")
-                            .and_then(Value::as_i64)
-                    })
                 {
-                    cache_input_tokens = v;
+                    cache_read_input_tokens = v;
+                }
+                if let Some(v) = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_i64)
+                {
+                    cache_creation_input_tokens = v;
                 }
             }
             "message_start" => {
@@ -182,20 +185,22 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
                 if let Some(v) = usage
                     .get("cache_read_input_tokens")
                     .and_then(Value::as_i64)
-                    .or_else(|| {
-                        usage
-                            .get("cache_creation_input_tokens")
-                            .and_then(Value::as_i64)
-                    })
                 {
-                    cache_input_tokens = v;
+                    cache_read_input_tokens = v;
+                }
+                if let Some(v) = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_i64)
+                {
+                    cache_creation_input_tokens = v;
                 }
             }
             "message_stop" => {
                 pending_usage = Some(UsageEvent {
                     input_tokens,
                     output_tokens,
-                    cache_input_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
                 });
                 pending_stop = Some(stop_reason.clone());
             }

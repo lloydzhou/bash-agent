@@ -21,8 +21,9 @@ pub struct Config {
     pub base_url: String,
     pub prompt: String,
     pub max_turns: i32,
-    pub max_context_bytes: usize,
+    pub max_context_tokens: usize,
     pub max_context_keep_pct: i32,
+    pub max_turns_before_compact: i32,
     pub skills: Vec<String>,
     pub thinking_budget: i32,
     pub interactive: bool,
@@ -48,8 +49,9 @@ impl Default for Config {
             base_url: String::new(),
             prompt: String::new(),
             max_turns: 40,
-            max_context_bytes: 200_000,
+            max_context_tokens: 200_000,
             max_context_keep_pct: 25,
+            max_turns_before_compact: 100,
             skills: Vec::new(),
             thinking_budget: 2048,
             interactive: false,
@@ -93,7 +95,9 @@ pub fn parse_args(args: Vec<String>) -> Result<Config> {
                 i += 2;
             }
             "--max-context" => {
-                cfg.max_context_bytes = parse_size_bytes(&require_value(&args, i)?)?;
+                let val = require_value(&args, i)?;
+                cfg.max_context_tokens = parse_size_bytes(&val)
+                    .map_err(|_| anyhow!("Invalid --max-context: {}", val))?;
                 i += 2;
             }
             "--api-key" => {
@@ -181,6 +185,11 @@ pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
     if let Ok(v) = std::env::var("THINKING_BUDGET") {
         if let Ok(n) = v.parse::<i32>() {
             cfg.thinking_budget = n;
+        }
+    }
+    if let Ok(v) = std::env::var("MAX_TURNS_BEFORE_COMPACT") {
+        if let Ok(n) = v.parse::<i32>() {
+            cfg.max_turns_before_compact = n;
         }
     }
 

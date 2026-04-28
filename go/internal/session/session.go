@@ -15,6 +15,7 @@ type Paths struct {
 	Summary      string
 	Todo         string
 	Plan         string
+	Stats        string
 }
 
 func ProjectKey(cwd string) string {
@@ -52,6 +53,7 @@ func PathsFor(home, cwd, sessionID string) Paths {
 		Summary:      filepath.Join(sessionDir, "summary.txt"),
 		Todo:         filepath.Join(sessionDir, "todo.md"),
 		Plan:         filepath.Join(sessionDir, "plan.md"),
+		Stats:        filepath.Join(sessionDir, "stats.json"),
 	}
 }
 

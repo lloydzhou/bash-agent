@@ -20,7 +20,7 @@ func (p OpenAIParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 	stopReason := ""
 	inputTokens := 0
 	outputTokens := 0
-	cacheInputTokens := 0
+	cacheReadInputTokens := 0
 	sawText := false
 	type pending struct {
 		ID        string
@@ -62,9 +62,10 @@ func (p OpenAIParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 				stopReason = "done"
 			}
 			if err := emit(protocol.UsageEvent{
-				InputTokens:      inputTokens,
-				OutputTokens:     outputTokens,
-				CacheInputTokens: cacheInputTokens,
+				InputTokens:             inputTokens,
+				OutputTokens:            outputTokens,
+				CacheReadInputTokens:    cacheReadInputTokens,
+				CacheCreationInputTokens: 0,
 			}); err != nil {
 				return err
 			}
@@ -106,14 +107,19 @@ func (p OpenAIParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 		if body.Error != nil {
 			return emit(protocol.ErrorEvent{Message: body.Error.Message})
 		}
-		if body.Usage.PromptTokens != 0 {
-			inputTokens = body.Usage.PromptTokens
-		}
 		if body.Usage.CompletionTokens != 0 {
 			outputTokens = body.Usage.CompletionTokens
 		}
 		if body.Usage.CachedTokens != 0 {
-			cacheInputTokens = body.Usage.CachedTokens
+			cacheReadInputTokens = body.Usage.CachedTokens
+		}
+		// inputTokens = promptTokens - cachedTokens (actual processed tokens)
+		if body.Usage.PromptTokens != 0 {
+			if body.Usage.CachedTokens != 0 {
+				inputTokens = body.Usage.PromptTokens - body.Usage.CachedTokens
+			} else {
+				inputTokens = body.Usage.PromptTokens
+			}
 		}
 		if len(body.Choices) == 0 {
 			continue
