@@ -57,7 +57,7 @@ PREV_WAS_THINKING=false
 
 # --- Stats Cache (in-memory) --- Indexes match stats.awk _init_fields() order:
 #   0:current_turn_count  1:agent_request_count  2:compact_request_count 3:total_input_tokens  4:total_output_tokens
-#   5:total_cache_read_tokens 6:total_cache_creation_tokens  7:current_context_tokens  8:last_updated  9:llm_turn_count
+#   5:total_cache_read_tokens 6:total_cache_creation_tokens  7:current_context_tokens  8:last_updated
 STATS_CACHE=()
 
 # --- Environment Defaults ---
