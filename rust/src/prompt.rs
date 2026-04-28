@@ -181,31 +181,7 @@ impl Builder {
     }
 }
 
-pub fn build_compact_summary_system_prompt() -> String {
-    [
-        "You are compressing conversation context for a lightweight coding agent.",
-        "",
-        "Return only plain text.",
-        "Do not include analysis, markdown fences, or extra commentary.",
-        "Update the existing summary snapshot using the dropped messages.",
-        "Keep the output concise and specific.",
-        "",
-        "Use exactly these fields:",
-        "Task focus:",
-        "Latest request:",
-        "Progress:",
-        "Tool evidence:",
-    ]
-    .join("\n")
-}
 
-pub fn build_compact_summary_user_prompt(current_summary: &str, dropped_messages: &str) -> String {
-    format!(
-        "{}\n\n{}",
-        wrap_section("current-summary", current_summary, None),
-        wrap_section("dropped-messages", dropped_messages, None)
-    )
-}
 
 fn wrap_section(tag: &str, content: &str, name: Option<&str>) -> String {
     if content.trim().is_empty() {
