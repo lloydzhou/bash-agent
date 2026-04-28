@@ -165,6 +165,24 @@ compact 现在按 **context 实际大小** 触发，而不是按消息条数：
 - 自动 compact 不应重复做 provider/API 初始化检查
 - 手动 compact 入口已移除，compact 仅在主循环内自动触发
 
+#### Summary 调用的缓存复用
+
+summary 调用（`run_summary_call`）采用与正常请求完全相同的前缀结构，以最大化 API 缓存命中：
+
+- **正常请求**：`system_prompt + tools + [全部消息]`
+- **summary 请求**：`system_prompt + tools + [dropped 消息] + [summary 指令消息]`
+
+由于 dropped 消息是 CONV_FILE 开头的行（通过 `head -n` 提取），它们与之前请求中的前缀完全一致。summary 请求只追加了一条 user 消息作为总结指令，不影响前缀匹配。thinking 参数也保持一致（使用 `THINKING_BUDGET`），确保 messages 层级缓存不被破坏。
+
+与旧方案（使用独立 system prompt 的单独请求，前缀完全不同，缓存命中率为零）相比，新方案利用已缓存的 `system + tools + dropped_messages` 前缀，仅末尾的 summary 指令消息产生少量 cache_creation，大幅降低 compact 成本。
+
+以 Claude Sonnet 为例（无缓存 $3.00/MTok，缓存命中 $0.30/MTok），典型场景：system+tools 20k tokens，dropped messages 30k tokens，summary 输出 500 tokens：
+
+- **旧方案**：50k tokens 全部无缓存 → 输入 $0.15 + 输出 $0.0075 = **$0.1575**
+- **新方案**：50k tokens 全部缓存命中 → 输入 $0.015 + 输出 $0.0075 = **$0.0225**
+
+单次 compact 节省约 **85.7%**，复杂任务中多次触发时累积效应显著。
+
 ### 3. Session Replay
 
 当恢复已有 session（`--continue` 或 `--session`）时，交互模式会回放最近 10 轮对话。
@@ -322,7 +340,7 @@ skills 当前优先读取：
 
 - `claude`：发送 `thinking.type=enabled, budget_tokens=N`
 - `openai`：发送 `reasoning_effort=high`（统一值，不按模型名分支）
-- summary 调用传 `0` 禁用 thinking，节省 token
+- summary 调用复用 `THINKING_BUDGET` 以保持 API 缓存前缀一致性
 
 消息转换时，assistant 的 `thinking` content block 会被跳过（OpenAI 格式不支持 thinking block）。
 

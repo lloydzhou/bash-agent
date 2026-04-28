@@ -580,23 +580,6 @@ build_instruction_files_section() {
     printf '%s' "${output%$'\n'}"
 }
 
-build_compact_summary_system_prompt() {
-    cat <<'EOF'
-You are compressing conversation context for a lightweight coding agent.
-
-Return only plain text.
-Do not include analysis, markdown fences, or extra commentary.
-Update the existing summary snapshot using the dropped messages.
-Keep the output concise and specific.
-
-Use exactly these fields:
-Task focus:
-Latest request:
-Progress:
-Tool evidence:
-EOF
-}
-
 build_tool_call_json_object() {
     local name="$1" id="$2" input="$3" type="${4:-tool_use}"
     if [[ "$type" == "tool_use" ]]; then
@@ -741,8 +724,7 @@ conv_add_user() {
 }
 
 conv_add_assistant() {
-    local text="$1" thinking="$2" calls="$3"
-    local content
+    local text="$1" thinking="$2" calls="$3" content
     content=$(build_assistant_content_json "$text" "$thinking" "$calls")
     printf '{"role":"assistant","content":%s}\n' "$content" >> "$CONV_FILE"
 }
@@ -767,7 +749,7 @@ conv_get_messages() {
         $first || result+=","
         first=false
         result+="$msg"
-    done < "$CONV_FILE"
+    done <<< "$1"
     printf '%s]' "$result"
 }
 
@@ -776,17 +758,6 @@ context_append_summary() {
     [[ -n "${CONTEXT_SUMMARY_FILE:-}" ]] || return 0
     [[ -n "$text" ]] || return 0
     printf '%s\n' "$text" > "$CONTEXT_SUMMARY_FILE"
-}
-
-build_compact_summary_user_prompt() {
-    local current_summary="$1" dropped_messages="$2" summary_section dropped_section
-    summary_section=$(wrap_section "current-summary" "$current_summary")
-    dropped_section=$(wrap_section "dropped-messages" "$dropped_messages")
-    cat <<EOF
-${summary_section}
-
-${dropped_section}
-EOF
 }
 
 compact_keep_lines() {
@@ -858,6 +829,22 @@ stats_get() {
     echo "${STATS_CACHE[$1]:-0}"
 }
 
+record_usage() {
+    # Args: kind counter_idx
+    # Reads REPLY_MESSAGE[1..4], logs event, updates stats.
+    # Returns context token count (input+output+cache_read+cache_creation).
+    local kind="$1" counter_idx="$2"
+    local _in="${REPLY_MESSAGE[1]:-0}" _out="${REPLY_MESSAGE[2]:-0}" _cr="${REPLY_MESSAGE[3]:-0}" _cc="${REPLY_MESSAGE[4]:-0}" _event
+    if [[ -n "$kind" ]]; then
+        _event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"%s"}' "$_in" "$_out" "$_cr" "$_cc" "$kind")
+    else
+        _event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "$_in" "$_out" "$_cr" "$_cc")
+    fi
+    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_event"
+    stats_inc ${counter_idx}=1 3=${_in} 4=${_out} 5=${_cr} 6=${_cc}
+    echo $(( _in + _out + _cr + _cc ))
+}
+
 stats_show_osc() {
     printf '\033]0;T:%s R:%s I:%s O:%s C:%s\007' \
         "${STATS_CACHE[0]:-0}" "${STATS_CACHE[1]:-0}" \
@@ -865,9 +852,8 @@ stats_show_osc() {
 }
 
 compact_context_window() {
-    local trigger="$1" force="${2:-false}"
-    local total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt
-    local turn_triggered=false
+    local trigger="$1" force="${2:-false}" turn_triggered=false
+    local total_bytes total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
     if ! $force; then
         local ct=$(stats_get 7) tc=$(stats_get 0)
@@ -894,17 +880,13 @@ compact_context_window() {
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
     dropped_messages=$(<"$tmp_dropped")
-    current_summary=""
-    if [[ -n "${CONTEXT_SUMMARY_FILE:-}" && -s "$CONTEXT_SUMMARY_FILE" ]]; then
-        current_summary=$(<"$CONTEXT_SUMMARY_FILE")
-    fi
 
-    prompt=$(build_compact_summary_user_prompt "$current_summary" "$dropped_messages")
     if [[ "$trigger" == "manual" && -z "${API_URL:-}" ]]; then
         validate_config
     fi
-    summary_request="[{\"role\":\"user\",\"content\":\"$(json_escape "$prompt")\"}]"
-    summary_response=$(run_summary_call "$summary_request")
+    # Pass raw dropped messages to run_summary_call
+    # which builds a cache-friendly request (system+tools prefix reused)
+    summary_response=$(run_summary_call "$dropped_messages")
     context_append_summary "$summary_response"
 
     if (( keep_lines < total_lines )); then
@@ -1085,28 +1067,6 @@ dispatch_tool() {
     esac
 }
 
-# --- API Request Builders ---
-
-build_claude_request() {
-    local messages="$1" tools="$2" system_prompt="${3:-}" max_tokens="${4:-$MAX_TOKENS}" thinking_budget="${5:-0}"
-    local body
-    if [[ -z "$system_prompt" ]]; then
-        system_prompt=$(build_system_prompt)
-    fi
-
-    body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
-
-    if (( thinking_budget > 0 )); then
-        body+=",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":${thinking_budget}}"
-    fi
-
-    [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(json_escape "$system_prompt")\""
-    [[ -n "$tools" ]] && body+=",\"tools\":${tools}"
-
-    body+=",\"messages\":${messages}}"
-    printf '%s' "$body"
-}
-
 # --- API Calls (curl) ---
 
 _stream_curl() {
@@ -1116,39 +1076,37 @@ _stream_curl() {
 # --- LLM Call (internal) ---
 
 llm_call() {
-    local messages="$1"
-    local tools="$TOOL_DEF_JSON"
+    local messages="$1" max_tokens="${2:-$MAX_TOKENS}" thinking_budget="${3:-$THINKING_BUDGET}" body system_prompt
+    system_prompt=$(build_system_prompt)
 
-    local body
-    body=$(build_claude_request "$messages" "$tools")
+    body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
+
+    if (( thinking_budget > 0 )); then
+        body+=",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":${thinking_budget}}"
+    fi
+
+    [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(json_escape "$system_prompt")\""
+    [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
+
+    body+=",\"messages\":${messages}}"
+
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
 
     printf '%s' "$body" | body_convert | _stream_curl | sse_convert | sse_parse
 }
 
 run_summary_call() {
-    local messages="$1"
-    local body text
-    body=$(build_claude_request "$messages" "" "$(build_compact_summary_system_prompt)" "$SUMMARY_MAX_TOKENS" 0)
-    $VERBOSE && printf '\033[90m[verbose] Summary request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
+    local dropped_messages="$1" text="" messages summary_instruction=$'The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:'
+    messages=$(conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(json_escape "$summary_instruction")\"}")
 
-    text=""
     while read_message; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
-            USAGE)
-                local _cu_in="${REPLY_MESSAGE[1]:-0}" _cu_out="${REPLY_MESSAGE[2]:-0}" _cu_cr="${REPLY_MESSAGE[3]:-0}" _cu_cc="${REPLY_MESSAGE[4]:-0}"
-                # Record compact usage to events and stats
-                if [[ -n "$_cu_in" ]]; then
-                    local _cu_event
-                    _cu_event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"compact"}' "$_cu_in" "$_cu_out" "$_cu_cr" "$_cu_cc")
-                    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_cu_event"
-                    stats_inc 2=1 3=${_cu_in} 4=${_cu_out} 5=${_cu_cr} 6=${_cu_cc}
-                fi
-                ;;
+            THINKING) ;;
+            USAGE) record_usage "compact" 2 >/dev/null ;;
             ERROR) die "${REPLY_MESSAGE[1]}" ;;
         esac
-    done < <(printf '%s' "$body" | body_convert | _stream_curl | sse_convert | sse_parse)
+    done < <(llm_call "$messages" "$SUMMARY_MAX_TOKENS" "$THINKING_BUDGET")
 
     [[ -n "$text" ]] || die "Failed to generate context summary"
     printf '%s' "$text"
@@ -1164,10 +1122,8 @@ agent_loop_stream() {
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
 
-        local text="" thinking="" tool_calls="" stop="" loop_error=""
-        local tool_conv_results=""  # collected: id<TAB>json_escaped_result per line
-        local _usage_in="" _usage_out="" _usage_cr="" _usage_cc=""
-        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
+        local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
+        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
         while read_message; do
             if interrupt_requested; then
                 stop="interrupted"
@@ -1178,7 +1134,7 @@ agent_loop_stream() {
             write_message "${REPLY_MESSAGE[@]}"
 
             case "${REPLY_MESSAGE[0]}" in
-                RETRY)    text="" thinking="" tool_calls="" tool_conv_results="" ;;
+                RETRY)    text="" thinking="" tool_calls="" tool_conv_results="" _ctx_tokens="" ;;
                 TEXT)     text+="${REPLY_MESSAGE[1]}" ;;
                 THINKING) thinking+="${REPLY_MESSAGE[1]}" ;;
                 TOOL_CALL)
@@ -1231,14 +1187,10 @@ agent_loop_stream() {
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
                 USAGE)
-                    # Capture usage data for stats and compact decisions
-                    _usage_in="${REPLY_MESSAGE[1]:-0}"
-                    _usage_out="${REPLY_MESSAGE[2]:-0}"
-                    _usage_cr="${REPLY_MESSAGE[3]:-0}"
-                    _usage_cc="${REPLY_MESSAGE[4]:-0}"
+                    _ctx_tokens=$(record_usage "agent" 1)
                     ;;
             esac
-        done < <(llm_call "$(conv_get_messages)")
+        done < <(llm_call "$(conv_get_messages "$(<"$CONV_FILE")")")
 
         # Fatal stop reasons exit immediately
         case "$stop" in
@@ -1254,16 +1206,8 @@ agent_loop_stream() {
             if [[ -n "$tool_conv_results" ]]; then
                 conv_add_tool_results "$tool_conv_results"
             fi
-            # Update stats with captured usage from this turn
-            if [[ -n "$_usage_in" ]]; then
-                # context = input + output + cache_read + cache_creation
-                local _ctx_tokens=$(( _usage_in + _usage_out + ${_usage_cr:-0} + ${_usage_cc:-0} ))
-                stats_inc \
-                    1=1 \
-                    3=${_usage_in} \
-                    4=${_usage_out} \
-                    5=${_usage_cr:-0} \
-                    6=${_usage_cc:-0}
+            # Update context tokens and trigger compact if needed
+            if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
                 stats_set 7=${_ctx_tokens}
                 compact_context_window "auto" false || true
             else
@@ -1284,8 +1228,7 @@ agent_loop_stream() {
 }
 
 agent_loop() {
-    local user_input="$1"
-    local had_error=false
+    local user_input="$1" had_error=false
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
     start_esc_interrupt_listener  # stop/clear before start
