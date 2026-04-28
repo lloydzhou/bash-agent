@@ -8,7 +8,7 @@ pub struct DPCompactConfig {
     pub p_cache: f64,         // $/MTok, cached input price
     pub v: usize,             // fixed overhead tokens (system prompt + current input)
     pub penalty: f64,         // $, compact overhead (summary call + cache miss)
-    pub baseline_e: i32,      // expected remaining user-input rounds (0 = auto)
+    pub baseline_e: i32,      // expected remaining user-input rounds (0 = use e_fixed or 1)
     pub e_fixed: i32,         // fixed E (0 = use baseline_e)
     pub r: f64,               // single-step summary retention rate
     pub beta: f64,            // info loss penalty coefficient

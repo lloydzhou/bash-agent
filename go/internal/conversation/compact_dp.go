@@ -12,7 +12,7 @@ type DPCompactConfig struct {
 	PCache        float64 // $/MTok, cached input price
 	V             int     // fixed overhead tokens (system prompt + current input)
 	Penalty       float64 // $, compact overhead (summary call + cache miss)
-	BaselineE     int     // expected remaining user-input rounds (0 = auto)
+	BaselineE     int     // expected remaining user-input rounds (0 = use EFixed or 1)
 	EFixed        int     // fixed E (0 = use BaselineE)
 	R             float64 // single-step summary retention rate
 	Beta          float64 // info loss penalty coefficient
