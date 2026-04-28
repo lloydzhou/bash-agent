@@ -1134,16 +1134,12 @@ func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error
 		dropped.Write(line)
 		dropped.WriteByte('\n')
 	}
-	currentSummary, err := os.ReadFile(rt.paths.Summary)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
 	if trigger == "manual" && rt.apiURL == "" {
 		if err := rt.applyProviderDefaults(); err != nil {
 			return false, err
 		}
 	}
-	summary, err := rt.runSummaryCall(string(currentSummary), strings.TrimRight(dropped.String(), "\n"))
+	summary, err := rt.runSummaryCall(allLines[:drop])
 	if err != nil {
 		return false, err
 	}
@@ -1169,19 +1165,33 @@ func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error
 	return true, nil
 }
 
-func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (string, error) {
-	lines := []json.RawMessage{}
-	userPrompt := prompt.BuildCompactSummaryUserPrompt(currentSummary, droppedMessages)
+func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error) {
+	// Build messages: dropped conversation lines + summary instruction
+	// Uses same system prompt + tools + thinking as normal requests for cache reuse
+	summaryInstruction := "The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:"
 	msg, err := json.Marshal(map[string]any{
 		"role":    "user",
-		"content": userPrompt,
+		"content": summaryInstruction,
 	})
 	if err != nil {
 		return "", err
 	}
+	lines := make([]json.RawMessage, 0, len(droppedLines)+1)
+	lines = append(lines, droppedLines...)
 	lines = append(lines, msg)
-	// Disable thinking for summary calls (not needed, saves tokens)
-	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens, 0)
+
+	systemPrompt, err := prompt.Builder{
+		Cwd:         rt.cwd,
+		Home:        rt.home,
+		Skills:      rt.cfg.Skills,
+		SummaryFile: rt.paths.Summary,
+		TodoFile:    rt.paths.Todo,
+		PlanFile:    rt.paths.Plan,
+	}.BuildSystemPrompt()
+	if err != nil {
+		return "", fmt.Errorf("build_system_prompt: %w", err)
+	}
+	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.SummaryMaxTokens, rt.cfg.ThinkingBudget)
 	if err != nil {
 		return "", fmt.Errorf("build_summary_request: %w", err)
 	}
@@ -1207,24 +1217,7 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 		case protocol.TextEvent:
 			b.WriteString(e.Content)
 		case protocol.UsageEvent:
-			// Record compact usage to events and stats (matches bash run_summary_call)
-			compactEvt := map[string]any{
-				"type":                     "usage",
-				"input_tokens":             e.InputTokens,
-				"output_tokens":            e.OutputTokens,
-				"cache_read_input_tokens":  e.CacheReadInputTokens,
-				"cache_creation_input_tokens": e.CacheCreationInputTokens,
-				"kind":                     "compact",
-			}
-			_ = rt.appendEvent(compactEvt)
-			// Update stats for compact call
-			stats := rt.readStats()
-			stats["compact_request_count"] = statsFloat64(stats, "compact_request_count") + 1
-			stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(e.InputTokens)
-			stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(e.OutputTokens)
-			stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(e.CacheReadInputTokens)
-			stats["total_cache_creation_tokens"] = statsFloat64(stats, "total_cache_creation_tokens") + float64(e.CacheCreationInputTokens)
-			rt.writeStats(stats)
+			_ = rt.recordUsage("compact", "compact_request_count", e)
 		case protocol.ErrorEvent:
 			return fmt.Errorf("%s", e.Message)
 		}
@@ -1278,6 +1271,27 @@ func (rt *runtime) incrementTurnCount() {
 	stats["current_turn_count"] = statsFloat64(stats, "current_turn_count") + 1
 	stats["last_updated"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	rt.writeStats(stats)
+}
+
+// recordUsage logs a usage event and updates stats. Returns context token count.
+func (rt *runtime) recordUsage(kind, counterKey string, e protocol.UsageEvent) int {
+	evt := map[string]any{
+		"type":                        "usage",
+		"input_tokens":                e.InputTokens,
+		"output_tokens":               e.OutputTokens,
+		"cache_read_input_tokens":     e.CacheReadInputTokens,
+		"cache_creation_input_tokens": e.CacheCreationInputTokens,
+		"kind":                        kind,
+	}
+	_ = rt.appendEvent(evt)
+	stats := rt.readStats()
+	stats[counterKey] = statsFloat64(stats, counterKey) + 1
+	stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(e.InputTokens)
+	stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(e.OutputTokens)
+	stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(e.CacheReadInputTokens)
+	stats["total_cache_creation_tokens"] = statsFloat64(stats, "total_cache_creation_tokens") + float64(e.CacheCreationInputTokens)
+	rt.writeStats(stats)
+	return e.InputTokens + e.OutputTokens + e.CacheReadInputTokens + e.CacheCreationInputTokens
 }
 
 // updateStatsFromLastUsage updates stats.json with last turn's usage (matches bash).

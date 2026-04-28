@@ -72,27 +72,6 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	return strings.Join(sections, "\n"), nil
 }
 
-func BuildCompactSummarySystemPrompt() string {
-	return strings.Join([]string{
-		"You are compressing conversation context for a lightweight coding agent.",
-		"",
-		"Return only plain text.",
-		"Do not include analysis, markdown fences, or extra commentary.",
-		"Update the existing summary snapshot using the dropped messages.",
-		"Keep the output concise and specific.",
-		"",
-		"Use exactly these fields:",
-		"Task focus:",
-		"Latest request:",
-		"Progress:",
-		"Tool evidence:",
-	}, "\n")
-}
-
-func BuildCompactSummaryUserPrompt(currentSummary, droppedMessages string) string {
-	return wrapSection("current-summary", currentSummary, "") + "\n\n" + wrapSection("dropped-messages", droppedMessages, "")
-}
-
 func appendSection(sections []string, tag, content, name string) []string {
 	if strings.TrimSpace(content) == "" {
 		return sections
