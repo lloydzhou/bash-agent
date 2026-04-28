@@ -385,6 +385,12 @@ func (r Runner) Bash(command string, timeout *int) (string, error) {
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
+	// Match bash-agent: exit code 124 from timeout command means timed out
+	if timeout != nil && *timeout > 0 && timeoutBin != "" && err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 124 {
+			return out.String() + fmt.Sprintf("\n[... command timed out after %d seconds ...]", *timeout), nil
+		}
+	}
 	return out.String(), err
 }
 

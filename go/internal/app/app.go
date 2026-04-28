@@ -26,8 +26,8 @@ import (
 	"github.com/lloydzhou/bash-agent/internal/protocol"
 	"github.com/lloydzhou/bash-agent/internal/provider"
 	"github.com/lloydzhou/bash-agent/internal/session"
-	"github.com/lloydzhou/bash-agent/internal/sse"
 	"github.com/lloydzhou/bash-agent/internal/tools"
+	"github.com/lloydzhou/bash-agent/internal/transport"
 )
 
 type runtime struct {
@@ -42,6 +42,7 @@ type runtime struct {
 	paths       session.Paths
 	conv        conversation.Store
 	http        httpclient.StreamClient
+	transport   transport.Transport
 	escTTY      *os.File
 	escState    *term.State
 	escStop     chan struct{}
@@ -143,6 +144,7 @@ func (rt *runtime) applyProviderDefaults() error {
 		return err
 	}
 	rt.apiURL = config.APIURL(rt.cfg)
+	rt.transport = transport.New(rt.cfg)
 	return nil
 }
 
@@ -749,12 +751,15 @@ func (rt *runtime) buildLLMRequest() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build_request: %w", err)
 	}
-	body, err := provider.BuildRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
+	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
 	if err != nil {
 		return nil, fmt.Errorf("build_request: %w", err)
 	}
+	body, err := rt.transport.ConvertBody(claudeBody)
+	if err != nil {
+		return nil, fmt.Errorf("body_convert: %w", err)
+	}
 	if rt.cfg.Verbose {
-		rt.verbose("POST %s (%dKB body)", rt.apiURL, len(body)/1024)
 		rt.verbose("Request body (%dKB): %.200s...", len(body)/1024, string(body))
 	}
 	return body, nil
@@ -787,16 +792,7 @@ func (rt *runtime) streamLLMEvents(respBody io.Reader, done <-chan struct{}) (<-
 			}
 			return nil
 		}
-		var err error
-		switch rt.cfg.Provider {
-		case "claude":
-			err = sse.ClaudeParser{}.Parse(respBody, emit)
-		case "openai":
-			err = sse.OpenAIParser{}.Parse(respBody, emit)
-		default:
-			err = fmt.Errorf("unknown provider: %s", rt.cfg.Provider)
-		}
-		if err != nil {
+		if err := rt.transport.ParseSSE(respBody, emit); err != nil {
 			errCh <- fmt.Errorf("sse_parse: %w", err)
 			return
 		}
@@ -1123,9 +1119,13 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 	}
 	lines = append(lines, msg)
 	// Disable thinking for summary calls (not needed, saves tokens)
-	body, err := provider.BuildRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens, 0)
+	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens, 0)
 	if err != nil {
 		return "", fmt.Errorf("build_summary_request: %w", err)
+	}
+	body, err := rt.transport.ConvertBody(claudeBody)
+	if err != nil {
+		return "", fmt.Errorf("body_convert: %w", err)
 	}
 	if rt.cfg.Verbose {
 		rt.verbose("Summary request body (%dKB): %.200s...", len(body)/1024, string(body))
@@ -1149,15 +1149,7 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 		}
 		return nil
 	}
-	switch rt.cfg.Provider {
-	case "claude":
-		err = (sse.ClaudeParser{}).Parse(respBody, parserEmit)
-	case "openai":
-		err = (sse.OpenAIParser{}).Parse(respBody, parserEmit)
-	default:
-		err = fmt.Errorf("sse_parse: unknown provider: %s", rt.cfg.Provider)
-	}
-	if err != nil {
+	if err := rt.transport.ParseSSE(respBody, parserEmit); err != nil {
 		return "", fmt.Errorf("sse_parse: %w", err)
 	}
 	if b.Len() == 0 {

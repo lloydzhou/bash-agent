@@ -6,7 +6,6 @@ use crate::prompt;
 use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent};
 use crate::provider;
 use crate::session::{self, Paths};
-use crate::sse;
 use crate::tools;
 use anyhow::{Result, anyhow, bail};
 use rustyline::DefaultEditor;
@@ -20,6 +19,8 @@ use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+type TransportRef = Arc<dyn crate::transport::Transport>;
 
 pub fn run(args: Vec<String>) -> Result<()> {
     let mut cfg = match parse_args(args) {
@@ -68,6 +69,7 @@ struct Runtime {
     conv: Store,
     tools_json: Vec<Value>,
     http: StreamClient,
+    transport: TransportRef,
     interrupted: Arc<AtomicBool>,
     esc_stop: Option<Arc<AtomicBool>>,
     esc_thread: Option<JoinHandle<()>>,
@@ -170,6 +172,7 @@ impl Runtime {
         let tools_json: Vec<Value> = serde_json::from_str(TOOLS_JSON)?;
         let api_url = api_url(&cfg);
         let interrupted = Arc::new(AtomicBool::new(false));
+        let transport = Arc::from(crate::transport::new_transport(&cfg));
 
         let rt = Self {
             cfg,
@@ -180,6 +183,7 @@ impl Runtime {
             conv,
             tools_json,
             http: StreamClient::new()?,
+            transport,
             interrupted,
             esc_stop: None,
             esc_thread: None,
@@ -599,7 +603,7 @@ impl Runtime {
         }
         .build_system_prompt()?;
 
-        let body = provider::build_request(
+        let claude_body = provider::build_claude_request(
             &self.cfg,
             &lines,
             &self.tools_json,
@@ -607,8 +611,8 @@ impl Runtime {
             self.cfg.max_tokens,
             self.cfg.thinking_budget,
         )?;
+        let body = self.transport.convert_body(&claude_body)?;
         if self.cfg.verbose {
-            self.debug(&format!("POST {} ({}KB body)", self.api_url, body.len() / 1024));
             self.debug(&format!("Request body ({}KB): {:.200}...", body.len() / 1024, String::from_utf8_lossy(&body)));
         }
 
@@ -625,17 +629,13 @@ impl Runtime {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_thread = cancel.clone();
-        let provider = self.cfg.provider.clone();
+        let transport = self.transport.clone();
         let _reader_thread = std::thread::spawn(move || {
             let reader = CancelReader { inner: resp, cancel: cancel_thread.clone() };
-            let send = |evt: Event| -> Result<()> {
+            let mut send = |evt: Event| -> Result<()> {
                 tx.send(StreamMsg::Event(evt)).map_err(|e| anyhow!(e.to_string()))
             };
-            let parse_res = match provider.as_str() {
-                "claude" => sse::claude::parse(reader, send),
-                "openai" => sse::openai::parse(reader, send),
-                _ => Err(anyhow!("unknown provider: {}", provider)),
-            };
+            let parse_res = transport.parse_sse(Box::new(reader), &mut send);
             let _ = tx.send(StreamMsg::Done(parse_res.map_err(|err| anyhow!("sse_parse: {err}"))));
         });
 
@@ -740,7 +740,7 @@ impl Runtime {
             prompt::build_compact_summary_user_prompt(current_summary, dropped_messages);
         let messages = vec![json!({"role":"user","content":user_prompt})];
         // Disable thinking for summary calls (not needed, saves tokens)
-        let body = provider::build_request(
+        let claude_body = provider::build_claude_request(
             &self.cfg,
             &messages,
             &[],
@@ -748,6 +748,7 @@ impl Runtime {
             self.cfg.summary_max_tokens,
             0,
         )?;
+        let body = self.transport.convert_body(&claude_body)?;
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
             Ok(r) => r,
             Err(e) => {
@@ -766,11 +767,7 @@ impl Runtime {
             }
             Ok(())
         };
-        match self.cfg.provider.as_str() {
-            "claude" => sse::claude::parse(resp, &mut parse_emit)?,
-            "openai" => sse::openai::parse(resp, &mut parse_emit)?,
-            _ => bail!("unknown provider: {}", self.cfg.provider),
-        }
+        self.transport.parse_sse(Box::new(resp), &mut parse_emit)?;
         if out.is_empty() {
             bail!("failed to generate context summary");
         }
