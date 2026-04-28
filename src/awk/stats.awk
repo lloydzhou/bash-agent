@@ -56,7 +56,8 @@ function _init_fields() {
     _field_keys[7] = "total_cache_creation_tokens"
     _field_keys[8] = "current_context_tokens"
     _field_keys[9] = "last_updated"
-    _field_count = 9
+    _field_keys[10] = "llm_turn_count"
+    _field_count = 10
 
     for (i = 1; i <= _field_count; i++) {
         _vals[_field_keys[i]] = (_field_keys[i] == "last_updated") ? "" : 0

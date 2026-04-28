@@ -1944,7 +1944,90 @@ test_agent_max_context() {
     fi
 }
 
-# Test 36: stats.json created on agent run
+# Test 37: compact_dp.awk — DP compact decision algorithm
+test_compact_dp_awk() {
+    info "Test 37: compact_dp.awk DP compact decision"
+    local tmpdir conv_file
+    tmpdir=$(mktemp -d)
+    conv_file="$tmpdir/conv.jsonl"
+
+    # Helper: generate conversation with N groups
+    gen_conv() {
+        local groups=$1 total_token_target=$2 output=$3
+        # total_token_target = 所有消息的总 token 数
+        local bytes_per_line=$(( total_token_target * 4 / groups / 3 ))
+        (( bytes_per_line > 20 )) || bytes_per_line=20
+        > "$output"
+        for i in $(seq 1 $groups); do
+            local pad
+            pad=$(printf "x%0${bytes_per_line}d" 1 2>/dev/null | tr '0-9' 'a-k')
+            echo "{\"role\":\"user\",\"content\":\"${pad:0:$bytes_per_line}\"}" >> "$output"
+            echo "{\"role\":\"assistant\",\"content\":\"${pad:0:$((bytes_per_line*2))}\"}" >> "$output"
+            echo "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t$i\",\"content\":\"${pad:0:$((bytes_per_line/2))}\"}]}" >> "$output"
+        done
+    }
+
+    # dp_run: run compact_dp.awk and capture result
+    dp_run() {
+        protocol_awk -f "$AWK_DIR/compact_dp.awk" \
+            -v E="$1" -v V=20000 -v p_base=3.0 -v p_cache=0.30 \
+            -v penalty=0.25 -v min_keep_ratio=0.12 \
+            -v c="${2:-0}" -v r=0.7 -v beta=0.5 "$conv_file" 2>/dev/null
+    }
+
+    # --- 37a: Empty ---
+    : > "$conv_file"
+    check "compact_dp: empty conv -> 0" "$(dp_run 14 0)" "0"
+
+    # --- 37b: Tiny (< V) ---
+    gen_conv 2 5000 "$conv_file"
+    check "compact_dp: tiny conv -> 0" "$(dp_run 14 0)" "0"
+
+    # --- 37c: Medium (30k tokens, barely above V) ---
+    gen_conv 10 30000 "$conv_file"
+    check "compact_dp: medium E=14 -> 0" "$(dp_run 14 0)" "0"
+    check "compact_dp: medium E=1 -> 0" "$(dp_run 1 0)" "0"
+
+    # --- 37d: Large (100k tokens) ---
+    gen_conv 20 100000 "$conv_file"
+    result=$(dp_run 14 0)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: large E=14 c=0 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large E=14 c=0 -> $result"; ((FAIL++)); }
+    check "compact_dp: large E=1 -> 0" "$(dp_run 1 0)" "0"
+    result=$(dp_run 14 3)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: large E=14 c=3 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large E=14 c=3 -> $result"; ((FAIL++)); }
+
+    # --- 37e: High beta suppresses ---
+    result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
+        -v E=14 -v V=20000 -v p_base=3.0 -v p_cache=0.30 \
+        -v penalty=0.25 -v min_keep_ratio=0.12 -v c=0 -v r=0.7 -v beta=5.0 "$conv_file" 2>/dev/null)
+    check "compact_dp: beta=5.0 -> 0" "$result" "0"
+
+    # --- 37f: Turn alignment ---
+    cat > "$conv_file" << 'TURNEOF'
+{"role":"assistant","content":"intro"}
+{"role":"user","content":"step 1"}
+{"role":"assistant","content":"response 1"}
+{"role":"user","content":[{"type":"tool_result","content":"result 1"}]}
+{"role":"assistant","content":"response 1b"}
+{"role":"user","content":"step 2"}
+{"role":"assistant","content":"response 2"}
+{"role":"user","content":"step 3"}
+TURNEOF
+    result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
+        -v E=10 -v V=0 -v p_base=3.0 -v p_cache=0.30 \
+        -v penalty=0 -v min_keep_ratio=0.12 -v c=0 -v r=0.7 -v beta=0.01 "$conv_file" 2>/dev/null)
+    if [[ "$result" == "3" || "$result" == "4" ]]; then
+        green "compact_dp: turn alignment -> $result"; ((PASS++))
+    else
+        red "compact_dp: turn alignment -> $result (expected 3 or 4)"; ((FAIL++))
+    fi
+
+    rm -rf "$tmpdir"
+}
 test_agent_stats_json() {
     info "Test 36: stats.json created on agent run"
     local home_dir stats_file
@@ -2018,6 +2101,7 @@ test_agent_edit_code_snippet
 test_stats_awk
 test_agent_max_context
 test_agent_stats_json
+test_compact_dp_awk
 
 echo ""
 echo "=============================="
