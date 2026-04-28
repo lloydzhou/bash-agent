@@ -788,20 +788,14 @@ impl Runtime {
         }
 
         let all = self.conv.lines()?;
-        let mut dropped = String::new();
-        for line in &all[..drop] {
-            dropped.push_str(&serde_json::to_string(line)?);
-            dropped.push('\n');
-        }
-
-        let current_summary = fs::read_to_string(&self.paths.summary).unwrap_or_default();
+        let dropped_lines = &all[..drop];
 
         if trigger == "manual" && self.api_url.is_empty() {
             apply_provider_defaults(&mut self.cfg)?;
             self.api_url = api_url(&self.cfg);
         }
 
-        let summary = self.run_summary_call(&current_summary, dropped.trim_end())?;
+        let summary = self.run_summary_call(dropped_lines)?;
         fs::write(&self.paths.summary, format!("{summary}\n"))?;
         self.conv.trim_keep_last(keep_lines)?;
 
@@ -822,22 +816,30 @@ impl Runtime {
         Ok(true)
     }
 
-    fn run_summary_call(
-        &mut self,
-        current_summary: &str,
-        dropped_messages: &str,
-    ) -> Result<String> {
-        let user_prompt =
-            prompt::build_compact_summary_user_prompt(current_summary, dropped_messages);
-        let messages = vec![json!({"role":"user","content":user_prompt})];
-        // Disable thinking for summary calls (not needed, saves tokens)
+    fn run_summary_call(&mut self, dropped_lines: &[Value]) -> Result<String> {
+        // Build messages: dropped conversation lines + summary instruction
+        // Uses same system prompt + tools + thinking as normal requests for cache reuse
+        let summary_instruction = "The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:";
+        let mut messages: Vec<Value> = dropped_lines.to_vec();
+        messages.push(json!({"role":"user","content":summary_instruction}));
+
+        let system_prompt = prompt::Builder {
+            cwd: self.cwd.clone(),
+            home: self.home.clone(),
+            skills: self.cfg.skills.clone(),
+            summary_file: self.paths.summary.clone(),
+            todo_file: self.paths.todo.clone(),
+            plan_file: self.paths.plan.clone(),
+        }
+        .build_system_prompt()?;
+
         let claude_body = provider::build_claude_request(
             &self.cfg,
             &messages,
-            &[],
-            &prompt::build_compact_summary_system_prompt(),
+            &self.tools_json,
+            &system_prompt,
             self.cfg.summary_max_tokens,
-            0,
+            self.cfg.thinking_budget,
         )?;
         let body = self.transport.convert_body(&claude_body)?;
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
@@ -853,34 +855,28 @@ impl Runtime {
         let mut parse_emit = |evt: Event| -> Result<()> {
             match evt {
                 Event::Text(TextEvent { content }) => out.push_str(&content),
-                Event::Usage(UsageEvent {
-                    input_tokens,
-                    output_tokens,
-                    cache_read_input_tokens,
-                    cache_creation_input_tokens,
-                }) => {
+                Event::Usage(usage) => {
                     // Record compact usage to events and stats (matches bash run_summary_call)
                     let compact_evt = json!({
                         "type":"usage",
-                        "input_tokens":input_tokens,
-                        "output_tokens":output_tokens,
-                        "cache_read_input_tokens":cache_read_input_tokens,
-                        "cache_creation_input_tokens":cache_creation_input_tokens,
+                        "input_tokens":usage.input_tokens,
+                        "output_tokens":usage.output_tokens,
+                        "cache_read_input_tokens":usage.cache_read_input_tokens,
+                        "cache_creation_input_tokens":usage.cache_creation_input_tokens,
                         "kind":"compact"
                     });
                     let _ = self.append_event(compact_evt);
-                    // Update stats for compact call
                     let mut stats = self.read_stats();
                     *stats.entry("compact_request_count".to_string()).or_insert(Value::Number(0.into())) =
                         Value::Number((stats_get_f64(&stats, "compact_request_count") as usize + 1).into());
                     *stats.entry("total_input_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_input_tokens") as usize + input_tokens as usize).into());
+                        Value::Number((stats_get_f64(&stats, "total_input_tokens") as usize + usage.input_tokens as usize).into());
                     *stats.entry("total_output_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_output_tokens") as usize + output_tokens as usize).into());
+                        Value::Number((stats_get_f64(&stats, "total_output_tokens") as usize + usage.output_tokens as usize).into());
                     *stats.entry("total_cache_read_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_cache_read_tokens") as usize + cache_read_input_tokens as usize).into());
+                        Value::Number((stats_get_f64(&stats, "total_cache_read_tokens") as usize + usage.cache_read_input_tokens as usize).into());
                     *stats.entry("total_cache_creation_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_cache_creation_tokens") as usize + cache_creation_input_tokens as usize).into());
+                        Value::Number((stats_get_f64(&stats, "total_cache_creation_tokens") as usize + usage.cache_creation_input_tokens as usize).into());
                     self.write_stats(&stats);
                 }
                 Event::Error(ErrorEvent { message }) => return Err(anyhow!(message)),
