@@ -80,14 +80,19 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
         }
 
         let usage = body.get("usage").cloned().unwrap_or(Value::Null);
-        if let Some(v) = usage.get("prompt_tokens").and_then(Value::as_i64) {
-            input_tokens = v;
-        }
         if let Some(v) = usage.get("completion_tokens").and_then(Value::as_i64) {
             output_tokens = v;
         }
         if let Some(v) = usage.get("cached_tokens").and_then(Value::as_i64) {
             cache_read_input_tokens = v;
+        }
+        // input_tokens = prompt_tokens - cached_tokens (actual processed tokens)
+        if let Some(v) = usage.get("prompt_tokens").and_then(Value::as_i64) {
+            if cache_read_input_tokens > 0 {
+                input_tokens = v - cache_read_input_tokens;
+            } else {
+                input_tokens = v;
+            }
         }
 
         let choice = body

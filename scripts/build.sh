@@ -169,6 +169,7 @@ content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.
 # --- Inline stats.awk references ---
 content = content.replace('awk_run -v action=update -f "$AWK_DIR/stats.awk"', 'awk_run -v action=update "${_AWK_STATS}"')
 content = content.replace('awk_run -v action=dump -f "$AWK_DIR/stats.awk"', 'awk_run -v action=dump "${_AWK_STATS}"')
+content = content.replace('awk_run -v action=sync -f "$AWK_DIR/stats.awk"', 'awk_run -v action=sync "${_AWK_STATS}"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)

@@ -21,6 +21,7 @@ USER_INPUT=""
 MAX_TURNS=40
 MAX_CONTEXT_KEEP_PCT=25
 MAX_CONTEXT_TOKENS=200000
+: "${MAX_TURNS_BEFORE_COMPACT:=100}"
 declare -a SKILL_NAMES=()
 : "${THINKING_BUDGET:=2048}"
 
@@ -45,6 +46,11 @@ ESC_LISTENER_PID=""
 ESC_LISTENER_FLAG=""
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
+
+# --- Stats Cache (in-memory) --- Indexes match stats.awk _init_fields() order:
+#   0:current_turn_count  1:agent_request_count  2:compact_request_count 3:total_input_tokens  4:total_output_tokens
+#   5:total_cache_read_tokens 6:total_cache_creation_tokens  7:current_context_tokens  8:last_updated
+STATS_CACHE=()
 
 # --- Environment Defaults ---
 : "${ANTHROPIC_API_KEY:=}"
@@ -724,6 +730,7 @@ conv_init() {
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
+    stats_load
     stats_show_osc
 }
 
@@ -818,66 +825,71 @@ compact_keep_lines() {
     ' "$CONV_FILE"
 }
 
-# --- Stats Management ---
+stats_load() {
+    local idx=0
+    while IFS=$'\t' read -r key val; do
+        [[ -z "$key" ]] && continue
+        STATS_CACHE[idx]="$val"
+        idx=$(( idx + 1 ))
+    done < <(awk_run -v action=dump -f "$AWK_DIR/stats.awk" "$STATS_FILE" 2>/dev/null)
+}
+
+_stats_sync() {
+    printf '%s\n' "${STATS_CACHE[@]}" | awk_run -v action=sync -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+}
+
 stats_inc() {
-    # Increment stats fields. Usage: stats_inc field=value [field=value ...]
-    {
-        for entry in "$@"; do
-            local key="${entry%%=*}" val="${entry#*=}"
-            printf '%s\t+%s\n' "$key" "$val"
-        done
-    } | awk_run -v action=update -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+    for entry in "$@"; do
+        local idx="${entry%%=*}" val="${entry#*=}"
+        STATS_CACHE[idx]=$(( STATS_CACHE[idx] + val ))
+    done
+    _stats_sync
 }
 
 stats_set() {
-    # Set absolute stats fields. Usage: stats_set field=value [field=value ...]
-    {
-        for entry in "$@"; do
-            local key="${entry%%=*}" val="${entry#*=}"
-            printf '%s\t%s\n' "$key" "$val"
-        done
-    } | awk_run -v action=update -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+    for entry in "$@"; do
+        local idx="${entry%%=*}" val="${entry#*=}"
+        STATS_CACHE[idx]="$val"
+    done
+    _stats_sync
 }
 
 stats_get() {
-    # Get a single stats field value. Prints to stdout.
-    awk_run -v action=dump -f "$AWK_DIR/stats.awk" "$STATS_FILE" 2>/dev/null | grep "^$1\t" | cut -f2 || echo "0"
+    echo "${STATS_CACHE[$1]:-0}"
 }
 
 stats_show_osc() {
-    # Update terminal title with key stats via OSC escape sequence.
-    local _ar _ai _ao _acr _ctx
-    _ar=$(stats_get "agent_request_count")
-    _ai=$(stats_get "total_input_tokens")
-    _ao=$(stats_get "total_output_tokens")
-    _ctx=$(stats_get "current_context_tokens")
-    printf '\033]0;agent:%s | in:%s out:%s | ctx:%s\007' "$_ar" "$_ai" "$_ao" "$_ctx"
+    printf '\033]0;T:%s R:%s I:%s O:%s C:%s\007' \
+        "${STATS_CACHE[0]:-0}" "${STATS_CACHE[1]:-0}" \
+        "${STATS_CACHE[3]:-0}" "${STATS_CACHE[4]:-0}" "${STATS_CACHE[7]:-0}"
 }
 
 compact_context_window() {
-    local trigger="$1" force="${2:-false}" context_tokens="${3:-}" total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
+    local trigger="$1" force="${2:-false}"
+    local total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt
+    local turn_triggered=false
 
-    # Token-based threshold: if no context_tokens (new session), skip auto compact.
-    # For forced compact, always proceed.
     if ! $force; then
-        if [[ -z "$context_tokens" || "$context_tokens" -le 0 ]]; then
-            return 1
-        fi
-        if (( context_tokens <= MAX_CONTEXT_TOKENS )); then
+        local ct=$(stats_get 7) tc=$(stats_get 0)
+        if [[ "$ct" -gt 0 && "$ct" -gt "$MAX_CONTEXT_TOKENS" ]]; then
+            :  # token threshold reached
+        elif [[ "$tc" -gt "$MAX_TURNS_BEFORE_COMPACT" ]]; then
+            turn_triggered=true
+        else
             return 1
         fi
     fi
 
     total_bytes=$(wc -c < "$CONV_FILE" 2>/dev/null || echo 0)
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-    local target_keep_bytes=$(( total_bytes * MAX_CONTEXT_KEEP_PCT / 100 ))
-    (( target_keep_bytes < 1 )) && target_keep_bytes=1
-
-    keep_lines=$(compact_keep_lines "$target_keep_bytes")
+    keep_lines=$(compact_keep_lines $(( total_bytes * MAX_CONTEXT_KEEP_PCT / 100 )))
     [[ -n "$keep_lines" ]] || keep_lines=0
     (( total_lines > keep_lines )) || keep_lines=$total_lines
     drop=$(( total_lines - keep_lines ))
     [[ $drop -gt 0 ]] || return 1
+
+    # If triggered by turn count, only compact if dropping > half the lines
+    [[ "$turn_triggered" == false ]] || (( drop > total_lines / 2 )) || return 1
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
@@ -902,6 +914,10 @@ compact_context_window() {
     fi
 
     rm -f "$tmp_dropped"
+    # Recalculate turn count based on remaining conversation history
+    local remaining_turns
+    remaining_turns=$(grep -c '"type":"user_input"' "$CONV_FILE" 2>/dev/null || echo 0)
+    stats_set 0=$remaining_turns
     if is_stream_json_mode; then
         printf '%s\n' "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
     elif [[ "$trigger" == "auto" ]]; then
@@ -1127,7 +1143,7 @@ run_summary_call() {
                     local _cu_event
                     _cu_event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"compact"}' "$_cu_in" "$_cu_out" "$_cu_cr" "$_cu_cc")
                     [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_cu_event"
-                    stats_inc "compact_request_count=1" "total_input_tokens=${_cu_in}" "total_output_tokens=${_cu_out}" "total_cache_read_tokens=${_cu_cr}" "total_cache_creation_tokens=${_cu_cc}"
+                    stats_inc 2=1 3=${_cu_in} 4=${_cu_out} 5=${_cu_cr} 6=${_cu_cc}
                 fi
                 ;;
             ERROR) die "${REPLY_MESSAGE[1]}" ;;
@@ -1240,15 +1256,16 @@ agent_loop_stream() {
             fi
             # Update stats with captured usage from this turn
             if [[ -n "$_usage_in" ]]; then
-                local _ctx_tokens=$(( _usage_in + _usage_out ))
+                # context = input + output + cache_read + cache_creation
+                local _ctx_tokens=$(( _usage_in + _usage_out + ${_usage_cr:-0} + ${_usage_cc:-0} ))
                 stats_inc \
-                    "agent_request_count=1" \
-                    "total_input_tokens=${_usage_in}" \
-                    "total_output_tokens=${_usage_out}" \
-                    "total_cache_read_tokens=${_usage_cr:-0}" \
-                    "total_cache_creation_tokens=${_usage_cc:-0}"
-                stats_set "current_context_tokens=${_ctx_tokens}"
-                compact_context_window "auto" false "$_ctx_tokens" || true
+                    1=1 \
+                    3=${_usage_in} \
+                    4=${_usage_out} \
+                    5=${_usage_cr:-0} \
+                    6=${_usage_cc:-0}
+                stats_set 7=${_ctx_tokens}
+                compact_context_window "auto" false || true
             else
                 # No usage data (e.g. retry) — skip compact
                 :
@@ -1276,6 +1293,8 @@ agent_loop() {
     # Record user input event
     [[ "$LOG_EVENTS" != "false" ]] && \
         session_append_line "{\"type\":\"user_input\",\"content\":\"$(json_escape "$user_input")\"}"
+    # Increment turn count
+    stats_inc 0=1
 
     local _se=""
     while read_message; do
@@ -1304,7 +1323,6 @@ agent_loop() {
     done < <(agent_loop_stream "$user_input")
 
     stop_esc_interrupt_listener
-    # Update terminal title with current stats
     stats_show_osc
     $had_error && return 1
     return 0

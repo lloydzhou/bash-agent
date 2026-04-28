@@ -160,6 +160,23 @@ func (s Store) TotalLines() (int, error) {
 	return len(lines), nil
 }
 
+// CountUserInputs counts the number of user_input events in events.jsonl
+func (s Store) CountUserInputs() (int, error) {
+	// Read events file (same path but with events.jsonl)
+	eventsPath := strings.Replace(s.Path, "conversation.jsonl", "events.jsonl", 1)
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, `"type":"user_input"`) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (s Store) KeepLineCount(targetBytes int) (int, error) {
 	lines, err := s.Lines()
 	if err != nil {

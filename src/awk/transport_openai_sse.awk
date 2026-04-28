@@ -113,12 +113,19 @@ BEGIN {
 
     # --- Usage ---
     pt = extract_num(json, "prompt_tokens", 1)
-    if (pt != "") input_tokens = pt
     ct = extract_num(json, "completion_tokens", 1)
     if (ct != "") output_tokens = ct
     crt = extract_num(json, "cached_tokens", 1)
     if (crt == "") crt = extract_num(json, "cache_read_input_tokens", 1)
     if (crt != "") cache_read_input_tokens = crt
+    # input_tokens = prompt_tokens - cached_tokens (actual processed tokens)
+    if (pt != "") {
+        if (crt != "") {
+            input_tokens = pt - crt
+        } else {
+            input_tokens = pt
+        }
+    }
 
     next
 }

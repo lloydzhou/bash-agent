@@ -33,6 +33,7 @@ type Config struct {
 	MaxTurns           int
 	MaxContextTokens  int
 	MaxContextKeepPct int
+	MaxTurnsBeforeCompact int
 	Skills             []string
 	ThinkingBudget     int
 
@@ -55,6 +56,7 @@ func Default() Config {
 		MaxTurns:           40,
 		MaxContextTokens:  200000,
 		MaxContextKeepPct: 25,
+		MaxTurnsBeforeCompact: 100,
 		ThinkingBudget:     2048,
 	}
 }
@@ -205,6 +207,11 @@ func ParseArgs(args []string) (Config, error) {
 	if v := os.Getenv("THINKING_BUDGET"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.ThinkingBudget = n
+		}
+	}
+	if v := os.Getenv("MAX_TURNS_BEFORE_COMPACT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxTurnsBeforeCompact = n
 		}
 	}
 

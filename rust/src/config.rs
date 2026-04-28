@@ -23,6 +23,7 @@ pub struct Config {
     pub max_turns: i32,
     pub max_context_tokens: usize,
     pub max_context_keep_pct: i32,
+    pub max_turns_before_compact: i32,
     pub skills: Vec<String>,
     pub thinking_budget: i32,
     pub interactive: bool,
@@ -50,6 +51,7 @@ impl Default for Config {
             max_turns: 40,
             max_context_tokens: 200_000,
             max_context_keep_pct: 25,
+            max_turns_before_compact: 100,
             skills: Vec::new(),
             thinking_budget: 2048,
             interactive: false,
@@ -183,6 +185,11 @@ pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
     if let Ok(v) = std::env::var("THINKING_BUDGET") {
         if let Ok(n) = v.parse::<i32>() {
             cfg.thinking_budget = n;
+        }
+    }
+    if let Ok(v) = std::env::var("MAX_TURNS_BEFORE_COMPACT") {
+        if let Ok(n) = v.parse::<i32>() {
+            cfg.max_turns_before_compact = n;
         }
     }
 

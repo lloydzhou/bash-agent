@@ -1,13 +1,3 @@
-# stats.awk — Session-level stats.json I/O
-# Read/write a flat JSON object with numeric fields.
-#
-# Actions:
-#   dump   — Read stats.json, print "key\\tvalue" lines to stdout
-#            (if file missing/empty, prints default zeros)
-#   update — Read "key\\tvalue" lines from stdin, merge into stats.json
-#            Values prefixed with "+" are incremented from current value.
-#            Writes updated JSON back to file.
-
 BEGIN {
     _init_fields()
 
@@ -15,6 +5,19 @@ BEGIN {
         _read_file(ARGV[1])
         _dump()
         ARGV[1] = ""
+        exit
+    }
+
+    if (action == "sync" && ARGC > 1) {
+        filepath = ARGV[1]
+        ARGV[1] = ""
+        for (i = 1; i <= _field_count; i++) {
+            if ((getline line) > 0) {
+                _vals[_field_keys[i]] = (line ~ /^[0-9]+$/) ? line + 0 : line
+            }
+        }
+        _vals["last_updated"] = _now()
+        _write_file(filepath)
         exit
     }
 
@@ -44,15 +47,16 @@ BEGIN {
 }
 
 function _init_fields() {
-    _field_keys[1] = "agent_request_count"
-    _field_keys[2] = "compact_request_count"
-    _field_keys[3] = "total_input_tokens"
-    _field_keys[4] = "total_output_tokens"
-    _field_keys[5] = "total_cache_read_tokens"
-    _field_keys[6] = "total_cache_creation_tokens"
-    _field_keys[7] = "current_context_tokens"
-    _field_keys[8] = "last_updated"
-    _field_count = 8
+    _field_keys[1] = "current_turn_count"
+    _field_keys[2] = "agent_request_count"
+    _field_keys[3] = "compact_request_count"
+    _field_keys[4] = "total_input_tokens"
+    _field_keys[5] = "total_output_tokens"
+    _field_keys[6] = "total_cache_read_tokens"
+    _field_keys[7] = "total_cache_creation_tokens"
+    _field_keys[8] = "current_context_tokens"
+    _field_keys[9] = "last_updated"
+    _field_count = 9
 
     for (i = 1; i <= _field_count; i++) {
         _vals[_field_keys[i]] = (_field_keys[i] == "last_updated") ? "" : 0
@@ -74,15 +78,11 @@ function _read_file(file) {
     for (i = 1; i <= _field_count; i++) {
         k = _field_keys[i]
         if (match(line, "\"" k "\":\"[^\"]*\"")) {
-            # String value: "key":"val"
-            vstart = RSTART + length(k) + 4  # skip "key":
-            vlen = RLENGTH - length(k) - 5    # remove trailing "
-            _vals[k] = substr(line, vstart, vlen)
+            vstart = RSTART + length(k) + 4
+            _vals[k] = substr(line, vstart, RLENGTH - length(k) - 5)
         } else if (match(line, "\"" k "\":[0-9]+")) {
-            # Numeric value: "key":123
-            vstart = RSTART + length(k) + 3  # skip "key":
-            vlen = RLENGTH - length(k) - 3
-            _vals[k] = substr(line, vstart, vlen) + 0
+            vstart = RSTART + length(k) + 3
+            _vals[k] = substr(line, vstart, RLENGTH - length(k) - 3) + 0
         }
     }
 }

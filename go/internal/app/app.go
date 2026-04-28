@@ -48,10 +48,10 @@ type runtime struct {
 	escStop     chan struct{}
 	escDone     chan struct{}
 	interrupted atomic.Bool
-	lastContextTokens     int
-	lastInputTokens       int
-	lastOutputTokens      int
-	lastCacheReadTokens   int
+	lastContextTokens       int
+	lastInputTokens        int
+	lastOutputTokens       int
+	lastCacheReadTokens    int
 	lastCacheCreationTokens int
 }
 
@@ -181,7 +181,7 @@ func (rt *runtime) initState() error {
 	if newSession {
 		_ = rt.appendEvent(map[string]any{"type": "session_start", "session_id": sessionID})
 		// Write initial stats
-		statsData := `{"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}`
+		statsData := `{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}`
 		_ = os.WriteFile(rt.paths.Stats, []byte(statsData+"\n"), 0o644)
 	}
 	rt.updateTermTitle()
@@ -537,6 +537,8 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 		return err
 	}
 	_ = rt.appendEvent(map[string]any{"type": "user_input", "content": userInput})
+	// Increment turn count
+	rt.incrementTurnCount()
 
 	turn := 0
 	state := displayState{lastChar: "\n"}
@@ -696,7 +698,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			if rt.lastInputTokens > 0 {
 				rt.updateStatsFromLastUsage()
 			}
-			_, _ = rt.compactContextWindow("auto", false, rt.lastContextTokens)
+			_, _ = rt.compactContextWindow("auto", false)
 			// tool_use/tool_calls → loop continues; anything else → break
 			if stop != "tool_use" && stop != "tool_calls" {
 				return nil
@@ -925,7 +927,8 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 			return err
 		}
 		// Track context tokens and usage for compact and stats
-		rt.lastContextTokens = e.InputTokens + e.OutputTokens
+		// context = input + output + cache_read + cache_creation
+		rt.lastContextTokens = e.InputTokens + e.OutputTokens + e.CacheReadInputTokens + e.CacheCreationInputTokens
 		rt.lastInputTokens = e.InputTokens
 		rt.lastOutputTokens = e.OutputTokens
 		rt.lastCacheReadTokens = e.CacheReadInputTokens
@@ -1082,12 +1085,18 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-func (rt *runtime) compactContextWindow(trigger string, force bool, contextTokens int) (bool, error) {
+func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error) {
+	turnTriggered := false
 	if !force {
-		if contextTokens <= 0 {
-			return false, nil
-		}
-		if contextTokens <= rt.cfg.MaxContextTokens {
+		stats := rt.readStats()
+		contextTokens := int(statsFloat64(stats, "current_context_tokens"))
+		turnCount := int(statsFloat64(stats, "current_turn_count"))
+		// Check token threshold - always compact if over limit
+		if contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens {
+			// token threshold reached, turnTriggered stays false
+		} else if turnCount > rt.cfg.MaxTurnsBeforeCompact {
+			turnTriggered = true
+		} else {
 			return false, nil
 		}
 	}
@@ -1109,6 +1118,11 @@ func (rt *runtime) compactContextWindow(trigger string, force bool, contextToken
 	}
 	drop := totalLines - keepLines
 	if drop <= 0 {
+		return false, nil
+	}
+	// If triggered by turn count, only compact if dropping more than half the lines
+	// This prevents frequent compact when context is small
+	if turnTriggered && drop <= totalLines/2 {
 		return false, nil
 	}
 	allLines, err := rt.conv.Lines()
@@ -1138,6 +1152,14 @@ func (rt *runtime) compactContextWindow(trigger string, force bool, contextToken
 	}
 	if err := rt.conv.TrimKeepLast(keepLines); err != nil {
 		return false, err
+	}
+	// Recalculate turn count based on remaining conversation history
+	remainingTurns, err := rt.conv.CountUserInputs()
+	if err == nil {
+		stats := rt.readStats()
+		stats["current_turn_count"] = float64(remainingTurns)
+		stats["last_updated"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+		rt.writeStats(stats)
 	}
 	if rt.isStreamJSONMode() {
 		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": trigger})
@@ -1250,6 +1272,14 @@ func (rt *runtime) appendEvent(v any) error {
 	return err
 }
 
+// incrementTurnCount increments the current_turn_count in stats.json.
+func (rt *runtime) incrementTurnCount() {
+	stats := rt.readStats()
+	stats["current_turn_count"] = statsFloat64(stats, "current_turn_count") + 1
+	stats["last_updated"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	rt.writeStats(stats)
+}
+
 // updateStatsFromLastUsage updates stats.json with last turn's usage (matches bash).
 // Uses the last captured usage data to increment counters and update context_tokens.
 func (rt *runtime) updateStatsFromLastUsage() {
@@ -1259,7 +1289,8 @@ func (rt *runtime) updateStatsFromLastUsage() {
 	stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(rt.lastOutputTokens)
 	stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(rt.lastCacheReadTokens)
 	stats["total_cache_creation_tokens"] = statsFloat64(stats, "total_cache_creation_tokens") + float64(rt.lastCacheCreationTokens)
-	stats["current_context_tokens"] = float64(rt.lastInputTokens + rt.lastOutputTokens)
+	// context = input + output + cache_read + cache_creation
+	stats["current_context_tokens"] = float64(rt.lastInputTokens + rt.lastOutputTokens + rt.lastCacheReadTokens + rt.lastCacheCreationTokens)
 	stats["last_updated"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	rt.writeStats(stats)
 }
@@ -1267,6 +1298,7 @@ func (rt *runtime) updateStatsFromLastUsage() {
 // readStats reads and parses stats.json, returning default zero values if missing.
 func (rt *runtime) readStats() map[string]any {
 	stats := map[string]any{
+		"current_turn_count":         float64(0),
 		"agent_request_count":        float64(0),
 		"compact_request_count":      float64(0),
 		"total_input_tokens":         float64(0),
@@ -1311,11 +1343,12 @@ func statsFloat64(m map[string]any, key string) float64 {
 // updateTermTitle updates the terminal title with current stats (matches bash stats_show_osc).
 func (rt *runtime) updateTermTitle() {
 	stats := rt.readStats()
+	tc := int(statsFloat64(stats, "current_turn_count"))
 	ar := int(statsFloat64(stats, "agent_request_count"))
 	ai := int(statsFloat64(stats, "total_input_tokens"))
 	ao := int(statsFloat64(stats, "total_output_tokens"))
 	ctx := int(statsFloat64(stats, "current_context_tokens"))
-	_, _ = fmt.Fprintf(rt.stderr, "\033]0;agent:%d | in:%d out:%d | ctx:%d\007", ar, ai, ao, ctx)
+	_, _ = fmt.Fprintf(rt.stderr, "\033]0;T:%d R:%d I:%d O:%d C:%d\007", tc, ar, ai, ao, ctx)
 }
 
 func (rt *runtime) buildAssistantEvent(text string, calls []protocol.ToolCallEvent) map[string]any {

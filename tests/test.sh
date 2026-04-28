@@ -1260,7 +1260,7 @@ data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":12345678
 
 data: [DONE]
 SSE
-    )" $'USAGE:10\t12\t5\t0' "STOP:end_turn"
+    )" $'USAGE:5\t12\t5\t0' "STOP:end_turn"
 }
 
 # Test 7: OpenAI SSE trims initial leading newlines

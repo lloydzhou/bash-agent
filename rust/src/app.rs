@@ -186,7 +186,7 @@ impl Runtime {
         if new_session {
             use std::io::Write;
             let mut f = std::fs::File::create(&paths.stats)?;
-            write!(f, r#"{{"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#, '\n')?;
+            write!(f, r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#, '\n')?;
         }
 
         let conv = Store {
@@ -291,6 +291,8 @@ impl Runtime {
         let result = (|| -> Result<()> {
             self.conv.add_user(&user_input)?;
             self.append_event(json!({"type":"user_input","content":user_input}))?;
+            // Increment turn count
+            self.increment_turn_count();
 
             let mut turn = 0;
             let mut ds = DisplayState {
@@ -464,7 +466,7 @@ impl Runtime {
                     if self.last_input_tokens > 0 {
                         self.update_stats_from_usage();
                     }
-                    let _ = self.compact_context_window("auto", false, self.last_context_tokens);
+                    let _ = self.compact_context_window("auto", false);
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
@@ -574,7 +576,8 @@ impl Runtime {
                     "cache_creation_input_tokens":cache_creation_input_tokens
                 }))?;
                 // No human display for usage events
-                self.last_context_tokens = (input_tokens + output_tokens) as usize;
+                // context = input + output + cache_read + cache_creation
+                self.last_context_tokens = (input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens) as usize;
                 self.last_input_tokens = input_tokens as usize;
                 self.last_output_tokens = output_tokens as usize;
                 self.last_cache_read_tokens = cache_read_input_tokens as usize;
@@ -751,16 +754,22 @@ impl Runtime {
         }
     }
 
-    fn compact_context_window(&mut self, trigger: &str, force: bool, context_tokens: usize) -> Result<bool> {
-        let total_bytes = self.conv.total_bytes()?;
+    fn compact_context_window(&mut self, trigger: &str, force: bool) -> Result<bool> {
+        let mut turn_triggered = false;
         if !force {
-            if context_tokens == 0 {
-                return Ok(false);
-            }
-            if context_tokens <= self.cfg.max_context_tokens {
+            let stats = self.read_stats();
+            let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
+            let turn_count = stats_get_f64(&stats, "current_turn_count") as i32;
+            // Check token threshold - always compact if over limit
+            if context_tokens > 0 && context_tokens > self.cfg.max_context_tokens {
+                // token threshold reached, turn_triggered stays false
+            } else if turn_count > self.cfg.max_turns_before_compact {
+                turn_triggered = true;
+            } else {
                 return Ok(false);
             }
         }
+        let total_bytes = self.conv.total_bytes()?;
         let mut target_keep =
             total_bytes * (self.cfg.max_context_keep_pct as usize) / 100;
         if target_keep < 1 {
@@ -772,6 +781,11 @@ impl Runtime {
             return Ok(false);
         }
         let drop = total_lines - keep_lines;
+        // If triggered by turn count, only compact if dropping more than half the lines
+        // This prevents frequent compact when context is small
+        if turn_triggered && drop <= total_lines / 2 {
+            return Ok(false);
+        }
 
         let all = self.conv.lines()?;
         let mut dropped = String::new();
@@ -790,6 +804,14 @@ impl Runtime {
         let summary = self.run_summary_call(&current_summary, dropped.trim_end())?;
         fs::write(&self.paths.summary, format!("{summary}\n"))?;
         self.conv.trim_keep_last(keep_lines)?;
+
+        // Recalculate turn count based on remaining conversation history
+        if let Ok(remaining_turns) = self.conv.count_user_inputs() {
+            let mut stats = self.read_stats();
+            stats.insert("current_turn_count".to_string(), Value::Number((remaining_turns as i64).into()));
+            stats.insert("last_updated".to_string(), Value::String(chrono_now_rfc3339()));
+            self.write_stats(&stats);
+        }
 
         if self.is_stream_json_mode() {
             let _ = self
@@ -912,6 +934,15 @@ impl Runtime {
         Ok(())
     }
 
+    /// increment_turn_count increments the current_turn_count in stats.json.
+    fn increment_turn_count(&self) {
+        let mut stats = self.read_stats();
+        *stats.entry("current_turn_count".to_string()).or_insert(Value::Number(0.into())) =
+            Value::Number((stats_get_f64(&stats, "current_turn_count") as usize + 1).into());
+        stats.insert("last_updated".to_string(), Value::String(chrono_now_rfc3339()));
+        self.write_stats(&stats);
+    }
+
     /// update_stats_from_usage updates stats.json with last turn's usage (matches bash stats_inc+stats_set).
     fn update_stats_from_usage(&self) {
         let mut stats = self.read_stats();
@@ -925,8 +956,9 @@ impl Runtime {
             Value::Number((stats_get_f64(&stats, "total_cache_read_tokens") as usize + self.last_cache_read_tokens).into());
         *stats.entry("total_cache_creation_tokens".to_string()).or_insert(Value::Number(0.into())) =
             Value::Number((stats_get_f64(&stats, "total_cache_creation_tokens") as usize + self.last_cache_creation_tokens).into());
+        // context = input + output + cache_read + cache_creation
         *stats.entry("current_context_tokens".to_string()).or_insert(Value::Number(0.into())) =
-            Value::Number((self.last_input_tokens + self.last_output_tokens).into());
+            Value::Number((self.last_input_tokens + self.last_output_tokens + self.last_cache_read_tokens + self.last_cache_creation_tokens).into());
         stats.insert("last_updated".to_string(), Value::String(chrono_now_rfc3339()));
         self.write_stats(&stats);
     }
@@ -934,6 +966,7 @@ impl Runtime {
     /// read_stats reads and parses stats.json, returning default zero values if missing.
     fn read_stats(&self) -> serde_json::Map<String, Value> {
         let mut stats = serde_json::Map::new();
+        stats.insert("current_turn_count".to_string(), Value::Number(0.into()));
         stats.insert("agent_request_count".to_string(), Value::Number(0.into()));
         stats.insert("compact_request_count".to_string(), Value::Number(0.into()));
         stats.insert("total_input_tokens".to_string(), Value::Number(0.into()));
@@ -962,11 +995,12 @@ impl Runtime {
     /// update_term_title updates the terminal title with current stats (matches bash stats_show_osc).
     fn update_term_title(&self) {
         let stats = self.read_stats();
+        let tc = stats_get_f64(&stats, "current_turn_count") as usize;
         let ar = stats_get_f64(&stats, "agent_request_count") as usize;
         let ai = stats_get_f64(&stats, "total_input_tokens") as usize;
         let ao = stats_get_f64(&stats, "total_output_tokens") as usize;
         let ctx = stats_get_f64(&stats, "current_context_tokens") as usize;
-        eprint!("\x1b]0;agent:{} | in:{} out:{} | ctx:{}\x07", ar, ai, ao, ctx);
+        eprint!("\x1b]0;T:{} R:{} I:{} O:{} C:{}\x07", tc, ar, ai, ao, ctx);
         let _ = io::stderr().flush();
     }
 
