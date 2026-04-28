@@ -180,7 +180,7 @@ func (rt *runtime) initState() error {
 	if newSession {
 		_ = rt.appendEvent(map[string]any{"type": "session_start", "session_id": sessionID})
 		// Write initial stats
-		statsData := `{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}`
+		statsData := `{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"llm_turn_count":0,"last_updated":""}`
 		_ = os.WriteFile(rt.paths.Stats, []byte(statsData+"\n"), 0o644)
 	}
 	rt.updateTermTitle()
@@ -543,6 +543,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 	state := displayState{lastChar: "\n"}
 	for turn < rt.cfg.MaxTurns {
 		turn++
+		rt.setLLMTurn(turn)
 		text := ""
 		thinking := ""
 		var calls []protocol.ToolCallEvent
@@ -1267,6 +1268,14 @@ func (rt *runtime) incrementTurnCount() {
 	rt.writeStats(stats)
 }
 
+// setLLMTurn updates the llm_turn_count in stats.json (matches bash stats_set 9=$turn).
+func (rt *runtime) setLLMTurn(turn int) {
+	stats := rt.readStats()
+	stats["llm_turn_count"] = float64(turn)
+	stats["last_updated"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	rt.writeStats(stats)
+}
+
 // recordUsage logs a usage event and updates stats. Returns context token count.
 func (rt *runtime) recordUsage(kind, counterKey string, e protocol.UsageEvent) int {
 	evt := map[string]any{
@@ -1314,6 +1323,7 @@ func (rt *runtime) readStats() map[string]any {
 		"total_cache_read_tokens":    float64(0),
 		"total_cache_creation_tokens": float64(0),
 		"current_context_tokens":     float64(0),
+		"llm_turn_count":             float64(0),
 		"last_updated":               "",
 	}
 	data, err := os.ReadFile(rt.paths.Stats)

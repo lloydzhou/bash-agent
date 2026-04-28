@@ -1,0 +1,54 @@
+# Python Port Plan
+
+## Goal
+Create `pyagent/` — a Python port of bash-agent that follows the exact same data flow, tool dispatch, session/compact semantics, and CLI interface.
+
+## Analysis
+bash-agent has ~1550 lines. Go port is ~4600 lines across 13 files. Rust port is ~3300 lines across 14 files.
+
+Python port should be single-file or minimal-module, matching bash's compactness while being idiomatic Python.
+
+### Core Data Flow (must match)
+```
+CLI args → config → session init → prompt assembly → agent loop:
+  conv_get_messages() → build_request() → curl SSE → parse events →
+  display events (human/stream-json) → execute tools → write conv → compact if needed → loop
+```
+
+### Key Modules to Port
+1. **config** — CLI arg parsing, defaults, env vars
+2. **session** — session dir, conversation.jsonl, events.jsonl, summary.txt, todo.md, plan.md
+3. **conversation** — JSONL read/write, add_user/add_assistant/add_tool_results
+4. **prompt** — system prompt assembly (sections, skills, instruction files)
+5. **protocol** — SSE parsing (Claude + OpenAI formats) → normalized events
+6. **provider** — build HTTP request for Claude/OpenAI
+7. **tools** — Read/Write/Edit/Bash/Glob/Grep/TodoWrite/Skill/WebSearch/WebFetch
+8. **display** — human output (colors, thinking) + stream-json output
+9. **compact** — context window compaction by byte budget
+10. **app** — agent_loop, agent_loop_stream, interactive mode, main
+
+### Design Decisions
+- **Single file**: `pyagent/agent.py` — matches bash's single-file philosophy
+- **Dependencies**: only Python stdlib + `requests` (or `urllib`) for HTTP
+- Actually `urllib.request` is enough for SSE streaming — zero external deps
+- **No awk needed** — Python handles JSON/SSE natively
+
+## File Structure
+```
+pyagent/
+  agent.py      # single-file agent (~800-1000 lines)
+```
+
+## Steps
+1. Create `pyagent/agent.py` with all modules inline
+2. Port config/CLI parsing
+3. Port session/conversation management
+4. Port SSE parsing (Claude + OpenAI)
+5. Port provider/request building
+6. Port prompt assembly
+7. Port all 10 tools
+8. Port display (human + stream-json)
+9. Port compact
+10. Port agent_loop + interactive mode
+11. Port main entry point
+12. Test with existing test.sh mock approach

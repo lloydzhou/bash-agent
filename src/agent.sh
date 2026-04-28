@@ -25,7 +25,7 @@ DP_P_BASE=3.0          # $/MTok，未命中缓存的输入价格
 DP_P_CACHE=0.30        # $/MTok，命中缓存的输入价格
 DP_V=20000             # 固定开销 token 数（系统提示 + 当前用户输入）
 DP_PENALTY=0.25        # $，压缩开销（摘要调用 + 缓存未命中）
-DP_BASELINE_E=15       # 单次用户输入预期剩余调用数（0=自动从 MAX_TURNS 计算）
+DP_BASELINE_E=3        # 单次用户输入预期剩余轮数（0=自动从 MAX_TURNS 计算）
 DP_E_FIXED=0           # 固定预期剩余步数（0=使用 DP_BASELINE_E）
 DP_R=0.7               # 单次摘要信息保留率（递归摘要的指数衰减）
 DP_BETA=0.5            # 信息损失惩罚系数（$(1-r_t)² × N_remain × β）
@@ -830,21 +830,21 @@ stats_show_osc() {
 # Over-compaction (k < min_keep) is penalized quadratically.
 # Returns: number of lines to keep (turn-aligned), or "0" if no compact beneficial.
 compact_dp_decision() {
-    local current_llm_turn=$(stats_get 9)
-    # E: DP_E_FIXED > (DP_BASELINE_E - turn) > baseline/2
-    local baseline=${DP_BASELINE_E:-15} E
+    local current_turn=$(stats_get 0)
+    # E: expected remaining user-input rounds
+    # DP_E_FIXED > (DP_BASELINE_E - current_turn) > baseline/2
+    local baseline=${DP_BASELINE_E:-3} E
     if (( DP_E_FIXED > 0 )); then
         E=$DP_E_FIXED
     elif (( baseline > 0 )); then
-        local remaining=$(( baseline - current_llm_turn ))
+        local remaining=$(( baseline - current_turn ))
         if (( remaining <= 0 )); then
-            # Exceeded baseline: task is harder than expected, use baseline/2
             E=$(( baseline > 1 ? baseline / 2 : 1 ))
         else
             E=$remaining
         fi
     else
-        E=$(( MAX_TURNS - current_llm_turn ))
+        E=$(( MAX_TURNS - current_turn ))
         (( E > 0 )) || E=1
     fi
 
