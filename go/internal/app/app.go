@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1128,11 +1127,6 @@ func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error
 	allLines, err := rt.conv.Lines()
 	if err != nil {
 		return false, err
-	}
-	var dropped bytes.Buffer
-	for _, line := range allLines[:drop] {
-		dropped.Write(line)
-		dropped.WriteByte('\n')
 	}
 	if trigger == "manual" && rt.apiURL == "" {
 		if err := rt.applyProviderDefaults(); err != nil {
