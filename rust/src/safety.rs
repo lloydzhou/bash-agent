@@ -5,7 +5,7 @@ static RE_FIND_DELETE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)(^|[;&|])\s*find\b.*\bdelete\b").expect("regex"));
 static RE_FORK_BOMB: Lazy<Regex> = Lazy::new(|| Regex::new(r":\(\)\{:\|:&\};:").expect("regex"));
 static RE_BLOCK_DEVICE_WRITE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(^|\s)(>|>>|of=)\s*/dev/(sd[a-z]|disk\d+|rdisk\d+|nvme\d+n\d+)")
+    Regex::new(r"(?i)(^|\s)(of=|>|1>|>>|1>>)\s*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)(\s|$)")
         .expect("regex")
 });
 

@@ -39,12 +39,14 @@ type StreamClient struct {
 }
 
 const (
-	defaultRetryCount              = 2
-	defaultRetryDelay              = time.Second
-	defaultRetryMaxTime            = 20 * time.Second
-	defaultConnectTimeout          = 5 * time.Second
-	defaultStreamIdleTimeout       = 60 * time.Second
-	defaultResponseHeaderTimeout   = 60 * time.Second
+	defaultRetryCount            = 2
+	defaultRetryDelay            = time.Second
+	defaultRetryMaxTime          = 20 * time.Second
+	defaultConnectTimeout        = 5 * time.Second
+	defaultStreamLowSpeedLimit   = 1
+	defaultStreamLowSpeedTime    = 60 * time.Second
+	defaultStreamCheckInterval   = time.Second
+	defaultResponseHeaderTimeout = 60 * time.Second
 )
 
 func (c StreamClient) Post(url string, headers map[string]string, body []byte) (io.ReadCloser, error) {
@@ -59,7 +61,13 @@ func (c StreamClient) Post(url string, headers map[string]string, body []byte) (
 					if err != nil {
 						return nil, err
 					}
-					return &deadlineConn{Conn: conn, idleTimeout: defaultStreamIdleTimeout}, nil
+					return &speedConn{
+						Conn:          conn,
+						lowSpeedLimit: defaultStreamLowSpeedLimit,
+						lowSpeedTime:  defaultStreamLowSpeedTime,
+						checkInterval: defaultStreamCheckInterval,
+						start:         time.Now(),
+					}, nil
 				},
 				ResponseHeaderTimeout: defaultResponseHeaderTimeout,
 			},
@@ -103,25 +111,81 @@ func (c StreamClient) Post(url string, headers map[string]string, body []byte) (
 	}
 }
 
-type deadlineConn struct {
-	net.Conn
-	idleTimeout time.Duration
+type streamSample struct {
+	at    time.Time
+	bytes int64
 }
 
-func (c *deadlineConn) Read(b []byte) (int, error) {
-	if c.idleTimeout > 0 {
-		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+type speedConn struct {
+	net.Conn
+	lowSpeedLimit int64
+	lowSpeedTime  time.Duration
+	checkInterval time.Duration
+	start         time.Time
+	samples       []streamSample
+	windowBytes   int64
+}
+
+func (c *speedConn) Read(b []byte) (int, error) {
+	if c.lowSpeedLimit <= 0 || c.lowSpeedTime <= 0 {
+		return c.Conn.Read(b)
 	}
-	n, err := c.Conn.Read(b)
-	if n > 0 && c.idleTimeout > 0 {
-		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idleTimeout))
+	checkInterval := c.checkInterval
+	if checkInterval <= 0 {
+		checkInterval = time.Second
 	}
-	if err != nil && n == 0 {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			return 0, ErrStreamRetryable
+	for {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(checkInterval))
+		n, err := c.Conn.Read(b)
+		now := time.Now()
+		if n > 0 {
+			c.record(now, n)
+			if err == nil {
+				return n, nil
+			}
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				return n, nil
+			}
+			return n, err
 		}
+		if err == nil {
+			return 0, nil
+		}
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			if c.lowSpeedExceeded(now) {
+				return 0, ErrStreamRetryable
+			}
+			continue
+		}
+		return 0, err
 	}
-	return n, err
+}
+
+func (c *speedConn) record(now time.Time, n int) {
+	c.samples = append(c.samples, streamSample{at: now, bytes: int64(n)})
+	c.windowBytes += int64(n)
+	c.prune(now)
+}
+
+func (c *speedConn) prune(now time.Time) {
+	cutoff := now.Add(-c.lowSpeedTime)
+	idx := 0
+	for idx < len(c.samples) && c.samples[idx].at.Before(cutoff) {
+		c.windowBytes -= c.samples[idx].bytes
+		idx++
+	}
+	if idx > 0 {
+		c.samples = append([]streamSample(nil), c.samples[idx:]...)
+	}
+}
+
+func (c *speedConn) lowSpeedExceeded(now time.Time) bool {
+	c.prune(now)
+	if now.Sub(c.start) < c.lowSpeedTime {
+		return false
+	}
+	required := c.lowSpeedLimit * int64(c.lowSpeedTime/time.Second)
+	return c.windowBytes < required
 }
 
 func shouldRetryAttempt(attempt int, start time.Time) bool {
@@ -141,11 +205,11 @@ func shouldRetryStatus(code int) bool {
 }
 
 // ErrStreamRetryable indicates a stream-level error that can be retried
-// (e.g. idle timeout mid-transfer). The caller may issue a new request.
+// (e.g. low-speed timeout mid-transfer). The caller may issue a new request.
 var ErrStreamRetryable = errors.New("stream interrupted: retryable")
 
 // IsRetryableStreamError returns true if the error is a retryable stream failure
-// (idle timeout, connection reset during transfer).
+// (low-speed timeout, connection reset during transfer).
 func IsRetryableStreamError(err error) bool {
 	if errors.Is(err, ErrStreamRetryable) {
 		return true

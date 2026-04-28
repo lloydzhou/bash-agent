@@ -26,8 +26,8 @@ import (
 	"github.com/lloydzhou/bash-agent/internal/protocol"
 	"github.com/lloydzhou/bash-agent/internal/provider"
 	"github.com/lloydzhou/bash-agent/internal/session"
-	"github.com/lloydzhou/bash-agent/internal/sse"
 	"github.com/lloydzhou/bash-agent/internal/tools"
+	"github.com/lloydzhou/bash-agent/internal/transport"
 )
 
 type runtime struct {
@@ -42,6 +42,7 @@ type runtime struct {
 	paths       session.Paths
 	conv        conversation.Store
 	http        httpclient.StreamClient
+	transport   transport.Transport
 	escTTY      *os.File
 	escState    *term.State
 	escStop     chan struct{}
@@ -70,8 +71,6 @@ func normalizeDisplayText(s string) string {
 	s = strings.ReplaceAll(s, "\r", "\n")
 	return s
 }
-
-
 
 var newHTTPClient = func() *http.Client {
 	return &http.Client{Timeout: 0}
@@ -143,6 +142,7 @@ func (rt *runtime) applyProviderDefaults() error {
 		return err
 	}
 	rt.apiURL = config.APIURL(rt.cfg)
+	rt.transport = transport.New(rt.cfg)
 	return nil
 }
 
@@ -309,7 +309,7 @@ func (rt *runtime) displayReplayEvent(state *displayState, evtType string, field
 			// Summary already prepended; use first line
 			trText = conversation.FirstLine(normalizeDisplayText(content)) + "\n"
 		} else {
-			trText = normalizeDisplayText(content) + "\n"
+			trText = truncateRunes(normalizeDisplayText(content), 200) + "\n"
 		}
 		// Insert newline when transitioning from thinking to text
 		if state.prevWasThinking && state.lastChar != "\n" {
@@ -330,10 +330,7 @@ func (rt *runtime) displayReplayEvent(state *displayState, evtType string, field
 		if state.lastChar != "\n" {
 			_, _ = rt.writeHuman(rt.nl())
 		}
-		content := fields["content"]
-		if len(content) > 80 {
-			content = content[:77] + "..."
-		}
+		content := truncateRunes(firstLine(fields["content"]), 77)
 		_, _ = fmt.Fprintf(rt.stdout, "\033[32m> %s\033[0m\n", content)
 		state.lastChar = "\n"
 		state.prevWasThinking = false
@@ -416,6 +413,8 @@ func (rt *runtime) replayLastTurns() {
 			}
 			hadTurns = true
 			rt.displayReplayEvent(&state, "USER_MESSAGE", map[string]string{"content": content})
+		case "todo_update":
+			flushAccumulated()
 		case "thinking":
 			// Flush text, accumulate thinking (match bash event_replay.awk)
 			if accText != "" {
@@ -488,6 +487,24 @@ func parseInputFields(input json.RawMessage) map[string]string {
 		}
 	}
 	return fields
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func (rt *runtime) agentLoop(userInput string) error {
@@ -749,12 +766,15 @@ func (rt *runtime) buildLLMRequest() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build_request: %w", err)
 	}
-	body, err := provider.BuildRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
+	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
 	if err != nil {
 		return nil, fmt.Errorf("build_request: %w", err)
 	}
+	body, err := rt.transport.ConvertBody(claudeBody)
+	if err != nil {
+		return nil, fmt.Errorf("body_convert: %w", err)
+	}
 	if rt.cfg.Verbose {
-		rt.verbose("POST %s (%dKB body)", rt.apiURL, len(body)/1024)
 		rt.verbose("Request body (%dKB): %.200s...", len(body)/1024, string(body))
 	}
 	return body, nil
@@ -787,16 +807,7 @@ func (rt *runtime) streamLLMEvents(respBody io.Reader, done <-chan struct{}) (<-
 			}
 			return nil
 		}
-		var err error
-		switch rt.cfg.Provider {
-		case "claude":
-			err = sse.ClaudeParser{}.Parse(respBody, emit)
-		case "openai":
-			err = sse.OpenAIParser{}.Parse(respBody, emit)
-		default:
-			err = fmt.Errorf("unknown provider: %s", rt.cfg.Provider)
-		}
-		if err != nil {
+		if err := rt.transport.ParseSSE(respBody, emit); err != nil {
 			errCh <- fmt.Errorf("sse_parse: %w", err)
 			return
 		}
@@ -1049,8 +1060,6 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-
-
 func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error) {
 	totalBytes, err := rt.conv.TotalBytes()
 	if err != nil {
@@ -1123,9 +1132,13 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 	}
 	lines = append(lines, msg)
 	// Disable thinking for summary calls (not needed, saves tokens)
-	body, err := provider.BuildRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens, 0)
+	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, nil, prompt.BuildCompactSummarySystemPrompt(), rt.cfg.SummaryMaxTokens, 0)
 	if err != nil {
 		return "", fmt.Errorf("build_summary_request: %w", err)
+	}
+	body, err := rt.transport.ConvertBody(claudeBody)
+	if err != nil {
+		return "", fmt.Errorf("body_convert: %w", err)
 	}
 	if rt.cfg.Verbose {
 		rt.verbose("Summary request body (%dKB): %.200s...", len(body)/1024, string(body))
@@ -1149,15 +1162,7 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 		}
 		return nil
 	}
-	switch rt.cfg.Provider {
-	case "claude":
-		err = (sse.ClaudeParser{}).Parse(respBody, parserEmit)
-	case "openai":
-		err = (sse.OpenAIParser{}).Parse(respBody, parserEmit)
-	default:
-		err = fmt.Errorf("sse_parse: unknown provider: %s", rt.cfg.Provider)
-	}
-	if err != nil {
+	if err := rt.transport.ParseSSE(respBody, parserEmit); err != nil {
 		return "", fmt.Errorf("sse_parse: %w", err)
 	}
 	if b.Len() == 0 {

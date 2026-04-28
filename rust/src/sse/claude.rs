@@ -1,4 +1,6 @@
-use crate::protocol::{ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, UsageEvent};
+use crate::protocol::{
+    ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, UsageEvent,
+};
 use crate::sse::toolcall::build_tool_call_event;
 use anyhow::{Result, anyhow};
 use serde_json::Value;
@@ -28,7 +30,10 @@ fn read_sse<R: Read>(reader: R, mut emit: impl FnMut(SseEvent) -> Result<()>) ->
             if !cur.event.is_empty() || !cur.data.is_empty() {
                 emit(cur)?;
             }
-            emit(SseEvent { event: "RETRY".to_string(), data: String::new() })?;
+            emit(SseEvent {
+                event: "RETRY".to_string(),
+                data: String::new(),
+            })?;
             cur = SseEvent::default();
             continue;
         }

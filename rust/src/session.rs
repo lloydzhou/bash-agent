@@ -60,7 +60,7 @@ pub fn continue_session(home: &Path, cwd: &Path) -> Result<String> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        let mt = entry.metadata()?.modified()?;
+        let mt = session_activity_mod_time(&entry.path())?;
         match &newest {
             Some((ts, _)) if *ts >= mt => {}
             _ => newest = Some((mt, name)),
@@ -70,5 +70,51 @@ pub fn continue_session(home: &Path, cwd: &Path) -> Result<String> {
         Ok(sid)
     } else {
         bail!("no sessions found")
+    }
+}
+
+fn session_activity_mod_time(session_dir: &Path) -> Result<std::time::SystemTime> {
+    let events = session_dir.join("events.jsonl");
+    if let Ok(meta) = fs::metadata(&events) {
+        return Ok(meta.modified()?);
+    }
+    Ok(fs::metadata(session_dir)?.modified()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    fn unique_path(prefix: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        path.push(format!("{prefix}-{stamp}-{}", std::process::id()));
+        path
+    }
+
+    #[test]
+    fn continue_session_uses_events_mtime() {
+        let home = unique_path("bash-agent-home");
+        let cwd = unique_path("bash-agent-cwd");
+        fs::create_dir_all(&cwd).unwrap();
+
+        let project_dir = home.join(".bash-agent/projects").join(project_key(&cwd));
+        let session_a = project_dir.join("session-a");
+        let session_b = project_dir.join("session-b");
+        fs::create_dir_all(&session_a).unwrap();
+        fs::create_dir_all(&session_b).unwrap();
+        fs::write(session_a.join("events.jsonl"), "{}\n").unwrap();
+        sleep(Duration::from_millis(20));
+        fs::write(session_b.join("events.jsonl"), "{}\n").unwrap();
+        sleep(Duration::from_millis(20));
+        fs::write(session_a.join("events.jsonl"), "{}\n{}\n").unwrap();
+
+        let got = continue_session(&home, &cwd).unwrap();
+        assert_eq!(got, "session-a");
     }
 }

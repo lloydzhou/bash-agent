@@ -1241,7 +1241,7 @@ SSE
 test_openai_sse() {
     info "Test 5: OpenAI SSE awk parser"
     local output
-    output=$(protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello from"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" OpenAI mock!"},"finish_reason":null}]}
@@ -1251,7 +1251,7 @@ data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":123456789
 data: [DONE]
 SSE
 )
-    if echo "$output" | grep -q "TEXT:Hello from" && echo "$output" | grep -q "TEXT:.*OpenAI" && echo "$output" | grep -q "STOP:stop"; then
+    if echo "$output" | grep -q "TEXT:Hello from" && echo "$output" | grep -q "TEXT:.*OpenAI" && echo "$output" | grep -q "STOP:end_turn"; then
         green "OpenAI SSE parser"; ((PASS++)) || true
     else
         red "OpenAI SSE parser"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1262,7 +1262,7 @@ SSE
 test_openai_usage_cache_tokens() {
     info "Test 6: OpenAI SSE usage cache tokens"
     local output
-    output=$(protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"Cache usage"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":12,"prompt_tokens_details":{"cached_tokens":5}}}
@@ -1270,7 +1270,7 @@ data: {"id":"chatcmpl-cache","object":"chat.completion.chunk","created":12345678
 data: [DONE]
 SSE
 )
-    if echo "$output" | grep -q $'USAGE:10\t12\t5' && echo "$output" | grep -q "STOP:stop"; then
+    if echo "$output" | grep -q $'USAGE:10\t12\t5' && echo "$output" | grep -q "STOP:end_turn"; then
         green "OpenAI usage cache tokens"; ((PASS++)) || true
     else
         red "OpenAI usage cache tokens"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1281,7 +1281,7 @@ SSE
 test_openai_sse_leading_newline() {
     info "Test 7: OpenAI SSE trims initial leading newlines"
     local output
-    output=$(protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
 data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":"\n\nHello"},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-leading-newline","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
@@ -1301,7 +1301,7 @@ SSE
 test_openai_sse_tool_calls() {
     info "Test 7b: OpenAI SSE tool_calls parser"
     local output
-    output=$(protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/openai_sse.awk" <<'SSE' | decode_awk_output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
 data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_openai_1","type":"function","function":{"name":"Write","arguments":"{\"path\":\"/tmp/test.txt\""}}]},"finish_reason":null}]}
 
 data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1234567890,"model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"content\":\"AbC\"}"}}]},"finish_reason":null}]}
@@ -1312,7 +1312,7 @@ data: [DONE]
 SSE
 )
     if echo "$output" | grep -Fq $'TOOL_CALL:Write\tcall_openai_1\t{"path":"/tmp/test.txt","content":"AbC"}\tpath\t/tmp/test.txt\tcontent\tAbC' && \
-       echo "$output" | grep -q '^STOP:tool_calls$'; then
+       echo "$output" | grep -q '^STOP:tool_use$'; then
         green "OpenAI SSE tool_calls parser"; ((PASS++)) || true
     else
         red "OpenAI SSE tool_calls parser"; echo "  Output: $output"; ((FAIL++)) || true
@@ -1331,27 +1331,29 @@ test_http_stream_error_body() {
     fi
 }
 
-# Test 8: Message format conversion
-test_convert_messages() {
-    info "Test 9: Message format conversion (Claude → OpenAI)"
-    local output
-    output=$(printf '%s' '[{"role":"user","content":"hello"}]' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_messages.awk")
-    if echo "$output" | grep -q '"role":"user"' && echo "$output" | grep -q '"content":"hello"'; then
-        green "Message conversion (simple)"; ((PASS++)) || true
+# Test 8: Transport body conversion (Claude request → OpenAI request)
+test_transport_body() {
+    info "Test 9: Transport body conversion (Claude → OpenAI request)"
+    local input output
+    input='{"model":"test","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"hello"}]}'
+    output=$(printf '%s' "$input" | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk")
+    if echo "$output" | grep -q '"role":"user"' && echo "$output" | grep -q '"content":"hello"' && echo "$output" | grep -q '"stream":true'; then
+        green "Transport body conversion (messages)"; ((PASS++)) || true
     else
-        red "Message conversion (simple)"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Transport body conversion (messages)"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
-# Test 9: Tool format conversion
-test_convert_tools() {
-    info "Test 9: Tool format conversion (Claude → OpenAI)"
-    local output
-    output=$(printf '%s' '[{"name":"read_file","description":"Read file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/convert_tools.awk")
+# Test 9: Transport body conversion with tools
+test_transport_body_tools() {
+    info "Test 9: Transport body conversion (tools)"
+    local input output
+    input='{"model":"test","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"hello"}],"tools":[{"name":"read_file","description":"Read file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]}'
+    output=$(printf '%s' "$input" | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk")
     if echo "$output" | grep -q '"type":"function"' && echo "$output" | grep -q '"parameters"'; then
-        green "Tool conversion"; ((PASS++)) || true
+        green "Transport body conversion (tools)"; ((PASS++)) || true
     else
-        red "Tool conversion"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Transport body conversion (tools)"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -1974,8 +1976,8 @@ test_openai_usage_cache_tokens
 test_openai_sse_leading_newline
 test_openai_sse_tool_calls
 test_http_stream_error_body
-test_convert_messages
-test_convert_tools
+test_transport_body
+test_transport_body_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_skill_injection
