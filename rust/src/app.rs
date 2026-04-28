@@ -466,7 +466,7 @@ impl Runtime {
                     if self.last_input_tokens > 0 {
                         self.update_stats_from_usage();
                     }
-                    let _ = self.compact_context_window("auto", false);
+                    let _ = self.compact_context_window();
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
@@ -754,12 +754,7 @@ impl Runtime {
         }
     }
 
-    fn compact_context_window(&mut self, trigger: &str, _force: bool) -> Result<bool> {
-        if trigger == "manual" && self.api_url.is_empty() {
-            apply_provider_defaults(&mut self.cfg)?;
-            self.api_url = api_url(&self.cfg);
-        }
-
+    fn compact_context_window(&mut self) -> Result<bool> {
         let stats = self.read_stats();
         let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
         let current_turn = stats_get_f64(&stats, "current_turn_count") as usize;
@@ -821,8 +816,8 @@ impl Runtime {
 
         if self.is_stream_json_mode() {
             let _ = self
-                .emit_stream(json!({"type":"context_update","kind":"compact","trigger":trigger}));
-        } else if trigger == "auto" {
+                .emit_stream(json!({"type":"context_update","kind":"compact","trigger":"auto"}));
+        } else {
             self.info("Context compacted automatically.");
         }
         Ok(true)

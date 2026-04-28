@@ -697,7 +697,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			if rt.lastInputTokens > 0 {
 				rt.updateStatsFromLastUsage()
 			}
-			_, _ = rt.compactContextWindow("auto", false)
+			_, _ = rt.compactContextWindow()
 			// tool_use/tool_calls → loop continues; anything else → break
 			if stop != "tool_use" && stop != "tool_calls" {
 				return nil
@@ -1084,13 +1084,7 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error) {
-	if trigger == "manual" && rt.apiURL == "" {
-		if err := rt.applyProviderDefaults(); err != nil {
-			return false, err
-		}
-	}
-
+func (rt *runtime) compactContextWindow() (bool, error) {
 	stats := rt.readStats()
 	contextTokens := int(statsFloat64(stats, "current_context_tokens"))
 	currentTurn := int(statsFloat64(stats, "current_turn_count"))
@@ -1098,15 +1092,15 @@ func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error
 
 	// DP decision
 	dpCfg := conversation.DPCompactConfig{
-		PBase:         rt.cfg.DPPBase,
-		PCache:        rt.cfg.DPPCache,
-		V:             rt.cfg.DPV,
-		Penalty:       rt.cfg.DPPenalty,
-		BaselineE:     rt.cfg.DPBaselineE,
-		EFixed:        rt.cfg.DPEFixed,
-		R:             rt.cfg.DPR,
-		Beta:          rt.cfg.DPBeta,
-		MinKeepRatio:  rt.cfg.DPMinKeepRatio,
+		PBase:        rt.cfg.DPPBase,
+		PCache:       rt.cfg.DPPCache,
+		V:            rt.cfg.DPV,
+		Penalty:      rt.cfg.DPPenalty,
+		BaselineE:    rt.cfg.DPBaselineE,
+		EFixed:       rt.cfg.DPEFixed,
+		R:            rt.cfg.DPR,
+		Beta:         rt.cfg.DPBeta,
+		MinKeepRatio: rt.cfg.DPMinKeepRatio,
 	}
 
 	keepLines, err := rt.conv.CompactDPDecision(dpCfg, prevCompactions, currentTurn)
@@ -1163,8 +1157,8 @@ func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error
 		rt.writeStats(stats)
 	}
 	if rt.isStreamJSONMode() {
-		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": trigger})
-	} else if trigger == "auto" {
+		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": "auto"})
+	} else {
 		rt.info("Context compacted automatically.")
 	}
 	return true, nil
