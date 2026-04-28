@@ -1927,8 +1927,8 @@ test_stats_awk() {
     local result
     result=$(protocol_awk -v action=dump -f "$AWK_DIR/stats.awk" "$tmpdir/test.json" | sort)
     check "stats.awk update/dump" "$result" \
-        'agent_request_count\t1' 'total_input_tokens\t10' 'total_output_tokens\t20' \
-        'total_cache_read_tokens\t3' 'total_cache_creation_tokens\t4' 'current_context_tokens\t30'
+        $'agent_request_count\t1' $'total_input_tokens\t10' $'total_output_tokens\t20' \
+        $'total_cache_read_tokens\t3' $'total_cache_creation_tokens\t4' $'current_context_tokens\t30'
     rm -rf "$tmpdir"
 }
 
