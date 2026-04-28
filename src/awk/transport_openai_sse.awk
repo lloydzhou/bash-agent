@@ -13,7 +13,8 @@ BEGIN {
     saw_text = 0
     input_tokens = 0
     output_tokens = 0
-    cache_input_tokens = 0
+    cache_read_input_tokens = 0
+    cache_creation_input_tokens = 0
 
     # Tool call accumulation
     tc_max = -1
@@ -48,7 +49,7 @@ BEGIN {
         else if (sr == "tool_calls") sr = "tool_use"
         else if (sr == "length") sr = "max_tokens"
 
-        printf "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"%s\"},\"usage\":{\"output_tokens\":%d,\"input_tokens\":%d,\"cache_read_input_tokens\":%d}}\n\n", sr, output_tokens + 0, input_tokens + 0, cache_input_tokens + 0
+        printf "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"%s\"},\"usage\":{\"output_tokens\":%d,\"input_tokens\":%d,\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":0}}\n\n", sr, output_tokens + 0, input_tokens + 0, cache_read_input_tokens + 0
         printf "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
         fflush()
     }
@@ -117,7 +118,7 @@ BEGIN {
     if (ct != "") output_tokens = ct
     crt = extract_num(json, "cached_tokens", 1)
     if (crt == "") crt = extract_num(json, "cache_read_input_tokens", 1)
-    if (crt != "") cache_input_tokens = crt
+    if (crt != "") cache_read_input_tokens = crt
 
     next
 }
@@ -131,7 +132,8 @@ function _sse_reset() {
     saw_text = 0
     input_tokens = 0
     output_tokens = 0
-    cache_input_tokens = 0
+    cache_read_input_tokens = 0
+    cache_creation_input_tokens = 0
     tc_max = -1
     split("", tc_name)
     split("", tc_id)

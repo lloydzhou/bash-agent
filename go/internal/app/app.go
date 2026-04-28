@@ -48,6 +48,11 @@ type runtime struct {
 	escStop     chan struct{}
 	escDone     chan struct{}
 	interrupted atomic.Bool
+	lastContextTokens     int
+	lastInputTokens       int
+	lastOutputTokens      int
+	lastCacheReadTokens   int
+	lastCacheCreationTokens int
 }
 
 var errInterrupted = errors.New("interrupted")
@@ -175,7 +180,11 @@ func (rt *runtime) initState() error {
 	}
 	if newSession {
 		_ = rt.appendEvent(map[string]any{"type": "session_start", "session_id": sessionID})
+		// Write initial stats
+		statsData := `{"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}`
+		_ = os.WriteFile(rt.paths.Stats, []byte(statsData+"\n"), 0o644)
 	}
+	rt.updateTermTitle()
 	rt.conv = conversation.Store{Path: rt.paths.Conversation}
 	return nil
 }
@@ -508,7 +517,10 @@ func truncateRunes(s string, limit int) string {
 }
 
 func (rt *runtime) agentLoop(userInput string) error {
-	return rt.agentLoopStream(userInput)
+	err := rt.agentLoopStream(userInput)
+	// Match bash: update terminal title with current stats after each turn
+	rt.updateTermTitle()
+	return err
 }
 
 type displayState struct {
@@ -680,7 +692,11 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				}
 				// Note: granular tool_result events already written by displayEvent inline
 			}
-			_, _ = rt.compactContextWindow("auto", false)
+			// Update stats with captured usage from this turn (matches bash agent_loop_stream)
+			if rt.lastInputTokens > 0 {
+				rt.updateStatsFromLastUsage()
+			}
+			_, _ = rt.compactContextWindow("auto", false, rt.lastContextTokens)
 			// tool_use/tool_calls → loop continues; anything else → break
 			if stop != "tool_use" && stop != "tool_calls" {
 				return nil
@@ -899,15 +915,21 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 		}
 	case protocol.UsageEvent:
 		usageEvt := map[string]any{
-			"type":               "usage",
-			"input_tokens":       e.InputTokens,
-			"output_tokens":      e.OutputTokens,
-			"cache_input_tokens": e.CacheInputTokens,
+			"type":                     "usage",
+			"input_tokens":             e.InputTokens,
+			"output_tokens":            e.OutputTokens,
+			"cache_read_input_tokens":  e.CacheReadInputTokens,
+			"cache_creation_input_tokens": e.CacheCreationInputTokens,
 		}
 		if err := rt.emitAndAppendEvent(usageEvt); err != nil {
 			return err
 		}
-		// No human display for usage events
+		// Track context tokens and usage for compact and stats
+		rt.lastContextTokens = e.InputTokens + e.OutputTokens
+		rt.lastInputTokens = e.InputTokens
+		rt.lastOutputTokens = e.OutputTokens
+		rt.lastCacheReadTokens = e.CacheReadInputTokens
+		rt.lastCacheCreationTokens = e.CacheCreationInputTokens
 	case protocol.StopEvent:
 		if err := rt.emitAndAppendEvent(map[string]any{"type": "stop", "reason": e.Reason}); err != nil {
 			return err
@@ -1060,15 +1082,20 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-func (rt *runtime) compactContextWindow(trigger string, force bool) (bool, error) {
+func (rt *runtime) compactContextWindow(trigger string, force bool, contextTokens int) (bool, error) {
+	if !force {
+		if contextTokens <= 0 {
+			return false, nil
+		}
+		if contextTokens <= rt.cfg.MaxContextTokens {
+			return false, nil
+		}
+	}
 	totalBytes, err := rt.conv.TotalBytes()
 	if err != nil {
 		return false, err
 	}
-	if !force && totalBytes <= rt.cfg.MaxContextBytes {
-		return false, nil
-	}
-	targetKeepBytes := rt.cfg.MaxContextBytes * rt.cfg.MaxContextKeepPct / 100
+	targetKeepBytes := totalBytes * rt.cfg.MaxContextKeepPct / 100
 	if targetKeepBytes < 1 {
 		targetKeepBytes = 1
 	}
@@ -1157,6 +1184,25 @@ func (rt *runtime) runSummaryCall(currentSummary, droppedMessages string) (strin
 		switch e := evt.(type) {
 		case protocol.TextEvent:
 			b.WriteString(e.Content)
+		case protocol.UsageEvent:
+			// Record compact usage to events and stats (matches bash run_summary_call)
+			compactEvt := map[string]any{
+				"type":                     "usage",
+				"input_tokens":             e.InputTokens,
+				"output_tokens":            e.OutputTokens,
+				"cache_read_input_tokens":  e.CacheReadInputTokens,
+				"cache_creation_input_tokens": e.CacheCreationInputTokens,
+				"kind":                     "compact",
+			}
+			_ = rt.appendEvent(compactEvt)
+			// Update stats for compact call
+			stats := rt.readStats()
+			stats["compact_request_count"] = statsFloat64(stats, "compact_request_count") + 1
+			stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(e.InputTokens)
+			stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(e.OutputTokens)
+			stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(e.CacheReadInputTokens)
+			stats["total_cache_creation_tokens"] = statsFloat64(stats, "total_cache_creation_tokens") + float64(e.CacheCreationInputTokens)
+			rt.writeStats(stats)
 		case protocol.ErrorEvent:
 			return fmt.Errorf("%s", e.Message)
 		}
@@ -1202,6 +1248,74 @@ func (rt *runtime) appendEvent(v any) error {
 	defer f.Close()
 	_, err = f.Write(append(line, '\n'))
 	return err
+}
+
+// updateStatsFromLastUsage updates stats.json with last turn's usage (matches bash).
+// Uses the last captured usage data to increment counters and update context_tokens.
+func (rt *runtime) updateStatsFromLastUsage() {
+	stats := rt.readStats()
+	stats["agent_request_count"] = statsFloat64(stats, "agent_request_count") + 1
+	stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(rt.lastInputTokens)
+	stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(rt.lastOutputTokens)
+	stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(rt.lastCacheReadTokens)
+	stats["total_cache_creation_tokens"] = statsFloat64(stats, "total_cache_creation_tokens") + float64(rt.lastCacheCreationTokens)
+	stats["current_context_tokens"] = float64(rt.lastInputTokens + rt.lastOutputTokens)
+	stats["last_updated"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	rt.writeStats(stats)
+}
+
+// readStats reads and parses stats.json, returning default zero values if missing.
+func (rt *runtime) readStats() map[string]any {
+	stats := map[string]any{
+		"agent_request_count":        float64(0),
+		"compact_request_count":      float64(0),
+		"total_input_tokens":         float64(0),
+		"total_output_tokens":        float64(0),
+		"total_cache_read_tokens":    float64(0),
+		"total_cache_creation_tokens": float64(0),
+		"current_context_tokens":     float64(0),
+		"last_updated":               "",
+	}
+	data, err := os.ReadFile(rt.paths.Stats)
+	if err != nil {
+		return stats
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err == nil {
+		for k, v := range parsed {
+			stats[k] = v
+		}
+	}
+	return stats
+}
+
+// writeStats serializes and writes stats.json.
+func (rt *runtime) writeStats(stats map[string]any) {
+	data, err := json.Marshal(stats)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(rt.paths.Stats, append(data, '\n'), 0o644)
+}
+
+// statsFloat64 safely extracts a float64 from a stats map.
+func statsFloat64(m map[string]any, key string) float64 {
+	if v, ok := m[key]; ok {
+		if f, ok := v.(float64); ok {
+			return f
+		}
+	}
+	return 0
+}
+
+// updateTermTitle updates the terminal title with current stats (matches bash stats_show_osc).
+func (rt *runtime) updateTermTitle() {
+	stats := rt.readStats()
+	ar := int(statsFloat64(stats, "agent_request_count"))
+	ai := int(statsFloat64(stats, "total_input_tokens"))
+	ao := int(statsFloat64(stats, "total_output_tokens"))
+	ctx := int(statsFloat64(stats, "current_context_tokens"))
+	_, _ = fmt.Fprintf(rt.stderr, "\033]0;agent:%d | in:%d out:%d | ctx:%d\007", ar, ai, ao, ctx)
 }
 
 func (rt *runtime) buildAssistantEvent(text string, calls []protocol.ToolCallEvent) map[string]any {

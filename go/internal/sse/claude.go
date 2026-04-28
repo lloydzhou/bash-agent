@@ -50,14 +50,15 @@ type ClaudeParser struct{}
 
 func (p ClaudeParser) Parse(r io.Reader, emit func(protocol.Event) error) error {
 	var (
-		blockType        string
-		toolName         string
-		toolID           string
-		partialJSON      string
-		stopReason       string
-		inputTokens      int
-		outputTokens     int
-		cacheInputTokens int
+		blockType              string
+		toolName               string
+		toolID                 string
+		partialJSON            string
+		stopReason             string
+		inputTokens            int
+		outputTokens           int
+		cacheReadInputTokens   int
+		cacheCreationInputTokens int
 	)
 	return ReadSSE(r, func(evt SSEEvent) error {
 		if evt.Data == "" {
@@ -166,9 +167,10 @@ func (p ClaudeParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 				outputTokens = payload.Usage.OutputTokens
 			}
 			if payload.Usage.CacheReadInputTokens != 0 {
-				cacheInputTokens = payload.Usage.CacheReadInputTokens
-			} else if payload.Usage.CacheCreationInputTokens != 0 {
-				cacheInputTokens = payload.Usage.CacheCreationInputTokens
+				cacheReadInputTokens = payload.Usage.CacheReadInputTokens
+			}
+			if payload.Usage.CacheCreationInputTokens != 0 {
+				cacheCreationInputTokens = payload.Usage.CacheCreationInputTokens
 			}
 		case "message_start":
 			var payload struct {
@@ -187,15 +189,17 @@ func (p ClaudeParser) Parse(r io.Reader, emit func(protocol.Event) error) error 
 				inputTokens = payload.Message.Usage.InputTokens
 			}
 			if payload.Message.Usage.CacheReadInputTokens != 0 {
-				cacheInputTokens = payload.Message.Usage.CacheReadInputTokens
-			} else if payload.Message.Usage.CacheCreationInputTokens != 0 {
-				cacheInputTokens = payload.Message.Usage.CacheCreationInputTokens
+				cacheReadInputTokens = payload.Message.Usage.CacheReadInputTokens
+			}
+			if payload.Message.Usage.CacheCreationInputTokens != 0 {
+				cacheCreationInputTokens = payload.Message.Usage.CacheCreationInputTokens
 			}
 		case "message_stop":
 			if err := emit(protocol.UsageEvent{
-				InputTokens:      inputTokens,
-				OutputTokens:     outputTokens,
-				CacheInputTokens: cacheInputTokens,
+				InputTokens:             inputTokens,
+				OutputTokens:            outputTokens,
+				CacheReadInputTokens:    cacheReadInputTokens,
+				CacheCreationInputTokens: cacheCreationInputTokens,
 			}); err != nil {
 				return err
 			}

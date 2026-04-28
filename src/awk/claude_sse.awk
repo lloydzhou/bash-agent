@@ -12,7 +12,8 @@ BEGIN {
     stop_reason = ""
     input_tokens = 0
     output_tokens = 0
-    cache_input_tokens = 0
+    cache_read_input_tokens = 0
+    cache_creation_input_tokens = 0
     pending_stop_reason = ""
 }
 
@@ -31,7 +32,8 @@ BEGIN {
     stop_reason = ""
     input_tokens = 0
     output_tokens = 0
-    cache_input_tokens = 0
+    cache_read_input_tokens = 0
+    cache_creation_input_tokens = 0
     pending_stop_reason = ""
     emit1("RETRY"); emit_flush()
     next
@@ -91,20 +93,23 @@ BEGIN {
         ot = extract_num(json, "output_tokens", 1)
         if (ot != "") output_tokens = ot
         crt = extract_num(json, "cache_read_input_tokens", 1)
-        if (crt == "") crt = extract_num(json, "cache_creation_input_tokens", 1)
-        if (crt != "") cache_input_tokens = crt
+        if (crt != "") cache_read_input_tokens = crt
+        cct = extract_num(json, "cache_creation_input_tokens", 1)
+        if (cct != "") cache_creation_input_tokens = cct
     }
     else if (event == "message_start") {
         it = extract_num(json, "input_tokens", 1)
         if (it != "") input_tokens = it
         crt = extract_num(json, "cache_read_input_tokens", 1)
-        if (crt == "") crt = extract_num(json, "cache_creation_input_tokens", 1)
-        if (crt != "") cache_input_tokens = crt
+        if (crt != "") cache_read_input_tokens = crt
+        cct = extract_num(json, "cache_creation_input_tokens", 1)
+        if (cct != "") cache_creation_input_tokens = cct
     }
     else if (event == "message_stop") {
         pending_input_tokens = input_tokens
         pending_output_tokens = output_tokens
-        pending_cache_tokens = cache_input_tokens
+        pending_cache_read_tokens = cache_read_input_tokens
+        pending_cache_creation_tokens = cache_creation_input_tokens
         pending_stop_reason = stop_reason
     }
     else if (event == "error") {
@@ -117,7 +122,7 @@ BEGIN {
 
 END {
     if (pending_stop_reason != "") {
-        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_tokens + 0); emit_flush()
+        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_read_tokens + 0); emit(pending_cache_creation_tokens + 0); emit_flush()
         emit1("STOP"); emit(pending_stop_reason); emit_flush()
     }
 }

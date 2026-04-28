@@ -77,6 +77,11 @@ struct Runtime {
     interrupted: Arc<AtomicBool>,
     esc_stop: Option<Arc<AtomicBool>>,
     esc_thread: Option<JoinHandle<()>>,
+    last_context_tokens: usize,
+    last_input_tokens: usize,
+    last_output_tokens: usize,
+    last_cache_read_tokens: usize,
+    last_cache_creation_tokens: usize,
 }
 
 struct DisplayState {
@@ -178,6 +183,11 @@ impl Runtime {
         ] {
             touch(f)?;
         }
+        if new_session {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&paths.stats)?;
+            write!(f, r#"{{"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#, '\n')?;
+        }
 
         let conv = Store {
             path: paths.conversation.clone(),
@@ -202,11 +212,17 @@ impl Runtime {
             interrupted,
             esc_stop: None,
             esc_thread: None,
+            last_context_tokens: 0,
+            last_input_tokens: 0,
+            last_output_tokens: 0,
+            last_cache_read_tokens: 0,
+            last_cache_creation_tokens: 0,
         };
 
         if new_session {
             let _ = rt.append_event(json!({"type":"session_start","session_id":sid}));
         }
+        rt.update_term_title();
 
         Ok(rt)
     }
@@ -263,7 +279,10 @@ impl Runtime {
     }
 
     fn agent_loop(&mut self, user_input: String) -> Result<()> {
-        self.agent_loop_stream(user_input)
+        let result = self.agent_loop_stream(user_input);
+        // Match bash: update terminal title with current stats after each turn
+        self.update_term_title();
+        result
     }
 
     fn agent_loop_stream(&mut self, user_input: String) -> Result<()> {
@@ -441,7 +460,11 @@ impl Runtime {
                         self.conv.add_tool_results(&tool_results)?;
                         // Note: granular tool_result events already written by display_event via emit_and_append_event
                     }
-                    let _ = self.compact_context_window("auto", false);
+                    // Update stats with captured usage from this turn (matches bash)
+                    if self.last_input_tokens > 0 {
+                        self.update_stats_from_usage();
+                    }
+                    let _ = self.compact_context_window("auto", false, self.last_context_tokens);
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
@@ -480,7 +503,7 @@ impl Runtime {
         Ok(())
     }
 
-    fn display_event(&self, ds: &mut DisplayState, evt: DisplayEvent) -> Result<()> {
+    fn display_event(&mut self, ds: &mut DisplayState, evt: DisplayEvent) -> Result<()> {
         match evt {
             DisplayEvent::Thinking(content) => {
                 // Always write to events.jsonl, and to stdout if stream-json mode
@@ -539,16 +562,23 @@ impl Runtime {
             DisplayEvent::Usage(UsageEvent {
                 input_tokens,
                 output_tokens,
-                cache_input_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
             }) => {
                 // Always write to events.jsonl, and to stdout if stream-json mode
                 self.emit_and_append_event(json!({
                     "type":"usage",
                     "input_tokens":input_tokens,
                     "output_tokens":output_tokens,
-                    "cache_input_tokens":cache_input_tokens
+                    "cache_read_input_tokens":cache_read_input_tokens,
+                    "cache_creation_input_tokens":cache_creation_input_tokens
                 }))?;
                 // No human display for usage events
+                self.last_context_tokens = (input_tokens + output_tokens) as usize;
+                self.last_input_tokens = input_tokens as usize;
+                self.last_output_tokens = output_tokens as usize;
+                self.last_cache_read_tokens = cache_read_input_tokens as usize;
+                self.last_cache_creation_tokens = cache_creation_input_tokens as usize;
             }
             DisplayEvent::Stop(reason) => {
                 // Always write to events.jsonl, and to stdout if stream-json mode
@@ -721,13 +751,18 @@ impl Runtime {
         }
     }
 
-    fn compact_context_window(&mut self, trigger: &str, force: bool) -> Result<bool> {
+    fn compact_context_window(&mut self, trigger: &str, force: bool, context_tokens: usize) -> Result<bool> {
         let total_bytes = self.conv.total_bytes()?;
-        if !force && total_bytes <= self.cfg.max_context_bytes {
-            return Ok(false);
+        if !force {
+            if context_tokens == 0 {
+                return Ok(false);
+            }
+            if context_tokens <= self.cfg.max_context_tokens {
+                return Ok(false);
+            }
         }
         let mut target_keep =
-            self.cfg.max_context_bytes * (self.cfg.max_context_keep_pct as usize) / 100;
+            total_bytes * (self.cfg.max_context_keep_pct as usize) / 100;
         if target_keep < 1 {
             target_keep = 1;
         }
@@ -796,6 +831,36 @@ impl Runtime {
         let mut parse_emit = |evt: Event| -> Result<()> {
             match evt {
                 Event::Text(TextEvent { content }) => out.push_str(&content),
+                Event::Usage(UsageEvent {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                }) => {
+                    // Record compact usage to events and stats (matches bash run_summary_call)
+                    let compact_evt = json!({
+                        "type":"usage",
+                        "input_tokens":input_tokens,
+                        "output_tokens":output_tokens,
+                        "cache_read_input_tokens":cache_read_input_tokens,
+                        "cache_creation_input_tokens":cache_creation_input_tokens,
+                        "kind":"compact"
+                    });
+                    let _ = self.append_event(compact_evt);
+                    // Update stats for compact call
+                    let mut stats = self.read_stats();
+                    *stats.entry("compact_request_count".to_string()).or_insert(Value::Number(0.into())) =
+                        Value::Number((stats_get_f64(&stats, "compact_request_count") as usize + 1).into());
+                    *stats.entry("total_input_tokens".to_string()).or_insert(Value::Number(0.into())) =
+                        Value::Number((stats_get_f64(&stats, "total_input_tokens") as usize + input_tokens as usize).into());
+                    *stats.entry("total_output_tokens".to_string()).or_insert(Value::Number(0.into())) =
+                        Value::Number((stats_get_f64(&stats, "total_output_tokens") as usize + output_tokens as usize).into());
+                    *stats.entry("total_cache_read_tokens".to_string()).or_insert(Value::Number(0.into())) =
+                        Value::Number((stats_get_f64(&stats, "total_cache_read_tokens") as usize + cache_read_input_tokens as usize).into());
+                    *stats.entry("total_cache_creation_tokens".to_string()).or_insert(Value::Number(0.into())) =
+                        Value::Number((stats_get_f64(&stats, "total_cache_creation_tokens") as usize + cache_creation_input_tokens as usize).into());
+                    self.write_stats(&stats);
+                }
                 Event::Error(ErrorEvent { message }) => return Err(anyhow!(message)),
                 _ => {}
             }
@@ -845,6 +910,64 @@ impl Runtime {
             .open(&self.paths.events)?;
         writeln!(f, "{line}")?;
         Ok(())
+    }
+
+    /// update_stats_from_usage updates stats.json with last turn's usage (matches bash stats_inc+stats_set).
+    fn update_stats_from_usage(&self) {
+        let mut stats = self.read_stats();
+        *stats.entry("agent_request_count".to_string()).or_insert(Value::Number(0.into())) =
+            Value::Number((stats_get_f64(&stats, "agent_request_count") as usize + 1).into());
+        *stats.entry("total_input_tokens".to_string()).or_insert(Value::Number(0.into())) =
+            Value::Number((stats_get_f64(&stats, "total_input_tokens") as usize + self.last_input_tokens).into());
+        *stats.entry("total_output_tokens".to_string()).or_insert(Value::Number(0.into())) =
+            Value::Number((stats_get_f64(&stats, "total_output_tokens") as usize + self.last_output_tokens).into());
+        *stats.entry("total_cache_read_tokens".to_string()).or_insert(Value::Number(0.into())) =
+            Value::Number((stats_get_f64(&stats, "total_cache_read_tokens") as usize + self.last_cache_read_tokens).into());
+        *stats.entry("total_cache_creation_tokens".to_string()).or_insert(Value::Number(0.into())) =
+            Value::Number((stats_get_f64(&stats, "total_cache_creation_tokens") as usize + self.last_cache_creation_tokens).into());
+        *stats.entry("current_context_tokens".to_string()).or_insert(Value::Number(0.into())) =
+            Value::Number((self.last_input_tokens + self.last_output_tokens).into());
+        stats.insert("last_updated".to_string(), Value::String(chrono_now_rfc3339()));
+        self.write_stats(&stats);
+    }
+
+    /// read_stats reads and parses stats.json, returning default zero values if missing.
+    fn read_stats(&self) -> serde_json::Map<String, Value> {
+        let mut stats = serde_json::Map::new();
+        stats.insert("agent_request_count".to_string(), Value::Number(0.into()));
+        stats.insert("compact_request_count".to_string(), Value::Number(0.into()));
+        stats.insert("total_input_tokens".to_string(), Value::Number(0.into()));
+        stats.insert("total_output_tokens".to_string(), Value::Number(0.into()));
+        stats.insert("total_cache_read_tokens".to_string(), Value::Number(0.into()));
+        stats.insert("total_cache_creation_tokens".to_string(), Value::Number(0.into()));
+        stats.insert("current_context_tokens".to_string(), Value::Number(0.into()));
+        stats.insert("last_updated".to_string(), Value::String(String::new()));
+        if let Ok(data) = fs::read_to_string(&self.paths.stats) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, Value>>(&data) {
+                for (k, v) in parsed {
+                    stats.insert(k, v);
+                }
+            }
+        }
+        stats
+    }
+
+    /// write_stats serializes and writes stats.json.
+    fn write_stats(&self, stats: &serde_json::Map<String, Value>) {
+        if let Ok(data) = serde_json::to_string(stats) {
+            let _ = fs::write(&self.paths.stats, data + "\n");
+        }
+    }
+
+    /// update_term_title updates the terminal title with current stats (matches bash stats_show_osc).
+    fn update_term_title(&self) {
+        let stats = self.read_stats();
+        let ar = stats_get_f64(&stats, "agent_request_count") as usize;
+        let ai = stats_get_f64(&stats, "total_input_tokens") as usize;
+        let ao = stats_get_f64(&stats, "total_output_tokens") as usize;
+        let ctx = stats_get_f64(&stats, "current_context_tokens") as usize;
+        eprint!("\x1b]0;agent:{} | in:{} out:{} | ctx:{}\x07", ar, ai, ao, ctx);
+        let _ = io::stderr().flush();
     }
 
     fn is_stream_json_mode(&self) -> bool {
@@ -1256,6 +1379,20 @@ fn chrono_like_now() -> String {
         .map(|d| d.subsec_nanos() as u16)
         .unwrap_or(0);
     format!("{}-{:04x}", base, rand_suffix)
+}
+
+/// stats_get_f64 safely extracts a f64 from a JSON object by key.
+fn stats_get_f64(m: &serde_json::Map<String, Value>, key: &str) -> f64 {
+    m.get(key)
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+}
+
+/// chrono_now_rfc3339 returns current UTC time in RFC 3339 format.
+fn chrono_now_rfc3339() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    let fmt = time::format_description::well_known::Rfc3339;
+    now.format(&fmt).unwrap_or_else(|_| String::new())
 }
 
 fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {

@@ -31,8 +31,8 @@ type Config struct {
 	BaseURL            string
 	Prompt             string
 	MaxTurns           int
-	MaxContextBytes    int
-	MaxContextKeepPct  int
+	MaxContextTokens  int
+	MaxContextKeepPct int
 	Skills             []string
 	ThinkingBudget     int
 
@@ -53,8 +53,8 @@ func Default() Config {
 		FileWriteMaxBytes:  1048576,
 		OutputFormat:       OutputHuman,
 		MaxTurns:           40,
-		MaxContextBytes:    200000,
-		MaxContextKeepPct:  25,
+		MaxContextTokens:  200000,
+		MaxContextKeepPct: 25,
 		ThinkingBudget:     2048,
 	}
 }
@@ -125,9 +125,9 @@ func ParseArgs(args []string) (Config, error) {
 			}
 			n, err := ParseSizeBytes(val)
 			if err != nil {
-				return cfg, fmt.Errorf("invalid --max-context value: %s", val)
+				return cfg, fmt.Errorf("Invalid --max-context: %s", val)
 			}
-			cfg.MaxContextBytes = n
+			cfg.MaxContextTokens = n
 			i = next
 		case "--api-key":
 			val, next, err := requireValue(args, i)

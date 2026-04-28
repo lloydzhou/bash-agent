@@ -11,6 +11,7 @@ pub struct Paths {
     pub summary: PathBuf,
     pub todo: PathBuf,
     pub plan: PathBuf,
+    pub stats: PathBuf,
 }
 
 pub fn project_key(cwd: &Path) -> String {
@@ -43,6 +44,7 @@ pub fn paths_for(home: &Path, cwd: &Path, session_id: &str) -> Paths {
         summary: session_dir.join("summary.txt"),
         todo: session_dir.join("todo.md"),
         plan: session_dir.join("plan.md"),
+        stats: session_dir.join("stats.json"),
     }
 }
 

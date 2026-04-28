@@ -19,8 +19,8 @@ API_KEY=""
 BASE_URL=""
 USER_INPUT=""
 MAX_TURNS=40
-MAX_CONTEXT_BYTES=200000
 MAX_CONTEXT_KEEP_PCT=25
+MAX_CONTEXT_TOKENS=200000
 declare -a SKILL_NAMES=()
 : "${THINKING_BUDGET:=2048}"
 
@@ -31,6 +31,7 @@ SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 TODO_FILE=""
 PLAN_FILE=""
+STATS_FILE=""
 LOG_EVENTS=true
 
 # --- Internal Runtime State ---
@@ -355,7 +356,7 @@ msg_to_stream_event() {
                 "$(json_escape "${REPLY_MESSAGE[2]}")" \
                 "$(json_escape "${REPLY_MESSAGE[3]}")"
             ;;
-        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" ;;
+        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
         TODO_UPDATE) build_todo_event_json "${REPLY_MESSAGE[1]}" ;;
         ERROR)       printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
@@ -712,6 +713,7 @@ conv_init() {
     CONTEXT_SUMMARY_FILE="${session_dir}/summary.txt"
     TODO_FILE="${session_dir}/todo.md"
     PLAN_FILE="${session_dir}/plan.md"
+    STATS_FILE="${session_dir}/stats.json"
     local new_session=false
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
     touch "$CONV_FILE"
@@ -722,6 +724,7 @@ conv_init() {
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
+    stats_show_osc
 }
 
 conv_add_user() {
@@ -815,18 +818,60 @@ compact_keep_lines() {
     ' "$CONV_FILE"
 }
 
+# --- Stats Management ---
+stats_inc() {
+    # Increment stats fields. Usage: stats_inc field=value [field=value ...]
+    {
+        for entry in "$@"; do
+            local key="${entry%%=*}" val="${entry#*=}"
+            printf '%s\t+%s\n' "$key" "$val"
+        done
+    } | awk_run -v action=update -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+}
+
+stats_set() {
+    # Set absolute stats fields. Usage: stats_set field=value [field=value ...]
+    {
+        for entry in "$@"; do
+            local key="${entry%%=*}" val="${entry#*=}"
+            printf '%s\t%s\n' "$key" "$val"
+        done
+    } | awk_run -v action=update -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+}
+
+stats_get() {
+    # Get a single stats field value. Prints to stdout.
+    awk_run -v action=dump -f "$AWK_DIR/stats.awk" "$STATS_FILE" 2>/dev/null | grep "^$1\t" | cut -f2 || echo "0"
+}
+
+stats_show_osc() {
+    # Update terminal title with key stats via OSC escape sequence.
+    local _ar _ai _ao _acr _ctx
+    _ar=$(stats_get "agent_request_count")
+    _ai=$(stats_get "total_input_tokens")
+    _ao=$(stats_get "total_output_tokens")
+    _ctx=$(stats_get "current_context_tokens")
+    printf '\033]0;agent:%s | in:%s out:%s | ctx:%s\007' "$_ar" "$_ai" "$_ao" "$_ctx"
+}
+
 compact_context_window() {
-    local trigger="$1" force="${2:-false}" total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
-    local threshold=$MAX_CONTEXT_BYTES
-    local target_keep_bytes=$(( MAX_CONTEXT_BYTES * MAX_CONTEXT_KEEP_PCT / 100 ))
+    local trigger="$1" force="${2:-false}" context_tokens="${3:-}" total_bytes total_lines keep_lines drop tmp_dropped dropped_messages current_summary prompt summary_request summary_response
+
+    # Token-based threshold: if no context_tokens (new session), skip auto compact.
+    # For forced compact, always proceed.
+    if ! $force; then
+        if [[ -z "$context_tokens" || "$context_tokens" -le 0 ]]; then
+            return 1
+        fi
+        if (( context_tokens <= MAX_CONTEXT_TOKENS )); then
+            return 1
+        fi
+    fi
 
     total_bytes=$(wc -c < "$CONV_FILE" 2>/dev/null || echo 0)
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+    local target_keep_bytes=$(( total_bytes * MAX_CONTEXT_KEEP_PCT / 100 ))
     (( target_keep_bytes < 1 )) && target_keep_bytes=1
-
-    if ! $force && (( total_bytes <= threshold )); then
-        return 1
-    fi
 
     keep_lines=$(compact_keep_lines "$target_keep_bytes")
     [[ -n "$keep_lines" ]] || keep_lines=0
@@ -1075,6 +1120,16 @@ run_summary_call() {
     while read_message; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
+            USAGE)
+                local _cu_in="${REPLY_MESSAGE[1]:-0}" _cu_out="${REPLY_MESSAGE[2]:-0}" _cu_cr="${REPLY_MESSAGE[3]:-0}" _cu_cc="${REPLY_MESSAGE[4]:-0}"
+                # Record compact usage to events and stats
+                if [[ -n "$_cu_in" ]]; then
+                    local _cu_event
+                    _cu_event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"compact"}' "$_cu_in" "$_cu_out" "$_cu_cr" "$_cu_cc")
+                    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_cu_event"
+                    stats_inc "compact_request_count=1" "total_input_tokens=${_cu_in}" "total_output_tokens=${_cu_out}" "total_cache_read_tokens=${_cu_cr}" "total_cache_creation_tokens=${_cu_cc}"
+                fi
+                ;;
             ERROR) die "${REPLY_MESSAGE[1]}" ;;
         esac
     done < <(printf '%s' "$body" | body_convert | _stream_curl | sse_convert | sse_parse)
@@ -1095,6 +1150,7 @@ agent_loop_stream() {
 
         local text="" thinking="" tool_calls="" stop="" loop_error=""
         local tool_conv_results=""  # collected: id<TAB>json_escaped_result per line
+        local _usage_in="" _usage_out="" _usage_cr="" _usage_cc=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages)" >&2
         while read_message; do
             if interrupt_requested; then
@@ -1158,6 +1214,13 @@ agent_loop_stream() {
                     ;;
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
+                USAGE)
+                    # Capture usage data for stats and compact decisions
+                    _usage_in="${REPLY_MESSAGE[1]:-0}"
+                    _usage_out="${REPLY_MESSAGE[2]:-0}"
+                    _usage_cr="${REPLY_MESSAGE[3]:-0}"
+                    _usage_cc="${REPLY_MESSAGE[4]:-0}"
+                    ;;
             esac
         done < <(llm_call "$(conv_get_messages)")
 
@@ -1175,7 +1238,21 @@ agent_loop_stream() {
             if [[ -n "$tool_conv_results" ]]; then
                 conv_add_tool_results "$tool_conv_results"
             fi
-            compact_context_window "auto" false || true
+            # Update stats with captured usage from this turn
+            if [[ -n "$_usage_in" ]]; then
+                local _ctx_tokens=$(( _usage_in + _usage_out ))
+                stats_inc \
+                    "agent_request_count=1" \
+                    "total_input_tokens=${_usage_in}" \
+                    "total_output_tokens=${_usage_out}" \
+                    "total_cache_read_tokens=${_usage_cr:-0}" \
+                    "total_cache_creation_tokens=${_usage_cc:-0}"
+                stats_set "current_context_tokens=${_ctx_tokens}"
+                compact_context_window "auto" false "$_ctx_tokens" || true
+            else
+                # No usage data (e.g. retry) — skip compact
+                :
+            fi
             # tool_use/tool_calls → loop continues; anything else → break
             [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
         else
@@ -1227,6 +1304,8 @@ agent_loop() {
     done < <(agent_loop_stream "$user_input")
 
     stop_esc_interrupt_listener
+    # Update terminal title with current stats
+    stats_show_osc
     $had_error && return 1
     return 0
 }
@@ -1244,7 +1323,7 @@ Options:
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
   --max-turns N           Max agent turns (default: 40)
-  --max-context N         Max stored context bytes before compact (default: 200000; supports k/m/g)
+  --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
   --output-format FMT     Output format: human | stream-json
@@ -1286,7 +1365,7 @@ parse_args() {
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
             --max-context)
-                MAX_CONTEXT_BYTES=$(parse_size_bytes "$2") || die "Invalid --max-context value: $2"
+                MAX_CONTEXT_TOKENS=$(parse_size_bytes "$2") || die "Invalid --max-context: $2"
                 shift 2
                 ;;
             --api-key)       API_KEY="$2"; shift 2 ;;
