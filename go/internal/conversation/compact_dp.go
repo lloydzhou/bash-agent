@@ -25,7 +25,7 @@ func DefaultDPCompactConfig() DPCompactConfig {
 		PCache:       0.30,
 		V:            20000,
 		Penalty:      0.25,
-		BaselineE:    3,
+		BaselineE:    8,
 		EFixed:       0,
 		R:            0.70,
 		Beta:         0.5,
@@ -86,7 +86,7 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 			if cfg.BaselineE > 1 {
 				e = cfg.BaselineE / 2
 			} else {
-				e = 1
+				e = 2
 			}
 		}
 		nRemain = float64(e)

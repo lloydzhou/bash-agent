@@ -66,7 +66,7 @@ impl Default for Config {
             dp_p_cache: 0.30,
             dp_v: 20000,
             dp_penalty: 0.25,
-            dp_baseline_e: 3,
+            dp_baseline_e: 8,
             dp_e_fixed: 0,
             dp_r: 0.70,
             dp_beta: 0.5,

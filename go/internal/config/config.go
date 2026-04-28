@@ -71,7 +71,7 @@ func Default() Config {
 		DPPCache:      0.30,
 		DPV:           20000,
 		DPPenalty:     0.25,
-		DPBaselineE:   3,
+		DPBaselineE:   8,
 		DPEFixed:      0,
 		DPR:           0.70,
 		DPBeta:        0.5,

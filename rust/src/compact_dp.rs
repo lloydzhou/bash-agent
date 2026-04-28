@@ -22,7 +22,7 @@ impl Default for DPCompactConfig {
             p_cache: 0.30,
             v: 20000,
             penalty: 0.25,
-            baseline_e: 3,
+            baseline_e: 8,
             e_fixed: 0,
             r: 0.70,
             beta: 0.5,
@@ -77,13 +77,13 @@ pub fn compact_dp_decision(
                 if cfg.baseline_e > 1 {
                     cfg.baseline_e / 2
                 } else {
-                    1
+                    2
                 }
             } else {
                 remaining
             }
         } else {
-            1
+            2
         };
         e as f64
     };
