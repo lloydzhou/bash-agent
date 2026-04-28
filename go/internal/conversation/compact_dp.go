@@ -12,7 +12,7 @@ type DPCompactConfig struct {
 	PCache        float64 // $/MTok, cached input price
 	V             int     // fixed overhead tokens (system prompt + current input)
 	Penalty       float64 // $, compact overhead (summary call + cache miss)
-	BaselineE     int     // expected remaining LLM calls per user input
+	BaselineE     int     // expected remaining user-input rounds (0 = auto)
 	EFixed        int     // fixed E (0 = use BaselineE)
 	R             float64 // single-step summary retention rate
 	Beta          float64 // info loss penalty coefficient
@@ -25,7 +25,7 @@ func DefaultDPCompactConfig() DPCompactConfig {
 		PCache:       0.30,
 		V:            20000,
 		Penalty:      0.25,
-		BaselineE:    15,
+		BaselineE:    3,
 		EFixed:       0,
 		R:            0.70,
 		Beta:         0.5,
@@ -34,8 +34,10 @@ func DefaultDPCompactConfig() DPCompactConfig {
 }
 
 // CompactDPDecision computes the optimal number of lines to keep.
+// prevCompactions: number of previous compactions (from stats).
+// currentTurn: completed user-input rounds (from stats current_turn_count).
 // Returns: keepLines (turn-aligned, or 0 if no compact beneficial).
-func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, llmTurn int) (int, error) {
+func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, currentTurn int) (int, error) {
 	lines, err := s.Lines()
 	if err != nil {
 		return 0, err
@@ -79,7 +81,7 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, llmTu
 	// Expected remaining cost
 	nRemain := float64(cfg.EFixed)
 	if nRemain <= 0 {
-		e := cfg.BaselineE - llmTurn
+		e := cfg.BaselineE - currentTurn
 		if e <= 0 {
 			if cfg.BaselineE > 1 {
 				e = cfg.BaselineE / 2

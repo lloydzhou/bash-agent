@@ -31,9 +31,19 @@ type Config struct {
 	BaseURL            string
 	Prompt             string
 	MaxTurns           int
-	MaxContextTokens  int
-	MaxContextKeepPct int
+	MaxContextTokens   int
+	MaxContextKeepPct  int
 	MaxTurnsBeforeCompact int
+	// DP compact strategy
+	DPPBase       float64
+	DPPCache      float64
+	DPV           int
+	DPPenalty     float64
+	DPBaselineE   int
+	DPEFixed      int
+	DPR           float64
+	DPBeta        float64
+	DPMinKeepRatio float64
 	Skills             []string
 	ThinkingBudget     int
 
@@ -57,6 +67,15 @@ func Default() Config {
 		MaxContextTokens:  200000,
 		MaxContextKeepPct: 25,
 		MaxTurnsBeforeCompact: 100,
+		DPPBase:       3.0,
+		DPPCache:      0.30,
+		DPV:           20000,
+		DPPenalty:     0.25,
+		DPBaselineE:   3,
+		DPEFixed:      0,
+		DPR:           0.70,
+		DPBeta:        0.5,
+		DPMinKeepRatio: 0.12,
 		ThinkingBudget:     2048,
 	}
 }

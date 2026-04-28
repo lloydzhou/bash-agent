@@ -754,50 +754,62 @@ impl Runtime {
         }
     }
 
-    fn compact_context_window(&mut self, trigger: &str, force: bool) -> Result<bool> {
-        let mut turn_triggered = false;
-        if !force {
-            let stats = self.read_stats();
-            let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
-            let turn_count = stats_get_f64(&stats, "current_turn_count") as i32;
-            // Check token threshold - always compact if over limit
-            if context_tokens > 0 && context_tokens > self.cfg.max_context_tokens {
-                // token threshold reached, turn_triggered stays false
-            } else if turn_count > self.cfg.max_turns_before_compact {
-                turn_triggered = true;
-            } else {
-                return Ok(false);
-            }
-        }
-        let total_bytes = self.conv.total_bytes()?;
-        let mut target_keep =
-            total_bytes * (self.cfg.max_context_keep_pct as usize) / 100;
-        if target_keep < 1 {
-            target_keep = 1;
-        }
-        let keep_lines = self.conv.keep_line_count(target_keep)?;
-        let total_lines = self.conv.total_lines()?;
-        if total_lines <= keep_lines {
-            return Ok(false);
-        }
-        let drop = total_lines - keep_lines;
-        // If triggered by turn count, only compact if dropping more than half the lines
-        // This prevents frequent compact when context is small
-        if turn_triggered && drop <= total_lines / 2 {
-            return Ok(false);
-        }
-
-        let all = self.conv.lines()?;
-        let dropped_lines = &all[..drop];
-
+    fn compact_context_window(&mut self, trigger: &str, _force: bool) -> Result<bool> {
         if trigger == "manual" && self.api_url.is_empty() {
             apply_provider_defaults(&mut self.cfg)?;
             self.api_url = api_url(&self.cfg);
         }
 
+        let stats = self.read_stats();
+        let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
+        let current_turn = stats_get_f64(&stats, "current_turn_count") as usize;
+        let prev_compactions = stats_get_f64(&stats, "compact_request_count") as usize;
+
+        // DP decision
+        let dp_cfg = crate::compact_dp::DPCompactConfig {
+            p_base: self.cfg.dp_p_base,
+            p_cache: self.cfg.dp_p_cache,
+            v: self.cfg.dp_v,
+            penalty: self.cfg.dp_penalty,
+            baseline_e: self.cfg.dp_baseline_e,
+            e_fixed: self.cfg.dp_e_fixed,
+            r: self.cfg.dp_r,
+            beta: self.cfg.dp_beta,
+            min_keep_ratio: self.cfg.dp_min_keep_ratio,
+        };
+
+        let all = self.conv.lines()?;
+        let mut keep_lines = crate::compact_dp::compact_dp_decision(&all, &dp_cfg, prev_compactions, current_turn);
+
+        if keep_lines.is_none() {
+            // Safety valve: DP says no, but check context size
+            if context_tokens > 0 && context_tokens > self.cfg.max_context_tokens * 90 / 100 {
+                let total_lines = all.len();
+                let min_keep = {
+                    let k = (total_lines as f64 * dp_cfg.min_keep_ratio + 0.5) as usize;
+                    k.max(3)
+                };
+                if min_keep < total_lines {
+                    keep_lines = Some(min_keep);
+                } else {
+                    return Ok(false);
+                }
+            } else {
+                return Ok(false);
+            }
+        }
+
+        let k = keep_lines.unwrap();
+        let total_lines = all.len();
+        if k >= total_lines {
+            return Ok(false);
+        }
+        let drop = total_lines - k;
+        let dropped_lines = &all[..drop];
+
         let summary = self.run_summary_call(dropped_lines)?;
         fs::write(&self.paths.summary, format!("{summary}\n"))?;
-        self.conv.trim_keep_last(keep_lines)?;
+        self.conv.trim_keep_last(k)?;
 
         // Recalculate turn count based on remaining conversation history
         if let Ok(remaining_turns) = self.conv.count_user_inputs() {
