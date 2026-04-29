@@ -23,7 +23,7 @@ MAX_CONTEXT_TOKENS=200000
 # --- Dynamic Planning Compact (DP) ---
 : "${DP_P_BASE:=3.0}"          # $/MTok，未命中缓存的输入价格
 : "${DP_P_CACHE:=0.30}"        # $/MTok，命中缓存的输入价格
-: "${DP_V:=20000}"             # 固定开销 token 数（系统提示 + 当前用户输入）
+: "${DP_V:=5000}"             # 固定开销 token 数（system prompt + tools + summary，实测约 3k-4k，summary 约 1k）
 : "${DP_PENALTY:=0.25}"        # $，压缩开销（摘要调用 + 缓存未命中）
 : "${DP_BASELINE_E:=8}"        # 预期剩余用户输入轮数（0=使用E_FIXED或2）
 : "${DP_E_FIXED:=0}"           # 固定预期剩余步数（0=使用 DP_BASELINE_E）

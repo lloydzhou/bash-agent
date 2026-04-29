@@ -23,7 +23,7 @@ func DefaultDPCompactConfig() DPCompactConfig {
 	return DPCompactConfig{
 		PBase:        3.0,
 		PCache:       0.30,
-		V:            20000,
+		V:            5000,
 		Penalty:      0.25,
 		BaselineE:    8,
 		EFixed:       0,

@@ -20,7 +20,7 @@ impl Default for DPCompactConfig {
         Self {
             p_base: 3.0,
             p_cache: 0.30,
-            v: 20000,
+            v: 5000,
             penalty: 0.25,
             baseline_e: 8,
             e_fixed: 0,

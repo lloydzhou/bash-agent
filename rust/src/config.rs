@@ -64,7 +64,7 @@ impl Default for Config {
             max_turns_before_compact: 100,
             dp_p_base: 3.0,
             dp_p_cache: 0.30,
-            dp_v: 20000,
+            dp_v: 5000,
             dp_penalty: 0.25,
             dp_baseline_e: 8,
             dp_e_fixed: 0,

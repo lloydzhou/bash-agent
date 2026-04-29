@@ -69,7 +69,7 @@ func Default() Config {
 		MaxTurnsBeforeCompact: 100,
 		DPPBase:       3.0,
 		DPPCache:      0.30,
-		DPV:           20000,
+		DPV:           5000,
 		DPPenalty:     0.25,
 		DPBaselineE:   8,
 		DPEFixed:      0,
