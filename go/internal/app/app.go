@@ -1094,8 +1094,8 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 	totalRequests := int(statsFloat64(stats, "agent_request_count"))
 	L := rt.cfg.DPL
 	if L <= 0 {
-		if currentTurn > 0 {
-			L = float64(totalRequests+currentTurn-1) / float64(currentTurn)
+		if currentTurn > 0 && totalRequests > 0 {
+			L = float64(totalRequests) / float64(currentTurn)
 		}
 		if L < 1 {
 			L = 5.0

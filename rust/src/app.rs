@@ -765,11 +765,11 @@ impl Runtime {
         let total_requests = stats_get_f64(&stats, "agent_request_count") as usize;
         let l = if self.cfg.dp_l > 0.0 {
             self.cfg.dp_l
-        } else if current_turn > 0 {
-            let computed = (total_requests + current_turn - 1) as f64 / current_turn as f64;
-            if computed >= 1.0 { computed } else { 3.0 }
+        } else if current_turn > 0 && total_requests > 0 {
+            let computed = total_requests as f64 / current_turn as f64;
+            if computed >= 1.0 { computed } else { 5.0 }
         } else {
-            3.0
+            5.0
         };
 
         // avg: average input tokens per LLM request

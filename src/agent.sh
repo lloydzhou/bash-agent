@@ -849,12 +849,9 @@ compact_dp_decision() {
 
     # L: avg LLM calls per user input (default 5, auto from stats if DP_L=0)
     local L=$DP_L
+    local L_raw=0
     if (( L <= 0 )); then
-        local total_requests=$(stats_get 1)
-        if (( current_turn > 0 )); then
-            L=$(( (total_requests + current_turn - 1) / current_turn ))
-        fi
-        (( L >= 1 )) || L=5
+        L_raw=$(stats_get 1)
     fi
 
     # avg: average input tokens per LLM request (for info loss N_remain)
@@ -867,8 +864,9 @@ compact_dp_decision() {
 
     local prev_compactions=$(stats_get 2)
 
-    awk_run -v E="$E" -v L="$L" -v avg="$avg_per_request" -v V="$DP_V" \
-            -v p_base="$DP_P_INPUT" -v p_cache="$DP_P_CACHE" -v p_out="$DP_P_OUT" \
+    awk_run -v E="$E" -v L="$L" -v L_raw="$L_raw" -v t="$current_turn" \
+            -v avg="$avg_per_request" -v V="$DP_V" \
+            -v p_input="$DP_P_INPUT" -v p_cache="$DP_P_CACHE" -v p_out="$DP_P_OUT" \
             -v S="$DP_S" -v min_keep_ratio="$DP_MIN_KEEP_RATIO" \
             -v c="$prev_compactions" -v r="$DP_R" -v beta="$DP_BETA" \
             -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"

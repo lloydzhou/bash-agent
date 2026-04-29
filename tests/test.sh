@@ -1972,7 +1972,7 @@ test_compact_dp_awk() {
     dp_run() {
         protocol_awk -f "$AWK_DIR/compact_dp.awk" \
             -v E="${1:-8}" -v L="${2:-5}" -v avg=4000 -v V=5000 \
-            -v p_base=3.0 -v p_cache=0.30 -v p_out=15.0 \
+            -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
             -v S=500 -v min_keep_ratio=0.12 \
             -v c="${3:-0}" -v r=0.8 -v beta=0.03 "$conv_file" 2>/dev/null
     }
@@ -2013,7 +2013,7 @@ test_compact_dp_awk() {
 
     # --- 37e: Extreme beta suppresses ---
     result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
-        -v E=8 -v L=5 -v avg=4000 -v V=5000 -v p_base=3.0 -v p_cache=0.30 -v p_out=15.0 \
+        -v E=8 -v L=5 -v avg=4000 -v V=5000 -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
         -v S=500 -v min_keep_ratio=0.12 -v c=0 -v r=0.8 -v beta=50.0 "$conv_file" 2>/dev/null)
     check "compact_dp: beta=50 -> 0" "$result" "0"
 
@@ -2029,7 +2029,7 @@ test_compact_dp_awk() {
 {"role":"user","content":"step 3"}
 TURNEOF
     result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
-        -v E=10 -v L=3 -v avg=4000 -v V=0 -v p_base=3.0 -v p_cache=0.30 -v p_out=15.0 \
+        -v E=10 -v L=3 -v avg=4000 -v V=0 -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
         -v S=0 -v min_keep_ratio=0.12 -v c=0 -v r=0.8 -v beta=0.001 "$conv_file" 2>/dev/null)
     if [[ "$result" == "3" || "$result" == "4" ]]; then
         green "compact_dp: turn alignment -> $result"; ((PASS++))
