@@ -354,10 +354,10 @@ $$
 
 | Term | Meaning |
 |---|---|
-| ① | After compaction, the next $R-1$ LLM calls each save $H$ tokens at cache price |
-| ② | Summary content change breaks prefix cache: $S+K$ tokens shift from cache to full price |
+| ① | After compaction, the next `R-1` LLM calls each save `H` tokens at cache price |
+| ② | Summary content change breaks prefix cache: `S+K` tokens shift from cache to full price |
 | ③ | Compaction request API cost (cached prefix + instruction + output) |
-| ④ | Cumulative information distortion penalty, $r_t = r^{c+1}$ (floor 0.37) |
+| ④ | Cumulative information distortion penalty, `r_t = r^(c+1)` (floor 0.37) |
 
 ### Key Variables
 
