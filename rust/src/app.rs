@@ -761,11 +761,32 @@ impl Runtime {
         let prev_compactions = stats_get_f64(&stats, "compact_request_count") as usize;
 
         // DP decision
+        // L: avg LLM calls per user input (auto-compute from stats)
+        let total_requests = stats_get_f64(&stats, "agent_request_count") as usize;
+        let l = if self.cfg.dp_l > 0.0 {
+            self.cfg.dp_l
+        } else if current_turn > 0 {
+            let computed = (total_requests + current_turn - 1) as f64 / current_turn as f64;
+            if computed >= 1.0 { computed } else { 3.0 }
+        } else {
+            3.0
+        };
+
+        // avg: average input tokens per LLM request
+        let total_input_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
+        let mut avg_per_request: usize = 4000;
+        if total_requests > 0 {
+            avg_per_request = total_input_tokens / total_requests;
+        }
+
         let dp_cfg = crate::compact_dp::DPCompactConfig {
             p_base: self.cfg.dp_p_base,
             p_cache: self.cfg.dp_p_cache,
+            p_out: self.cfg.dp_p_out,
             v: self.cfg.dp_v,
-            penalty: self.cfg.dp_penalty,
+            s: self.cfg.dp_s,
+            avg: avg_per_request,
+            l,
             baseline_e: self.cfg.dp_baseline_e,
             e_fixed: self.cfg.dp_e_fixed,
             r: self.cfg.dp_r,
@@ -774,7 +795,7 @@ impl Runtime {
         };
 
         let all = self.conv.lines()?;
-        let mut keep_lines = crate::compact_dp::compact_dp_decision(&all, &dp_cfg, prev_compactions, current_turn);
+        let mut keep_lines = crate::compact_dp::compact_dp_decision(&all, &dp_cfg, prev_compactions, current_turn, total_requests);
 
         if keep_lines.is_none() {
             // Safety valve: DP says no, but check context size

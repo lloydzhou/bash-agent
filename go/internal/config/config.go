@@ -35,14 +35,16 @@ type Config struct {
 	MaxContextKeepPct  int
 	MaxTurnsBeforeCompact int
 	// DP compact strategy
-	DPPBase       float64
-	DPPCache      float64
-	DPV           int
-	DPPenalty     float64
-	DPBaselineE   int
-	DPEFixed      int
-	DPR           float64
-	DPBeta        float64
+	DPPBase        float64
+	DPPCache       float64
+	DPPOut         float64
+	DPV            int
+	DPS            int
+	DPL            float64
+	DPBaselineE    int
+	DPEFixed       int
+	DPR            float64
+	DPBeta         float64
 	DPMinKeepRatio float64
 	Skills             []string
 	ThinkingBudget     int
@@ -69,12 +71,14 @@ func Default() Config {
 		MaxTurnsBeforeCompact: 100,
 		DPPBase:       3.0,
 		DPPCache:      0.30,
-		DPV:           5000,
-		DPPenalty:     0.25,
-		DPBaselineE:   8,
-		DPEFixed:      0,
-		DPR:           0.70,
-		DPBeta:        0.5,
+		DPV:            5000,
+		DPPOut:         15.0,
+		DPS:            500,
+		DPL:            0.0,
+		DPBaselineE:    8,
+		DPEFixed:       0,
+		DPR:            0.8,
+		DPBeta:         0.03,
 		DPMinKeepRatio: 0.12,
 		ThinkingBudget:     2048,
 	}
@@ -244,14 +248,24 @@ func ParseArgs(args []string) (Config, error) {
 			cfg.DPPCache = f
 		}
 	}
+	if v := os.Getenv("DP_P_OUT"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.DPPOut = f
+		}
+	}
 	if v := os.Getenv("DP_V"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.DPV = n
 		}
 	}
-	if v := os.Getenv("DP_PENALTY"); v != "" {
+	if v := os.Getenv("DP_S"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.DPS = n
+		}
+	}
+	if v := os.Getenv("DP_L"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
-			cfg.DPPenalty = f
+			cfg.DPL = f
 		}
 	}
 	if v := os.Getenv("DP_BASELINE_E"); v != "" {

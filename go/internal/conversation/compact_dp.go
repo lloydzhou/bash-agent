@@ -8,27 +8,33 @@ import (
 // DPCompactConfig holds the parameters for the DP compact decision.
 // Matches DP_* env vars in bash-agent.
 type DPCompactConfig struct {
-	PBase         float64 // $/MTok, uncached input price
-	PCache        float64 // $/MTok, cached input price
-	V             int     // fixed overhead tokens (system prompt + current input)
-	Penalty       float64 // $, compact overhead (summary call + cache miss)
-	BaselineE     int     // expected remaining user-input rounds (0 = use EFixed or 1)
-	EFixed        int     // fixed E (0 = use BaselineE)
-	R             float64 // single-step summary retention rate
-	Beta          float64 // info loss penalty coefficient
-	MinKeepRatio  float64 // minimum fraction of messages to retain
+	PBase        float64 // $/MTok, uncached input price
+	PCache       float64 // $/MTok, cached input price
+	POut         float64 // $/MTok, output price
+	V            int     // fixed prefix tokens (system prompt + tools + summary)
+	S            int     // fixed summary length (tokens)
+	Avg          int     // avg input tokens per LLM request
+	L            float64 // avg LLM calls per user input (R = E * L)
+	BaselineE    int     // expected remaining user-input rounds (0 = auto)
+	EFixed       int     // fixed E (0 = use BaselineE)
+	R            float64 // single-step summary retention rate
+	Beta         float64 // info loss penalty coefficient
+	MinKeepRatio float64 // minimum fraction of messages to retain
 }
 
 func DefaultDPCompactConfig() DPCompactConfig {
 	return DPCompactConfig{
 		PBase:        3.0,
 		PCache:       0.30,
+		POut:         15.0,
 		V:            5000,
-		Penalty:      0.25,
+		S:            500,
+		Avg:          4000,
+		L:            5.0,
 		BaselineE:    8,
 		EFixed:       0,
-		R:            0.70,
-		Beta:         0.5,
+		R:            0.8,
+		Beta:         0.03,
 		MinKeepRatio: 0.12,
 	}
 }
@@ -46,7 +52,6 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 		return 0, nil
 	}
 
-	// Token estimation per line (bytes/4)
 	n := len(lines)
 	sizes := make([]int, n)
 	roleUser := make([]bool, n)
@@ -63,35 +68,46 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 		}
 	}
 
-	// Total tokens
 	totalTokens := 0
 	for _, s := range sizes {
 		totalTokens += s
 	}
 
-	// Cumulative retention after prevCompactions compactions
-	rCumulative := 1.0
-	for i := 0; i < prevCompactions; i++ {
-		rCumulative *= cfg.R
-	}
-	if rCumulative < 0.37 {
-		rCumulative = 0.37
-	}
-
-	// Expected remaining cost
-	nRemain := float64(cfg.EFixed)
-	if nRemain <= 0 {
-		e := cfg.BaselineE - currentTurn
-		if e <= 0 {
+	// E: expected remaining user-input rounds
+	var E float64
+	if cfg.EFixed > 0 {
+		E = float64(cfg.EFixed)
+	} else if cfg.BaselineE > 0 {
+		remaining := cfg.BaselineE - currentTurn
+		if remaining <= 0 {
 			if cfg.BaselineE > 1 {
-				e = cfg.BaselineE / 2
+				remaining = cfg.BaselineE / 2
 			} else {
-				e = 2
+				remaining = 2
 			}
 		}
-		nRemain = float64(e)
+		E = float64(remaining)
+	} else {
+		E = 2.0
 	}
-	nRemainDollars := nRemain * float64(totalTokens) * cfg.PBase / 1_000_000
+
+	// R = E * L: total expected remaining LLM calls
+	R := E * cfg.L
+
+	// Cumulative retention: r^(c+1) (independent of k)
+	rT := math.Pow(cfg.R, float64(prevCompactions+1))
+	if rT < 0.37 {
+		rT = 0.37
+	}
+
+	// N_remain: expected remaining input tokens (R * avg_per_request)
+	NRemain := R * float64(cfg.Avg)
+
+	// ④ Info loss (constant across all k)
+	infoLoss := cfg.Beta * (1.0 - rT) * NRemain * cfg.PBase / 1_000_000
+
+	// Summary instruction length (fixed ~70 tokens)
+	lInstr := 70.0
 
 	// Minimum keep (hard floor at 3)
 	minKeep := int(float64(n)*cfg.MinKeepRatio + 0.5)
@@ -106,23 +122,31 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 	bestBenefit := math.Inf(-1)
 
 	for k := minKeep; k <= n; k++ {
-		retained := 0
+		K := 0
 		for i := n - k; i < n; i++ {
-			retained += sizes[i]
+			K += sizes[i]
 		}
-		dropped := totalTokens - retained - cfg.V
-		if dropped <= 0 {
+
+		H := totalTokens - K
+		if H <= 0 {
 			continue
 		}
 
-		// Monetary benefit
-		benefit := nRemain * (cfg.PBase - cfg.PCache) * float64(dropped) / 1_000_000
-		benefit -= cfg.Penalty
+		Hf := float64(H)
+		Kf := float64(K)
+		Sf := float64(cfg.S)
+		Vf := float64(cfg.V)
 
-		// Info loss penalty
-		rT := rCumulative * float64(k) / float64(n)
-		infoLoss := (1.0 - rT) * (1.0 - rT)
-		benefit -= cfg.Beta * infoLoss * nRemainDollars
+		// ① Savings: (R-1) subsequent LLM calls save P_cache × H each
+		savings := (R - 1) * cfg.PCache * Hf / 1_000_000
+
+		// ② Cache invalidation: (S + K) at P_base instead of P_cache
+		cacheMiss := (Sf + Kf) * (cfg.PBase - cfg.PCache) / 1_000_000
+
+		// ③ Compaction request cost
+		compactCost := (cfg.PCache*(Vf+Hf) + cfg.PBase*lInstr + cfg.POut*Sf) / 1_000_000
+
+		benefit := savings - cacheMiss - compactCost - infoLoss
 
 		if benefit > bestBenefit {
 			bestBenefit = benefit

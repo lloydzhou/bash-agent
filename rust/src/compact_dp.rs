@@ -4,15 +4,18 @@ use serde_json::Value;
 /// Matches DP_* env vars in bash-agent.
 #[derive(Debug, Clone)]
 pub struct DPCompactConfig {
-    pub p_base: f64,          // $/MTok, uncached input price
-    pub p_cache: f64,         // $/MTok, cached input price
-    pub v: usize,             // fixed overhead tokens (system prompt + current input)
-    pub penalty: f64,         // $, compact overhead (summary call + cache miss)
-    pub baseline_e: i32,      // expected remaining user-input rounds (0 = use e_fixed or 1)
-    pub e_fixed: i32,         // fixed E (0 = use baseline_e)
-    pub r: f64,               // single-step summary retention rate
-    pub beta: f64,            // info loss penalty coefficient
-    pub min_keep_ratio: f64,  // minimum fraction of messages to retain
+    pub p_base: f64,
+    pub p_cache: f64,
+    pub p_out: f64,
+    pub v: usize,
+    pub s: usize,
+    pub avg: usize,
+    pub l: f64,
+    pub baseline_e: i32,
+    pub e_fixed: i32,
+    pub r: f64,
+    pub beta: f64,
+    pub min_keep_ratio: f64,
 }
 
 impl Default for DPCompactConfig {
@@ -20,24 +23,31 @@ impl Default for DPCompactConfig {
         Self {
             p_base: 3.0,
             p_cache: 0.30,
+            p_out: 15.0,
             v: 5000,
-            penalty: 0.25,
+            s: 500,
+            avg: 4000,
+            l: 0.0,  // auto-compute from stats
             baseline_e: 8,
             e_fixed: 0,
-            r: 0.70,
-            beta: 0.5,
+            r: 0.8,
+            beta: 0.03,
             min_keep_ratio: 0.12,
         }
     }
 }
 
 /// Compute the optimal number of lines to keep using DP analysis.
+/// prev_compactions: number of previous compactions (from stats).
+/// current_turn: completed user-input rounds (from stats).
+/// total_requests: total agent_request_count (for computing L).
 /// Returns: Some(keep_lines) turn-aligned, or None if no compact beneficial.
 pub fn compact_dp_decision(
     lines: &[Value],
     cfg: &DPCompactConfig,
     prev_compactions: usize,
     current_turn: usize,
+    total_requests: usize,
 ) -> Option<usize> {
     if lines.is_empty() {
         return None;
@@ -45,7 +55,6 @@ pub fn compact_dp_decision(
 
     let n = lines.len();
 
-    // Token estimation per line (bytes/4) and role detection
     let mut sizes = Vec::with_capacity(n);
     let mut role_user = Vec::with_capacity(n);
     for line in lines {
@@ -58,38 +67,41 @@ pub fn compact_dp_decision(
 
     let total_tokens: usize = sizes.iter().sum();
 
-    // Cumulative retention after prev_compactions compactions
-    let mut r_cumulative = 1.0f64;
-    for _ in 0..prev_compactions {
-        r_cumulative *= cfg.r;
-    }
-    if r_cumulative < 0.37 {
-        r_cumulative = 0.37;
-    }
-
-    // Expected remaining user-input rounds
-    let n_remain = if cfg.e_fixed > 0 {
+    // E: expected remaining user-input rounds
+    let e = if cfg.e_fixed > 0 {
         cfg.e_fixed as f64
+    } else if cfg.baseline_e > 0 {
+        let remaining = cfg.baseline_e - current_turn as i32;
+        let remaining = if remaining <= 0 {
+            if cfg.baseline_e > 1 { cfg.baseline_e / 2 } else { 2 }
+        } else { remaining };
+        remaining as f64
     } else {
-        let e = if cfg.baseline_e > 0 {
-            let remaining = cfg.baseline_e - current_turn as i32;
-            if remaining <= 0 {
-                if cfg.baseline_e > 1 {
-                    cfg.baseline_e / 2
-                } else {
-                    2
-                }
-            } else {
-                remaining
-            }
-        } else {
-            2
-        };
-        e as f64
+        2.0
     };
-    let n_remain_dollars = n_remain * total_tokens as f64 * cfg.p_base / 1_000_000.0;
 
-    // Minimum keep (hard floor at 3)
+    // L: avg LLM calls per user input (auto-compute or use config)
+    let l = if cfg.l > 0.0 {
+        cfg.l
+    } else if current_turn > 0 {
+        let computed = (total_requests + current_turn - 1) as f64 / current_turn as f64;
+        if computed >= 1.0 { computed } else { 5.0 }
+    } else {
+        5.0
+    };
+
+    // R = E * L
+    let r_total = e * l;
+
+    // r_t = r^(c+1) (independent of k)
+    let mut r_t = cfg.r.powi((prev_compactions + 1) as i32);
+    if r_t < 0.37 { r_t = 0.37; }
+
+    let n_remain = r_total * cfg.avg as f64;
+    let info_loss = cfg.beta * (1.0 - r_t) * n_remain * cfg.p_base / 1_000_000.0;
+
+    let l_instr = 70.0_f64;
+
     let min_keep = {
         let k = (n as f64 * cfg.min_keep_ratio + 0.5) as usize;
         k.max(3).min(n)
@@ -99,20 +111,24 @@ pub fn compact_dp_decision(
     let mut best_benefit = f64::NEG_INFINITY;
 
     for k in min_keep..=n {
-        let retained: usize = sizes[n - k..].iter().sum();
-        let dropped = total_tokens as f64 - retained as f64 - cfg.v as f64;
-        if dropped <= 0.0 {
-            continue;
-        }
+        let k_tokens: usize = sizes[n - k..].iter().sum();
+        let h = total_tokens as f64 - k_tokens as f64;
+        if h <= 0.0 { continue; }
 
-        // Monetary benefit
-        let mut benefit = n_remain * (cfg.p_base - cfg.p_cache) * dropped / 1_000_000.0;
-        benefit -= cfg.penalty;
+        let kf = k_tokens as f64;
+        let sf = cfg.s as f64;
+        let vf = cfg.v as f64;
 
-        // Info loss penalty
-        let r_t = r_cumulative * k as f64 / n as f64;
-        let info_loss = (1.0 - r_t) * (1.0 - r_t);
-        benefit -= cfg.beta * info_loss * n_remain_dollars;
+        // ① Savings: (R-1) * P_cache * H
+        let savings = (r_total - 1.0) * cfg.p_cache * h / 1_000_000.0;
+
+        // ② Cache invalidation: (S + K) * (P_base - P_cache)
+        let cache_miss = (sf + kf) * (cfg.p_base - cfg.p_cache) / 1_000_000.0;
+
+        // ③ Compaction request cost
+        let compact_cost = (cfg.p_cache * (vf + h) + cfg.p_base * l_instr + cfg.p_out * sf) / 1_000_000.0;
+
+        let benefit = savings - cache_miss - compact_cost - info_loss;
 
         if benefit > best_benefit {
             best_benefit = benefit;
@@ -124,15 +140,12 @@ pub fn compact_dp_decision(
         return None;
     }
 
-    // Align to user-message (turn) boundary
     let mut adj = best_k;
     let mut cut = n - adj;
     while cut > 0 && !role_user[cut] {
         cut -= 1;
         adj = n - cut;
     }
-    if adj < 1 {
-        adj = 1;
-    }
+    if adj < 1 { adj = 1; }
     Some(adj)
 }

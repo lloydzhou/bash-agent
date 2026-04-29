@@ -1967,44 +1967,55 @@ test_compact_dp_awk() {
         done
     }
 
-    # dp_run: run compact_dp.awk and capture result
+    # dp_run: run compact_dp.awk with new 4-term formula
+    # Args: E L [c]
     dp_run() {
         protocol_awk -f "$AWK_DIR/compact_dp.awk" \
-            -v E="$1" -v V=20000 -v p_base=3.0 -v p_cache=0.30 \
-            -v penalty=0.25 -v min_keep_ratio=0.12 \
-            -v c="${2:-0}" -v r=0.7 -v beta=0.5 "$conv_file" 2>/dev/null
+            -v E="${1:-8}" -v L="${2:-5}" -v avg=4000 -v V=5000 \
+            -v p_base=3.0 -v p_cache=0.30 -v p_out=15.0 \
+            -v S=500 -v min_keep_ratio=0.12 \
+            -v c="${3:-0}" -v r=0.8 -v beta=0.03 "$conv_file" 2>/dev/null
     }
 
     # --- 37a: Empty ---
     : > "$conv_file"
-    check "compact_dp: empty conv -> 0" "$(dp_run 14 0)" "0"
+    check "compact_dp: empty conv -> 0" "$(dp_run 8 3 0)" "0"
 
-    # --- 37b: Tiny (< V) ---
+    # --- 37b: Tiny (5k tokens, below useful threshold) ---
     gen_conv 2 5000 "$conv_file"
-    check "compact_dp: tiny conv -> 0" "$(dp_run 14 0)" "0"
+    check "compact_dp: tiny conv -> 0" "$(dp_run 8 3 0)" "0"
 
-    # --- 37c: Medium (30k tokens, barely above V) ---
+    # --- 37c: Medium (30k tokens, R=40) — compact is now worth it with corrected formula ---
     gen_conv 10 30000 "$conv_file"
-    check "compact_dp: medium E=14 -> 0" "$(dp_run 14 0)" "0"
-    check "compact_dp: medium E=1 -> 0" "$(dp_run 1 0)" "0"
+    result=$(dp_run 8 5 0)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: medium R=40 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: medium R=40 -> $result"; ((FAIL++)); }
+    # R=5 with small context should not compact
+    gen_conv 3 5000 "$conv_file"
+    check "compact_dp: small R=5 -> 0" "$(dp_run 1 5 0)" "0"
 
-    # --- 37d: Large (100k tokens) ---
+    # --- 37d: Large (100k tokens, R=E*L=40) — should compact ---
     gen_conv 20 100000 "$conv_file"
-    result=$(dp_run 14 0)
+    result=$(dp_run 8 5 0)
     [[ -n "$result" && "$result" != "0" ]] \
-        && { green "compact_dp: large E=14 c=0 -> $result"; ((PASS++)); } \
-        || { red "compact_dp: large E=14 c=0 -> $result"; ((FAIL++)); }
-    check "compact_dp: large E=1 -> 0" "$(dp_run 1 0)" "0"
-    result=$(dp_run 14 3)
+        && { green "compact_dp: large R=40 c=0 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large R=40 c=0 -> $result"; ((FAIL++)); }
+    # R=5 with large context also compacts — formula correctly sees benefit
+    result=$(dp_run 1 5 0)
     [[ -n "$result" && "$result" != "0" ]] \
-        && { green "compact_dp: large E=14 c=3 -> $result"; ((PASS++)); } \
-        || { red "compact_dp: large E=14 c=3 -> $result"; ((FAIL++)); }
+        && { green "compact_dp: large R=5 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large R=5 -> $result"; ((FAIL++)); }
+    result=$(dp_run 8 5 3)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: large R=40 c=3 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large R=40 c=3 -> $result"; ((FAIL++)); }
 
-    # --- 37e: High beta suppresses ---
+    # --- 37e: Extreme beta suppresses ---
     result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
-        -v E=14 -v V=20000 -v p_base=3.0 -v p_cache=0.30 \
-        -v penalty=0.25 -v min_keep_ratio=0.12 -v c=0 -v r=0.7 -v beta=5.0 "$conv_file" 2>/dev/null)
-    check "compact_dp: beta=5.0 -> 0" "$result" "0"
+        -v E=8 -v L=5 -v avg=4000 -v V=5000 -v p_base=3.0 -v p_cache=0.30 -v p_out=15.0 \
+        -v S=500 -v min_keep_ratio=0.12 -v c=0 -v r=0.8 -v beta=50.0 "$conv_file" 2>/dev/null)
+    check "compact_dp: beta=50 -> 0" "$result" "0"
 
     # --- 37f: Turn alignment ---
     cat > "$conv_file" << 'TURNEOF'
@@ -2018,8 +2029,8 @@ test_compact_dp_awk() {
 {"role":"user","content":"step 3"}
 TURNEOF
     result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
-        -v E=10 -v V=0 -v p_base=3.0 -v p_cache=0.30 \
-        -v penalty=0 -v min_keep_ratio=0.12 -v c=0 -v r=0.7 -v beta=0.01 "$conv_file" 2>/dev/null)
+        -v E=10 -v L=3 -v avg=4000 -v V=0 -v p_base=3.0 -v p_cache=0.30 -v p_out=15.0 \
+        -v S=0 -v min_keep_ratio=0.12 -v c=0 -v r=0.8 -v beta=0.001 "$conv_file" 2>/dev/null)
     if [[ "$result" == "3" || "$result" == "4" ]]; then
         green "compact_dp: turn alignment -> $result"; ((PASS++))
     else
@@ -2027,10 +2038,10 @@ TURNEOF
     fi
 
     # --- 37g: Long session E saturation (stats[0] > baseline) ---
-    # After baseline turns, E saturates at baseline/2 = 4
+    # After baseline turns, E saturates at baseline/2 = 4, R=4*3=12
     # DP should still recommend compaction with very large context
     gen_conv 30 200000 "$conv_file"
-    result=$(dp_run 4 0)  # E=4 (saturated)
+    result=$(dp_run 4 5 0)  # E=4 (saturated), L=5, R=20
     [[ -n "$result" && "$result" != "0" ]] \
         && { green "compact_dp: long session E=4 -> $result"; ((PASS++)); } \
         || { red "compact_dp: long session E=4 -> $result"; ((FAIL++)); }

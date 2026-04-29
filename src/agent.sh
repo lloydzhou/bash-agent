@@ -23,12 +23,14 @@ MAX_CONTEXT_TOKENS=200000
 # --- Dynamic Planning Compact (DP) ---
 : "${DP_P_BASE:=3.0}"          # $/MTok，未命中缓存的输入价格
 : "${DP_P_CACHE:=0.30}"        # $/MTok，命中缓存的输入价格
-: "${DP_V:=5000}"             # 固定开销 token 数（system prompt + tools + summary，实测约 3k-4k，summary 约 1k）
-: "${DP_PENALTY:=0.25}"        # $，压缩开销（摘要调用 + 缓存未命中）
+: "${DP_P_OUT:=15.0}"          # $/MTok，输出价格
+: "${DP_V:=5000}"              # 固定前缀 token 数（system prompt + tools + summary）
+: "${DP_S:=500}"               # 固定摘要长度 token 数
+: "${DP_L:=0}"                 # 每轮用户输入平均 LLM 调用次数（0=从 stats 自动计算，默认≈5）
 : "${DP_BASELINE_E:=8}"        # 预期剩余用户输入轮数（0=使用E_FIXED或2）
 : "${DP_E_FIXED:=0}"           # 固定预期剩余步数（0=使用 DP_BASELINE_E）
-: "${DP_R:=0.7}"               # 单次摘要信息保留率（递归摘要的指数衰减）
-: "${DP_BETA:=0.5}"            # 信息损失惩罚系数（$(1-r_t)² × N_remain × β）
+: "${DP_R:=0.8}"               # 单次摘要信息保留率（递归摘要的指数衰减）
+: "${DP_BETA:=0.03}"           # 信息损失惩罚系数（典型值 0.03）
 : "${DP_MIN_KEEP_RATIO:=0.12}" # 最少保留消息比例（防止过度压缩）
 declare -a SKILL_NAMES=()
 : "${THINKING_BUDGET:=2048}"
@@ -824,22 +826,20 @@ stats_show_osc() {
 }
 
 # --- Dynamic Planning Compact Decision ---
-# At each step, compute optimal k (lines to retain) by maximizing net benefit:
-#   NetBenefit(k) = E × (P_base - P_cache) × dropped_tokens / 1e6 - penalty
-# where dropped_tokens = total - retained(k) - V.
-# Over-compaction (k < min_keep) is penalized quadratically.
+# DP compact decision: find optimal k via cache-aware economics.
+# Formula: NetBenefit(k) = ①savings - ②cache_miss - ③compact_cost - ④info_loss
 # Returns: number of lines to keep (turn-aligned), or "0" if no compact beneficial.
 compact_dp_decision() {
     local current_turn=$(stats_get 0)
     # E: expected remaining user-input rounds
     # DP_E_FIXED > (DP_BASELINE_E - current_turn) > baseline/2
-    local baseline=${DP_BASELINE_E:-3} E
+    local baseline=${DP_BASELINE_E:-8} E
     if (( DP_E_FIXED > 0 )); then
         E=$DP_E_FIXED
     elif (( baseline > 0 )); then
         local remaining=$(( baseline - current_turn ))
         if (( remaining <= 0 )); then
-            E=$(( baseline > 1 ? baseline / 2 : 1 ))
+            E=$(( baseline > 1 ? baseline / 2 : 2 ))
         else
             E=$remaining
         fi
@@ -847,10 +847,29 @@ compact_dp_decision() {
         E=2
     fi
 
+    # L: avg LLM calls per user input (auto-compute from stats or use default)
+    local L=${DP_L:-0}
+    if (( L <= 0 )); then
+        local total_requests=$(stats_get 1)
+        if (( current_turn > 0 )); then
+            L=$(( (total_requests + current_turn - 1) / current_turn ))
+        fi
+        (( L >= 1 )) || L=5
+    fi
+
+    # avg: average input tokens per LLM request (for info loss N_remain)
+    local avg_per_request=4000
+    local total_input_tokens=$(stats_get 3)
+    local total_requests=$(stats_get 1)
+    if (( total_requests > 0 )); then
+        avg_per_request=$(( total_input_tokens / total_requests ))
+    fi
+
     local prev_compactions=$(stats_get 2)
 
-    awk_run -v E="$E" -v V="$DP_V" -v p_base="$DP_P_BASE" -v p_cache="$DP_P_CACHE" \
-            -v penalty="$DP_PENALTY" -v min_keep_ratio="$DP_MIN_KEEP_RATIO" \
+    awk_run -v E="$E" -v L="$L" -v avg="$avg_per_request" -v V="$DP_V" \
+            -v p_base="$DP_P_BASE" -v p_cache="$DP_P_CACHE" -v p_out="$DP_P_OUT" \
+            -v S="$DP_S" -v min_keep_ratio="$DP_MIN_KEEP_RATIO" \
             -v c="$prev_compactions" -v r="$DP_R" -v beta="$DP_BETA" \
             -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"
 }

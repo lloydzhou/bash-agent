@@ -1090,12 +1090,34 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 	currentTurn := int(statsFloat64(stats, "current_turn_count"))
 	prevCompactions := int(statsFloat64(stats, "compact_request_count"))
 
+	// L: avg LLM calls per user input (auto-compute from stats)
+	totalRequests := int(statsFloat64(stats, "agent_request_count"))
+	L := rt.cfg.DPL
+	if L <= 0 {
+		if currentTurn > 0 {
+			L = float64(totalRequests+currentTurn-1) / float64(currentTurn)
+		}
+		if L < 1 {
+			L = 5.0
+		}
+	}
+
+	// avg: average input tokens per LLM request
+	totalInputTokens := int(statsFloat64(stats, "total_input_tokens"))
+	avgPerRequest := 4000
+	if totalRequests > 0 {
+		avgPerRequest = totalInputTokens / totalRequests
+	}
+
 	// DP decision
 	dpCfg := conversation.DPCompactConfig{
 		PBase:        rt.cfg.DPPBase,
 		PCache:       rt.cfg.DPPCache,
+		POut:         rt.cfg.DPPOut,
 		V:            rt.cfg.DPV,
-		Penalty:      rt.cfg.DPPenalty,
+		S:            rt.cfg.DPS,
+		Avg:          avgPerRequest,
+		L:            L,
 		BaselineE:    rt.cfg.DPBaselineE,
 		EFixed:       rt.cfg.DPEFixed,
 		R:            rt.cfg.DPR,

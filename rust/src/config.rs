@@ -27,8 +27,10 @@ pub struct Config {
     // DP compact strategy
     pub dp_p_base: f64,
     pub dp_p_cache: f64,
+    pub dp_p_out: f64,
     pub dp_v: usize,
-    pub dp_penalty: f64,
+    pub dp_s: usize,
+    pub dp_l: f64,
     pub dp_baseline_e: i32,
     pub dp_e_fixed: i32,
     pub dp_r: f64,
@@ -64,11 +66,13 @@ impl Default for Config {
             max_turns_before_compact: 100,
             dp_p_base: 3.0,
             dp_p_cache: 0.30,
+            dp_p_out: 15.0,
             dp_v: 5000,
-            dp_penalty: 0.25,
+            dp_s: 500,
+            dp_l: 0.0,
             dp_baseline_e: 8,
             dp_e_fixed: 0,
-            dp_r: 0.70,
+            dp_r: 0.8,
             dp_beta: 0.5,
             dp_min_keep_ratio: 0.12,
             skills: Vec::new(),
@@ -218,11 +222,17 @@ pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
     if let Ok(v) = std::env::var("DP_P_CACHE") {
         if let Ok(f) = v.parse::<f64>() { if f >= 0.0 { cfg.dp_p_cache = f; } }
     }
+    if let Ok(v) = std::env::var("DP_P_OUT") {
+        if let Ok(f) = v.parse::<f64>() { if f > 0.0 { cfg.dp_p_out = f; } }
+    }
     if let Ok(v) = std::env::var("DP_V") {
         if let Ok(n) = v.parse::<usize>() { if n > 0 { cfg.dp_v = n; } }
     }
-    if let Ok(v) = std::env::var("DP_PENALTY") {
-        if let Ok(f) = v.parse::<f64>() { if f >= 0.0 { cfg.dp_penalty = f; } }
+    if let Ok(v) = std::env::var("DP_S") {
+        if let Ok(n) = v.parse::<usize>() { if n > 0 { cfg.dp_s = n; } }
+    }
+    if let Ok(v) = std::env::var("DP_L") {
+        if let Ok(f) = v.parse::<f64>() { if f >= 0.0 { cfg.dp_l = f; } }
     }
     if let Ok(v) = std::env::var("DP_BASELINE_E") {
         if let Ok(n) = v.parse::<i32>() { if n >= 0 { cfg.dp_baseline_e = n; } }
