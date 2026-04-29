@@ -141,47 +141,63 @@ session 数据按当前项目目录归档：
 
 ### 2. Context / compact
 
-compact 现在按 **context 实际大小** 触发，而不是按消息条数：
+compact 使用**基于缓存经济学的动态规划算法**，在每一步计算压缩的净收益，自动决定是否压缩和保留多少消息。
 
-- `--max-context` 表示字节预算
-- 支持 `100k` / `1m` 这类写法
-- 超预算后会从旧消息中裁剪
-- 但保留部分必须对齐到**完整 user turn 起点**
+#### 决策公式
 
-这条规则很重要：
+$$
+\text{NetBenefit}(k) = \frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6} - \frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6} - \frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6} - \frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}
+$$
 
-- compact 不能把会话裁成孤立的 `tool_result`
-- 不能只剩 `assistant.tool_use` 而丢掉对应用户请求
-- 必须保留完整一轮消息的语义边界
+- 若 $\max_k \text{NetBenefit}(k) > 0$，选择最优 $k$ 执行压缩
+- 否则不压缩
+- 安全阀：当 DP 说不压缩但 `current_context > max_context × 90%` 时，强制压缩
 
-当前默认策略：
+| 项 | 含义 |
+|---|---|
+| ① | 压缩后后续 $R-1$ 次 LLM 调用每次少发送 $H$ token，按缓存价节省 |
+| ② | 摘要内容变化导致前缀缓存断裂，$S+K$ 个 token 从缓存价变为全价 |
+| ③ | 压缩请求本身的 API 成本（缓存复用前缀 + 指令 + 输出） |
+| ④ | 多次压缩的信息累积损失，$r_t = r^{c+1}$（下限 0.37） |
 
-- 总大小超预算时 compact
-- 保留最新的预算后缀
-- 但对齐到最近的完整 `user` 文本消息起点
+#### 核心变量
 
-当前 compact 也有一条明确约束：
-
-- 自动 compact 不应重复做 provider/API 初始化检查
-- 手动 compact 入口已移除，compact 仅在主循环内自动触发
+| 变量 | 含义 | 默认 |
+|---|---|---|
+| $R = E \times L$ | 预期剩余 LLM 调用总次数 | — |
+| $E$ | 预期剩余用户输入轮数 | `DP_BASELINE_E - t`，饱和至 `baseline/2` |
+| $L$ | 每轮用户输入平均 LLM 调用次数 | 5（`DP_L=0` 时从 stats 自动计算） |
+| $H = T_{\text{total}} - K$ | 被丢弃的旧消息 token 数 | 遍历 $k$ 计算 |
+| $S$ | 固定摘要长度 | 500 token |
+| $V$ | 固定前缀（system prompt + tools + old summary） | 5000 token |
 
 #### Summary 调用的缓存复用
 
-summary 调用（`run_summary_call`）采用与正常请求完全相同的前缀结构，以最大化 API 缓存命中：
+summary 调用（`run_summary_call`）采用与正常请求**完全相同的前缀结构**，以最大化 API 缓存命中：
 
-- **正常请求**：`system_prompt + tools + [全部消息]`
-- **summary 请求**：`system_prompt + tools + [dropped 消息] + [summary 指令消息]`
+```
+正常请求：  [System prompt + Tools + Summary] + [全部消息]
+summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summary 指令]
+            ←────── 缓存命中，按 P_cache 计费 ──────→  ← P_input →
+```
 
-由于 dropped 消息是 CONV_FILE 开头的行（通过 `head -n` 提取），它们与之前请求中的前缀完全一致。summary 请求只追加了一条 user 消息作为总结指令，不影响前缀匹配。thinking 参数也保持一致（使用 `THINKING_BUDGET`），确保 messages 层级缓存不被破坏。
+由于 dropped 消息是 CONV_FILE 开头的行，它们与之前请求中的前缀完全一致。summary 请求只追加了一条 user 消息作为总结指令，不影响前缀匹配。
 
-与旧方案（使用独立 system prompt 的单独请求，前缀完全不同，缓存命中率为零）相比，新方案利用已缓存的 `system + tools + dropped_messages` 前缀，仅末尾的 summary 指令消息产生少量 cache_creation，大幅降低 compact 成本。
+以 Claude Sonnet 为例（无缓存 $3.00/MTok，缓存命中 $0.30/MTok），典型场景：system+tools+summary 5k tokens，dropped messages 30k tokens，summary 输出 500 tokens：
 
-以 Claude Sonnet 为例（无缓存 $3.00/MTok，缓存命中 $0.30/MTok），典型场景：system+tools 20k tokens，dropped messages 30k tokens，summary 输出 500 tokens：
+- **旧方案**：35k tokens 全部无缓存 → 输入 $0.105 + 输出 $0.0075 = **$0.1125**
+- **新方案**：35k tokens 全部缓存命中 → 输入 $0.0105 + 输出 $0.0075 = **$0.018**
 
-- **旧方案**：50k tokens 全部无缓存 → 输入 $0.15 + 输出 $0.0075 = **$0.1575**
-- **新方案**：50k tokens 全部缓存命中 → 输入 $0.015 + 输出 $0.0075 = **$0.0225**
+单次 compact 节省约 **84%**，复杂任务中多次触发时累积效应显著。
 
-单次 compact 节省约 **85.7%**，复杂任务中多次触发时累积效应显著。
+#### 保留窗口对齐
+
+切分点始终对齐到**真实用户输入**（`"role":"user","content":"..."`），不会在工具结果处切断：
+
+- 不能把会话裁成孤立的 `tool_result`
+- 不能只剩 `assistant.tool_use` 而丢掉对应用户请求
+
+> 完整推导见 [`dp-compact-analysis.md`](dp-compact-analysis.md)。
 
 ### 3. Session Replay
 

@@ -497,6 +497,11 @@ src/
     edit_file.awk
     skill_summary.awk
     event_replay.awk
+    compact_dp.awk
+    stats.awk
+docs/
+  ARCHITECTURE.md
+  dp-compact-analysis.md
 scripts/
   build.sh
 tests/
@@ -585,4 +590,4 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 ## 文档
 
 - [README.en.md](README.en.md) English
-- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md)

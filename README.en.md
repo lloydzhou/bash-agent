@@ -332,17 +332,89 @@ All sessions are persisted under `~/.bash-agent/projects/<project_key>/`, even w
 
 ## Context Compaction
 
-Compaction is based on actual context size, not message count.
+Compaction uses a **cache-aware dynamic programming algorithm** that computes the net economic benefit of each compaction decision — whether to compact and how many messages to retain — rather than simple threshold triggering.
 
-- `--max-context` is a byte budget
-- accepts values like `100k`, `1m`, `100000`
-- when over budget, old messages are compacted into `summary.txt`
-- retained history is aligned to a full user-turn boundary
+### Decision Formula
 
-This avoids invalid tails such as:
+For each candidate retention count $k$, compute the net benefit:
+
+$$
+\text{NetBenefit}(k) = \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{savings}} - \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{cache miss}} - \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{compact cost}} - \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}}
+$$
+
+- If $\max_k \text{NetBenefit}(k) > 0$, compact with the optimal $k$
+- Otherwise, skip compaction
+
+| Term | Meaning |
+|---|---|
+| ① | After compaction, the next $R-1$ LLM calls each save $H$ tokens at cache price |
+| ② | Summary content change breaks prefix cache: $S+K$ tokens shift from cache to full price |
+| ③ | Compaction request API cost (cached prefix + instruction + output) |
+| ④ | Cumulative information distortion penalty, $r_t = r^{c+1}$ (floor 0.37) |
+
+### Key Variables
+
+| Variable | Meaning | Default |
+|---|---|---|
+| $R = E \times L$ | Expected remaining LLM calls | — |
+| $E$ | Expected remaining user-input rounds | $8 - t$, saturating at 4 |
+| $L$ | Avg LLM calls per user input | 5 (empirical) |
+| $H$ | Dropped old message tokens | $T_{\text{total}} - K$ |
+| $K$ | Retained message tokens | Computed per $k$ |
+| $S$ | Fixed summary length | 500 tokens |
+| $V$ | Fixed prefix (system prompt + tools + old summary) | 5000 tokens |
+
+### Price Parameters (override per provider)
+
+| Env Var | Default | Description |
+|---|---|---|
+| `DP_P_INPUT` | 3.00 | $/MTok, uncached input price |
+| `DP_P_CACHE` | 0.30 | $/MTok, cached input price |
+| `DP_P_OUT` | 15.00 | $/MTok, output price |
+| `DP_L` | 5 | Avg LLM calls per user input (`0` = auto from stats) |
+| `DP_BASELINE_E` | 8 | Expected remaining user-input rounds baseline |
+| `DP_R` | 0.8 | Per-compaction info retention rate |
+| `DP_BETA` | 0.03 | Info loss penalty coefficient |
+| `DP_MIN_KEEP_RATIO` | 0.12 | Minimum messages to retain |
+
+### Cache Reuse Strategy
+
+The summary request uses the **same prefix** as normal conversation requests:
+
+```
+[System prompt + Tools + Old summary]     ← cache hit, billed at P_cache
+[Dropped old messages H]                  ← cache hit, billed at P_cache
+[Summary instruction L_instr]             ← cache miss, billed at P_input
+```
+
+Output is a fixed-length $S$ new summary, replacing the old one in `summary.txt`.
+
+### Safety Valve
+
+When the DP formula says "don't compact" but `current_context > max_context × 90%`, compaction is forced:
+
+```
+keep_lines = max(3, total_lines × DP_MIN_KEEP_RATIO)
+```
+
+### Retention Window Alignment
+
+The cut point is always aligned to a **real user message** (`"role":"user","content":"..."`), never at a tool result boundary. This avoids:
 
 - orphaned `tool_result`
 - preserved `assistant.tool_use` without the corresponding user turn
+
+### Provider Price Comparison
+
+| Provider | $P_{\text{input}}$ | $P_{\text{cache}}$ | $P_{\text{out}}$ | Savings/MTok | Preference |
+|----------|-----|-----|-----|-----|------|
+| Claude Sonnet 4 | 3.00 | 0.30 | 15.00 | 2.70 | Aggressive |
+| GPT-4o | 2.50 | 1.25 | 10.00 | 1.25 | Moderate |
+| DeepSeek v4 flash | 1.00 | 0.02 | 3.00 | 0.98 | Conservative |
+
+Override via environment: `DP_P_INPUT=1.00 DP_P_CACHE=0.02 DP_P_OUT=3.00 ./src/agent.sh ...`
+
+> Full derivation: [`docs/dp-compact-analysis.md`](docs/dp-compact-analysis.md).
 
 ## Skills
 
@@ -434,6 +506,11 @@ src/
     edit_file.awk
     skill_summary.awk
     event_replay.awk
+    compact_dp.awk
+    stats.awk
+docs/
+  ARCHITECTURE.md
+  dp-compact-analysis.md
 scripts/
   build.sh
 tests/
@@ -524,4 +601,4 @@ Current status:
 ## Documentation
 
 - [README.md](README.md) Chinese
-- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md)
