@@ -309,6 +309,7 @@ history 文件保存在：
 <session_id>/summary.txt
 <session_id>/todo.md
 <session_id>/plan.md
+<session_id>/stats.json
 ```
 
 含义：
@@ -318,6 +319,7 @@ history 文件保存在：
 - `summary.txt`：compact 后的历史摘要
 - `todo.md`：当前 session 的 todo 状态
 - `plan.md`：当前 session 的计划文档
+- `stats.json`：session 统计数据（LLM 调用次数、输入 token 总量、compact 次数、当前 turn 等）
 
 所有会话都会持久化到 `~/.bash-agent/projects/<project_key>/` 目录中，即使不传 `--session` 也会生成一个 session_id 并保存。可以使用 `--continue` 恢复最近一次会话。
 
@@ -330,7 +332,12 @@ compact 使用基于缓存经济学的动态规划算法决定**是否压缩**�
 对每个候选保留条数 $k$，计算净收益：
 
 $$
-\text{NetBenefit}(k) = \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{后续节省}} - \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{缓存失效损失}} - \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{压缩请求成本}} - \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真惩罚}}
+\begin{aligned}
+\text{NetBenefit}(k) &= \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{后续节省}} \\
+&- \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{缓存失效损失}} \\
+&- \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{压缩请求成本}} \\
+&- \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真惩罚}}
+\end{aligned}
 $$
 
 - 若 $\max_k \text{NetBenefit}(k) > 0$，选择最优 $k$ 执行压缩

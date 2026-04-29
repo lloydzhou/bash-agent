@@ -154,10 +154,10 @@ Session 生命周期：
 ```
 NetBenefit(k) = ① - ② - ③ - ④
 
-① (R-1) × P_cache × H / 1e6              后续 LLM 调用节省的缓存读取成本
-② (S + K) × (P_input - P_cache) / 1e6     压缩后首次 LLM 调用的缓存失效损失
-③ [P_cache×(V+H) + P_input×L_instr + P_out×S] / 1e6   压缩请求成本
-④ β × (1 - r^(c+1)) × R × avg × P_input / 1e6         信息失真预期成本
+① (R-1) × P_cache × H / 1e6                             后续 LLM 调用节省的缓存读取成本
+② (S + K) × (P_input - P_cache) / 1e6                    压缩后首次 LLM 调用的缓存失效损失
+③ [P_cache×(V+H) + P_input×L_instr + P_out×S] / 1e6     压缩请求成本
+④ β × (1 - r^(c+1)) × R × avg × P_input / 1e6           信息失真预期成本
 ```
 
 **决策规则**：若存在 k 使 NetBenefit(k) > 0，选择最大收益的 k 执行压缩；否则不压缩。

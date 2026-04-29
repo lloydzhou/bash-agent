@@ -318,6 +318,7 @@ Per-session files (inside each session directory):
 <session_id>/summary.txt
 <session_id>/todo.md
 <session_id>/plan.md
+<session_id>/stats.json
 ```
 
 Meaning:
@@ -327,6 +328,7 @@ Meaning:
 - `summary.txt`: compacted history summary
 - `todo.md`: current session todo checklist
 - `plan.md`: current session plan document
+- `stats.json`: session statistics (LLM call count, total input tokens, compaction count, current turn, etc.)
 
 All sessions are persisted under `~/.bash-agent/projects/<project_key>/`, even without `--session` (a session ID is auto-generated). Use `--continue` to resume the most recent session.
 
@@ -339,7 +341,12 @@ Compaction uses a **cache-aware dynamic programming algorithm** that computes th
 For each candidate retention count $k$, compute the net benefit:
 
 $$
-\text{NetBenefit}(k) = \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{savings}} - \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{cache miss}} - \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{compact cost}} - \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}}
+\begin{aligned}
+\text{NetBenefit}(k) &= \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{savings}} \\
+&- \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{cache miss}} \\
+&- \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{compact cost}} \\
+&- \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}}
+\end{aligned}
 $$
 
 - If $\max_k \text{NetBenefit}(k) > 0$, compact with the optimal $k$

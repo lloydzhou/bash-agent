@@ -124,6 +124,7 @@ session 数据按当前项目目录归档：
     summary.txt
     todo.md
     plan.md
+    stats.json
 ```
 
 职责分工：
@@ -138,6 +139,8 @@ session 数据按当前项目目录归档：
   - 当前 session 的待办清单，由 `TodoWrite` 维护
 - `plan.md`
   - 当前 session 的计划文档，由 `plan-lifecycle-guidance` 机制维护
+- `stats.json`
+  - session 统计数据（LLM 调用次数、输入 token 总量、compact 次数、当前 turn 等）
 
 ### 2. Context / compact
 
@@ -146,7 +149,12 @@ compact 使用**基于缓存经济学的动态规划算法**，在每一步计�
 #### 决策公式
 
 $$
-\text{NetBenefit}(k) = \frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6} - \frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6} - \frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6} - \frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}
+\begin{aligned}
+\text{NetBenefit}(k) &= \frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6} \\
+&- \frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6} \\
+&- \frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6} \\
+&- \frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}
+\end{aligned}
 $$
 
 - 若 $\max_k \text{NetBenefit}(k) > 0$，选择最优 $k$ 执行压缩
