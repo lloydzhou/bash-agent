@@ -591,7 +591,7 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 
 Current status:
 
-- compact uses real context size, not message count
+- compact uses a cache-aware DP economics algorithm for optimal compaction decisions
 - session state is project-scoped
 - tool protocol is structured and binary-safe (RESP-like length-prefix), suitable for machine consumption
 - `TodoWrite` maintains session-scoped todo state

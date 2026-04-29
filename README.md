@@ -580,7 +580,7 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 
 ## 当前状态
 
-- compact 已按真实 context 大小处理，不再按消息条数
+- compact 使用基于缓存经济学的 DP 算法，自动决策是否压缩和保留量
 - session 状态按项目隔离
 - tool 协议已经结构化，二进制安全（RESP-like length-prefix），适合机器消费
 - `TodoWrite` 负责维护 session 级 todo 状态
