@@ -191,10 +191,10 @@ summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summar
 
 由于 dropped 消息是 CONV_FILE 开头的行，它们与之前请求中的前缀完全一致。summary 请求只追加了一条 user 消息作为总结指令，不影响前缀匹配。
 
-以 Claude Sonnet 为例（无缓存 $3.00/MTok，缓存命中 $0.30/MTok），典型场景：system+tools+summary 5k tokens，dropped messages 38k tokens，summary 输出 500 tokens：
+以 Claude Sonnet 为例（无缓存 $3.00/MTok，缓存命中 $0.30/MTok），典型场景：system+tools+summary 5k tokens，dropped messages 40k tokens，summary 输出 500 tokens：
 
-- **旧方案**：43k tokens 全部无缓存 → 输入 $0.129 + 输出 $0.0075 = **$0.1365**
-- **新方案**：43k tokens 全部缓存命中 → 输入 $0.0129 + 输出 $0.0075 = **$0.0204**
+- **旧方案**：45k tokens 全部无缓存 → 输入 $0.135 + 输出 $0.0075 = **$0.1425**
+- **新方案**：45k tokens 全部缓存命中 → 输入 $0.0135 + 输出 $0.0075 = **$0.021**
 
 单次 compact 节省约 **85%**，复杂任务中多次触发时累积效应显著。
 
