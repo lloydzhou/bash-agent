@@ -780,7 +780,7 @@ impl Runtime {
         }
 
         let dp_cfg = crate::compact_dp::DPCompactConfig {
-            p_base: self.cfg.dp_p_input,
+            p_input: self.cfg.dp_p_input,
             p_cache: self.cfg.dp_p_cache,
             p_out: self.cfg.dp_p_out,
             v: self.cfg.dp_v,

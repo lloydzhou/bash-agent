@@ -4,7 +4,7 @@ use serde_json::Value;
 /// Matches DP_* env vars in bash-agent.
 #[derive(Debug, Clone)]
 pub struct DPCompactConfig {
-    pub p_base: f64,
+    pub p_input: f64,
     pub p_cache: f64,
     pub p_out: f64,
     pub v: usize,
@@ -21,7 +21,7 @@ pub struct DPCompactConfig {
 impl Default for DPCompactConfig {
     fn default() -> Self {
         Self {
-            p_base: 3.0,
+            p_input: 3.0,
             p_cache: 0.30,
             p_out: 15.0,
             v: 5000,
@@ -83,8 +83,8 @@ pub fn compact_dp_decision(
     // L: avg LLM calls per user input (auto-compute or use config)
     let l = if cfg.l > 0.0 {
         cfg.l
-    } else if current_turn > 0 {
-        let computed = (total_requests + current_turn - 1) as f64 / current_turn as f64;
+    } else if current_turn > 0 && total_requests > 0 {
+        let computed = total_requests as f64 / current_turn as f64;
         if computed >= 1.0 { computed } else { 5.0 }
     } else {
         5.0
@@ -98,7 +98,7 @@ pub fn compact_dp_decision(
     if r_t < 0.37 { r_t = 0.37; }
 
     let n_remain = r_total * cfg.avg as f64;
-    let info_loss = cfg.beta * (1.0 - r_t) * n_remain * cfg.p_base / 1_000_000.0;
+    let info_loss = cfg.beta * (1.0 - r_t) * n_remain * cfg.p_input / 1_000_000.0;
 
     let l_instr = 70.0_f64;
 
@@ -123,10 +123,10 @@ pub fn compact_dp_decision(
         let savings = (r_total - 1.0) * cfg.p_cache * h / 1_000_000.0;
 
         // ② Cache invalidation: (S + K) * (P_base - P_cache)
-        let cache_miss = (sf + kf) * (cfg.p_base - cfg.p_cache) / 1_000_000.0;
+        let cache_miss = (sf + kf) * (cfg.p_input - cfg.p_cache) / 1_000_000.0;
 
         // ③ Compaction request cost
-        let compact_cost = (cfg.p_cache * (vf + h) + cfg.p_base * l_instr + cfg.p_out * sf) / 1_000_000.0;
+        let compact_cost = (cfg.p_cache * (vf + h) + cfg.p_input * l_instr + cfg.p_out * sf) / 1_000_000.0;
 
         let benefit = savings - cache_miss - compact_cost - info_loss;
 
