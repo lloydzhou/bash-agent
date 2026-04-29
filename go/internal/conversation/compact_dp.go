@@ -8,7 +8,7 @@ import (
 // DPCompactConfig holds the parameters for the DP compact decision.
 // Matches DP_* env vars in bash-agent.
 type DPCompactConfig struct {
-	PBase        float64 // $/MTok, uncached input price
+	PInput        float64 // $/MTok, uncached input price
 	PCache       float64 // $/MTok, cached input price
 	POut         float64 // $/MTok, output price
 	V            int     // fixed prefix tokens (system prompt + tools + summary)
@@ -24,7 +24,7 @@ type DPCompactConfig struct {
 
 func DefaultDPCompactConfig() DPCompactConfig {
 	return DPCompactConfig{
-		PBase:        3.0,
+		PInput:        3.0,
 		PCache:       0.30,
 		POut:         15.0,
 		V:            5000,
@@ -104,7 +104,7 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 	NRemain := R * float64(cfg.Avg)
 
 	// ④ Info loss (constant across all k)
-	infoLoss := cfg.Beta * (1.0 - rT) * NRemain * cfg.PBase / 1_000_000
+	infoLoss := cfg.Beta * (1.0 - rT) * NRemain * cfg.PInput / 1_000_000
 
 	// Summary instruction length (fixed ~70 tokens)
 	lInstr := 70.0
@@ -141,10 +141,10 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 		savings := (R - 1) * cfg.PCache * Hf / 1_000_000
 
 		// ② Cache invalidation: (S + K) at P_base instead of P_cache
-		cacheMiss := (Sf + Kf) * (cfg.PBase - cfg.PCache) / 1_000_000
+		cacheMiss := (Sf + Kf) * (cfg.PInput - cfg.PCache) / 1_000_000
 
 		// ③ Compaction request cost
-		compactCost := (cfg.PCache*(Vf+Hf) + cfg.PBase*lInstr + cfg.POut*Sf) / 1_000_000
+		compactCost := (cfg.PCache*(Vf+Hf) + cfg.PInput*lInstr + cfg.POut*Sf) / 1_000_000
 
 		benefit := savings - cacheMiss - compactCost - infoLoss
 

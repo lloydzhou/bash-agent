@@ -35,7 +35,7 @@ type Config struct {
 	MaxContextKeepPct  int
 	MaxTurnsBeforeCompact int
 	// DP compact strategy
-	DPPBase        float64
+	DPPInput        float64
 	DPPCache       float64
 	DPPOut         float64
 	DPV            int
@@ -69,12 +69,12 @@ func Default() Config {
 		MaxContextTokens:  200000,
 		MaxContextKeepPct: 25,
 		MaxTurnsBeforeCompact: 100,
-		DPPBase:       3.0,
+		DPPInput:       3.0,
 		DPPCache:      0.30,
 		DPV:            5000,
 		DPPOut:         15.0,
 		DPS:            500,
-		DPL:            0.0,
+		DPL:            5.0,
 		DPBaselineE:    8,
 		DPEFixed:       0,
 		DPR:            0.8,
@@ -238,9 +238,9 @@ func ParseArgs(args []string) (Config, error) {
 		}
 	}
 	// DP compact strategy env overrides
-	if v := os.Getenv("DP_P_BASE"); v != "" {
+	if v := os.Getenv("DP_P_INPUT"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
-			cfg.DPPBase = f
+			cfg.DPPInput = f
 		}
 	}
 	if v := os.Getenv("DP_P_CACHE"); v != "" {

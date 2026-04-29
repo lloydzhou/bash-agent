@@ -21,12 +21,12 @@ USER_INPUT=""
 MAX_TURNS=40
 MAX_CONTEXT_TOKENS=200000
 # --- Dynamic Planning Compact (DP) ---
-: "${DP_P_BASE:=3.0}"          # $/MTok，未命中缓存的输入价格
+: "${DP_P_INPUT:=3.0}"          # $/MTok，未命中缓存的输入价格
 : "${DP_P_CACHE:=0.30}"        # $/MTok，命中缓存的输入价格
 : "${DP_P_OUT:=15.0}"          # $/MTok，输出价格
 : "${DP_V:=5000}"              # 固定前缀 token 数（system prompt + tools + summary）
 : "${DP_S:=500}"               # 固定摘要长度 token 数
-: "${DP_L:=0}"                 # 每轮用户输入平均 LLM 调用次数（0=从 stats 自动计算，默认≈5）
+: "${DP_L:=5}"                 # 每轮用户输入平均 LLM 调用次数（0=从 stats 自动计算，默认≈5）
 : "${DP_BASELINE_E:=8}"        # 预期剩余用户输入轮数（0=使用E_FIXED或2）
 : "${DP_E_FIXED:=0}"           # 固定预期剩余步数（0=使用 DP_BASELINE_E）
 : "${DP_R:=0.8}"               # 单次摘要信息保留率（递归摘要的指数衰减）
@@ -847,8 +847,8 @@ compact_dp_decision() {
         E=2
     fi
 
-    # L: avg LLM calls per user input (auto-compute from stats or use default)
-    local L=${DP_L:-0}
+    # L: avg LLM calls per user input (default 5, auto from stats if DP_L=0)
+    local L=$DP_L
     if (( L <= 0 )); then
         local total_requests=$(stats_get 1)
         if (( current_turn > 0 )); then
@@ -868,7 +868,7 @@ compact_dp_decision() {
     local prev_compactions=$(stats_get 2)
 
     awk_run -v E="$E" -v L="$L" -v avg="$avg_per_request" -v V="$DP_V" \
-            -v p_base="$DP_P_BASE" -v p_cache="$DP_P_CACHE" -v p_out="$DP_P_OUT" \
+            -v p_base="$DP_P_INPUT" -v p_cache="$DP_P_CACHE" -v p_out="$DP_P_OUT" \
             -v S="$DP_S" -v min_keep_ratio="$DP_MIN_KEEP_RATIO" \
             -v c="$prev_compactions" -v r="$DP_R" -v beta="$DP_BETA" \
             -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"

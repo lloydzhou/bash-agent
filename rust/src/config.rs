@@ -25,7 +25,7 @@ pub struct Config {
     pub max_context_keep_pct: i32,
     pub max_turns_before_compact: i32,
     // DP compact strategy
-    pub dp_p_base: f64,
+    pub dp_p_input: f64,
     pub dp_p_cache: f64,
     pub dp_p_out: f64,
     pub dp_v: usize,
@@ -64,12 +64,12 @@ impl Default for Config {
             max_context_tokens: 200_000,
             max_context_keep_pct: 25,
             max_turns_before_compact: 100,
-            dp_p_base: 3.0,
+            dp_p_input: 3.0,
             dp_p_cache: 0.30,
             dp_p_out: 15.0,
             dp_v: 5000,
             dp_s: 500,
-            dp_l: 0.0,
+            dp_l: 5.0,
             dp_baseline_e: 8,
             dp_e_fixed: 0,
             dp_r: 0.8,
@@ -216,8 +216,8 @@ pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
         }
     }
     // DP compact strategy env overrides
-    if let Ok(v) = std::env::var("DP_P_BASE") {
-        if let Ok(f) = v.parse::<f64>() { if f > 0.0 { cfg.dp_p_base = f; } }
+    if let Ok(v) = std::env::var("DP_P_INPUT") {
+        if let Ok(f) = v.parse::<f64>() { if f > 0.0 { cfg.dp_p_input = f; } }
     }
     if let Ok(v) = std::env::var("DP_P_CACHE") {
         if let Ok(f) = v.parse::<f64>() { if f >= 0.0 { cfg.dp_p_cache = f; } }

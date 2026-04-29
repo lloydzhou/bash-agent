@@ -1111,7 +1111,7 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 
 	// DP decision
 	dpCfg := conversation.DPCompactConfig{
-		PBase:        rt.cfg.DPPBase,
+		PInput:        rt.cfg.DPPInput,
 		PCache:       rt.cfg.DPPCache,
 		POut:         rt.cfg.DPPOut,
 		V:            rt.cfg.DPV,
