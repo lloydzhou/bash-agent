@@ -357,7 +357,7 @@ $$
 | Variable | Meaning | Default |
 |---|---|---|
 | $R = E \times L$ | Expected remaining LLM calls | — |
-| $E$ | Expected remaining user-input rounds | $8 - t$, saturating at 4 |
+| $E$ | Expected remaining user-input rounds | $\max(8 - t,\; 4)$, monotonically non-increasing |
 | $L$ | Avg LLM calls per user input | 5 (empirical) |
 | $H$ | Dropped old message tokens | $T_{\text{total}} - K$ |
 | $K$ | Retained message tokens | Computed per $k$ |

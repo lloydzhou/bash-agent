@@ -165,7 +165,7 @@ $$
 | 变量 | 含义 | 默认 |
 |---|---|---|
 | $R = E \times L$ | 预期剩余 LLM 调用总次数 | — |
-| $E$ | 预期剩余用户输入轮数 | `DP_BASELINE_E - t`，饱和至 `baseline/2` |
+| $E$ | 预期剩余用户输入轮数 | `max(DP_BASELINE_E - t, baseline/2)`，单调非递增 |
 | $L$ | 每轮用户输入平均 LLM 调用次数 | 5（`DP_L=0` 时从 stats 自动计算） |
 | $H = T_{\text{total}} - K$ | 被丢弃的旧消息 token 数 | 遍历 $k$ 计算 |
 | $S$ | 固定摘要长度 | 500 token |

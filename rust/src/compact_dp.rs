@@ -27,7 +27,7 @@ impl Default for DPCompactConfig {
             v: 5000,
             s: 500,
             avg: 4000,
-            l: 0.0,  // auto-compute from stats
+            l: 5.0,
             baseline_e: 8,
             e_fixed: 0,
             r: 0.8,
@@ -72,10 +72,8 @@ pub fn compact_dp_decision(
         cfg.e_fixed as f64
     } else if cfg.baseline_e > 0 {
         let remaining = cfg.baseline_e - current_turn as i32;
-        let remaining = if remaining <= 0 {
-            if cfg.baseline_e > 1 { cfg.baseline_e / 2 } else { 2 }
-        } else { remaining };
-        remaining as f64
+        let floor = if cfg.baseline_e > 1 { cfg.baseline_e / 2 } else { 2 };
+        remaining.max(floor) as f64
     } else {
         2.0
     };

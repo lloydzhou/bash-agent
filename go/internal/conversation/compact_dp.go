@@ -79,12 +79,12 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 		E = float64(cfg.EFixed)
 	} else if cfg.BaselineE > 0 {
 		remaining := cfg.BaselineE - currentTurn
-		if remaining <= 0 {
-			if cfg.BaselineE > 1 {
-				remaining = cfg.BaselineE / 2
-			} else {
-				remaining = 2
-			}
+		floor := cfg.BaselineE / 2
+		if floor < 2 {
+			floor = 2
+		}
+		if remaining < floor {
+			remaining = floor
 		}
 		E = float64(remaining)
 	} else {

@@ -838,11 +838,8 @@ compact_dp_decision() {
         E=$DP_E_FIXED
     elif (( baseline > 0 )); then
         local remaining=$(( baseline - current_turn ))
-        if (( remaining <= 0 )); then
-            E=$(( baseline > 1 ? baseline / 2 : 2 ))
-        else
-            E=$remaining
-        fi
+        local floor=$(( baseline > 1 ? baseline / 2 : 2 ))
+        E=$(( remaining > floor ? remaining : floor ))
     else
         E=2
     fi

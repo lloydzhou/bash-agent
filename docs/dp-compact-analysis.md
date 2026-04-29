@@ -126,14 +126,15 @@ fi
 **E 的衰减行为：**
 
 ```
-Turn 1: E = 8 - 1 = 7
-Turn 5: E = 8 - 5 = 3
-Turn 8: E = max(8-8, 8/2) = 4  ← 开始饱和
-Turn 20: E = max(8-20, 8/2) = 4
-Turn 100: E = max(8-100, 8/2) = 4  ← 恒定
+Turn 1: E = max(8-1, 4) = 7
+Turn 5: E = max(8-5, 4) = 4  ← 达到下限
+Turn 7: E = max(8-7, 4) = 4
+Turn 8: E = max(0, 4) = 4
+Turn 20: E = max(-12, 4) = 4
+Turn 100: E = max(-92, 4) = 4
 ```
 
-**长 session 行为**：超过 DP_BASELINE_E 轮后 E 恒定为 baseline/2。这不影响正确性——上下文大小（H = total_tokens - K）随会话增长主导收益公式，DP 仍会在上下文够大时触发压缩。
+E 始终 = max(remaining, baseline/2)，单调非递增，无跳变。
 
 ### 跨任务行为
 
@@ -321,23 +322,21 @@ if DP_E_FIXED > 0:
     E = DP_E_FIXED
 elif DP_BASELINE_E > 0:
     remaining = DP_BASELINE_E - current_turn
-    if remaining <= 0:
-        E = DP_BASELINE_E / 2    # 饱和
-    else:
-        E = remaining
+    floor = DP_BASELINE_E / 2
+    E = max(remaining, floor)
 else:
     E = 2
 ```
 
-E 的衰减行为：
+E = max(DP_BASELINE_E - t, baseline/2)，单调非递增，无跳变。
 ```
-Turn 1: E = 8 - 1 = 7,  R = 7 × 5 = 35
-Turn 5: E = 8 - 5 = 3,  R = 3 × 5 = 15
-Turn 8: E = max(8-8, 4) = 4,  R = 20  ← 饱和
-Turn 20: E = 4,  R = 20  ← 恒定
+Turn 1: E = max(7, 4) = 7,  R = 35
+Turn 5: E = max(3, 4) = 4,  R = 20
+Turn 8: E = max(0, 4) = 4,  R = 20
+Turn 20: E = max(-12, 4) = 4,  R = 20
 ```
 
-长 session 中 E 饱和，但上下文大小主导收益，DP 仍正确触发。
+长 session 中 E 以 baseline/2 为下限，但上下文大小主导收益，DP 仍正确触发。
 
 ---
 
