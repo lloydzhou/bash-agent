@@ -233,6 +233,52 @@ func ParseArgs(args []string) (Config, error) {
 			cfg.MaxTurnsBeforeCompact = n
 		}
 	}
+	// DP compact strategy env overrides
+	if v := os.Getenv("DP_P_BASE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.DPPBase = f
+		}
+	}
+	if v := os.Getenv("DP_P_CACHE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			cfg.DPPCache = f
+		}
+	}
+	if v := os.Getenv("DP_V"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.DPV = n
+		}
+	}
+	if v := os.Getenv("DP_PENALTY"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			cfg.DPPenalty = f
+		}
+	}
+	if v := os.Getenv("DP_BASELINE_E"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.DPBaselineE = n
+		}
+	}
+	if v := os.Getenv("DP_E_FIXED"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.DPEFixed = n
+		}
+	}
+	if v := os.Getenv("DP_R"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
+			cfg.DPR = f
+		}
+	}
+	if v := os.Getenv("DP_BETA"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			cfg.DPBeta = f
+		}
+	}
+	if v := os.Getenv("DP_MIN_KEEP_RATIO"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f < 1 {
+			cfg.DPMinKeepRatio = f
+		}
+	}
 
 	return cfg, nil
 }

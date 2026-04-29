@@ -211,6 +211,34 @@ pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
             cfg.max_turns_before_compact = n;
         }
     }
+    // DP compact strategy env overrides
+    if let Ok(v) = std::env::var("DP_P_BASE") {
+        if let Ok(f) = v.parse::<f64>() { if f > 0.0 { cfg.dp_p_base = f; } }
+    }
+    if let Ok(v) = std::env::var("DP_P_CACHE") {
+        if let Ok(f) = v.parse::<f64>() { if f >= 0.0 { cfg.dp_p_cache = f; } }
+    }
+    if let Ok(v) = std::env::var("DP_V") {
+        if let Ok(n) = v.parse::<usize>() { if n > 0 { cfg.dp_v = n; } }
+    }
+    if let Ok(v) = std::env::var("DP_PENALTY") {
+        if let Ok(f) = v.parse::<f64>() { if f >= 0.0 { cfg.dp_penalty = f; } }
+    }
+    if let Ok(v) = std::env::var("DP_BASELINE_E") {
+        if let Ok(n) = v.parse::<i32>() { if n >= 0 { cfg.dp_baseline_e = n; } }
+    }
+    if let Ok(v) = std::env::var("DP_E_FIXED") {
+        if let Ok(n) = v.parse::<i32>() { if n >= 0 { cfg.dp_e_fixed = n; } }
+    }
+    if let Ok(v) = std::env::var("DP_R") {
+        if let Ok(f) = v.parse::<f64>() { if f > 0.0 && f <= 1.0 { cfg.dp_r = f; } }
+    }
+    if let Ok(v) = std::env::var("DP_BETA") {
+        if let Ok(f) = v.parse::<f64>() { if f >= 0.0 { cfg.dp_beta = f; } }
+    }
+    if let Ok(v) = std::env::var("DP_MIN_KEEP_RATIO") {
+        if let Ok(f) = v.parse::<f64>() { if f > 0.0 && f < 1.0 { cfg.dp_min_keep_ratio = f; } }
+    }
 
     match cfg.provider.as_str() {
         "claude" => {

@@ -21,15 +21,15 @@ USER_INPUT=""
 MAX_TURNS=40
 MAX_CONTEXT_TOKENS=200000
 # --- Dynamic Planning Compact (DP) ---
-DP_P_BASE=3.0          # $/MTok，未命中缓存的输入价格
-DP_P_CACHE=0.30        # $/MTok，命中缓存的输入价格
-DP_V=20000             # 固定开销 token 数（系统提示 + 当前用户输入）
-DP_PENALTY=0.25        # $，压缩开销（摘要调用 + 缓存未命中）
-DP_BASELINE_E=8        # 预期剩余用户输入轮数（0=使用E_FIXED或2）
-DP_E_FIXED=0           # 固定预期剩余步数（0=使用 DP_BASELINE_E）
-DP_R=0.7               # 单次摘要信息保留率（递归摘要的指数衰减）
-DP_BETA=0.5            # 信息损失惩罚系数（$(1-r_t)² × N_remain × β）
-DP_MIN_KEEP_RATIO=0.12 # 最少保留消息比例（防止过度压缩）
+: "${DP_P_BASE:=3.0}"          # $/MTok，未命中缓存的输入价格
+: "${DP_P_CACHE:=0.30}"        # $/MTok，命中缓存的输入价格
+: "${DP_V:=20000}"             # 固定开销 token 数（系统提示 + 当前用户输入）
+: "${DP_PENALTY:=0.25}"        # $，压缩开销（摘要调用 + 缓存未命中）
+: "${DP_BASELINE_E:=8}"        # 预期剩余用户输入轮数（0=使用E_FIXED或2）
+: "${DP_E_FIXED:=0}"           # 固定预期剩余步数（0=使用 DP_BASELINE_E）
+: "${DP_R:=0.7}"               # 单次摘要信息保留率（递归摘要的指数衰减）
+: "${DP_BETA:=0.5}"            # 信息损失惩罚系数（$(1-r_t)² × N_remain × β）
+: "${DP_MIN_KEEP_RATIO:=0.12}" # 最少保留消息比例（防止过度压缩）
 declare -a SKILL_NAMES=()
 : "${THINKING_BUDGET:=2048}"
 
