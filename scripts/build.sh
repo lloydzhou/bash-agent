@@ -69,6 +69,7 @@ awk_files = {
     "transport_openai_sse": ("transport_openai_sse.awk", "_AWK_TRANSPORT_OPENAI_SSE"),
     "event_replay": ("event_replay.awk", "_AWK_EVENT_REPLAY"),
     "stats": ("stats.awk", "_AWK_STATS"),
+    "compact_dp": ("compact_dp.awk", "_AWK_COMPACT_DP"),
 }
 
 awk_bodies = {}
@@ -170,6 +171,8 @@ content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.
 content = content.replace('awk_run -v action=update -f "$AWK_DIR/stats.awk"', 'awk_run -v action=update "${_AWK_STATS}"')
 content = content.replace('awk_run -v action=dump -f "$AWK_DIR/stats.awk"', 'awk_run -v action=dump "${_AWK_STATS}"')
 content = content.replace('awk_run -v action=sync -f "$AWK_DIR/stats.awk"', 'awk_run -v action=sync "${_AWK_STATS}"')
+# --- Inline compact_dp.awk reference ---
+content = content.replace('-f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"', '"${_AWK_COMPACT_DP}" "$CONV_FILE"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)

@@ -19,9 +19,19 @@ API_KEY=""
 BASE_URL=""
 USER_INPUT=""
 MAX_TURNS=40
-MAX_CONTEXT_KEEP_PCT=25
 MAX_CONTEXT_TOKENS=200000
-: "${MAX_TURNS_BEFORE_COMPACT:=100}"
+# --- Dynamic Planning Compact (DP) ---
+: "${DP_P_INPUT:=3.0}"          # $/MTok，未命中缓存的输入价格
+: "${DP_P_CACHE:=0.30}"        # $/MTok，命中缓存的输入价格
+: "${DP_P_OUT:=15.0}"          # $/MTok，输出价格
+: "${DP_V:=5000}"              # 固定前缀 token 数（system prompt + tools + summary）
+: "${DP_S:=500}"               # 固定摘要长度 token 数
+: "${DP_L:=5}"                 # 每轮用户输入平均 LLM 调用次数（0=从 stats 自动计算，默认≈5）
+: "${DP_BASELINE_E:=8}"        # 预期剩余用户输入轮数（0=使用E_FIXED或2）
+: "${DP_E_FIXED:=0}"           # 固定预期剩余步数（0=使用 DP_BASELINE_E）
+: "${DP_R:=0.8}"               # 单次摘要信息保留率（递归摘要的指数衰减）
+: "${DP_BETA:=0.03}"           # 信息损失惩罚系数（典型值 0.03）
+: "${DP_MIN_KEEP_RATIO:=0.12}" # 最少保留消息比例（防止过度压缩）
 declare -a SKILL_NAMES=()
 : "${THINKING_BUDGET:=2048}"
 
@@ -760,42 +770,6 @@ context_append_summary() {
     printf '%s\n' "$text" > "$CONTEXT_SUMMARY_FILE"
 }
 
-compact_keep_lines() {
-    local target_keep_bytes="$1"
-    awk_run -v target_bytes="$target_keep_bytes" '
-        {
-            sizes[NR] = length($0) + 1
-            turn_start[NR] = ($0 ~ /^\{"role":"user","content":"/)
-        }
-        END {
-            keep = 0
-            bytes = 0
-            for (i = NR; i >= 1; i--) {
-                if (keep > 0 && bytes + sizes[i] > target_bytes) break
-                bytes += sizes[i]
-                keep++
-            }
-            if (keep == 0 && NR > 0) keep = 1
-
-            start = NR - keep + 1
-            adjusted = start
-            while (adjusted <= NR && !turn_start[adjusted]) {
-                adjusted++
-            }
-
-            if (adjusted <= NR) {
-                start = adjusted
-            } else {
-                while (start > 1 && !turn_start[start]) {
-                    start--
-                }
-            }
-
-            print NR - start + 1
-        }
-    ' "$CONV_FILE"
-}
-
 stats_load() {
     local idx=0
     while IFS=$'\t' read -r key val; do
@@ -851,41 +825,77 @@ stats_show_osc() {
         "${STATS_CACHE[3]:-0}" "${STATS_CACHE[4]:-0}" "${STATS_CACHE[7]:-0}"
 }
 
-compact_context_window() {
-    local trigger="$1" force="${2:-false}" turn_triggered=false
-    local total_bytes total_lines keep_lines drop tmp_dropped dropped_messages summary_response
+# --- Dynamic Planning Compact Decision ---
+# DP compact decision: find optimal k via cache-aware economics.
+# Formula: NetBenefit(k) = ①savings - ②cache_miss - ③compact_cost - ④info_loss
+# Returns: number of lines to keep (turn-aligned), or "0" if no compact beneficial.
+compact_dp_decision() {
+    local current_turn=$(stats_get 0)
+    # E: expected remaining user-input rounds
+    # DP_E_FIXED > (DP_BASELINE_E - current_turn) > baseline/2
+    local baseline=${DP_BASELINE_E:-8} E
+    if (( DP_E_FIXED > 0 )); then
+        E=$DP_E_FIXED
+    elif (( baseline > 0 )); then
+        local remaining=$(( baseline - current_turn ))
+        if (( remaining <= 0 )); then
+            E=$(( baseline > 1 ? baseline / 2 : 2 ))
+        else
+            E=$remaining
+        fi
+    else
+        E=2
+    fi
 
-    if ! $force; then
-        local ct=$(stats_get 7) tc=$(stats_get 0)
-        if [[ "$ct" -gt 0 && "$ct" -gt "$MAX_CONTEXT_TOKENS" ]]; then
-            :  # token threshold reached
-        elif [[ "$tc" -gt "$MAX_TURNS_BEFORE_COMPACT" ]]; then
-            turn_triggered=true
+    # L: avg LLM calls per user input (default 5, auto from stats if DP_L=0)
+    local L=$DP_L
+    local L_raw=0
+    if (( L <= 0 )); then
+        L_raw=$(stats_get 1)
+    fi
+
+    # avg: average input tokens per LLM request (for info loss N_remain)
+    local avg_per_request=4000
+    local total_input_tokens=$(stats_get 3)
+    local total_requests=$(stats_get 1)
+    if (( total_requests > 0 )); then
+        avg_per_request=$(( total_input_tokens / total_requests ))
+    fi
+
+    local prev_compactions=$(stats_get 2)
+
+    awk_run -v E="$E" -v L="$L" -v L_raw="$L_raw" -v t="$current_turn" \
+            -v avg="$avg_per_request" -v V="$DP_V" \
+            -v p_input="$DP_P_INPUT" -v p_cache="$DP_P_CACHE" -v p_out="$DP_P_OUT" \
+            -v S="$DP_S" -v min_keep_ratio="$DP_MIN_KEEP_RATIO" \
+            -v c="$prev_compactions" -v r="$DP_R" -v beta="$DP_BETA" \
+            -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"
+}
+
+compact_context_window() {
+    local total_lines keep_lines drop tmp_dropped dropped_messages summary_response
+
+    keep_lines=$(compact_dp_decision) || true
+    [[ -n "$keep_lines" ]] || keep_lines=0
+    if (( keep_lines == 0 )); then
+        # Safety valve: DP says no, but check context size
+        local ct=$(stats_get 7)
+        if (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
+            total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+            keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" 'BEGIN { k=int(lines*r+0.5); print k>3?k:3 }')
         else
             return 1
         fi
     fi
 
-    total_bytes=$(wc -c < "$CONV_FILE" 2>/dev/null || echo 0)
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-    keep_lines=$(compact_keep_lines $(( total_bytes * MAX_CONTEXT_KEEP_PCT / 100 )))
-    [[ -n "$keep_lines" ]] || keep_lines=0
-    (( total_lines > keep_lines )) || keep_lines=$total_lines
+    (( keep_lines < total_lines )) || return 1
     drop=$(( total_lines - keep_lines ))
-    [[ $drop -gt 0 ]] || return 1
-
-    # If triggered by turn count, only compact if dropping > half the lines
-    [[ "$turn_triggered" == false ]] || (( drop > total_lines / 2 )) || return 1
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
     dropped_messages=$(<"$tmp_dropped")
 
-    if [[ "$trigger" == "manual" && -z "${API_URL:-}" ]]; then
-        validate_config
-    fi
-    # Pass raw dropped messages to run_summary_call
-    # which builds a cache-friendly request (system+tools prefix reused)
     summary_response=$(run_summary_call "$dropped_messages")
     context_append_summary "$summary_response"
 
@@ -896,13 +906,12 @@ compact_context_window() {
     fi
 
     rm -f "$tmp_dropped"
-    # Recalculate turn count based on remaining conversation history
     local remaining_turns
-    remaining_turns=$(grep -c '"type":"user_input"' "$CONV_FILE" 2>/dev/null || echo 0)
+    remaining_turns=$(grep -c '"role":"user","content":"' "$CONV_FILE" 2>/dev/null || echo 0)
     stats_set 0=$remaining_turns
     if is_stream_json_mode; then
-        printf '%s\n' "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":\"$(json_escape "$trigger")\"}"
-    elif [[ "$trigger" == "auto" ]]; then
+        printf '%s\n' '{"type":"context_update","kind":"compact","trigger":"auto"}'
+    else
         printf '\033[36mContext compacted automatically.\033[0m\n'
     fi
     return 0
@@ -1121,6 +1130,7 @@ agent_loop_stream() {
     local turn=0
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
+        stats_set 9=$turn
 
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
@@ -1209,7 +1219,7 @@ agent_loop_stream() {
             # Update context tokens and trigger compact if needed
             if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
                 stats_set 7=${_ctx_tokens}
-                compact_context_window "auto" false || true
+                compact_context_window || true
             else
                 # No usage data (e.g. retry) — skip compact
                 :

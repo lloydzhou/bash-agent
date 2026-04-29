@@ -1944,7 +1944,110 @@ test_agent_max_context() {
     fi
 }
 
-# Test 36: stats.json created on agent run
+# Test 37: compact_dp.awk — DP compact decision algorithm
+test_compact_dp_awk() {
+    info "Test 37: compact_dp.awk DP compact decision"
+    local tmpdir conv_file
+    tmpdir=$(mktemp -d)
+    conv_file="$tmpdir/conv.jsonl"
+
+    # Helper: generate conversation with N groups
+    gen_conv() {
+        local groups=$1 total_token_target=$2 output=$3
+        # total_token_target = 所有消息的总 token 数
+        local bytes_per_line=$(( total_token_target * 4 / groups / 3 ))
+        (( bytes_per_line > 20 )) || bytes_per_line=20
+        > "$output"
+        for i in $(seq 1 $groups); do
+            local pad
+            pad=$(printf "x%0${bytes_per_line}d" 1 2>/dev/null | tr '0-9' 'a-k')
+            echo "{\"role\":\"user\",\"content\":\"${pad:0:$bytes_per_line}\"}" >> "$output"
+            echo "{\"role\":\"assistant\",\"content\":\"${pad:0:$((bytes_per_line*2))}\"}" >> "$output"
+            echo "{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t$i\",\"content\":\"${pad:0:$((bytes_per_line/2))}\"}]}" >> "$output"
+        done
+    }
+
+    # dp_run: run compact_dp.awk with new 4-term formula
+    # Args: E L [c]
+    dp_run() {
+        protocol_awk -f "$AWK_DIR/compact_dp.awk" \
+            -v E="${1:-8}" -v L="${2:-5}" -v avg=4000 -v V=5000 \
+            -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
+            -v S=500 -v min_keep_ratio=0.12 \
+            -v c="${3:-0}" -v r=0.8 -v beta=0.03 "$conv_file" 2>/dev/null
+    }
+
+    # --- 37a: Empty ---
+    : > "$conv_file"
+    check "compact_dp: empty conv -> 0" "$(dp_run 8 3 0)" "0"
+
+    # --- 37b: Tiny (5k tokens, below useful threshold) ---
+    gen_conv 2 5000 "$conv_file"
+    check "compact_dp: tiny conv -> 0" "$(dp_run 8 3 0)" "0"
+
+    # --- 37c: Medium (30k tokens, R=40) — compact is now worth it with corrected formula ---
+    gen_conv 10 30000 "$conv_file"
+    result=$(dp_run 8 5 0)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: medium R=40 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: medium R=40 -> $result"; ((FAIL++)); }
+    # R=5 with small context should not compact
+    gen_conv 3 5000 "$conv_file"
+    check "compact_dp: small R=5 -> 0" "$(dp_run 1 5 0)" "0"
+
+    # --- 37d: Large (100k tokens, R=E*L=40) — should compact ---
+    gen_conv 20 100000 "$conv_file"
+    result=$(dp_run 8 5 0)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: large R=40 c=0 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large R=40 c=0 -> $result"; ((FAIL++)); }
+    # R=5 with large context also compacts — formula correctly sees benefit
+    result=$(dp_run 1 5 0)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: large R=5 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large R=5 -> $result"; ((FAIL++)); }
+    result=$(dp_run 8 5 3)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: large R=40 c=3 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: large R=40 c=3 -> $result"; ((FAIL++)); }
+
+    # --- 37e: Extreme beta suppresses ---
+    result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
+        -v E=8 -v L=5 -v avg=4000 -v V=5000 -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
+        -v S=500 -v min_keep_ratio=0.12 -v c=0 -v r=0.8 -v beta=50.0 "$conv_file" 2>/dev/null)
+    check "compact_dp: beta=50 -> 0" "$result" "0"
+
+    # --- 37f: Turn alignment ---
+    cat > "$conv_file" << 'TURNEOF'
+{"role":"assistant","content":"intro"}
+{"role":"user","content":"step 1"}
+{"role":"assistant","content":"response 1"}
+{"role":"user","content":[{"type":"tool_result","content":"result 1"}]}
+{"role":"assistant","content":"response 1b"}
+{"role":"user","content":"step 2"}
+{"role":"assistant","content":"response 2"}
+{"role":"user","content":"step 3"}
+TURNEOF
+    result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
+        -v E=10 -v L=3 -v avg=4000 -v V=0 -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
+        -v S=0 -v min_keep_ratio=0.12 -v c=0 -v r=0.8 -v beta=0.001 "$conv_file" 2>/dev/null)
+    if [[ "$result" == "3" || "$result" == "4" ]]; then
+        green "compact_dp: turn alignment -> $result"; ((PASS++))
+    else
+        red "compact_dp: turn alignment -> $result (expected 3 or 4)"; ((FAIL++))
+    fi
+
+    # --- 37g: Long session E saturation (stats[0] > baseline) ---
+    # After baseline turns, E saturates at baseline/2 = 4, R=4*3=12
+    # DP should still recommend compaction with very large context
+    gen_conv 30 200000 "$conv_file"
+    result=$(dp_run 4 5 0)  # E=4 (saturated), L=5, R=20
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: long session E=4 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: long session E=4 -> $result"; ((FAIL++)); }
+
+    rm -rf "$tmpdir"
+}
 test_agent_stats_json() {
     info "Test 36: stats.json created on agent run"
     local home_dir stats_file
@@ -2018,6 +2121,7 @@ test_agent_edit_code_snippet
 test_stats_awk
 test_agent_max_context
 test_agent_stats_json
+test_compact_dp_awk
 
 echo ""
 echo "=============================="

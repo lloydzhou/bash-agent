@@ -31,9 +31,21 @@ type Config struct {
 	BaseURL            string
 	Prompt             string
 	MaxTurns           int
-	MaxContextTokens  int
-	MaxContextKeepPct int
+	MaxContextTokens   int
+	MaxContextKeepPct  int
 	MaxTurnsBeforeCompact int
+	// DP compact strategy
+	DPPInput        float64
+	DPPCache       float64
+	DPPOut         float64
+	DPV            int
+	DPS            int
+	DPL            float64
+	DPBaselineE    int
+	DPEFixed       int
+	DPR            float64
+	DPBeta         float64
+	DPMinKeepRatio float64
 	Skills             []string
 	ThinkingBudget     int
 
@@ -57,6 +69,17 @@ func Default() Config {
 		MaxContextTokens:  200000,
 		MaxContextKeepPct: 25,
 		MaxTurnsBeforeCompact: 100,
+		DPPInput:       3.0,
+		DPPCache:      0.30,
+		DPV:            5000,
+		DPPOut:         15.0,
+		DPS:            500,
+		DPL:            5.0,
+		DPBaselineE:    8,
+		DPEFixed:       0,
+		DPR:            0.8,
+		DPBeta:         0.03,
+		DPMinKeepRatio: 0.12,
 		ThinkingBudget:     2048,
 	}
 }
@@ -212,6 +235,62 @@ func ParseArgs(args []string) (Config, error) {
 	if v := os.Getenv("MAX_TURNS_BEFORE_COMPACT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.MaxTurnsBeforeCompact = n
+		}
+	}
+	// DP compact strategy env overrides
+	if v := os.Getenv("DP_P_INPUT"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.DPPInput = f
+		}
+	}
+	if v := os.Getenv("DP_P_CACHE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			cfg.DPPCache = f
+		}
+	}
+	if v := os.Getenv("DP_P_OUT"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			cfg.DPPOut = f
+		}
+	}
+	if v := os.Getenv("DP_V"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.DPV = n
+		}
+	}
+	if v := os.Getenv("DP_S"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.DPS = n
+		}
+	}
+	if v := os.Getenv("DP_L"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			cfg.DPL = f
+		}
+	}
+	if v := os.Getenv("DP_BASELINE_E"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.DPBaselineE = n
+		}
+	}
+	if v := os.Getenv("DP_E_FIXED"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.DPEFixed = n
+		}
+	}
+	if v := os.Getenv("DP_R"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
+			cfg.DPR = f
+		}
+	}
+	if v := os.Getenv("DP_BETA"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			cfg.DPBeta = f
+		}
+	}
+	if v := os.Getenv("DP_MIN_KEEP_RATIO"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f < 1 {
+			cfg.DPMinKeepRatio = f
 		}
 	}
 
