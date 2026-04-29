@@ -387,6 +387,8 @@ $$
 
 输出固定长度 $S$ 的新摘要，替代旧摘要写入 `summary.txt`。
 
+以 Claude Sonnet 4 为例，典型 45k tokens 的 compact 请求，缓存复用后单次成本从约 $0.143 降至约 $0.021，**节省约 85%**。
+
 ### 安全阀
 
 当 DP 公式判断不压缩，但 `current_context > max_context × 90%` 时，强制压缩：

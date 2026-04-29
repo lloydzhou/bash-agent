@@ -396,6 +396,8 @@ The summary request uses the **same prefix** as normal conversation requests:
 
 Output is a fixed-length $S$ new summary, replacing the old one in `summary.txt`.
 
+With Claude Sonnet 4, a typical 45k-token compact request drops from ~$0.143 to ~$0.021 thanks to cache reuse — **~85% savings** per compaction.
+
 ### Safety Valve
 
 When the DP formula says "don't compact" but `current_context > max_context × 90%`, compaction is forced:
