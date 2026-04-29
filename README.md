@@ -325,7 +325,7 @@ history 文件保存在：
 
 ## Context Compact
 
-compact 使用基于缓存经济学的动态规划算法决定**是否压缩**和**保留多少消息**，而非简单的阈值触发。
+compact 使用**缓存对齐摘要（Cache-Aligned Summarization）**和基于缓存经济学的动态规划算法，决定**是否压缩**和**保留多少消息**，而非简单的阈值触发。摘要请求复用主 agent 的前缀以实现缓存命中，单次压缩节省约 85% 的 input token 费用。
 
 ### 决策公式
 
@@ -375,9 +375,9 @@ $$
 | `DP_BETA` | 0.03 | 信息损失折算系数 |
 | `DP_MIN_KEEP_RATIO` | 0.12 | 最少保留消息比例 |
 
-### 缓存复用策略
+### 缓存对齐摘要（Cache-Aligned Summarization）
 
-压缩请求（summary call）的消息序列与普通对话保持**相同前缀**：
+压缩请求（summary call）与普通对话保持**相同前缀**（system prompt + tools + cache-control markers），以实现前缀缓存命中：
 
 ```
 [System prompt + Tools + Old summary]     ← 缓存命中，按 P_cache 计费
@@ -387,7 +387,7 @@ $$
 
 输出固定长度 $S$ 的新摘要，替代旧摘要写入 `summary.txt`。
 
-以 Claude Sonnet 4 为例，典型 45k tokens 的 compact 请求，相比不使用前缀缓存的传统 summary 方式，缓存复用将单次成本从约 $0.143 降至约 $0.021，**节省约 85%**。
+以 Claude Sonnet 4 为例，典型 45k tokens 的 compact 请求，相比不使用前缀缓存的传统 summary 方式，缓存对齐摘要将单次成本从约 $0.143 降至约 $0.021，**节省约 85%**。
 
 ### 安全阀
 
@@ -589,7 +589,7 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 
 ## 当前状态
 
-- compact 使用基于缓存经济学的 DP 算法，自动决策是否压缩和保留量
+- compact 使用缓存对齐摘要（Cache-Aligned Summarization）+ DP 算法，自动决策是否压缩和保留量
 - session 状态按项目隔离
 - tool 协议已经结构化，二进制安全（RESP-like length-prefix），适合机器消费
 - `TodoWrite` 负责维护 session 级 todo 状态

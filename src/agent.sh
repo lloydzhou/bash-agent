@@ -827,6 +827,8 @@ stats_show_osc() {
 
 # --- Dynamic Planning Compact Decision ---
 # DP compact decision: find optimal k via cache-aware economics.
+# Cache-Aligned Summarization: the summary call reuses the main agent's
+# prefix (system prompt + tools + cache-control markers) for cache hits.
 # Formula: NetBenefit(k) = ①savings - ②cache_miss - ③compact_cost - ④info_loss
 # Returns: number of lines to keep (turn-aligned), or "0" if no compact beneficial.
 compact_dp_decision() {

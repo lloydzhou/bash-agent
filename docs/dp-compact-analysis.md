@@ -1,6 +1,8 @@
 # DP Compact Algorithm — 设计分析与推导
 
 > 实现记录见 `plan.md`。本文档保留完整的设计推导过程。
+>
+> 相关技术：**Cache-Aligned Summarization** — 摘要请求复用主 agent 的前缀以实现缓存命中，单次压缩节省约 85% input token 费用。
 
 ## 1. 核心问题
 
@@ -170,7 +172,7 @@ NetBenefit(k) = ① - ② - ③ - ④
 
 #### ③ 压缩操作本身的请求成本
 
-压缩请求采用**缓存复用策略**：前缀保持旧摘要不变（V = system prompt + tools + old summary），加上被丢弃消息 H。这些命中缓存按 P_cache 计费。末尾追加的指令 L_instr 无法命中按 P_input 计费。输出 S 按 P_out 计费。
+压缩请求采用**缓存对齐摘要（Cache-Aligned Summarization）**：前缀保持旧摘要不变（V = system prompt + tools + old summary），加上被丢弃消息 H。这些命中缓存按 P_cache 计费。末尾追加的指令 L_instr 无法命中按 P_input 计费。输出 S 按 P_out 计费。
 
 #### ④ 信息失真带来的预期额外成本
 

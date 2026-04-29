@@ -846,7 +846,8 @@ impl Runtime {
 
     fn run_summary_call(&mut self, dropped_lines: &[Value]) -> Result<String> {
         // Build messages: dropped conversation lines + summary instruction
-        // Uses same system prompt + tools + thinking as normal requests for cache reuse
+        // Cache-Aligned Summarization: uses same system prompt + tools +
+        // thinking as normal requests for prefix cache hit.
         let summary_instruction = "The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:";
         let mut messages: Vec<Value> = dropped_lines.to_vec();
         messages.push(json!({"role":"user","content":summary_instruction}));

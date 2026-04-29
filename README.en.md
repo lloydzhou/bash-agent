@@ -334,7 +334,9 @@ All sessions are persisted under `~/.bash-agent/projects/<project_key>/`, even w
 
 ## Context Compaction
 
-Compaction uses a **cache-aware dynamic programming algorithm** that computes the net economic benefit of each compaction decision — whether to compact and how many messages to retain — rather than simple threshold triggering.
+### Cache-Aligned Summarization
+
+Compaction uses a **cache-aware dynamic programming algorithm** that computes the net economic benefit of each compaction decision — whether to compact and how many messages to retain — rather than simple threshold triggering. The summary call reuses the main agent's prefix for cache alignment, saving ~85% input token cost per compaction.
 
 ### Decision Formula
 
@@ -384,9 +386,9 @@ $$
 | `DP_BETA` | 0.03 | Info loss penalty coefficient |
 | `DP_MIN_KEEP_RATIO` | 0.12 | Minimum messages to retain |
 
-### Cache Reuse Strategy
+### Cache-Aligned Summarization
 
-The summary request uses the **same prefix** as normal conversation requests:
+The summary call uses the **same prefix** (system prompt + tools + cache-control markers) as normal conversation requests, so the summarization agent achieves a prefix-cache hit:
 
 ```
 [System prompt + Tools + Old summary]     ← cache hit, billed at P_cache
@@ -600,7 +602,7 @@ mkdir -p go/.gocache go/.gomodcache && GOCACHE=$(pwd)/go/.gocache GOMODCACHE=$(p
 
 Current status:
 
-- compact uses a cache-aware DP economics algorithm for optimal compaction decisions
+- compact uses cache-aligned summarization with a DP economics algorithm for optimal compaction decisions
 - session state is project-scoped
 - tool protocol is structured and binary-safe (RESP-like length-prefix), suitable for machine consumption
 - `TodoWrite` maintains session-scoped todo state

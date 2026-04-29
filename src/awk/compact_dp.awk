@@ -1,4 +1,6 @@
-# compact_dp.awk — DP compact decision with cache-aware economics
+# compact_dp.awk — DP compact decision with cache-aware economics.
+# Part of Cache-Aligned Summarization: computes optimal k to retain, so
+# the summary call can reuse the main agent's cached prefix.
 # Input: reads CONV_FILE (NDJSON), computes optimal k messages to retain
 # Parameters (via -v):
 #   E              — expected remaining user-input rounds

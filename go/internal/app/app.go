@@ -1188,7 +1188,8 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 
 func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error) {
 	// Build messages: dropped conversation lines + summary instruction
-	// Uses same system prompt + tools + thinking as normal requests for cache reuse
+	// Cache-Aligned Summarization: uses same system prompt + tools +
+	// thinking as normal requests for prefix cache hit.
 	summaryInstruction := "The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:"
 	msg, err := json.Marshal(map[string]any{
 		"role":    "user",
