@@ -163,7 +163,7 @@ NetBenefit(k) = E × (P_base - P_cache) × dropped_tokens / 1,000,000
 | P_cache | 命中缓存的输入价格 ($/MTok) | 0.30 | Claude Sonnet 4 |
 | dropped_tokens | total - retained(k) - V | 计算得出 | 从 CONV_FILE |
 | retained(k) | 末尾 k 条消息的 token 估算值 | 计算得出 | 从 CONV_FILE |
-| V | 固定开销 token 数 | 20,000 | 系统提示 + 本轮用户输入 |
+| V | 固定开销 token 数 | 5,000 | 实测校准（见下方） |
 | penalty | 压缩直接开销 ($) | 0.25 | 摘要调用成本 + 缓存未命中成本 |
 | r_cumulative | DP_R^c (c = 历史压缩次数) | 0.72^c | 见信息损失模型 |
 | DP_R | 单次压缩信息保留率 | 0.72 | Factory AI 数据推导 |
@@ -233,6 +233,50 @@ info_penalty = DP_BETA × (1 - r_t(k))² × N_remain
 ```
 
 这自然抑制了频繁压缩，替代了旧方案中的硬性 min_keep 二次惩罚。
+
+---
+
+## 5. 参数校准（实测数据）
+
+### V = 5000（固定开销 token 数）
+
+从 6 个真实 session 的首次 usage event 统计：
+
+```
+Session                        input_tokens
+20260426-230651                    3,116
+20260424-142959                    2,535
+20260425-121147                    2,729
+feature-summary-refactor           4,082
+feature-stats                      2,949
+feature-summary-refactor-fit       4,230  (cache_read: 384)
+```
+
+**首次调用 input_tokens 范围：2,535 - 4,230（均值 ~3,274）**
+
+这包含：system prompt + tools JSON + 首条用户消息。
+
+V 设为 5,000（略高于实测均值）以覆盖：
+- system prompt + tools JSON（~3,000-4,000 tokens）
+- compact 后的 summary 文本（~1,000 tokens）
+
+**校准前（V=20,000）的问题**：V 被高估 5-6 倍，`dropped = total - retained - V` 的门槛过高，DP 过度保守，上下文需积累到很大才触发压缩。
+
+### DP_BASELINE_E = 8（预期用户输入轮数）
+
+典型开发 session 约 8-15 轮用户输入。设为 8（偏中低），避免过度压缩。
+
+超过 8 轮后 E 饱和为 `baseline/2 = 4`（恒定），但不影响正确性——上下文大小主导收益公式。
+
+### 价格系数（因 provider 而异）
+
+| Provider | P_base | P_cache | Savings/MTok | 压缩偏好 |
+|----------|--------|---------|-------------|---------|
+| Claude Sonnet 4 | 3.00 | 0.30 | 2.70 | 较激进 |
+| DeepSeek | 0.27 | 0.07 | 0.20 | 很保守 |
+| GPT-4o | 2.50 | 1.25 | 1.25 | 中等 |
+
+通过环境变量覆盖：`DP_P_BASE=0.27 DP_P_CACHE=0.07 bash-agent ...`
 
 ### 参数标定分析
 
