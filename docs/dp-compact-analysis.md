@@ -93,74 +93,55 @@ remaining_turns=$(grep -c '"type":"user_input"' "$CONV_FILE")
 
 ## 3. E（预期剩余步数）的精确语义
 
-### 公式中 E 应该对应哪个步数？
+### E 的定义：预期剩余用户输入轮数
 
-| 维度 | 用户层 (stats[0]) | API 层 (turn / stats[1]) |
-|------|-------------------|-------------------------|
-| 每次谁发送全部上下文？ | 用户输入本身不发请求 | **每次 LLM 调用都发送** |
-| 压缩节省的是什么？ | — | **每次 LLM 调用的 token 费用** |
-| 被 `MAX_TURNS` 限制的是什么？ | 否 | **是** (`while turn < MAX_TURNS`) |
+E 代表"还有多少轮用户输入会触发 agent_loop_stream 调用"。压缩的经济收益来自未来每轮用户输入中的 LLM 调用——每次 LLM 调用都发送完整上下文，压缩后上下文更小，每次调用都省钱。
 
-**结论：E 应该对应剩余 LLM API 调用次数。**
+### 为什么用 stats[0]（用户输入轮数）而不是 LLM 调用次数？
 
-### 为什么不能用 stats[1] 直接计算？
+- 压缩的切分边界对齐到**真实用户输入**（`{"role":"user","content":"`），不会在 tool 结果处切断
+- 压缩以"用户输入轮"为单位丢弃历史 → E 也应以"用户输入轮"为度量
+- `stats[0]` = `current_turn_count`，由 `agent_loop()` 在每次用户输入时 +1
 
-`stats[1]` (agent_request_count) 是**会话级累计值，永不清零**。跨任务时失效：
-
-```
-Session 生命周期：
-  Task 1: 30 次 LLM 调用 → stats[1] = 30
-  Task 2: 新任务开始 → stats[1] 还是 30
-  stats_get(1) % MAX_TURNS = 30 % 40 = 30
-  E = MAX_TURNS - 30 = 10  ← 错误！
-  新任务刚开始，应有 ~40 次调用可用
-```
-
-模运算无法区分"同一任务内的第30次调用"和"第二个任务的第一次调用"。
-
-### 正确方案：追踪 per-user-input 的 LLM turn 数
-
-**核心思路**：`agent_loop_stream` 每次被调用时 `turn` 从 0 开始 → **自然重置**，不受历史任务影响。把这个值同步到 stats 即可。
+### E 的计算
 
 ```bash
-# 在 agent_loop_stream 的 while 循环入口处
-while (( turn < MAX_TURNS )); do
-    (( turn++ )) || true
-    stats_set 9=$turn    # 同步当前 LLM 层 turn 数到 stats[9]
-```
+current_turn=$(stats_get 0)
+baseline=${DP_BASELINE_E:-8}
 
-**实现考量**：
-
-`agent_loop_stream` 在进程替换 `<(agent_loop_stream "$user_input")` 中运行（子 shell）。子 shell 继承父 shell 的 `STATS_CACHE` 副本。`stats_set` 修改副本并向 stats 文件写入。`compact_dp_decision`（同一子 shell 内调用）的 `stats_get 9` 读到正确的值。
-
-**E 的计算：**
-
-```bash
-local_llm_turn=$(stats_get 9)   # = agent_loop_stream 里当前的 turn 值
-# E 的优先级：DP_E_FIXED > (DP_BASELINE_E - llm_turn) > baseline/2
-baseline=${DP_BASELINE_E:-15}
 if (( DP_E_FIXED > 0 )); then
     E=$DP_E_FIXED
 elif (( baseline > 0 )); then
-    remaining=$(( baseline - local_llm_turn ))
+    remaining=$(( baseline - current_turn ))
     if (( remaining <= 0 )); then
-        # 超过 baseline：任务比预期复杂，保守估计至少 baseline/2 步
-        E=$(( baseline > 1 ? baseline / 2 : 1 ))
+        E=$(( baseline > 1 ? baseline / 2 : 2 ))
     else
         E=$remaining
     fi
 else
-    # 兜底：DP_BASELINE_E=0 时用 MAX_TURNS
-    E=$(( MAX_TURNS - local_llm_turn ))
-    (( E > 0 )) || E=1
+    E=2
 fi
 ```
 
-**跨任务行为：**
+**E 的衰减行为：**
 
 ```
-Task 1, 用户输入:  turn=1→E=14, turn=2→E=13, ..., turn=8→E=7
-Task 2, 用户输入:  turn=1→E=14 ✓  (新调用, turn 从 0 开始; baseline 15)
+Turn 1: E = 8 - 1 = 7
+Turn 5: E = 8 - 5 = 3
+Turn 8: E = max(8-8, 8/2) = 4  ← 开始饱和
+Turn 20: E = max(8-20, 8/2) = 4
+Turn 100: E = max(8-100, 8/2) = 4  ← 恒定
+```
+
+**长 session 行为**：超过 DP_BASELINE_E 轮后 E 恒定为 baseline/2。这不影响正确性——上下文大小（dropped_tokens）随会话增长主导收益公式，DP 仍会在上下文够大时触发压缩。
+
+### 跨任务行为
+
+```
+Session 生命周期：
+  Task 1: 5 轮用户输入 → stats[0] = 5
+  Task 2: 新任务 → stats[0] = 6（继续累计）
+  E = max(8-6, 4) = 4  ← 仍然合理
 ```
 
 ---
@@ -177,7 +158,7 @@ NetBenefit(k) = E × (P_base - P_cache) × dropped_tokens / 1,000,000
 
 | 符号 | 含义 | 默认值 | 来源 |
 |------|------|--------|------|
-| E | 预期剩余 LLM API 调用次数 | DP_BASELINE_E - local_llm_turn，见第 3 节 | 见第 3 节 |
+| E | 预期剩余用户输入轮数 | DP_BASELINE_E - current_turn，见第 3 节 | 见第 3 节 |
 | P_base | 未命中缓存的输入价格 ($/MTok) | 3.00 | Claude Sonnet 4 |
 | P_cache | 命中缓存的输入价格 ($/MTok) | 0.30 | Claude Sonnet 4 |
 | dropped_tokens | total - retained(k) - V | 计算得出 | 从 CONV_FILE |
@@ -392,15 +373,10 @@ awk 内部：
 | 空 CONV_FILE | awk 中 NR==0 → print "0" |
 | 极小对话 (< V tokens) | 所有 k 的 dropped ≤ 0 → 不压缩 |
 | 单消息对话 | min_keep = NR → k=NR → dropped ≤ 0 → 不压缩 |
-| E=0（任务已达 MAX_TURNS）| E 下限为 1 → 微收益 |
-| 恰好 V tokens | 所有 k 的 dropped = 0 → 不压缩 |
-| 手动压缩 (force=true) | 运行 DP，无正收益时 fallback 保留 10 行 |
-| k 落在轮次中间 | 向后遍历至 role[cut] == "user" |
-| 舍入导致负收益 | 守卫：best_benefit > 0 |
-| llm_turn ≥ DP_BASELINE_E | `E = baseline/2`，不会退化为 1 |
+| E=0（超过 DP_BASELINE_E）| E 下限为 baseline/2 | | llm_turn ≥ DP_BASELINE_E | `E = baseline/2`，不会退化为 1 |
 | DP 说不压缩，但 ct > MAX_CONTEXT_TOKENS × 90% | 强制压缩，`keep_lines = max(3, NR × DP_MIN_KEEP_RATIO)` |
 | 同一用户输入内多次 compact | 压缩后上下文缩小 → dropped 变小 → 下次不触发的概率高 |
-| 跨任务 session | stats[9] 随 `agent_loop_stream` 调用重置 → 不受历史影响 |
+| 长 session（stats[0] > baseline）| E 恒定为 baseline/2，dropped_tokens 主导收益 |
 
 ---
 
@@ -411,5 +387,4 @@ awk 内部：
 - **Token-字节校准**：用实际 tokenizer 统计替代 bytes/4 启发式
 - **自适应 penalty**：根据观察到的摘要调用成本自动调整 DP_PENALTY
 - **自适应 min_keep**：基于对话实际结构（rounds 而非 lines）确定 min_keep
-- **内层 turn 精确追踪**：已实现（stats[9] = llm_turn_count）
-- **events.jsonl 的用户输入计数修复**：压缩后应读 events.jsonl 而非 CONV_FILE
+- **价格系数自动适配**：根据 provider/model 自动设置 DP_P_BASE/DP_P_CACHE

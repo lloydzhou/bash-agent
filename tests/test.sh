@@ -2026,6 +2026,15 @@ TURNEOF
         red "compact_dp: turn alignment -> $result (expected 3 or 4)"; ((FAIL++))
     fi
 
+    # --- 37g: Long session E saturation (stats[0] > baseline) ---
+    # After baseline turns, E saturates at baseline/2 = 4
+    # DP should still recommend compaction with very large context
+    gen_conv 30 200000 "$conv_file"
+    result=$(dp_run 4 0)  # E=4 (saturated)
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: long session E=4 -> $result"; ((PASS++)); } \
+        || { red "compact_dp: long session E=4 -> $result"; ((FAIL++)); }
+
     rm -rf "$tmpdir"
 }
 test_agent_stats_json() {
