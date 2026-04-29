@@ -323,20 +323,89 @@ history 文件保存在：
 
 ## Context Compact
 
-compact 依据真实 context 大小，而不是消息条数。
+compact 使用基于缓存经济学的动态规划算法决定**是否压缩**和**保留多少消息**，而非简单的阈值触发。
 
-- `--max-context` 表示字节预算
-- 支持：
-  - `100k`
-  - `1m`
-  - `100000`
-- 超预算时，旧消息会被压缩写入 `summary.txt`
-- 保留窗口会对齐到完整 user turn 边界
+### 决策公式
 
-这样可以避免保留出非法尾部，例如：
+对每个候选保留条数 $k$，计算净收益：
+
+$$
+\text{NetBenefit}(k) = \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{后续节省}} - \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{缓存失效损失}} - \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{压缩请求成本}} - \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真惩罚}}
+$$
+
+- 若 $\max_k \text{NetBenefit}(k) > 0$，选择最优 $k$ 执行压缩
+- 否则不压缩
+
+| 项 | 含义 |
+|---|---|
+| ① | 压缩后后续 $R-1$ 次 LLM 调用每次少发送 $H$ token，按缓存价节省 |
+| ② | 摘要内容变化导致前缀缓存断裂，$S+K$ 个 token 从缓存价变为全价 |
+| ③ | 压缩请求本身的 API 成本（缓存复用前缀 + 指令 + 输出） |
+| ④ | 多次压缩的信息累积损失，$\beta=0.03$，$r=0.8$ |
+
+### 核心变量
+
+| 变量 | 含义 | 默认 |
+|---|---|---|
+| $R = E \times L$ | 预期剩余 LLM 调用总次数 | — |
+| $E$ | 预期剩余用户输入轮数 | $8 - t$，饱和至 4 |
+| $L$ | 每轮用户输入平均 LLM 调用次数 | 5（经验值） |
+| $H$ | 被丢弃的旧消息 token 数 | $T_{\text{total}} - K$ |
+| $K$ | 保留消息 token 数 | 遍历 $k$ 计算 |
+| $S$ | 固定摘要长度 | 500 token |
+| $V$ | 固定前缀（system prompt + tools + old summary） | 5000 token |
+
+### 价格参数（按 provider 覆盖）
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `DP_P_INPUT` | 3.00 | $/MTok，未命中缓存输入价格 |
+| `DP_P_CACHE` | 0.30 | $/MTok，缓存命中输入价格 |
+| `DP_P_OUT` | 15.00 | $/MTok，输出价格 |
+| `DP_L` | 5 | 每轮平均 LLM 调用次数（`0` = 从 stats 自动计算） |
+| `DP_BASELINE_E` | 8 | 预期剩余用户输入轮数基线 |
+| `DP_R` | 0.8 | 单次摘要信息保留率 |
+| `DP_BETA` | 0.03 | 信息损失折算系数 |
+| `DP_MIN_KEEP_RATIO` | 0.12 | 最少保留消息比例 |
+
+### 缓存复用策略
+
+压缩请求（summary call）的消息序列与普通对话保持**相同前缀**：
+
+```
+[System prompt + Tools + Old summary]     ← 缓存命中，按 P_cache 计费
+[被丢弃的旧消息 H]                        ← 缓存命中，按 P_cache 计费
+[Summary 指令 L_instr]                    ← 缓存未命中，按 P_input 计费
+```
+
+输出固定长度 $S$ 的新摘要，替代旧摘要写入 `summary.txt`。
+
+### 安全阀
+
+当 DP 公式判断不压缩，但 `current_context > max_context × 90%` 时，强制压缩：
+
+```
+keep_lines = max(3, total_lines × DP_MIN_KEEP_RATIO)
+```
+
+### 保留窗口对齐
+
+切分点始终对齐到**真实用户输入**（`"role":"user","content":"..."`），不会在工具结果处切断。避免：
 
 - 孤立的 `tool_result`
-- 保留了 `assistant.tool_use`，却丢掉对应 user turn
+- 保留了 `assistant.tool_use` 却丢掉对应 user turn
+
+### 不同 provider 的压缩偏好
+
+| Provider | $P_{\text{input}}$ | $P_{\text{cache}}$ | $P_{\text{out}}$ | 节省/MTok | 偏好 |
+|----------|-----|-----|-----|-----|------|
+| Claude Sonnet 4 | 3.00 | 0.30 | 15.00 | 2.70 | 激进 |
+| GPT-4o | 2.50 | 1.25 | 10.00 | 1.25 | 中等 |
+| DeepSeek v4 flash | 1.00 | 0.02 | 3.00 | 0.98 | 保守 |
+
+通过环境变量覆盖：`DP_P_INPUT=1.00 DP_P_CACHE=0.02 DP_P_OUT=3.00 ./src/agent.sh ...`
+
+> 完整推导见 [`docs/dp-compact-analysis.md`](docs/dp-compact-analysis.md)。
 
 ## Skills
 
