@@ -110,6 +110,7 @@ With Claude Sonnet 4 (compacting 45K tokens of history):
 | Dropped messages ~40K | Full: $0.120 | Cached: $0.012 |
 | Summary instruction ~200 | Full: $0.0006 | Full: $0.0006 |
 | **Total ~45.2K** | **$0.136** | **$0.014** |
+| | | **Saves ~90%** |
 
 > Full derivation: [`docs/compact-analysis.md`](docs/compact-analysis.md).
 

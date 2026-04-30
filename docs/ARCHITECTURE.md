@@ -200,6 +200,7 @@ summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summar
 | Dropped messages ~40K | Full: $0.120 | Cached: $0.012 |
 | Summary instruction ~200 | Full: $0.0006 | Full: $0.0006 |
 | **Total ~45.2K** | **$0.136** | **$0.014** |
+| | | **节省 ~90%** |
 
 单次 compact 相比不使用前缀缓存的传统 summary 方式节省约 **90%**，复杂任务中多次触发时累积效应显著。这一技术已被移植到 [Crush](https://github.com/charmbracelet/crush) 的 Go 实现中。
 
