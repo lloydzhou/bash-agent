@@ -191,12 +191,17 @@ summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summar
 
 由于 dropped 消息是 CONV_FILE 开头的行，它们与之前请求中的前缀完全一致。summary 请求只追加了一条 user 消息作为总结指令，不影响前缀匹配。这就是 **Cache-Aligned Summarization**：摘要 agent 的前缀与主 agent 对齐，确保前缀缓存命中。
 
-以 Claude Sonnet 为例（无缓存 $3.00/MTok，缓存命中 $0.30/MTok），典型场景：system+tools+summary 5k tokens，dropped messages 40k tokens，summary 输出 500 tokens：
+以 Claude Sonnet 4 为例（compact 45K tokens of history）：
 
-- **旧方案**：45k tokens 全部无缓存 → 输入 $0.135 + 输出 $0.0075 = **$0.1425**
-- **新方案**：45k tokens 全部缓存命中 → 输入 $0.0135 + 输出 $0.0075 = **$0.021**
+| Tokens | Without cache alignment | With cache alignment |
+|--------|------------------------|---------------------|
+| System prompt ~2K | Full: $0.006 | Cached: $0.0006 |
+| Tools ~3K | Full: $0.009 | Cached: $0.0009 |
+| Dropped messages ~40K | Full: $0.120 | Cached: $0.012 |
+| Summary instruction ~200 | Full: $0.0006 | Full: $0.0006 |
+| **Total ~45.2K** | **$0.136** | **$0.014** |
 
-单次 compact 相比不使用前缀缓存的传统 summary 方式节省约 **85%**，复杂任务中多次触发时累积效应显著。这一技术已被移植到 [Crush](https://github.com/charmbracelet/crush) 的 Go 实现中。
+单次 compact 相比不使用前缀缓存的传统 summary 方式节省约 **90%**，复杂任务中多次触发时累积效应显著。这一技术已被移植到 [Crush](https://github.com/charmbracelet/crush) 的 Go 实现中。
 
 #### 保留窗口对齐
 

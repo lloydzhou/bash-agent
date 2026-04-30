@@ -101,9 +101,15 @@ $$
 [Summary 指令]                         ← 仅此处缓存未命中
 ```
 
-以 Claude Sonnet 为例（P_input $3.00/MTok, P_cache $0.30/MTok），35k tokens 的压缩请求：
+以 Claude Sonnet 4 为例（compact 45K tokens of history）：
 
-- 无缓存复用：$0.105 → **缓存对齐后：$0.018**（节省 **83%**）
+| Tokens | Without cache alignment | With cache alignment |
+|--------|------------------------|---------------------|
+| System prompt ~2K | Full: $0.006 | Cached: $0.0006 |
+| Tools ~3K | Full: $0.009 | Cached: $0.0009 |
+| Dropped messages ~40K | Full: $0.120 | Cached: $0.012 |
+| Summary instruction ~200 | Full: $0.0006 | Full: $0.0006 |
+| **Total ~45.2K** | **$0.136** | **$0.014** |
 
 > 完整推导见 [`docs/compact-analysis.md`](docs/compact-analysis.md)。
 

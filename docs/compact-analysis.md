@@ -2,7 +2,7 @@
 
 > 实现记录见 `plan.md`。本文档保留完整的设计推导过程。
 >
-> 相关技术：**Cache-Aligned Summarization** — 摘要请求复用主 agent 的前缀以实现缓存命中，单次压缩节省约 85% input token 费用。
+> 相关技术：**Cache-Aligned Summarization** — 摘要请求复用主 agent 的前缀以实现缓存命中，单次压缩节省约 90% input token 费用。
 
 ## 1. 核心问题
 

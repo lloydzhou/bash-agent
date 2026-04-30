@@ -101,9 +101,15 @@ The summary request uses the **same prefix** as normal conversation requests, ma
 [Summary instruction]                  ← only this part is cache-miss
 ```
 
-With Claude Sonnet (P_input $3.00/MTok, P_cache $0.30/MTok), a 35k-token compact request:
+With Claude Sonnet 4 (compacting 45K tokens of history):
 
-- Without cache reuse: $0.105 → **With cache alignment: $0.018** (saves **83%**)
+| Tokens | Without cache alignment | With cache alignment |
+|--------|------------------------|---------------------|
+| System prompt ~2K | Full: $0.006 | Cached: $0.0006 |
+| Tools ~3K | Full: $0.009 | Cached: $0.0009 |
+| Dropped messages ~40K | Full: $0.120 | Cached: $0.012 |
+| Summary instruction ~200 | Full: $0.0006 | Full: $0.0006 |
+| **Total ~45.2K** | **$0.136** | **$0.014** |
 
 > Full derivation: [`docs/compact-analysis.md`](docs/compact-analysis.md).
 
