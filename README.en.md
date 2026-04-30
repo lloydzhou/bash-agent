@@ -85,12 +85,25 @@ Pre-built binaries (Go / Rust) are available on [Releases](https://github.com/ll
 Compaction uses a cache-aware DP economics algorithm that computes a 4-term net benefit:
 
 $$
-\text{NetBenefit}(k) = \underbrace{\frac{(R\!-\!1)\,P_{\text{cache}}\,H}{10^6}}_{①} - \underbrace{\frac{(S\!+\!K)(P_{\text{input}}\!-\!P_{\text{cache}})}{10^6}}_{②} - \underbrace{\frac{P_{\text{cache}}(V\!+\!H)+P_{\text{input}} L_{\text{instr}}+P_{\text{out}} S}{10^6}}_{③} - \underbrace{\frac{\beta(1\!-\!r^{c+1})R\,\text{avg}\,P_{\text{input}}}{10^6}}_{④}
+\text{NetBenefit}(k) = \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{savings}} - \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{cache miss}} - \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{compact cost}} - \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}}
 $$
 
-- ① future savings ② cache invalidation ③ compact cost ④ info distortion
 - All parameters overridable via env vars (`DP_P_INPUT`, `DP_L`, `DP_BETA`, etc.)
 - Safety valve: force compact when context exceeds 90% of limit
+
+### Cache-Aligned Summary
+
+The summary request uses the **same prefix** as normal conversation requests, maximizing API cache hits:
+
+```
+[System prompt + Tools + Old summary]  ← cache hit, billed at P_cache
+[Dropped old messages H]               ← cache hit, billed at P_cache
+[Summary instruction]                  ← only this part is cache-miss
+```
+
+With Claude Sonnet (P_input $3.00/MTok, P_cache $0.30/MTok), a 35k-token compact request:
+
+- Without cache reuse: $0.105 → **With cache alignment: $0.018** (saves **83%**)
 
 > Full derivation: [`docs/compact-analysis.md`](docs/compact-analysis.md).
 

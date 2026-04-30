@@ -85,12 +85,25 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 压缩使用基于缓存经济学的 DP 算法，在每一步计算 4 项净收益：
 
 $$
-\text{NetBenefit}(k) = \underbrace{\frac{(R\!-\!1)\,P_{\text{cache}}\,H}{10^6}}_{①} - \underbrace{\frac{(S\!+\!K)(P_{\text{input}}\!-\!P_{\text{cache}})}{10^6}}_{②} - \underbrace{\frac{P_{\text{cache}}(V\!+\!H)+P_{\text{input}} L_{\text{instr}}+P_{\text{out}} S}{10^6}}_{③} - \underbrace{\frac{\beta(1\!-\!r^{c+1})R\,\text{avg}\,P_{\text{input}}}{10^6}}_{④}
+\text{NetBenefit}(k) = \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{后续节省}} - \underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{缓存失效}} - \underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{压缩成本}} - \underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真}}
 $$
 
-- ① 后续调用节省 ② 缓存失效损失 ③ 压缩请求成本 ④ 信息失真惩罚
 - 所有参数支持环境变量覆盖（`DP_P_INPUT`、`DP_L`、`DP_BETA` 等）
 - 安全阀：context > 90% 上限时强制压缩
+
+### 缓存对齐摘要
+
+摘要请求（summary call）与普通对话保持**完全相同的前缀**，最大化 API 缓存命中：
+
+```
+[System prompt + Tools + Old summary]  ← 缓存命中，按 P_cache 计费
+[被丢弃的旧消息 H]                     ← 缓存命中，按 P_cache 计费
+[Summary 指令]                         ← 仅此处缓存未命中
+```
+
+以 Claude Sonnet 为例（P_input $3.00/MTok, P_cache $0.30/MTok），35k tokens 的压缩请求：
+
+- 无缓存复用：$0.105 → **缓存对齐后：$0.018**（节省 **83%**）
 
 > 完整推导见 [`docs/compact-analysis.md`](docs/compact-analysis.md)。
 
