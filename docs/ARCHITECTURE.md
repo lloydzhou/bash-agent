@@ -205,7 +205,7 @@ summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summar
 - 不能把会话裁成孤立的 `tool_result`
 - 不能只剩 `assistant.tool_use` 而丢掉对应用户请求
 
-> 完整推导见 [`dp-compact-analysis.md`](dp-compact-analysis.md)。
+> 完整推导见 [`compact-analysis.md`](compact-analysis.md)。
 
 ### 3. Session Replay
 
