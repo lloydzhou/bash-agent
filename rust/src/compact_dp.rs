@@ -9,8 +9,7 @@ pub struct DPCompactConfig {
     pub p_out: f64,
     pub v: usize,
     pub s: usize,
-    pub avg: usize,
-    pub l: f64,
+    pub l_fixed: f64,
     pub baseline_e: i32,
     pub e_fixed: i32,
     pub r: f64,
@@ -26,8 +25,7 @@ impl Default for DPCompactConfig {
             p_out: 15.0,
             v: 5000,
             s: 500,
-            avg: 4000,
-            l: 5.0,
+            l_fixed: 0.0,
             baseline_e: 8,
             e_fixed: 0,
             r: 0.8,
@@ -38,9 +36,11 @@ impl Default for DPCompactConfig {
 }
 
 /// Compute the optimal number of lines to keep using DP analysis.
+/// All computation (E, L, avg) happens here — callers pass raw stats only.
 /// prev_compactions: number of previous compactions (from stats).
 /// current_turn: completed user-input rounds (from stats).
-/// total_requests: total agent_request_count (for computing L).
+/// total_requests: total agent_request_count (from stats).
+/// total_input_tokens: total cumulative input tokens (from stats).
 /// Returns: Some(keep_lines) turn-aligned, or None if no compact beneficial.
 pub fn compact_dp_decision(
     lines: &[Value],
@@ -48,6 +48,7 @@ pub fn compact_dp_decision(
     prev_compactions: usize,
     current_turn: usize,
     total_requests: usize,
+    total_input_tokens: usize,
 ) -> Option<usize> {
     if lines.is_empty() {
         return None;
@@ -78,14 +79,22 @@ pub fn compact_dp_decision(
         2.0
     };
 
-    // L: avg LLM calls per user input (auto-compute or use config)
-    let l = if cfg.l > 0.0 {
-        cfg.l
+    // L: avg LLM calls per user input (auto from stats if l_fixed=0)
+    let l = if cfg.l_fixed > 0.0 {
+        cfg.l_fixed
     } else if current_turn > 0 && total_requests > 0 {
         let computed = total_requests as f64 / current_turn as f64;
         if computed >= 1.0 { computed } else { 5.0 }
     } else {
         5.0
+    };
+    let l = l.max(1.0);
+
+    // avg: avg input tokens per LLM request (auto from stats)
+    let avg = if total_requests > 0 && total_input_tokens > 0 {
+        total_input_tokens as f64 / total_requests as f64
+    } else {
+        4000.0
     };
 
     // R = E * L
@@ -95,7 +104,7 @@ pub fn compact_dp_decision(
     let mut r_t = cfg.r.powi((prev_compactions + 1) as i32);
     if r_t < 0.37 { r_t = 0.37; }
 
-    let n_remain = r_total * cfg.avg as f64;
+    let n_remain = r_total * avg;
     let info_loss = cfg.beta * (1.0 - r_t) * n_remain * cfg.p_input / 1_000_000.0;
 
     let l_instr = 70.0_f64;

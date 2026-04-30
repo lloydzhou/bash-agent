@@ -2,21 +2,27 @@
 # Part of Cache-Aligned Summarization: computes optimal k to retain, so
 # the summary call can reuse the main agent's cached prefix.
 # Input: reads CONV_FILE (NDJSON), computes optimal k messages to retain
+#
 # Parameters (via -v):
-#   E              — expected remaining user-input rounds
-#   L              — avg LLM calls per user input (0=auto from L_raw/t)
-#   L_raw          — total LLM request count (for auto-computing L)
-#   t              — current user-input turn count (for auto-computing L)
-#   avg            — avg input tokens per LLM request (for N_remain)
-#   V              — fixed prefix tokens (system prompt + tools + old summary)
-#   p_input        — uncached input price ($/MTok)
-#   p_cache        — cached input price ($/MTok)
-#   p_out          — output price ($/MTok)
-#   S              — fixed summary length (tokens)
-#   min_keep_ratio — minimum fraction of messages to retain
-#   c              — number of previous compactions
-#   r              — single-step summary retention rate
-#   beta           — info loss penalty coefficient
+#   Stats raw values (passed from caller):
+#     t              — current user-input turn count (stats[0])
+#     total_requests — total LLM request count (stats[1])
+#     total_compact  — number of previous compactions (stats[2])
+#     total_input    — total cumulative input tokens (stats[3])
+#
+#   Configuration (from env / defaults):
+#     baseline_e     — baseline for E calculation (DP_BASELINE_E, default 8)
+#     e_fixed        — fixed E override (DP_E_FIXED, default 0)
+#     L_fixed        — fixed L override (DP_L, default 0 = auto)
+#     V              — fixed prefix tokens (system prompt + tools + old summary)
+#     p_input        — uncached input price ($/MTok)
+#     p_cache        — cached input price ($/MTok)
+#     p_out          — output price ($/MTok)
+#     S              — fixed summary length (tokens)
+#     min_keep_ratio — minimum fraction of messages to retain
+#     r              — single-step summary retention rate
+#     beta           — info loss penalty coefficient
+#
 # Output: number of lines to keep (turn-aligned), or "0" if no compact
 {
     sizes[NR] = int((length($0) + 3) / 4) + 1
@@ -28,11 +34,36 @@ END {
     total_tokens = 0
     for (i = 1; i <= NR; i++) total_tokens += sizes[i]
 
-    # L: auto-compute from stats if DP_L=0
-    if (L <= 0 && t > 0 && L_raw > 0) {
-        L = L_raw / t
+    # --- E: expected remaining user-input rounds ---
+    if (e_fixed > 0) {
+        E = e_fixed
+    } else if (baseline_e > 0) {
+        remaining = baseline_e - t
+        floor = (baseline_e > 1) ? int(baseline_e / 2) : 2
+        E = (remaining > floor) ? remaining : floor
+    } else {
+        E = 2
     }
-    if (L < 1) L = 5
+
+    # --- L: avg LLM calls per user input ---
+    if (L_fixed > 0) {
+        L = L_fixed
+    } else if (t > 0 && total_requests > 0) {
+        L = total_requests / t
+    } else {
+        L = 5
+    }
+    if (L < 1) L = 1
+
+    # --- avg: avg input tokens per LLM request ---
+    if (total_requests > 0 && total_input > 0) {
+        avg = total_input / total_requests
+    } else {
+        avg = 4000
+    }
+
+    # --- c: previous compaction count ---
+    c = total_compact + 0
 
     # R = total expected remaining LLM calls
     R = E * L

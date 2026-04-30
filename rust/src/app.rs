@@ -759,34 +759,17 @@ impl Runtime {
         let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
         let current_turn = stats_get_f64(&stats, "current_turn_count") as usize;
         let prev_compactions = stats_get_f64(&stats, "compact_request_count") as usize;
-
-        // DP decision
-        // L: avg LLM calls per user input (auto-compute from stats)
         let total_requests = stats_get_f64(&stats, "agent_request_count") as usize;
-        let l = if self.cfg.dp_l > 0.0 {
-            self.cfg.dp_l
-        } else if current_turn > 0 && total_requests > 0 {
-            let computed = total_requests as f64 / current_turn as f64;
-            if computed >= 1.0 { computed } else { 5.0 }
-        } else {
-            5.0
-        };
-
-        // avg: average input tokens per LLM request
         let total_input_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
-        let mut avg_per_request: usize = 4000;
-        if total_requests > 0 {
-            avg_per_request = total_input_tokens / total_requests;
-        }
 
+        // DP decision — all computation (E, L, avg) inside compact_dp_decision
         let dp_cfg = crate::compact_dp::DPCompactConfig {
             p_input: self.cfg.dp_p_input,
             p_cache: self.cfg.dp_p_cache,
             p_out: self.cfg.dp_p_out,
             v: self.cfg.dp_v,
             s: self.cfg.dp_s,
-            avg: avg_per_request,
-            l,
+            l_fixed: self.cfg.dp_l,
             baseline_e: self.cfg.dp_baseline_e,
             e_fixed: self.cfg.dp_e_fixed,
             r: self.cfg.dp_r,
@@ -795,7 +778,7 @@ impl Runtime {
         };
 
         let all = self.conv.lines()?;
-        let mut keep_lines = crate::compact_dp::compact_dp_decision(&all, &dp_cfg, prev_compactions, current_turn, total_requests);
+        let mut keep_lines = crate::compact_dp::compact_dp_decision(&all, &dp_cfg, prev_compactions, current_turn, total_requests, total_input_tokens);
 
         if keep_lines.is_none() {
             // Safety valve: DP says no, but check context size

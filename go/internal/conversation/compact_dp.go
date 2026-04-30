@@ -13,10 +13,9 @@ type DPCompactConfig struct {
 	POut         float64 // $/MTok, output price
 	V            int     // fixed prefix tokens (system prompt + tools + summary)
 	S            int     // fixed summary length (tokens)
-	Avg          int     // avg input tokens per LLM request
-	L            float64 // avg LLM calls per user input (R = E * L)
-	BaselineE    int     // expected remaining user-input rounds (0 = auto)
-	EFixed       int     // fixed E (0 = use BaselineE)
+	LFixed       float64 // fixed L override (0 = auto from stats)
+	BaselineE    int     // baseline for E calculation
+	EFixed       int     // fixed E override (0 = use BaselineE)
 	R            float64 // single-step summary retention rate
 	Beta         float64 // info loss penalty coefficient
 	MinKeepRatio float64 // minimum fraction of messages to retain
@@ -29,8 +28,7 @@ func DefaultDPCompactConfig() DPCompactConfig {
 		POut:         15.0,
 		V:            5000,
 		S:            500,
-		Avg:          4000,
-		L:            5.0,
+		LFixed:       0,
 		BaselineE:    8,
 		EFixed:       0,
 		R:            0.8,
@@ -40,10 +38,13 @@ func DefaultDPCompactConfig() DPCompactConfig {
 }
 
 // CompactDPDecision computes the optimal number of lines to keep.
+// All computation (E, L, avg) happens here — callers pass raw stats only.
 // prevCompactions: number of previous compactions (from stats).
-// currentTurn: completed user-input rounds (from stats current_turn_count).
+// currentTurn: completed user-input rounds (from stats).
+// totalRequests: total LLM request count (from stats).
+// totalInputTokens: total cumulative input tokens (from stats).
 // Returns: keepLines (turn-aligned, or 0 if no compact beneficial).
-func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, currentTurn int) (int, error) {
+func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, currentTurn int, totalRequests int, totalInputTokens int) (int, error) {
 	lines, err := s.Lines()
 	if err != nil {
 		return 0, err
@@ -91,8 +92,29 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 		E = 2.0
 	}
 
+	// L: avg LLM calls per user input (auto from stats if LFixed=0)
+	var L float64
+	if cfg.LFixed > 0 {
+		L = cfg.LFixed
+	} else if currentTurn > 0 && totalRequests > 0 {
+		L = float64(totalRequests) / float64(currentTurn)
+	} else {
+		L = 5.0
+	}
+	if L < 1 {
+		L = 1
+	}
+
+	// avg: avg input tokens per LLM request (auto from stats)
+	var avg float64
+	if totalRequests > 0 && totalInputTokens > 0 {
+		avg = float64(totalInputTokens) / float64(totalRequests)
+	} else {
+		avg = 4000
+	}
+
 	// R = E * L: total expected remaining LLM calls
-	R := E * cfg.L
+	R := E * L
 
 	// Cumulative retention: r^(c+1) (independent of k)
 	rT := math.Pow(cfg.R, float64(prevCompactions+1))
@@ -101,7 +123,7 @@ func (s Store) CompactDPDecision(cfg DPCompactConfig, prevCompactions int, curre
 	}
 
 	// N_remain: expected remaining input tokens (R * avg_per_request)
-	NRemain := R * float64(cfg.Avg)
+	NRemain := R * avg
 
 	// ④ Info loss (constant across all k)
 	infoLoss := cfg.Beta * (1.0 - rT) * NRemain * cfg.PInput / 1_000_000
