@@ -724,7 +724,6 @@ conv_init() {
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
     stats_load
-    stats_show_osc
 }
 
 conv_add_user() {
@@ -781,6 +780,7 @@ stats_load() {
 
 _stats_sync() {
     printf '%s\n' "${STATS_CACHE[@]}" | awk_run -v action=sync -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+    stats_show_osc
 }
 
 stats_inc() {
@@ -1244,7 +1244,6 @@ agent_loop() {
     done < <(agent_loop_stream "$user_input")
 
     stop_esc_interrupt_listener
-    stats_show_osc
     $had_error && return 1
     return 0
 }
