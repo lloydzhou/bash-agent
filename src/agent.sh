@@ -60,7 +60,7 @@ PREV_WAS_THINKING=false
 # --- Stats Cache (in-memory) --- Indexes match stats.awk _init_fields() order:
 #   0:current_turn_count  1:agent_request_count  2:compact_request_count 3:total_input_tokens  4:total_output_tokens
 #   5:total_cache_read_tokens 6:total_cache_creation_tokens  7:current_context_tokens  8:last_updated
-STATS_CACHE=()
+STATS_CACHE=(0 0 0 0 0 0 0 0 "")
 
 # --- Environment Defaults ---
 : "${ANTHROPIC_API_KEY:=}"
@@ -723,7 +723,7 @@ conv_init() {
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
-    stats_load
+    stats_load && stats_show_osc
 }
 
 conv_add_user() {
@@ -820,9 +820,10 @@ record_usage() {
 }
 
 stats_show_osc() {
-    printf '\033]0;T:%s R:%s I:%s O:%s C:%s\007' \
-        "${STATS_CACHE[0]:-0}" "${STATS_CACHE[1]:-0}" \
-        "${STATS_CACHE[3]:-0}" "${STATS_CACHE[4]:-0}" "${STATS_CACHE[7]:-0}"
+    awk -v m="$MODEL" -v t="${STATS_CACHE[0]:-0}" -v r="${STATS_CACHE[1]:-0}" \
+        -v i="${STATS_CACHE[3]:-0}" -v o="${STATS_CACHE[4]:-0}" -v c="${STATS_CACHE[7]:-0}" '
+    function f(n,s,r){s=sprintf("%d",n);while(length(s)>3){r=","substr(s,length(s)-2)r;s=substr(s,1,length(s)-3)}return s r}
+    BEGIN{printf "\033]0;%s T:%s R:%s I:%s O:%s C:%s\007",m,f(t),f(r),f(i),f(o),f(c) > "/dev/stderr"}'
 }
 
 # --- Dynamic Planning Compact Decision ---
@@ -1487,10 +1488,9 @@ main() {
     parse_args "$@"
 
     find_awk_dir
+    validate_config
     conv_init
     load_tool_defs
-
-    validate_config
 
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode

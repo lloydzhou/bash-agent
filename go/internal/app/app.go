@@ -183,7 +183,6 @@ func (rt *runtime) initState() error {
 		statsData := `{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}`
 		_ = os.WriteFile(rt.paths.Stats, []byte(statsData+"\n"), 0o644)
 	}
-	rt.updateTermTitle()
 	rt.conv = conversation.Store{Path: rt.paths.Conversation}
 	return nil
 }
@@ -517,8 +516,6 @@ func truncateRunes(s string, limit int) string {
 
 func (rt *runtime) agentLoop(userInput string) error {
 	err := rt.agentLoopStream(userInput)
-	// Match bash: update terminal title with current stats after each turn
-	rt.updateTermTitle()
 	return err
 }
 
@@ -1339,13 +1336,14 @@ func (rt *runtime) readStats() map[string]any {
 	return stats
 }
 
-// writeStats serializes and writes stats.json.
+// writeStats serializes and writes stats.json, then updates terminal title.
 func (rt *runtime) writeStats(stats map[string]any) {
 	data, err := json.Marshal(stats)
 	if err != nil {
 		return
 	}
 	_ = os.WriteFile(rt.paths.Stats, append(data, '\n'), 0o644)
+	rt.updateTermTitle()
 }
 
 // statsFloat64 safely extracts a float64 from a stats map.
@@ -1358,6 +1356,25 @@ func statsFloat64(m map[string]any, key string) float64 {
 	return 0
 }
 
+// fmtNum formats an integer with comma separators: 28126139 → "28,126,139".
+func fmtNum(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var buf []byte
+	off := len(s) % 3
+	if off == 0 {
+		off = 3
+	}
+	buf = append(buf, s[:off]...)
+	for i := off; i < len(s); i += 3 {
+		buf = append(buf, ',')
+		buf = append(buf, s[i:i+3]...)
+	}
+	return string(buf)
+}
+
 // updateTermTitle updates the terminal title with current stats (matches bash stats_show_osc).
 func (rt *runtime) updateTermTitle() {
 	stats := rt.readStats()
@@ -1366,7 +1383,9 @@ func (rt *runtime) updateTermTitle() {
 	ai := int(statsFloat64(stats, "total_input_tokens"))
 	ao := int(statsFloat64(stats, "total_output_tokens"))
 	ctx := int(statsFloat64(stats, "current_context_tokens"))
-	_, _ = fmt.Fprintf(rt.stderr, "\033]0;T:%d R:%d I:%d O:%d C:%d\007", tc, ar, ai, ao, ctx)
+	_, _ = fmt.Fprintf(rt.stderr, "\033]0;%s T:%s R:%s I:%s O:%s C:%s\007",
+		rt.cfg.Model,
+		fmtNum(tc), fmtNum(ar), fmtNum(ai), fmtNum(ao), fmtNum(ctx))
 }
 
 func (rt *runtime) buildAssistantEvent(text string, calls []protocol.ToolCallEvent) map[string]any {

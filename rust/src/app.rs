@@ -222,7 +222,6 @@ impl Runtime {
         if new_session {
             let _ = rt.append_event(json!({"type":"session_start","session_id":sid}));
         }
-        rt.update_term_title();
 
         Ok(rt)
     }
@@ -280,8 +279,6 @@ impl Runtime {
 
     fn agent_loop(&mut self, user_input: String) -> Result<()> {
         let result = self.agent_loop_stream(user_input);
-        // Match bash: update terminal title with current stats after each turn
-        self.update_term_title();
         result
     }
 
@@ -993,11 +990,26 @@ impl Runtime {
         stats
     }
 
-    /// write_stats serializes and writes stats.json.
+    /// write_stats serializes and writes stats.json, then updates terminal title.
     fn write_stats(&self, stats: &serde_json::Map<String, Value>) {
         if let Ok(data) = serde_json::to_string(stats) {
             let _ = fs::write(&self.paths.stats, data + "\n");
         }
+        self.update_term_title();
+    }
+
+    /// Format integer with comma separators: 28126139 → "28,126,139"
+    fn fmt_num(n: usize) -> String {
+        let s = n.to_string();
+        let mut buf = String::with_capacity(s.len() + s.len() / 3);
+        let off = s.len() % 3;
+        let first = if off == 0 { 3 } else { off };
+        buf.push_str(&s[..first]);
+        for i in (first..s.len()).step_by(3) {
+            buf.push(',');
+            buf.push_str(&s[i..i + 3]);
+        }
+        buf
     }
 
     /// update_term_title updates the terminal title with current stats (matches bash stats_show_osc).
@@ -1008,7 +1020,9 @@ impl Runtime {
         let ai = stats_get_f64(&stats, "total_input_tokens") as usize;
         let ao = stats_get_f64(&stats, "total_output_tokens") as usize;
         let ctx = stats_get_f64(&stats, "current_context_tokens") as usize;
-        eprint!("\x1b]0;T:{} R:{} I:{} O:{} C:{}\x07", tc, ar, ai, ao, ctx);
+        eprint!("\x1b]0;{} T:{} R:{} I:{} O:{} C:{}\x07",
+            self.cfg.model, Self::fmt_num(tc), Self::fmt_num(ar),
+            Self::fmt_num(ai), Self::fmt_num(ao), Self::fmt_num(ctx));
         let _ = io::stderr().flush();
     }
 
