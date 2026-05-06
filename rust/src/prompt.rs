@@ -15,31 +15,32 @@ pub struct Builder {
 impl Builder {
     pub fn build_system_prompt(&self) -> Result<String> {
         let mut sections = Vec::new();
-        sections.push(wrap_section(
-            "agent-identity",
-            "You are bash-agent, a lightweight coding agent that works in a terminal.",
-            None,
-        ));
         let locale_raw = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .iter()
             .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
             .unwrap_or_else(|| "en_US".to_string());
         // Strip encoding suffix (e.g., zh_CN.UTF-8 -> zh_CN)
         let locale = locale_raw.split('.').next().unwrap_or(&locale_raw).to_string();
+        let identity = format!(
+            "You are bash-agent, a lightweight coding agent that works in a terminal.\nMUST use \"{}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.",
+            locale
+        );
+        let identity = if locale.starts_with("zh") {
+            "你是 bash-agent，一个在终端中运行的轻量级编码智能体。\n必须使用中文进行所有输出！包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！代码、命令、文件内容保持原样。".to_string()
+        } else {
+            identity
+        };
+        sections.push(wrap_section("agent-identity", &identity, None));
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
         let platform = std::env::consts::OS;
-        let environment = format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: MUST USE \"{}\" FOR ALL OUTPUT, INCLUDING THINKING/REASONING!!",
+        let environment = format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}",
             locale,
             self.cwd.display(),
             self.home.display(),
             platform,
-            shell,
-            locale);
+            shell);
         sections.push(wrap_section("environment", &environment, None));
-        let mut rules_str = format!("- MUST use \"{}\" for all output, including thinking/reasoning! Never mix languages! Code, commands, and file content remain as-is.\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", locale);
-        if locale.starts_with("zh") {
-            rules_str = "- 必须使用中文进行所有输出！包括思考/推理！严禁混用语言！代码、命令和文件内容保持原样。\n- 简洁具体。不要客套，除非被要求否则不要解释。只返回原始结果。\n- 优先安全、精确的编辑。\n- 清晰报告失败。".to_string();
-        }
+        let rules_str = "- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.";
         sections.push(wrap_section("rules", &rules_str, None));
         sections.push(wrap_section(
             "using-your-tools",

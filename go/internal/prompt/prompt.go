@@ -19,7 +19,6 @@ type Builder struct {
 
 func (b Builder) BuildSystemPrompt() (string, error) {
 	sections := make([]string, 0, 8)
-	sections = appendSection(sections, "agent-identity", "You are bash-agent, a lightweight coding agent that works in a terminal.", "")
 	locale := "en_US"
 	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if v := os.Getenv(key); v != "" {
@@ -31,6 +30,11 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	if idx := strings.Index(locale, "."); idx >= 0 {
 		locale = locale[:idx]
 	}
+	identity := fmt.Sprintf("You are bash-agent, a lightweight coding agent that works in a terminal.\nMUST use \"%s\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.", locale)
+	if strings.HasPrefix(locale, "zh") {
+		identity = "你是 bash-agent，一个在终端中运行的轻量级编码智能体。\n必须使用中文进行所有输出！包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！代码、命令、文件内容保持原样。"
+	}
+	sections = appendSection(sections, "agent-identity", identity, "")
 	environment := "lang: " + locale + "\npwd: " + b.Cwd + "\nhome: " + b.Home + "\nplatform: " + runtime.GOOS
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -38,10 +42,7 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	}
 	environment += "\nshell: " + shell
 	sections = appendSection(sections, "environment", environment, "")
-	rules := fmt.Sprintf("- MUST use \"%s\" for all output, including thinking/reasoning! Never mix languages! Code, commands, and file content remain as-is.\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", locale)
-	if strings.HasPrefix(locale, "zh") {
-		rules = "- 必须使用中文进行所有输出！包括思考/推理！严禁混用语言！代码、命令和文件内容保持原样。\n- 简洁具体。不要客套，除非被要求否则不要解释。只返回原始结果。\n- 优先安全、精确的编辑。\n- 清晰报告失败。"
-	}
+	rules := "- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly."
 	sections = appendSection(sections, "rules", rules, "")
 	sections = appendSection(sections, "using-your-tools", "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.", "")
 	sections = appendSection(sections, "todo-guidance", "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.", "")
