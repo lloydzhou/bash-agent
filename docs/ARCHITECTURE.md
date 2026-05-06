@@ -61,7 +61,7 @@ src/awk/*
 - CLI 参数解析
 - provider/model 选择
 - session 初始化与恢复
-- context 文件、summary、todo 文件管理
+- context 文件、summary 文件管理
 - prompt section 组装
 - tool 分发与文件/进程控制
 - API 请求
@@ -122,7 +122,6 @@ session 数据按当前项目目录归档：
     conversation.jsonl
     events.jsonl
     summary.txt
-    todo.md
     plan.md
     stats.json
 ```
@@ -135,8 +134,6 @@ session 数据按当前项目目录归档：
   - session 内部事件日志
 - `summary.txt`
   - compact 后留下的历史摘要
-- `todo.md`
-  - 当前 session 的待办清单，由 `TodoWrite` 维护
 - `plan.md`
   - 当前 session 的计划文档，由 `plan-lifecycle-guidance` 机制维护
 - `stats.json`
@@ -235,7 +232,7 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 
 当前顺序：
 
-1. `agent-identity`
+1. `agent-identity`（按 locale 翻译，提供语言启动）
 2. `environment`
 3. `rules`
 4. `using-your-tools`
@@ -244,9 +241,9 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 7. `instruction-files`
 8. `skill-index`
 9. `selected-skills`
-10. `current-plan`
-11. `context-summary`
-12. `current-todo`
+10. `output-language`（尾部重申，静态锚定，在动态 section 之前）
+11. `current-plan`
+12. `context-summary`
 
 实现策略：
 
@@ -254,6 +251,7 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 - `append_section()` 负责按顺序累加
 - 稳定内容尽量前置
 - 动态内容尽量后置
+- `current-todo` 已移除（见下文）
 
 `using-your-tools` 指导模型如何正确使用各内置 tool。
 
@@ -292,9 +290,12 @@ skills 当前优先读取：
 现在的设计是：
 
 - 使用内置 tool：`TodoWrite`
-- `todo.md` 是 session 级状态
-- 模型通过 tool 显式更新 checklist
-- host 只负责保存状态
+- 模型通过 tool 显式更新完整 checklist
+- TodoWrite 输出直接作为 tool result 返回，不持久化到文件
+- 模型从对话历史中的 tool result 获取最新 todo 状态
+- 不再有 `current-todo` system prompt section（避免每次 todo 更新导致前缀缓存失效）
+
+> 注意：之前 `current-todo` section 的方案虽然直观，但每次 `TodoWrite` 都会改变 system prompt 前缀，导致前序上下文缓存全部失效。移除后，system prompt 前缀保持稳定，TodoWrite 仅通过 tool result 传递状态，效果等价且缓存友好。
 
 这种方式更接近 Claude Code 的做法，也更适合结构化维护 session 级待办状态。
 
@@ -424,7 +425,6 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
 - `text`
 - `thinking`
 - `tool_call`
-- `todo_update`
 - `tool_result`
 - `usage`
 - `stop`
