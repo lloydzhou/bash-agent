@@ -452,8 +452,7 @@ display_event() {
 }
 
 build_system_prompt() {
-    local output=""
-    local agent_identity core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context todo
+    local output="" agent_identity core_rules tool_guidance todo_guidance plan_lifecycle_guidance locale instruction_files skill_index selected_skills plan stable_context todo
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     core_rules=$'- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.'
     tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
@@ -469,6 +468,8 @@ build_system_prompt() {
 
     append_section output "agent-identity" "$agent_identity"
     append_section output "rules" "$core_rules"
+    locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+    [[ -n "$locale" ]] && append_section output "user-locale" "User system language: ${locale%%.*}. Use this language for all output (including thinking)."
     append_section output "using-your-tools" "$tool_guidance"
     append_section output "todo-guidance" "$todo_guidance"
     append_section output "plan-lifecycle-guidance" "$plan_lifecycle_guidance"
