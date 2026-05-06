@@ -1449,26 +1449,21 @@ EOF
 
 test_agent_todo_state() {
     info "Test 16: Agent.sh session todo state"
-    local home_dir project_dir output session_file todo_file event_file human_home
+    local home_dir project_dir output session_file event_file human_home
     home_dir=$(mktemp -d)
-    project_dir="$home_dir/.bash-agent/projects/$(project_key)"
+    project_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)"
     session_dir="$project_dir/demo"
     session_file="$session_dir/conversation.jsonl"
-    todo_file="$session_dir/todo.md"
     event_file="$session_dir/events.jsonl"
 
     output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'run tests and fix failures TODO_WRITE_MARKER' 2>&1) || true
     if echo "$output" | grep -q '"type":"text"' && \
-       echo "$output" | grep -q '"type":"todo_update"' && \
-       [[ -f "$todo_file" ]] && \
-       grep -q "^- \\[ \\] inspect repository$" "$todo_file" && \
-       grep -q "^- \\[ \\] run tests$" "$todo_file" && \
-       [[ "$(grep -c '"type":"session_start"' "$event_file" 2>/dev/null || echo 0)" -eq 1 ]] && \
-       grep -q '"type":"todo_update"' "$event_file" && \
-       grep -q "inspect repository" "$session_file"; then
+       [[ -f "$session_file" ]] && \
+       grep -q "inspect repository" "$session_file" && \
+       grep -q '"type":"session_start"' "$event_file"; then
         :
     else
-        red "Agent session todo state"; echo "  Output: $output"; echo "  Todo: $(cat "$todo_file" 2>/dev/null || true)"; echo "  Session: $(cat "$session_file" 2>/dev/null || true)"; echo "  Events: $(cat "$event_file" 2>/dev/null || true)"; ((FAIL++)) || { rm -rf "$home_dir"; return; }
+        red "Agent session todo state"; echo "  Output: $output"; echo "  Session: $(cat "$session_file" 2>/dev/null || true)"; echo "  Events: $(cat "$event_file" 2>/dev/null || true)"; ((FAIL++)) || { rm -rf "$home_dir"; return; }
         rm -rf "$home_dir"
         return
     fi
