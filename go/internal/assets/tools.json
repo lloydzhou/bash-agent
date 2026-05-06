@@ -1,7 +1,7 @@
 [
   {
     "name": "Read",
-    "description": "Read a single file from the local filesystem. Use multiple Read calls if you need multiple files.\n\nFor large files, use offset and limit to read specific line ranges instead of reading the entire file.",
+    "description": "Read a file from the local filesystem. Use multiple Read calls if you need multiple files. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.\n\nIMPORTANT - Large file handling:\n- Tool results may be truncated for large files. If you need to search for specific content, use Grep instead — it returns only matching lines and never truncates.\n- Use Grep with context to get enough surrounding lines for Edit, avoiding a separate Read.\n- Use Read with offset/limit only when you already know the target line range (e.g. from a prior Grep).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -11,11 +11,11 @@
         },
         "offset": {
           "type": "integer",
-          "description": "Line number to start reading from (1-based). Useful for reading specific sections of large files."
+          "description": "Line number to start reading from (1-indexed). Only provide when reading a specific portion of the file."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum number of lines to read. Useful for reading specific sections of large files."
+          "description": "Number of lines to read. Only provide when reading a specific portion of the file."
         }
       },
       "required": ["path"]
@@ -41,7 +41,7 @@
   },
   {
     "name": "Edit",
-    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Read the file first and copy exact text before calling Edit.",
+    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, read the relevant portion of the file — use Read with offset/limit if you know the location, or use Grep with context to locate and capture the target text in one step. Copy the exact text before calling Edit.",
     "input_schema": {
       "type": "object",
       "properties": {
