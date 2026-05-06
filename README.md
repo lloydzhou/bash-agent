@@ -62,23 +62,50 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 
 ## CLI
 
-| 参数 | 说明 |
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| `-p, --provider` | `claude` 或 `openai` | `claude` |
+| `-m, --model` | 模型名 | `claude-sonnet-4-20250514` |
+| `--base-url` | 覆盖 API base URL | - |
+| `--api-key` | 覆盖 API key | - |
+| `--skill NAME` | 加载 skill | - |
+| `--max-tokens` | 最大输出 token | `4096` |
+| `--max-turns` | 最大 agent loop turn 数 | `40` |
+| `--max-context` | context 预算（`100k`/`1m`/`1g`） | `200000` |
+| `--tool-timeout N` | tool 超时秒数 | `600` |
+| `--session [NAME]` | 创建或使用 session | - |
+| `--continue` | 继续最近 session | - |
+| `--list-sessions` | 列出当前项目 session | - |
+| `-i` | 交互模式 | - |
+| `--print` | stream-json 输出 | - |
+| `-v` | 详细日志 | - |
+
+## 环境变量
+
+| 变量 | 说明 |
 | --- | --- |
-| `-p, --provider` | `claude` 或 `openai`，默认 `claude` |
-| `-m, --model` | 模型名 |
-| `--base-url` | 覆盖 API base URL |
-| `--api-key` | 覆盖 API key |
-| `--skill NAME` | 加载 skill |
-| `--max-tokens` | 最大输出 token |
-| `--max-turns` | 最大 agent loop turn 数 |
-| `--max-context` | context 预算（`100k`/`1m`/`1g`） |
-| `--tool-timeout N` | tool 超时秒数 |
-| `--session [NAME]` | 创建或使用 session |
-| `--continue` | 继续最近 session |
-| `--list-sessions` | 列出当前项目 session |
-| `-i` | 交互模式 |
-| `--print` | stream-json 输出 |
-| `-v` | 详细日志 |
+| `ANTHROPIC_API_KEY` | Claude API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_BASE_URL` | Claude API base URL |
+| `OPENAI_BASE_URL` | OpenAI API base URL |
+| `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
+| `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
+| `THINKING_BUDGET` | thinking token 预算（默认 `2048`） |
+
+DP 算法相关环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DP_P_INPUT` | `3.0` | $/MTok，未命中缓存的输入价格 |
+| `DP_P_CACHE` | `0.30` | $/MTok，命中缓存的输入价格 |
+| `DP_P_OUT` | `15.0` | $/MTok，输出价格 |
+| `DP_V` | `5000` | 固定前缀 token 数 |
+| `DP_S` | `500` | 固定摘要长度 token 数 |
+| `DP_L` | `5` | 每轮用户输入平均 LLM 调用次数（0=自动计算） |
+| `DP_BASELINE_E` | `8` | 预期剩余用户输入轮数 |
+| `DP_R` | `0.8` | 单次摘要信息保留率 |
+| `DP_BETA` | `0.03` | 信息损失惩罚系数 |
+| `DP_MIN_KEEP_RATIO` | `0.12` | 最少保留消息比例 |
 
 ## Context 压缩
 

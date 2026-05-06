@@ -117,6 +117,7 @@
 - 基于 Jina AI Search API
 - 依赖 `JINA_API_KEY` 环境变量
 - 默认超时 30s
+- 返回结果包含标题和 URL
 
 ## `WebFetch`
 
@@ -129,3 +130,5 @@
 - 基于 Jina AI Reader API
 - 依赖 `JINA_API_KEY` 环境变量
 - 默认超时 60s
+- 返回 markdown 格式内容
+- 无法访问需要认证的私有 URL

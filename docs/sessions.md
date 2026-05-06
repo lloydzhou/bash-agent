@@ -21,6 +21,7 @@
   summary.txt          compact 后的历史摘要
   todo.md              当前 session 的 todo 状态
   plan.md              当前 session 的计划文档
+  stats.json           session 统计数据
 ```
 
 ### conversation.jsonl
@@ -55,6 +56,29 @@ compact 后的历史摘要。由 LLM 生成，替代被丢弃的旧消息。
 ### plan.md
 
 由 `plan-lifecycle-guidance` 机制维护的当前计划文档。
+
+### stats.json
+
+session 统计数据，JSON 格式，包含以下字段：
+
+```json
+{
+  "current_turn_count": 5,
+  "agent_request_count": 15,
+  "compact_request_count": 1,
+  "total_input_tokens": 50000,
+  "total_output_tokens": 10000,
+  "total_cache_read_tokens": 30000,
+  "total_cache_creation_tokens": 5000,
+  "current_context_tokens": 25000,
+  "last_updated": "20260506-123456"
+}
+```
+
+用途：
+- DP compact 算法计算预期剩余步数和成本
+- 追踪 session 的 token 使用情况
+- 交互模式标题栏显示统计信息
 
 ## 恢复与持久化
 

@@ -335,6 +335,8 @@ skills 当前优先读取：
 
 `Bash` 支持通过 `timeout` 参数为单条命令设置独立超时，覆盖全局 `--tool-timeout`。
 
+`WebSearch` 和 `WebFetch` 基于 Jina AI API，需要 `JINA_API_KEY` 环境变量。
+
 ### 后续不该做什么
 
 - 不要再让 bash 回去解析 JSON object

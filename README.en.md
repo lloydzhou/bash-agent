@@ -62,23 +62,50 @@ Pre-built binaries (Go / Rust) are available on [Releases](https://github.com/ll
 
 ## CLI
 
-| Flag | Description |
+| Flag | Description | Default |
+| --- | --- | --- |
+| `-p, --provider` | `claude` or `openai` | `claude` |
+| `-m, --model` | model name | `claude-sonnet-4-20250514` |
+| `--base-url` | override API base URL | - |
+| `--api-key` | override API key | - |
+| `--skill NAME` | load a skill | - |
+| `--max-tokens` | max output tokens | `4096` |
+| `--max-turns` | max agent loop turns | `40` |
+| `--max-context` | context budget (`100k`/`1m`/`1g`) | `200000` |
+| `--tool-timeout N` | tool timeout in seconds | `600` |
+| `--session [NAME]` | create or resume a session | - |
+| `--continue` | continue the latest session | - |
+| `--list-sessions` | list sessions for the current project | - |
+| `-i` | interactive mode | - |
+| `--print` | stream-json output | - |
+| `-v` | verbose logging | - |
+
+## Environment Variables
+
+| Variable | Description |
 | --- | --- |
-| `-p, --provider` | `claude` or `openai` (default: `claude`) |
-| `-m, --model` | model name |
-| `--base-url` | override API base URL |
-| `--api-key` | override API key |
-| `--skill NAME` | load a skill |
-| `--max-tokens` | max output tokens |
-| `--max-turns` | max agent loop turns |
-| `--max-context` | context budget (`100k`/`1m`/`1g`) |
-| `--tool-timeout N` | tool timeout in seconds |
-| `--session [NAME]` | create or resume a session |
-| `--continue` | continue the latest session |
-| `--list-sessions` | list sessions for the current project |
-| `-i` | interactive mode |
-| `--print` | stream-json output |
-| `-v` | verbose logging |
+| `ANTHROPIC_API_KEY` | API key for Claude |
+| `OPENAI_API_KEY` | API key for OpenAI |
+| `ANTHROPIC_BASE_URL` | Claude API base URL |
+| `OPENAI_BASE_URL` | OpenAI API base URL |
+| `JINA_API_KEY` | Jina AI API key (required for WebSearch/WebFetch tools) |
+| `BASH_AGENT_HOME` | Override session storage directory (default: `$HOME`) |
+| `THINKING_BUDGET` | Thinking token budget (default: `2048`) |
+
+DP algorithm environment variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DP_P_INPUT` | `3.0` | $/MTok, input price without cache |
+| `DP_P_CACHE` | `0.30` | $/MTok, input price with cache |
+| `DP_P_OUT` | `15.0` | $/MTok, output price |
+| `DP_V` | `5000` | Fixed prefix token count |
+| `DP_S` | `500` | Fixed summary length in tokens |
+| `DP_L` | `5` | Avg LLM calls per user input (0=auto) |
+| `DP_BASELINE_E` | `8` | Expected remaining user input turns |
+| `DP_R` | `0.8` | Single summary info retention rate |
+| `DP_BETA` | `0.03` | Info loss penalty coefficient |
+| `DP_MIN_KEEP_RATIO` | `0.12` | Minimum message keep ratio |
 
 ## Context Compaction
 

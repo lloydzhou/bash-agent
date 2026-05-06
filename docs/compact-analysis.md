@@ -401,5 +401,5 @@ while (cut > 1 && role[cut] != "user") {
 | `go/internal/config/config.go` | Go DP 配置字段 + 环境变量覆盖 |
 | `rust/src/compact_dp.rs` | Rust 实现（150 行） |
 | `rust/src/config.rs` | Rust DP 配置字段 + 环境变量覆盖 |
-| `docs/dp-compact-analysis.md` | 本文档 |
+| `docs/compact-analysis.md` | 本文档 |
 | `plan.md` | 实现记录 |
