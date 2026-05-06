@@ -38,9 +38,9 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	}
 	environment += "\nshell: " + shell
 	if strings.HasPrefix(locale, "zh") {
-		environment += "\nlocale: 必须使用中文进行所有输出，包括思考/推理！"
+		environment += "\nlocale: 必须使用中文进行所有输出，包括思考/推理！！"
 	} else {
-		environment += fmt.Sprintf("\nlocale: MUST use \"%s\" for all output, including thinking/reasoning!", locale)
+		environment += fmt.Sprintf("\nlocale: MUST USE \"%s\" FOR ALL OUTPUT, INCLUDING THINKING/REASONING!!", locale)
 	}
 	sections = appendSection(sections, "environment", environment, "")
 	rules := fmt.Sprintf("- MUST use \"%s\" for all output, including thinking/reasoning! Never mix languages! Code, commands, and file content remain as-is.\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", locale)

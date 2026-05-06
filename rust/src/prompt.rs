@@ -29,14 +29,14 @@ impl Builder {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
         let platform = std::env::consts::OS;
         let environment = if locale.starts_with("zh") {
-            format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: 必须使用中文进行所有输出，包括思考/推理！",
+            format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: 必须使用中文进行所有输出，包括思考/推理！！",
                 locale,
                 self.cwd.display(),
                 self.home.display(),
                 platform,
                 shell)
         } else {
-            format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: MUST use \"{}\" for all output, including thinking/reasoning!",
+            format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: MUST USE \"{}\" FOR ALL OUTPUT, INCLUDING THINKING/REASONING!!",
                 locale,
                 self.cwd.display(),
                 self.home.display(),
