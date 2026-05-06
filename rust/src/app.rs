@@ -308,7 +308,6 @@ impl Runtime {
 
                 let runner = tools::Runner {
                     config: self.cfg.clone(),
-                    todo_file: self.paths.todo.clone(),
                     cwd: self.cwd.clone(),
                     home: self.home.clone(),
                 };
@@ -395,17 +394,15 @@ impl Runtime {
                             tool_results.push(tool_result);
 
                             if call.name == "TodoWrite" {
-                                if let Ok(data) = fs::read_to_string(&self.paths.todo) {
-                                    if !data.trim().is_empty() {
-                                        let trimmed = data.trim_end().to_string();
-                                        self.append_event(
-                                            json!({"type":"todo_update","content":trimmed}),
+                                let content = output.trim_end().to_string();
+                                if !content.is_empty() {
+                                    self.append_event(
+                                        json!({"type":"todo_update","content":content}),
+                                    )?;
+                                    if self.is_stream_json_mode() {
+                                        self.emit_stream(
+                                            json!({"type":"todo_update","content":content}),
                                         )?;
-                                        if self.is_stream_json_mode() {
-                                            self.emit_stream(
-                                                json!({"type":"todo_update","content":trimmed}),
-                                            )?;
-                                        }
                                     }
                                 }
                             }
@@ -648,7 +645,6 @@ impl Runtime {
             home: self.home.clone(),
             skills: self.cfg.skills.clone(),
             summary_file: self.paths.summary.clone(),
-            todo_file: self.paths.todo.clone(),
             plan_file: self.paths.plan.clone(),
         }
         .build_system_prompt()?;
@@ -837,7 +833,6 @@ impl Runtime {
             home: self.home.clone(),
             skills: self.cfg.skills.clone(),
             summary_file: self.paths.summary.clone(),
-            todo_file: self.paths.todo.clone(),
             plan_file: self.paths.plan.clone(),
         }
         .build_system_prompt()?;

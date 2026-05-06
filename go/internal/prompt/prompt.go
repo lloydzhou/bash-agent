@@ -13,7 +13,6 @@ type Builder struct {
 	Home        string
 	Skills      []string
 	SummaryFile string
-	TodoFile    string
 	PlanFile    string
 }
 
@@ -87,11 +86,6 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 		return "", err
 	} else {
 		sections = appendSection(sections, "context-summary", section, "")
-	}
-	if section, err := readOptionalFile(b.TodoFile); err != nil {
-		return "", err
-	} else {
-		sections = appendSection(sections, "current-todo", section, "")
 	}
 	outputLanguageReaffirm := fmt.Sprintf("MUST use \"%s\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.", locale)
 	if strings.HasPrefix(locale, "zh") {

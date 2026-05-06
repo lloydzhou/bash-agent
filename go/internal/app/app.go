@@ -553,9 +553,8 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 		}
 
 		runner := tools.Runner{
-			Config:   rt.cfg,
-			TodoFile: rt.paths.Todo,
-			Cwd:      rt.cwd,
+			Config: rt.cfg,
+			Cwd:    rt.cwd,
 			Home:     rt.home,
 		}
 
@@ -619,12 +618,10 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				}
 				// Handle TodoWrite event
 				if e.Name == "TodoWrite" && result.Err == nil {
-					if data, err := os.ReadFile(rt.paths.Todo); err == nil && len(data) > 0 {
-						todoContent := strings.TrimRight(string(data), "\n")
-						_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": todoContent})
-						if rt.isStreamJSONMode() {
-							_ = rt.emitStream(map[string]any{"type": "todo_update", "content": todoContent})
-						}
+					todoContent := strings.TrimRight(result.Output, "\n")
+					_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": todoContent})
+					if rt.isStreamJSONMode() {
+						_ = rt.emitStream(map[string]any{"type": "todo_update", "content": todoContent})
 					}
 				}
 			case protocol.UsageEvent:
@@ -774,7 +771,6 @@ func (rt *runtime) buildLLMRequest() ([]byte, error) {
 		Home:        rt.home,
 		Skills:      rt.cfg.Skills,
 		SummaryFile: rt.paths.Summary,
-		TodoFile:    rt.paths.Todo,
 		PlanFile:    rt.paths.Plan,
 	}.BuildSystemPrompt()
 	if err != nil {
@@ -1186,7 +1182,6 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 		Home:        rt.home,
 		Skills:      rt.cfg.Skills,
 		SummaryFile: rt.paths.Summary,
-		TodoFile:    rt.paths.Todo,
 		PlanFile:    rt.paths.Plan,
 	}.BuildSystemPrompt()
 	if err != nil {

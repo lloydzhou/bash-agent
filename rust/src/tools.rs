@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 pub struct Runner {
     pub config: Config,
-    pub todo_file: std::path::PathBuf,
     pub cwd: std::path::PathBuf,
     pub home: std::path::PathBuf,
 }
@@ -378,9 +377,6 @@ impl Runner {
     }
 
     fn todo_write(&self, todos: Vec<TodoArg>) -> Result<String> {
-        if self.todo_file.as_os_str().is_empty() {
-            bail!("Error: todo file not configured");
-        }
         let mut lines = Vec::new();
         let mut in_progress = 0;
         for t in todos {
@@ -403,7 +399,6 @@ impl Runner {
             bail!("Error: todo_write allows at most one in_progress item");
         }
         let checklist = lines.join("\n");
-        fs::write(&self.todo_file, format!("{checklist}\n"))?;
         Ok(checklist)
     }
 
@@ -675,7 +670,6 @@ mod tests {
 
         let runner = Runner {
             config: Config::default(),
-            todo_file: PathBuf::new(),
             cwd: root.clone(),
             home: root.join("home"),
         };

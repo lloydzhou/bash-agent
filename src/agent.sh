@@ -40,7 +40,6 @@ INTERACTIVE=false
 SESSION_ID=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
-TODO_FILE=""
 PLAN_FILE=""
 STATS_FILE=""
 LOG_EVENTS=true
@@ -452,7 +451,7 @@ display_event() {
 }
 
 build_system_prompt() {
-    local output="" agent_identity environment core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context todo locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
+    local output="" agent_identity environment core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
     locale="${locale%%.*}"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     [[ "$locale" == zh* ]] && agent_identity='你是 bash-agent，一个在终端中运行的轻量级编码智能体。'
@@ -469,7 +468,6 @@ build_system_prompt() {
     selected_skills=$(build_selected_skills_section)
     plan=$(read_optional_file "${PLAN_FILE:-}")
     stable_context=$(read_optional_file "${CONTEXT_SUMMARY_FILE:-}")
-    todo=$(read_optional_file "${TODO_FILE:-}")
 
     append_section output "agent-identity" "$agent_identity"
     append_section output "environment" "$environment"
@@ -482,7 +480,6 @@ build_system_prompt() {
     append_section output "selected-skills" "$selected_skills"
     append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     append_section output "context-summary" "$stable_context"
-    append_section output "current-todo" "$todo"
     append_section output "output-language" "$output_language_reaffirm"
 
     printf '%s' "${output%$'\n'}"
@@ -716,7 +713,6 @@ conv_init() {
     CONV_FILE="${session_dir}/conversation.jsonl"
     SESSION_EVENT_FILE="${session_dir}/events.jsonl"
     CONTEXT_SUMMARY_FILE="${session_dir}/summary.txt"
-    TODO_FILE="${session_dir}/todo.md"
     PLAN_FILE="${session_dir}/plan.md"
     STATS_FILE="${session_dir}/stats.json"
     local new_session=false
@@ -724,7 +720,6 @@ conv_init() {
     touch "$CONV_FILE"
     touch "$SESSION_EVENT_FILE"
     touch "$CONTEXT_SUMMARY_FILE"
-    touch "$TODO_FILE"
     touch "$PLAN_FILE"
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
@@ -1014,7 +1009,6 @@ tool_grep() {
 }
 
 tool_todo() {
-    printf '%s\n' "$1" > "$TODO_FILE"
     printf '%s' "$1"
 }
 
@@ -1143,9 +1137,6 @@ agent_loop_stream() {
                     fi
                     output=$(format_tool_result "$output")
 
-                    if [[ "$cur_tool_name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
-                        write_message "TODO_UPDATE" "$(<"$TODO_FILE")"
-                    fi
                     local result_for_conv="$output"
                     if [[ "$cur_tool_name" == "Edit" ]]; then
                         result_for_conv="$(printf '%s' "$output" | sed -n '1p')"
