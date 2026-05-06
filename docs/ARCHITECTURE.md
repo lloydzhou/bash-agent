@@ -236,16 +236,17 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 当前顺序：
 
 1. `agent-identity`
-2. `rules`
-3. `using-your-tools`
-4. `todo-guidance`
-5. `plan-lifecycle-guidance`
-6. `instruction-files`
-7. `skill-index`
-8. `selected-skills`
-9. `current-plan`
-10. `context-summary`
-11. `current-todo`
+2. `environment`
+3. `rules`
+4. `using-your-tools`
+5. `todo-guidance`
+6. `plan-lifecycle-guidance`
+7. `instruction-files`
+8. `skill-index`
+9. `selected-skills`
+10. `current-plan`
+11. `context-summary`
+12. `current-todo`
 
 实现策略：
 

@@ -36,8 +36,8 @@ impl Builder {
             shell,
         );
         sections.push(wrap_section("environment", &environment, None));
-        let rules_str = "- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.\n- Respond in the user's system language (see environment > lang), including chain-of-thought reasoning. Code, commands, and file content remain as-is.";
-        sections.push(wrap_section("rules", rules_str, None));
+        let rules_str = format!("- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.\n- Respond in {} (system language), including chain-of-thought reasoning. Code, commands, and file content remain as-is.", locale);
+        sections.push(wrap_section("rules", &rules_str, None));
         sections.push(wrap_section(
             "using-your-tools",
             "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.",
