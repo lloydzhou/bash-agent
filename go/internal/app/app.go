@@ -616,14 +616,6 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				if err := rt.displayEvent(&state, toolResults[len(toolResults)-1]); err != nil {
 					return err
 				}
-				// Handle TodoWrite event
-				if e.Name == "TodoWrite" && result.Err == nil {
-					todoContent := strings.TrimRight(result.Output, "\n")
-					_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": todoContent})
-					if rt.isStreamJSONMode() {
-						_ = rt.emitStream(map[string]any{"type": "todo_update", "content": todoContent})
-					}
-				}
 			case protocol.UsageEvent:
 				if err := rt.displayEvent(&state, e); err != nil {
 					return err

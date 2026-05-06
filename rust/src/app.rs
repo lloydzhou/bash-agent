@@ -396,20 +396,6 @@ impl Runtime {
                                 DisplayEvent::ToolResult(tool_result.clone()),
                             )?;
                             tool_results.push(tool_result);
-
-                            if call.name == "TodoWrite" {
-                                let content = output.trim_end().to_string();
-                                if !content.is_empty() {
-                                    self.append_event(
-                                        json!({"type":"todo_update","content":content}),
-                                    )?;
-                                    if self.is_stream_json_mode() {
-                                        self.emit_stream(
-                                            json!({"type":"todo_update","content":content}),
-                                        )?;
-                                    }
-                                }
-                            }
                         }
                         Event::Usage(usage) => {
                             self.display_event(&mut ds, DisplayEvent::Usage(usage))?;
