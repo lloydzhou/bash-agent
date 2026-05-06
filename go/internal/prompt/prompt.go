@@ -60,7 +60,7 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 - **PLAN_FILE**: %s`, planFile)
 	sections = appendSection(sections, "plan-lifecycle-guidance", planLifecycleGuidance, "")
 	if section, err := b.buildInstructionFilesSection(); err != nil {
-		return "", err
+		return "en_US", err
 	} else {
 		sections = appendSection(sections, "instruction-files", section, "")
 	}
