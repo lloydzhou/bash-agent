@@ -36,7 +36,10 @@ impl Builder {
             shell,
             locale);
         sections.push(wrap_section("environment", &environment, None));
-        let rules_str = format!("- MUST use \"{}\" for all output, including thinking/reasoning! Never mix languages! Code, commands, and file content remain as-is.\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", locale);
+        let mut rules_str = format!("- MUST use \"{}\" for all output, including thinking/reasoning! Never mix languages! Code, commands, and file content remain as-is.\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", locale);
+        if locale.starts_with("zh") {
+            rules_str = "- 必须使用中文进行所有输出！包括思考/推理！严禁混用语言！代码、命令和文件内容保持原样。\n- 简洁具体。不要客套，除非被要求否则不要解释。只返回原始结果。\n- 优先安全、精确的编辑。\n- 清晰报告失败。".to_string();
+        }
         sections.push(wrap_section("rules", &rules_str, None));
         sections.push(wrap_section(
             "using-your-tools",
