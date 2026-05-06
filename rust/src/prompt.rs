@@ -20,18 +20,24 @@ impl Builder {
             "You are bash-agent, a lightweight coding agent that works in a terminal.",
             None,
         ));
-        sections.push(wrap_section(
-            "rules",
-            "- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.",
-            None,
-        ));
-        if let Some(locale) = detect_locale() {
-            sections.push(wrap_section(
-                "user-locale",
-                &format!("User system language: {}. Use this language for all output (including thinking).", locale),
-                None,
-            ));
-        }
+        let locale_raw = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+            .unwrap_or_else(|| "en_US".to_string());
+        // Strip encoding suffix (e.g., zh_CN.UTF-8 -> zh_CN)
+        let locale = locale_raw.split('.').next().unwrap_or(&locale_raw).to_string();
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
+        let platform = std::env::consts::OS;
+        let environment = format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}",
+            locale,
+            self.cwd.display(),
+            self.home.display(),
+            platform,
+            shell,
+        );
+        sections.push(wrap_section("environment", &environment, None));
+        let rules_str = "- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.\n- Respond in the user's system language (see environment > lang), including chain-of-thought reasoning. Code, commands, and file content remain as-is.";
+        sections.push(wrap_section("rules", rules_str, None));
         sections.push(wrap_section(
             "using-your-tools",
             "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.",
@@ -189,19 +195,6 @@ impl Builder {
 }
 
 
-
-/// Detect user locale from environment variables.
-/// Priority: LC_ALL > LC_MESSAGES > LANG. Strips encoding suffix (e.g. ".UTF-8").
-fn detect_locale() -> Option<String> {
-    for key in &["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Ok(v) = std::env::var(key) {
-            if !v.is_empty() {
-                return Some(v.split('.').next().unwrap_or(&v).to_string());
-            }
-        }
-    }
-    None
-}
 
 fn wrap_section(tag: &str, content: &str, name: Option<&str>) -> String {
     if content.trim().is_empty() {
