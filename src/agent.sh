@@ -40,7 +40,6 @@ INTERACTIVE=false
 SESSION_ID=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
-TODO_FILE=""
 PLAN_FILE=""
 STATS_FILE=""
 LOG_EVENTS=true
@@ -452,11 +451,13 @@ display_event() {
 }
 
 build_system_prompt() {
-    local output="" agent_identity environment core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context todo locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
+    local output="" agent_identity environment core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
     locale="${locale%%.*}"
-    agent_identity="You are bash-agent, a lightweight coding agent that works in a terminal."$'\n'"MUST use \"${locale}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
-    [[ "$locale" == zh* ]] && agent_identity='你是 bash-agent，一个在终端中运行的轻量级编码智能体。'$'\n''必须使用中文进行所有输出！包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！代码、命令、文件内容保持原样。'
+    agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
+    [[ "$locale" == zh* ]] && agent_identity='你是 bash-agent，一个在终端中运行的轻量级编码智能体。'
     core_rules=$'- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.'
+    output_language_reaffirm="MUST use \"${locale}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
+    [[ "$locale" == zh* ]] && output_language_reaffirm='再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！'
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
     tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
@@ -467,7 +468,6 @@ build_system_prompt() {
     selected_skills=$(build_selected_skills_section)
     plan=$(read_optional_file "${PLAN_FILE:-}")
     stable_context=$(read_optional_file "${CONTEXT_SUMMARY_FILE:-}")
-    todo=$(read_optional_file "${TODO_FILE:-}")
 
     append_section output "agent-identity" "$agent_identity"
     append_section output "environment" "$environment"
@@ -480,7 +480,7 @@ build_system_prompt() {
     append_section output "selected-skills" "$selected_skills"
     append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     append_section output "context-summary" "$stable_context"
-    append_section output "current-todo" "$todo"
+    append_section output "output-language" "$output_language_reaffirm"
 
     printf '%s' "${output%$'\n'}"
 }
@@ -713,7 +713,6 @@ conv_init() {
     CONV_FILE="${session_dir}/conversation.jsonl"
     SESSION_EVENT_FILE="${session_dir}/events.jsonl"
     CONTEXT_SUMMARY_FILE="${session_dir}/summary.txt"
-    TODO_FILE="${session_dir}/todo.md"
     PLAN_FILE="${session_dir}/plan.md"
     STATS_FILE="${session_dir}/stats.json"
     local new_session=false
@@ -721,7 +720,6 @@ conv_init() {
     touch "$CONV_FILE"
     touch "$SESSION_EVENT_FILE"
     touch "$CONTEXT_SUMMARY_FILE"
-    touch "$TODO_FILE"
     touch "$PLAN_FILE"
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
@@ -1010,11 +1008,6 @@ tool_grep() {
     rg "${args[@]}" 2>/dev/null || true
 }
 
-tool_todo() {
-    printf '%s\n' "$1" > "$TODO_FILE"
-    printf '%s' "$1"
-}
-
 tool_skill() {
     local skill_name="$1" skill_content=""
     skill_name="${skill_name#"${skill_name%%[![:space:]]*}"}"
@@ -1037,7 +1030,7 @@ dispatch_tool() {
         Bash)      tool_bash "$arg1" "$arg2" ;;
         Glob)      tool_glob "$arg1" "$arg2" ;;
         Grep)      tool_grep "$arg1" "$arg2" "$arg3" "$arg4" ;;
-        TodoWrite) tool_todo "$arg1" ;;
+        TodoWrite) printf '%s' "$arg1" ;;
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
         WebFetch)  tool_web_fetch "$arg1" ;;
@@ -1140,9 +1133,6 @@ agent_loop_stream() {
                     fi
                     output=$(format_tool_result "$output")
 
-                    if [[ "$cur_tool_name" == "TodoWrite" ]] && (( tool_rc == 0 )) && [[ -s "$TODO_FILE" ]]; then
-                        write_message "TODO_UPDATE" "$(<"$TODO_FILE")"
-                    fi
                     local result_for_conv="$output"
                     if [[ "$cur_tool_name" == "Edit" ]]; then
                         result_for_conv="$(printf '%s' "$output" | sed -n '1p')"

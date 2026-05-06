@@ -186,7 +186,11 @@ impl Runtime {
         if new_session {
             use std::io::Write;
             let mut f = std::fs::File::create(&paths.stats)?;
-            write!(f, r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#, '\n')?;
+            write!(
+                f,
+                r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#,
+                '\n'
+            )?;
         }
 
         let conv = Store {
@@ -308,7 +312,6 @@ impl Runtime {
 
                 let runner = tools::Runner {
                     config: self.cfg.clone(),
-                    todo_file: self.paths.todo.clone(),
                     cwd: self.cwd.clone(),
                     home: self.home.clone(),
                 };
@@ -393,22 +396,6 @@ impl Runtime {
                                 DisplayEvent::ToolResult(tool_result.clone()),
                             )?;
                             tool_results.push(tool_result);
-
-                            if call.name == "TodoWrite" {
-                                if let Ok(data) = fs::read_to_string(&self.paths.todo) {
-                                    if !data.trim().is_empty() {
-                                        let trimmed = data.trim_end().to_string();
-                                        self.append_event(
-                                            json!({"type":"todo_update","content":trimmed}),
-                                        )?;
-                                        if self.is_stream_json_mode() {
-                                            self.emit_stream(
-                                                json!({"type":"todo_update","content":trimmed}),
-                                            )?;
-                                        }
-                                    }
-                                }
-                            }
                         }
                         Event::Usage(usage) => {
                             self.display_event(&mut ds, DisplayEvent::Usage(usage))?;
@@ -574,7 +561,11 @@ impl Runtime {
                 }))?;
                 // No human display for usage events
                 // context = input + output + cache_read + cache_creation
-                self.last_context_tokens = (input_tokens + output_tokens + cache_read_input_tokens + cache_creation_input_tokens) as usize;
+                self.last_context_tokens = (input_tokens
+                    + output_tokens
+                    + cache_read_input_tokens
+                    + cache_creation_input_tokens)
+                    as usize;
                 self.last_input_tokens = input_tokens as usize;
                 self.last_output_tokens = output_tokens as usize;
                 self.last_cache_read_tokens = cache_read_input_tokens as usize;
@@ -648,7 +639,6 @@ impl Runtime {
             home: self.home.clone(),
             skills: self.cfg.skills.clone(),
             summary_file: self.paths.summary.clone(),
-            todo_file: self.paths.todo.clone(),
             plan_file: self.paths.plan.clone(),
         }
         .build_system_prompt()?;
@@ -775,7 +765,14 @@ impl Runtime {
         };
 
         let all = self.conv.lines()?;
-        let mut keep_lines = crate::compact_dp::compact_dp_decision(&all, &dp_cfg, prev_compactions, current_turn, total_requests, total_input_tokens);
+        let mut keep_lines = crate::compact_dp::compact_dp_decision(
+            &all,
+            &dp_cfg,
+            prev_compactions,
+            current_turn,
+            total_requests,
+            total_input_tokens,
+        );
 
         if keep_lines.is_none() {
             // Safety valve: DP says no, but check context size
@@ -810,8 +807,14 @@ impl Runtime {
         // Recalculate turn count based on remaining conversation history
         if let Ok(remaining_turns) = self.conv.count_user_inputs() {
             let mut stats = self.read_stats();
-            stats.insert("current_turn_count".to_string(), Value::Number((remaining_turns as i64).into()));
-            stats.insert("last_updated".to_string(), Value::String(chrono_now_rfc3339()));
+            stats.insert(
+                "current_turn_count".to_string(),
+                Value::Number((remaining_turns as i64).into()),
+            );
+            stats.insert(
+                "last_updated".to_string(),
+                Value::String(chrono_now_rfc3339()),
+            );
             self.write_stats(&stats);
         }
 
@@ -837,7 +840,6 @@ impl Runtime {
             home: self.home.clone(),
             skills: self.cfg.skills.clone(),
             summary_file: self.paths.summary.clone(),
-            todo_file: self.paths.todo.clone(),
             plan_file: self.paths.plan.clone(),
         }
         .build_system_prompt()?;
@@ -876,16 +878,39 @@ impl Runtime {
                     });
                     let _ = self.append_event(compact_evt);
                     let mut stats = self.read_stats();
-                    *stats.entry("compact_request_count".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "compact_request_count") as usize + 1).into());
-                    *stats.entry("total_input_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_input_tokens") as usize + usage.input_tokens as usize).into());
-                    *stats.entry("total_output_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_output_tokens") as usize + usage.output_tokens as usize).into());
-                    *stats.entry("total_cache_read_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_cache_read_tokens") as usize + usage.cache_read_input_tokens as usize).into());
-                    *stats.entry("total_cache_creation_tokens".to_string()).or_insert(Value::Number(0.into())) =
-                        Value::Number((stats_get_f64(&stats, "total_cache_creation_tokens") as usize + usage.cache_creation_input_tokens as usize).into());
+                    *stats
+                        .entry("compact_request_count".to_string())
+                        .or_insert(Value::Number(0.into())) = Value::Number(
+                        (stats_get_f64(&stats, "compact_request_count") as usize + 1).into(),
+                    );
+                    *stats
+                        .entry("total_input_tokens".to_string())
+                        .or_insert(Value::Number(0.into())) = Value::Number(
+                        (stats_get_f64(&stats, "total_input_tokens") as usize
+                            + usage.input_tokens as usize)
+                            .into(),
+                    );
+                    *stats
+                        .entry("total_output_tokens".to_string())
+                        .or_insert(Value::Number(0.into())) = Value::Number(
+                        (stats_get_f64(&stats, "total_output_tokens") as usize
+                            + usage.output_tokens as usize)
+                            .into(),
+                    );
+                    *stats
+                        .entry("total_cache_read_tokens".to_string())
+                        .or_insert(Value::Number(0.into())) = Value::Number(
+                        (stats_get_f64(&stats, "total_cache_read_tokens") as usize
+                            + usage.cache_read_input_tokens as usize)
+                            .into(),
+                    );
+                    *stats
+                        .entry("total_cache_creation_tokens".to_string())
+                        .or_insert(Value::Number(0.into())) = Value::Number(
+                        (stats_get_f64(&stats, "total_cache_creation_tokens") as usize
+                            + usage.cache_creation_input_tokens as usize)
+                            .into(),
+                    );
                     self.write_stats(&stats);
                 }
                 Event::Error(ErrorEvent { message }) => return Err(anyhow!(message)),
@@ -942,29 +967,63 @@ impl Runtime {
     /// increment_turn_count increments the current_turn_count in stats.json.
     fn increment_turn_count(&self) {
         let mut stats = self.read_stats();
-        *stats.entry("current_turn_count".to_string()).or_insert(Value::Number(0.into())) =
+        *stats
+            .entry("current_turn_count".to_string())
+            .or_insert(Value::Number(0.into())) =
             Value::Number((stats_get_f64(&stats, "current_turn_count") as usize + 1).into());
-        stats.insert("last_updated".to_string(), Value::String(chrono_now_rfc3339()));
+        stats.insert(
+            "last_updated".to_string(),
+            Value::String(chrono_now_rfc3339()),
+        );
         self.write_stats(&stats);
     }
 
     /// update_stats_from_usage updates stats.json with last turn's usage (matches bash stats_inc+stats_set).
     fn update_stats_from_usage(&self) {
         let mut stats = self.read_stats();
-        *stats.entry("agent_request_count".to_string()).or_insert(Value::Number(0.into())) =
+        *stats
+            .entry("agent_request_count".to_string())
+            .or_insert(Value::Number(0.into())) =
             Value::Number((stats_get_f64(&stats, "agent_request_count") as usize + 1).into());
-        *stats.entry("total_input_tokens".to_string()).or_insert(Value::Number(0.into())) =
-            Value::Number((stats_get_f64(&stats, "total_input_tokens") as usize + self.last_input_tokens).into());
-        *stats.entry("total_output_tokens".to_string()).or_insert(Value::Number(0.into())) =
-            Value::Number((stats_get_f64(&stats, "total_output_tokens") as usize + self.last_output_tokens).into());
-        *stats.entry("total_cache_read_tokens".to_string()).or_insert(Value::Number(0.into())) =
-            Value::Number((stats_get_f64(&stats, "total_cache_read_tokens") as usize + self.last_cache_read_tokens).into());
-        *stats.entry("total_cache_creation_tokens".to_string()).or_insert(Value::Number(0.into())) =
-            Value::Number((stats_get_f64(&stats, "total_cache_creation_tokens") as usize + self.last_cache_creation_tokens).into());
+        *stats
+            .entry("total_input_tokens".to_string())
+            .or_insert(Value::Number(0.into())) = Value::Number(
+            (stats_get_f64(&stats, "total_input_tokens") as usize + self.last_input_tokens).into(),
+        );
+        *stats
+            .entry("total_output_tokens".to_string())
+            .or_insert(Value::Number(0.into())) = Value::Number(
+            (stats_get_f64(&stats, "total_output_tokens") as usize + self.last_output_tokens)
+                .into(),
+        );
+        *stats
+            .entry("total_cache_read_tokens".to_string())
+            .or_insert(Value::Number(0.into())) = Value::Number(
+            (stats_get_f64(&stats, "total_cache_read_tokens") as usize
+                + self.last_cache_read_tokens)
+                .into(),
+        );
+        *stats
+            .entry("total_cache_creation_tokens".to_string())
+            .or_insert(Value::Number(0.into())) = Value::Number(
+            (stats_get_f64(&stats, "total_cache_creation_tokens") as usize
+                + self.last_cache_creation_tokens)
+                .into(),
+        );
         // context = input + output + cache_read + cache_creation
-        *stats.entry("current_context_tokens".to_string()).or_insert(Value::Number(0.into())) =
-            Value::Number((self.last_input_tokens + self.last_output_tokens + self.last_cache_read_tokens + self.last_cache_creation_tokens).into());
-        stats.insert("last_updated".to_string(), Value::String(chrono_now_rfc3339()));
+        *stats
+            .entry("current_context_tokens".to_string())
+            .or_insert(Value::Number(0.into())) = Value::Number(
+            (self.last_input_tokens
+                + self.last_output_tokens
+                + self.last_cache_read_tokens
+                + self.last_cache_creation_tokens)
+                .into(),
+        );
+        stats.insert(
+            "last_updated".to_string(),
+            Value::String(chrono_now_rfc3339()),
+        );
         self.write_stats(&stats);
     }
 
@@ -976,9 +1035,18 @@ impl Runtime {
         stats.insert("compact_request_count".to_string(), Value::Number(0.into()));
         stats.insert("total_input_tokens".to_string(), Value::Number(0.into()));
         stats.insert("total_output_tokens".to_string(), Value::Number(0.into()));
-        stats.insert("total_cache_read_tokens".to_string(), Value::Number(0.into()));
-        stats.insert("total_cache_creation_tokens".to_string(), Value::Number(0.into()));
-        stats.insert("current_context_tokens".to_string(), Value::Number(0.into()));
+        stats.insert(
+            "total_cache_read_tokens".to_string(),
+            Value::Number(0.into()),
+        );
+        stats.insert(
+            "total_cache_creation_tokens".to_string(),
+            Value::Number(0.into()),
+        );
+        stats.insert(
+            "current_context_tokens".to_string(),
+            Value::Number(0.into()),
+        );
         stats.insert("last_updated".to_string(), Value::String(String::new()));
         if let Ok(data) = fs::read_to_string(&self.paths.stats) {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, Value>>(&data) {
@@ -1020,9 +1088,15 @@ impl Runtime {
         let ai = stats_get_f64(&stats, "total_input_tokens") as usize;
         let ao = stats_get_f64(&stats, "total_output_tokens") as usize;
         let ctx = stats_get_f64(&stats, "current_context_tokens") as usize;
-        eprint!("\x1b]0;{} T:{} R:{} I:{} O:{} C:{}\x07",
-            self.cfg.model, Self::fmt_num(tc), Self::fmt_num(ar),
-            Self::fmt_num(ai), Self::fmt_num(ao), Self::fmt_num(ctx));
+        eprint!(
+            "\x1b]0;{} T:{} R:{} I:{} O:{} C:{}\x07",
+            self.cfg.model,
+            Self::fmt_num(tc),
+            Self::fmt_num(ar),
+            Self::fmt_num(ai),
+            Self::fmt_num(ao),
+            Self::fmt_num(ctx)
+        );
         let _ = io::stderr().flush();
     }
 
@@ -1439,9 +1513,7 @@ fn chrono_like_now() -> String {
 
 /// stats_get_f64 safely extracts a f64 from a JSON object by key.
 fn stats_get_f64(m: &serde_json::Map<String, Value>, key: &str) -> f64 {
-    m.get(key)
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0)
+    m.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0)
 }
 
 /// chrono_now_rfc3339 returns current UTC time in RFC 3339 format.

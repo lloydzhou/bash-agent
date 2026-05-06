@@ -30,27 +30,27 @@ import (
 )
 
 type runtime struct {
-	cfg         config.Config
-	cwd         string
-	home        string
-	stdin       io.Reader
-	stdout      io.Writer
-	stderr      io.Writer
-	apiURL      string
-	toolsJSON   []byte
-	paths       session.Paths
-	conv        conversation.Store
-	http        httpclient.StreamClient
-	transport   transport.Transport
-	escTTY      *os.File
-	escState    *term.State
-	escStop     chan struct{}
-	escDone     chan struct{}
-	interrupted atomic.Bool
+	cfg                     config.Config
+	cwd                     string
+	home                    string
+	stdin                   io.Reader
+	stdout                  io.Writer
+	stderr                  io.Writer
+	apiURL                  string
+	toolsJSON               []byte
+	paths                   session.Paths
+	conv                    conversation.Store
+	http                    httpclient.StreamClient
+	transport               transport.Transport
+	escTTY                  *os.File
+	escState                *term.State
+	escStop                 chan struct{}
+	escDone                 chan struct{}
+	interrupted             atomic.Bool
 	lastContextTokens       int
-	lastInputTokens        int
-	lastOutputTokens       int
-	lastCacheReadTokens    int
+	lastInputTokens         int
+	lastOutputTokens        int
+	lastCacheReadTokens     int
 	lastCacheCreationTokens int
 }
 
@@ -553,10 +553,9 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 		}
 
 		runner := tools.Runner{
-			Config:   rt.cfg,
-			TodoFile: rt.paths.Todo,
-			Cwd:      rt.cwd,
-			Home:     rt.home,
+			Config: rt.cfg,
+			Cwd:    rt.cwd,
+			Home:   rt.home,
 		}
 
 		err := rt.llmCall(func(evt protocol.Event) error {
@@ -616,16 +615,6 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				// Display tool result immediately
 				if err := rt.displayEvent(&state, toolResults[len(toolResults)-1]); err != nil {
 					return err
-				}
-				// Handle TodoWrite event
-				if e.Name == "TodoWrite" && result.Err == nil {
-					if data, err := os.ReadFile(rt.paths.Todo); err == nil && len(data) > 0 {
-						todoContent := strings.TrimRight(string(data), "\n")
-						_ = rt.appendEvent(map[string]any{"type": "todo_update", "content": todoContent})
-						if rt.isStreamJSONMode() {
-							_ = rt.emitStream(map[string]any{"type": "todo_update", "content": todoContent})
-						}
-					}
 				}
 			case protocol.UsageEvent:
 				if err := rt.displayEvent(&state, e); err != nil {
@@ -774,7 +763,6 @@ func (rt *runtime) buildLLMRequest() ([]byte, error) {
 		Home:        rt.home,
 		Skills:      rt.cfg.Skills,
 		SummaryFile: rt.paths.Summary,
-		TodoFile:    rt.paths.Todo,
 		PlanFile:    rt.paths.Plan,
 	}.BuildSystemPrompt()
 	if err != nil {
@@ -913,10 +901,10 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 		}
 	case protocol.UsageEvent:
 		usageEvt := map[string]any{
-			"type":                     "usage",
-			"input_tokens":             e.InputTokens,
-			"output_tokens":            e.OutputTokens,
-			"cache_read_input_tokens":  e.CacheReadInputTokens,
+			"type":                        "usage",
+			"input_tokens":                e.InputTokens,
+			"output_tokens":               e.OutputTokens,
+			"cache_read_input_tokens":     e.CacheReadInputTokens,
 			"cache_creation_input_tokens": e.CacheCreationInputTokens,
 		}
 		if err := rt.emitAndAppendEvent(usageEvt); err != nil {
@@ -1091,7 +1079,7 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 
 	// DP decision — all computation (E, L, avg) inside CompactDPDecision
 	dpCfg := conversation.DPCompactConfig{
-		PInput:        rt.cfg.DPPInput,
+		PInput:       rt.cfg.DPPInput,
 		PCache:       rt.cfg.DPPCache,
 		POut:         rt.cfg.DPPOut,
 		V:            rt.cfg.DPV,
@@ -1186,7 +1174,6 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 		Home:        rt.home,
 		Skills:      rt.cfg.Skills,
 		SummaryFile: rt.paths.Summary,
-		TodoFile:    rt.paths.Todo,
 		PlanFile:    rt.paths.Plan,
 	}.BuildSystemPrompt()
 	if err != nil {
@@ -1313,15 +1300,15 @@ func (rt *runtime) updateStatsFromLastUsage() {
 // readStats reads and parses stats.json, returning default zero values if missing.
 func (rt *runtime) readStats() map[string]any {
 	stats := map[string]any{
-		"current_turn_count":         float64(0),
-		"agent_request_count":        float64(0),
-		"compact_request_count":      float64(0),
-		"total_input_tokens":         float64(0),
-		"total_output_tokens":        float64(0),
-		"total_cache_read_tokens":    float64(0),
+		"current_turn_count":          float64(0),
+		"agent_request_count":         float64(0),
+		"compact_request_count":       float64(0),
+		"total_input_tokens":          float64(0),
+		"total_output_tokens":         float64(0),
+		"total_cache_read_tokens":     float64(0),
 		"total_cache_creation_tokens": float64(0),
-		"current_context_tokens":     float64(0),
-		"last_updated":               "",
+		"current_context_tokens":      float64(0),
+		"last_updated":                "",
 	}
 	data, err := os.ReadFile(rt.paths.Stats)
 	if err != nil {

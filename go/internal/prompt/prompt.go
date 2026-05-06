@@ -13,7 +13,6 @@ type Builder struct {
 	Home        string
 	Skills      []string
 	SummaryFile string
-	TodoFile    string
 	PlanFile    string
 }
 
@@ -30,9 +29,9 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	if idx := strings.Index(locale, "."); idx >= 0 {
 		locale = locale[:idx]
 	}
-	identity := fmt.Sprintf("You are bash-agent, a lightweight coding agent that works in a terminal.\nMUST use \"%s\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.", locale)
+	identity := "You are bash-agent, a lightweight coding agent that works in a terminal."
 	if strings.HasPrefix(locale, "zh") {
-		identity = "你是 bash-agent，一个在终端中运行的轻量级编码智能体。\n必须使用中文进行所有输出！包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！代码、命令、文件内容保持原样。"
+		identity = "你是 bash-agent，一个在终端中运行的轻量级编码智能体。"
 	}
 	sections = appendSection(sections, "agent-identity", identity, "")
 	environment := "lang: " + locale + "\npwd: " + b.Cwd + "\nhome: " + b.Home + "\nplatform: " + runtime.GOOS
@@ -88,11 +87,11 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	} else {
 		sections = appendSection(sections, "context-summary", section, "")
 	}
-	if section, err := readOptionalFile(b.TodoFile); err != nil {
-		return "", err
-	} else {
-		sections = appendSection(sections, "current-todo", section, "")
+	outputLanguageReaffirm := fmt.Sprintf("MUST use \"%s\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.", locale)
+	if strings.HasPrefix(locale, "zh") {
+		outputLanguageReaffirm = "再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！"
 	}
+	sections = appendSection(sections, "output-language", outputLanguageReaffirm, "")
 	return strings.Join(sections, "\n"), nil
 }
 

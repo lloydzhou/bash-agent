@@ -73,7 +73,11 @@ pub fn compact_dp_decision(
         cfg.e_fixed as f64
     } else if cfg.baseline_e > 0 {
         let remaining = cfg.baseline_e - current_turn as i32;
-        let floor = if cfg.baseline_e > 1 { cfg.baseline_e / 2 } else { 2 };
+        let floor = if cfg.baseline_e > 1 {
+            cfg.baseline_e / 2
+        } else {
+            2
+        };
         remaining.max(floor) as f64
     } else {
         2.0
@@ -102,7 +106,9 @@ pub fn compact_dp_decision(
 
     // r_t = r^(c+1) (independent of k)
     let mut r_t = cfg.r.powi((prev_compactions + 1) as i32);
-    if r_t < 0.37 { r_t = 0.37; }
+    if r_t < 0.37 {
+        r_t = 0.37;
+    }
 
     let n_remain = r_total * avg;
     let info_loss = cfg.beta * (1.0 - r_t) * n_remain * cfg.p_input / 1_000_000.0;
@@ -120,7 +126,9 @@ pub fn compact_dp_decision(
     for k in min_keep..=n {
         let k_tokens: usize = sizes[n - k..].iter().sum();
         let h = total_tokens as f64 - k_tokens as f64;
-        if h <= 0.0 { continue; }
+        if h <= 0.0 {
+            continue;
+        }
 
         let kf = k_tokens as f64;
         let sf = cfg.s as f64;
@@ -133,7 +141,8 @@ pub fn compact_dp_decision(
         let cache_miss = (sf + kf) * (cfg.p_input - cfg.p_cache) / 1_000_000.0;
 
         // ③ Compaction request cost
-        let compact_cost = (cfg.p_cache * (vf + h) + cfg.p_input * l_instr + cfg.p_out * sf) / 1_000_000.0;
+        let compact_cost =
+            (cfg.p_cache * (vf + h) + cfg.p_input * l_instr + cfg.p_out * sf) / 1_000_000.0;
 
         let benefit = savings - cache_miss - compact_cost - info_loss;
 
@@ -153,6 +162,8 @@ pub fn compact_dp_decision(
         cut -= 1;
         adj = n - cut;
     }
-    if adj < 1 { adj = 1; }
+    if adj < 1 {
+        adj = 1;
+    }
     Some(adj)
 }

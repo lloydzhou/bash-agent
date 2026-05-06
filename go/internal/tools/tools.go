@@ -25,10 +25,9 @@ type Result struct {
 }
 
 type Runner struct {
-	Config   config.Config
-	TodoFile string
-	Cwd      string
-	Home     string
+	Config config.Config
+	Cwd    string
+	Home   string
 }
 
 func (r Runner) Dispatch(name string, input json.RawMessage) Result {
@@ -463,9 +462,6 @@ func (r Runner) TodoWrite(todos []struct {
 	Content string `json:"content"`
 	Status  string `json:"status"`
 }) (string, error) {
-	if r.TodoFile == "" {
-		return "", errors.New("Error: todo file not configured")
-	}
 	var completed, inProgress int
 	lines := make([]string, 0, len(todos))
 	for _, todo := range todos {
@@ -489,9 +485,6 @@ func (r Runner) TodoWrite(todos []struct {
 		return "", errors.New("Error: todo_write allows at most one in_progress item")
 	}
 	checklist := strings.Join(lines, "\n")
-	if err := os.WriteFile(r.TodoFile, []byte(checklist+"\n"), 0o644); err != nil {
-		return "", err
-	}
 	return checklist, nil
 }
 

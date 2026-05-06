@@ -8,7 +8,6 @@ pub struct Builder {
     pub home: PathBuf,
     pub skills: Vec<String>,
     pub summary_file: PathBuf,
-    pub todo_file: PathBuf,
     pub plan_file: PathBuf,
 }
 
@@ -20,25 +19,27 @@ impl Builder {
             .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
             .unwrap_or_else(|| "en_US".to_string());
         // Strip encoding suffix (e.g., zh_CN.UTF-8 -> zh_CN)
-        let locale = locale_raw.split('.').next().unwrap_or(&locale_raw).to_string();
-        let identity = format!(
-            "You are bash-agent, a lightweight coding agent that works in a terminal.\nMUST use \"{}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.",
-            locale
-        );
+        let locale = locale_raw
+            .split('.')
+            .next()
+            .unwrap_or(&locale_raw)
+            .to_string();
         let identity = if locale.starts_with("zh") {
-            "你是 bash-agent，一个在终端中运行的轻量级编码智能体。\n必须使用中文进行所有输出！包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！代码、命令、文件内容保持原样。".to_string()
+            "你是 bash-agent，一个在终端中运行的轻量级编码智能体。".to_string()
         } else {
-            identity
+            format!("You are bash-agent, a lightweight coding agent that works in a terminal.")
         };
         sections.push(wrap_section("agent-identity", &identity, None));
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
         let platform = std::env::consts::OS;
-        let environment = format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}",
+        let environment = format!(
+            "lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}",
             locale,
             self.cwd.display(),
             self.home.display(),
             platform,
-            shell);
+            shell
+        );
         sections.push(wrap_section("environment", &environment, None));
         let rules_str = "- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.";
         sections.push(wrap_section("rules", &rules_str, None));
@@ -96,9 +97,15 @@ impl Builder {
         if let Some(s) = read_optional_file(&self.summary_file)? {
             sections.push(wrap_section("context-summary", &s, None));
         }
-        if let Some(s) = read_optional_file(&self.todo_file)? {
-            sections.push(wrap_section("current-todo", &s, None));
-        }
+        let output_language = if locale.starts_with("zh") {
+            "再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！".to_string()
+        } else {
+            format!(
+                "MUST use \"{}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.",
+                locale
+            )
+        };
+        sections.push(wrap_section("output-language", &output_language, None));
         Ok(sections.join("\n"))
     }
 
@@ -197,8 +204,6 @@ impl Builder {
         Ok(Some(sections.join("\n")))
     }
 }
-
-
 
 fn wrap_section(tag: &str, content: &str, name: Option<&str>) -> String {
     if content.trim().is_empty() {

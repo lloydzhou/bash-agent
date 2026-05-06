@@ -26,9 +26,7 @@ func TestEditMatchesBashErrors(t *testing.T) {
 }
 
 func TestDispatchTodoWrite(t *testing.T) {
-	dir := t.TempDir()
-	todoFile := filepath.Join(dir, "todo.md")
-	r := Runner{Config: config.Default(), TodoFile: todoFile}
+	r := Runner{Config: config.Default()}
 	input := json.RawMessage(`{"todos":[{"content":"one","status":"completed"},{"content":"two","status":"pending"}]}`)
 	result := r.Dispatch("TodoWrite", input)
 	if result.Err != nil {

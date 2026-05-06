@@ -95,9 +95,13 @@ impl Store {
 
     /// Count user_input events in events.jsonl
     pub fn count_user_inputs(&self) -> Result<usize> {
-        let events_path = self.path.to_string_lossy().replace("conversation.jsonl", "events.jsonl");
+        let events_path = self
+            .path
+            .to_string_lossy()
+            .replace("conversation.jsonl", "events.jsonl");
         let data = fs::read_to_string(&events_path)?;
-        let count = data.lines()
+        let count = data
+            .lines()
             .filter(|line| line.contains("\"type\":\"user_input\""))
             .count();
         Ok(count)
