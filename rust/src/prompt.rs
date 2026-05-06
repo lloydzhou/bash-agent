@@ -28,22 +28,13 @@ impl Builder {
         let locale = locale_raw.split('.').next().unwrap_or(&locale_raw).to_string();
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
         let platform = std::env::consts::OS;
-        let environment = if locale.starts_with("zh") {
-            format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: 必须使用中文进行所有输出，包括思考/推理！！",
-                locale,
-                self.cwd.display(),
-                self.home.display(),
-                platform,
-                shell)
-        } else {
-            format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: MUST USE \"{}\" FOR ALL OUTPUT, INCLUDING THINKING/REASONING!!",
-                locale,
-                self.cwd.display(),
-                self.home.display(),
-                platform,
-                shell,
-                locale)
-        };
+        let environment = format!("lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}\nlocale: MUST USE \"{}\" FOR ALL OUTPUT, INCLUDING THINKING/REASONING!!",
+            locale,
+            self.cwd.display(),
+            self.home.display(),
+            platform,
+            shell,
+            locale);
         sections.push(wrap_section("environment", &environment, None));
         let rules_str = format!("- MUST use \"{}\" for all output, including thinking/reasoning! Never mix languages! Code, commands, and file content remain as-is.\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", locale);
         sections.push(wrap_section("rules", &rules_str, None));
