@@ -36,7 +36,7 @@ impl Builder {
             shell,
         );
         sections.push(wrap_section("environment", &environment, None));
-        let rules_str = format!("- Be concise and concrete.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- No pleasantries. No explanations unless asked. Raw results only.\n- MUST use {} for all output, including thinking/reasoning. Never mix languages. Code, commands, and file content remain as-is.", locale);
+        let rules_str = format!("- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.\n- MUST use {} for all output, including thinking/reasoning. Never mix languages. Code, commands, and file content remain as-is.", locale);
         sections.push(wrap_section("rules", &rules_str, None));
         sections.push(wrap_section(
             "using-your-tools",
