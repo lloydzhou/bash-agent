@@ -1008,10 +1008,6 @@ tool_grep() {
     rg "${args[@]}" 2>/dev/null || true
 }
 
-tool_todo() {
-    printf '%s' "$1"
-}
-
 tool_skill() {
     local skill_name="$1" skill_content=""
     skill_name="${skill_name#"${skill_name%%[![:space:]]*}"}"
@@ -1034,7 +1030,7 @@ dispatch_tool() {
         Bash)      tool_bash "$arg1" "$arg2" ;;
         Glob)      tool_glob "$arg1" "$arg2" ;;
         Grep)      tool_grep "$arg1" "$arg2" "$arg3" "$arg4" ;;
-        TodoWrite) tool_todo "$arg1" ;;
+        TodoWrite) printf '%s' "$arg1" ;;
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
         WebFetch)  tool_web_fetch "$arg1" ;;

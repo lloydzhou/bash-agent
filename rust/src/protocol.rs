@@ -38,7 +38,10 @@ impl Event {
             }
             Event::Usage(e) => format!(
                 "USAGE:{}\t{}\t{}\t{}",
-                e.input_tokens, e.output_tokens, e.cache_read_input_tokens, e.cache_creation_input_tokens
+                e.input_tokens,
+                e.output_tokens,
+                e.cache_read_input_tokens,
+                e.cache_creation_input_tokens
             ),
             Event::Stop(e) => format!("STOP:{}", e.reason),
             Event::Error(e) => format!("ERROR:{}", e.message),

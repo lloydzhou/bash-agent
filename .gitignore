@@ -3,3 +3,4 @@
 /go/.gomodcache/
 /rust/target/
 dist/*
+go/goagent

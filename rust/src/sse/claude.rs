@@ -160,10 +160,7 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
                 if let Some(v) = usage.get("output_tokens").and_then(Value::as_i64) {
                     output_tokens = v;
                 }
-                if let Some(v) = usage
-                    .get("cache_read_input_tokens")
-                    .and_then(Value::as_i64)
-                {
+                if let Some(v) = usage.get("cache_read_input_tokens").and_then(Value::as_i64) {
                     cache_read_input_tokens = v;
                 }
                 if let Some(v) = usage
@@ -182,10 +179,7 @@ pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> R
                 if let Some(v) = usage.get("input_tokens").and_then(Value::as_i64) {
                     input_tokens = v;
                 }
-                if let Some(v) = usage
-                    .get("cache_read_input_tokens")
-                    .and_then(Value::as_i64)
-                {
+                if let Some(v) = usage.get("cache_read_input_tokens").and_then(Value::as_i64) {
                     cache_read_input_tokens = v;
                 }
                 if let Some(v) = usage
