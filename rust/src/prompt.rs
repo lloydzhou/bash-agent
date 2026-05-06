@@ -37,11 +37,11 @@ impl Builder {
         );
         sections.push(wrap_section("environment", &environment, None));
         let lang_rule = if locale.starts_with("zh") {
-            format!("必须使用 {} 进行所有输出，包括思考/推理。严禁混用语言。代码、命令和文件内容保持原样。", locale)
+            "必须使用中文进行所有输出！包括思考/推理！严禁混用语言！代码、命令和文件内容保持原样。".to_string()
         } else {
-            format!("MUST use {} for all output, including thinking/reasoning. Never mix languages. Code, commands, and file content remain as-is.", locale)
+            format!("MUST use \"{}\" for all output, including thinking/reasoning. Never mix languages. Code, commands, and file content remain as-is.", locale)
         };
-        let rules_str = format!("{}\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", lang_rule);
+        let rules_str = format!("- {}\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", lang_rule);
         sections.push(wrap_section("rules", &rules_str, None));
         sections.push(wrap_section(
             "using-your-tools",

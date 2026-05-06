@@ -40,11 +40,11 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	sections = appendSection(sections, "environment", environment, "")
 	var langRule string
 	if strings.HasPrefix(locale, "zh") {
-		langRule = fmt.Sprintf("必须使用 %s 进行所有输出，包括思考/推理。严禁混用语言。代码、命令和文件内容保持原样。", locale)
+		langRule = "必须使用中文进行所有输出！包括思考/推理！严禁混用语言！代码、命令和文件内容保持原样。"
 	} else {
-		langRule = fmt.Sprintf("MUST use %s for all output, including thinking/reasoning. Never mix languages. Code, commands, and file content remain as-is.", locale)
+		langRule = fmt.Sprintf("MUST use \"%s\" for all output, including thinking/reasoning. Never mix languages. Code, commands, and file content remain as-is.", locale)
 	}
-	rules := fmt.Sprintf("%s\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", langRule)
+	rules := fmt.Sprintf("- %s\n- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.", langRule)
 	sections = appendSection(sections, "rules", rules, "")
 	sections = appendSection(sections, "using-your-tools", "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.", "")
 	sections = appendSection(sections, "todo-guidance", "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.", "")
