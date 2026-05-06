@@ -232,7 +232,7 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 
 当前顺序：
 
-1. `agent-identity`（按 locale 翻译，提供语言启动）
+1. `agent-identity`（按 locale 翻译，提供语言启动——头部锚定）
 2. `environment`
 3. `rules`
 4. `using-your-tools`
@@ -241,9 +241,11 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 7. `instruction-files`
 8. `skill-index`
 9. `selected-skills`
-10. `output-language`（尾部重申，静态锚定，在动态 section 之前）
-11. `current-plan`
-12. `context-summary`
+10. `current-plan`
+11. `context-summary`
+12. `output-language`（尾部重申，语言约束作为 system prompt 的最后内容——近因锚定）
+
+system prompt 首尾都是语言约束，中间内容无论多长、是否变化，语言锚定效应始终被两端强化。
 
 实现策略：
 
