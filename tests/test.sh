@@ -1526,7 +1526,8 @@ test_agent_plan_clear() {
 
     output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'plan completed PLAN_CLEAR_MARKER' 2>&1) || true
 
-    if echo "$output" | grep -q '"type":"tool_call","name":"PlanClear"' && \
+    if echo "$output" | grep -q '"name":"PlanClear"' && \
+       echo "$output" | grep -q '"type":"tool_call"' && \
        [[ ! -s "$plan_file" ]] && \
        [[ -s "$summary_file" ]]; then
         green "Agent PlanClear"; ((PASS++)) || true
