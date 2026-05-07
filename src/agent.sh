@@ -842,52 +842,44 @@ compact_dp_decision() {
             -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"
 }
 
+compact_turn_keep() {
+    awk -v r="$DP_MIN_KEEP_RATIO" '
+    BEGIN { target_turns = 0 }
+    { role[NR] = ($0 ~ /^\{"role":"user","content":"/) ? "user" : "other" }
+    END {
+        if (NR == 0) { print 0; exit }
+        for (i = 1; i <= NR; i++) if (role[i] == "user") total_turns++
+        target = int(total_turns * r + 0.5)
+        if (target < 1) target = 1
+        if (target > total_turns) target = total_turns
+        keep = 0; found = 0
+        for (i = NR; i >= 1 && found < target; i--) { keep++; if (role[i] == "user") found++ }
+        if (keep < 3) keep = 3
+        print keep
+    }' "$CONV_FILE"
+}
+
 compact_context_window() {
     local force=${1:-0}
     local total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
     if (( force )); then
-        # Force compact: keep last few complete turns, turn-aligned
-        total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-        [[ "$total_lines" -gt 0 ]] || return 1
-        keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" '
-        BEGIN { k = int(lines * r + 0.5); if (k < 3) k = 3; if (k > lines) k = lines; print k }')
-        # Align to user message boundary (turn boundary)
-        keep_lines=$(awk -v keep="$keep_lines" '
-        { role[NR] = ($0 ~ /"role":"user"/) ? "user" : "other" }
-        END {
-            if (keep >= NR) { print NR; exit }
-            cut = NR - keep + 1
-            while (cut > 1 && role[cut] != "user") cut--
-            adj = NR - cut + 1
-            if (adj < 1) adj = 1
-            print adj
-        }' "$CONV_FILE")
-        [[ -n "$keep_lines" && "$keep_lines" -gt 0 ]] || keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" 'BEGIN { k=int(lines*r+0.5); print k>3?k:3 }')
+        # Force compact（PlanClear）：按完整 turn 数 × DP_MIN_KEEP_RATIO 保留
+        keep_lines=$(compact_turn_keep)
+        [[ -n "$keep_lines" && "$keep_lines" -gt 0 ]] || return 1
     else
+        # 正常 compact：先尝试 DP 决策
         keep_lines=$(compact_dp_decision) || true
-    [[ -n "$keep_lines" ]] || keep_lines=0
-    if (( keep_lines == 0 )); then
-        # Safety valve: DP says no, but check context size
-        local ct=$(stats_get 7)
-        if (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
-            total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-            keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" 'BEGIN { k=int(lines*r+0.5); print k>3?k:3 }')
-            # Align to user message boundary
-            keep_lines=$(awk -v keep="$keep_lines" '
-            { role[NR] = ($0 ~ /"role":"user"/) ? "user" : "other" }
-            END {
-                if (keep >= NR) { print NR; exit }
-                cut = NR - keep + 1
-                while (cut > 1 && role[cut] != "user") cut--
-                adj = NR - cut + 1
-                if (adj < 1) adj = 1
-                print adj
-            }' "$CONV_FILE")
-        else
-            return 1
+        [[ -n "$keep_lines" ]] || keep_lines=0
+        if (( keep_lines == 0 )); then
+            # DP 认为不值得，但上下文超过 90% 阈值时强制 compact
+            local ct=$(stats_get 7)
+            if (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
+                keep_lines=$(compact_turn_keep)
+            else
+                return 1
+            fi
         fi
-    fi
     fi
 
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)

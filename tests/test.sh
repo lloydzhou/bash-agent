@@ -269,6 +269,33 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing TodoWrite tool result content')
             return
+        if b'PLAN_CLEAR_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_clear\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Plan is complete, I will clear it now.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_plan_clear_1\",\"name\":\"PlanClear\",\"input\":{}}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20,\"cache_creation_input_tokens\":1,\"cache_read_input_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'PLAN_CLEAR_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'Plan cleared' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_clear_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Plan cleared and context compacted.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing PlanClear tool result')
+            return
         if b'SKILL_TOOL_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -1478,6 +1505,41 @@ test_agent_todo_state() {
     fi
 }
 
+# Test 17: PlanClear tool
+test_agent_plan_clear() {
+    info "Test 17: Agent.sh PlanClear tool"
+    local home_dir output plan_file summary_file conv_file
+    home_dir=$(mktemp -d)
+    project_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)"
+    session_dir="$project_dir/demo"
+    plan_file="$session_dir/plan.md"
+    summary_file="$session_dir/summary.txt"
+    conv_file="$session_dir/conversation.jsonl"
+    mkdir -p "$session_dir"
+
+    # Seed a plan (PlanClear needs non-empty plan to clear)
+    printf 'Task: complete the test plan\n' > "$plan_file"
+    [[ -s "$plan_file" ]] || { red "Agent PlanClear (setup)"; rm -rf "$home_dir"; return; }
+
+    # Seed conversation history so compact has something to work with
+    for i in $(seq 1 10); do
+        printf '{"role":"user","content":"step %d of plan"}\n' "$i" >> "$conv_file"
+        printf '{"role":"assistant","content":[{"type":"text","text":"done step %d"}]}\n' "$i" >> "$conv_file"
+    done
+
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session demo 'plan completed PLAN_CLEAR_MARKER' 2>&1) || true
+
+    if echo "$output" | grep -q '"type":"tool_call","name":"PlanClear"' && \
+       echo "$output" | grep -q "Plan cleared and context compacted." && \
+       [[ ! -s "$plan_file" ]] && \
+       [[ -s "$summary_file" ]]; then
+        green "Agent PlanClear"; ((PASS++)) || true
+    else
+        red "Agent PlanClear"; echo "  Output: $output"; echo "  Plan: $(cat "$plan_file" 2>/dev/null || echo 'empty')"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || echo 'empty')"; ((FAIL++)) || true
+    fi
+    rm -rf "$home_dir"
+}
+
 # Test 18: Read file end-to-end
 test_agent_read_file() {
     info "Test 18: Agent.sh read_file"
@@ -2096,6 +2158,7 @@ test_agent_skill_index
 test_agent_skill_tool
 test_agent_instruction_files
 test_agent_todo_state
+test_agent_plan_clear
 test_agent_read_file
 test_agent_read_tool_arg_parsing
 test_agent_read_file_long_result
