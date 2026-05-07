@@ -35,6 +35,52 @@ impl Default for DPCompactConfig {
     }
 }
 
+/// compact_turn_keep: compute turn-aligned lines to keep using MinKeepRatio.
+/// Matches bash compact_turn_keep(): counts user inputs, applies ratio, aligns to user boundary.
+pub fn compact_turn_keep(lines: &[Value], min_keep_ratio: f64) -> Option<usize> {
+    if lines.is_empty() {
+        return None;
+    }
+
+    // Detect user role: match {"role":"user","content":"... (excludes tool_result lines)
+    let mut is_user = Vec::with_capacity(lines.len());
+    let mut total_turns = 0usize;
+    for line in lines {
+        if let Some(s) = line.as_str() {
+            if s.starts_with("{\"role\":\"user\",\"content\":\"") {
+                is_user.push(true);
+                total_turns += 1;
+            } else {
+                is_user.push(false);
+            }
+        } else {
+            is_user.push(false);
+        }
+    }
+
+    let target = {
+        let t = (total_turns as f64 * min_keep_ratio + 0.5) as usize;
+        t.max(1).min(total_turns)
+    };
+
+    let mut keep = 0usize;
+    let mut found = 0usize;
+    for i in (0..lines.len()).rev() {
+        if found >= target {
+            break;
+        }
+        keep += 1;
+        if is_user[i] {
+            found += 1;
+        }
+    }
+    keep = keep.max(3);
+    if keep > lines.len() {
+        keep = lines.len();
+    }
+    Some(keep)
+}
+
 /// Compute the optimal number of lines to keep using DP analysis.
 /// All computation (E, L, avg) happens here — callers pass raw stats only.
 /// prev_compactions: number of previous compactions (from stats).

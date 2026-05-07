@@ -158,6 +158,16 @@ $$
 - 否则不压缩
 - 安全阀：当 DP 说不压缩但 `current_context > max_context × 90%` 时，强制压缩
 
+#### Force Compact / PlanClear
+
+当用户手动触发 `PlanClear` 工具时，跳过 DP 决策，以 `DP_MIN_KEEP_RATIO`（默认 0.3）计算 turn-aligned 保留行数，执行压缩并清空 plan 文件。三步：
+
+1. **`compact_turn_keep()`** — 扫描 conversation 中的 user 消息（匹配 `{"role":"user","content":"`），从末尾按 ratio 保留完整 turn
+2. **`compact_context_window(force=true)`** — 用 turn keep 结果执行缓存对齐摘要 + 裁切
+3. **清理 plan 文件** — `printf '' > "$PLAN_FILE"`
+
+Safety valve 也改用 `compact_turn_keep()` 实现 turn 对齐（替换原简单比例计算），确保 tool_result 不会被误算为 user turn。
+
 | 项 | 含义 |
 |---|---|
 | ① | 压缩后后续 `R-1` 次 LLM 调用每次少发送 `H` token，按缓存价节省 |
@@ -257,7 +267,7 @@ system prompt 首尾都是语言约束，中间内容无论多长、是否变化
 
 `using-your-tools` 指导模型如何正确使用各内置 tool。
 
-`plan-lifecycle-guidance` 为复杂多步任务提供规划工作流（写 PLAN_FILE → 确认 → TodoWrite checklist → 执行 → 清空 plan），由 `PLAN_FILE` 环境变量标识当前 session 的 plan 路径。
+`plan-lifecycle-guidance` 为复杂多步任务提供规划工作流（写 PLAN_FILE → 确认 → TodoWrite checklist → 执行 → PlanClear 清空 plan），由 `PLAN_FILE` 环境变量标识当前 session 的 plan 路径。PLAN_FILE 清空后，system prompt 中的 plan section 会消失。
 
 ### 4. Skills
 
@@ -337,6 +347,7 @@ skills 当前优先读取：
 - `Glob`
 - `Grep`
 - `TodoWrite`
+- `PlanClear` — 清空 plan 并触发 force compact（跳过 DP 决策，保留最后 `DP_MIN_KEEP_RATIO` 比例的完整 turn）
 - `Skill`
 - `WebSearch`
 - `WebFetch`

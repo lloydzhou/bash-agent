@@ -366,6 +366,13 @@ impl Runtime {
                             };
                             output =
                                 tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
+
+                            if call.name == "PlanClear" {
+                                let _ = self.compact_context_window(true);
+                                let _ = fs::write(&self.paths.plan, "");
+                                output = "Plan cleared.".to_string();
+                            }
+
                             let mut conv_content = String::new();
                             if call.name == "Edit" {
                                 // Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
@@ -450,7 +457,7 @@ impl Runtime {
                     if self.last_input_tokens > 0 {
                         self.update_stats_from_usage();
                     }
-                    let _ = self.compact_context_window();
+                    let _ = self.compact_context_window(false);
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
@@ -741,7 +748,7 @@ impl Runtime {
         }
     }
 
-    fn compact_context_window(&mut self) -> Result<bool> {
+    fn compact_context_window(&mut self, force: bool) -> Result<bool> {
         let stats = self.read_stats();
         let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
         let current_turn = stats_get_f64(&stats, "current_turn_count") as usize;
@@ -749,7 +756,6 @@ impl Runtime {
         let total_requests = stats_get_f64(&stats, "agent_request_count") as usize;
         let total_input_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
 
-        // DP decision — all computation (E, L, avg) inside compact_dp_decision
         let dp_cfg = crate::compact_dp::DPCompactConfig {
             p_input: self.cfg.dp_p_input,
             p_cache: self.cfg.dp_p_cache,
@@ -765,34 +771,31 @@ impl Runtime {
         };
 
         let all = self.conv.lines()?;
-        let mut keep_lines = crate::compact_dp::compact_dp_decision(
-            &all,
-            &dp_cfg,
-            prev_compactions,
-            current_turn,
-            total_requests,
-            total_input_tokens,
-        );
-
-        if keep_lines.is_none() {
-            // Safety valve: DP says no, but check context size
-            if context_tokens > 0 && context_tokens > self.cfg.max_context_tokens * 90 / 100 {
-                let total_lines = all.len();
-                let min_keep = {
-                    let k = (total_lines as f64 * dp_cfg.min_keep_ratio + 0.5) as usize;
-                    k.max(3)
-                };
-                if min_keep < total_lines {
-                    keep_lines = Some(min_keep);
-                } else {
-                    return Ok(false);
+        let keep_lines = if force {
+            // Force compact（PlanClear）：按完整 turn 数 × MinKeepRatio 保留
+            crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio)
+        } else {
+            let mut k = crate::compact_dp::compact_dp_decision(
+                &all,
+                &dp_cfg,
+                prev_compactions,
+                current_turn,
+                total_requests,
+                total_input_tokens,
+            );
+            if k.is_none() {
+                // Safety valve: DP says no, but check context size
+                if context_tokens > 0 && context_tokens > self.cfg.max_context_tokens * 90 / 100 {
+                    k = crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio);
                 }
-            } else {
-                return Ok(false);
             }
-        }
+            k
+        };
 
-        let k = keep_lines.unwrap();
+        let k = match keep_lines {
+            Some(v) => v,
+            None => return Ok(false),
+        };
         let total_lines = all.len();
         if k >= total_lines {
             return Ok(false);

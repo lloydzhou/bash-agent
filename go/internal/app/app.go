@@ -595,6 +595,13 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
 				}
 				output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
+
+				if e.Name == "PlanClear" {
+					_, _ = rt.compactContextWindow(true)
+					_ = os.WriteFile(rt.paths.Plan, []byte{}, 0o644)
+					output = "Plan cleared."
+				}
+
 				var convContent string
 				if e.Name == "Edit" {
 					// Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
@@ -683,7 +690,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			if rt.lastInputTokens > 0 {
 				rt.updateStatsFromLastUsage()
 			}
-			_, _ = rt.compactContextWindow()
+			_, _ = rt.compactContextWindow(false)
 			// tool_use/tool_calls → loop continues; anything else → break
 			if stop != "tool_use" && stop != "tool_calls" {
 				return nil
@@ -1069,7 +1076,7 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-func (rt *runtime) compactContextWindow() (bool, error) {
+func (rt *runtime) compactContextWindow(force bool) (bool, error) {
 	stats := rt.readStats()
 	contextTokens := int(statsFloat64(stats, "current_context_tokens"))
 	currentTurn := int(statsFloat64(stats, "current_turn_count"))
@@ -1077,7 +1084,6 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 	totalRequests := int(statsFloat64(stats, "agent_request_count"))
 	totalInputTokens := int(statsFloat64(stats, "total_input_tokens"))
 
-	// DP decision — all computation (E, L, avg) inside CompactDPDecision
 	dpCfg := conversation.DPCompactConfig{
 		PInput:       rt.cfg.DPPInput,
 		PCache:       rt.cfg.DPPCache,
@@ -1092,25 +1098,30 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 		MinKeepRatio: rt.cfg.DPMinKeepRatio,
 	}
 
-	keepLines, err := rt.conv.CompactDPDecision(dpCfg, prevCompactions, currentTurn, totalRequests, totalInputTokens)
-	if err != nil {
-		return false, err
-	}
+	var keepLines int
+	var err error
 
-	if keepLines == 0 {
-		// Safety valve: DP says no, but check context size
-		if contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100 {
-			totalLines, _ := rt.conv.TotalLines()
-			minKeep := int(float64(totalLines)*dpCfg.MinKeepRatio + 0.5)
-			if minKeep < 3 {
-				minKeep = 3
-			}
-			if minKeep >= totalLines {
+	if force {
+		// Force compact（PlanClear）：按完整 turn 数 × MinKeepRatio 保留
+		keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
+		if err != nil || keepLines <= 0 {
+			return false, err
+		}
+	} else {
+		keepLines, err = rt.conv.CompactDPDecision(dpCfg, prevCompactions, currentTurn, totalRequests, totalInputTokens)
+		if err != nil {
+			return false, err
+		}
+		if keepLines == 0 {
+			// Safety valve: DP says no, but check context size
+			if contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100 {
+				keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
+				if err != nil || keepLines <= 0 {
+					return false, err
+				}
+			} else {
 				return false, nil
 			}
-			keepLines = minKeep
-		} else {
-			return false, nil
 		}
 	}
 
