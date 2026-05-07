@@ -373,7 +373,6 @@ msg_to_stream_event() {
             ;;
         USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
-        TODO_UPDATE) build_todo_event_json "${REPLY_MESSAGE[1]}" ;;
         ERROR)       printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
         RETRY)       printf '{"type":"retry"}' ;;
         *)           return 1 ;;
@@ -631,11 +630,6 @@ build_assistant_content_json() {
 
     content+="]"
     printf '%s' "$content"
-}
-
-build_todo_event_json() {
-    local checklist="$1"
-    printf '{"type":"todo_update","content":"%s"}' "$(json_escape "$checklist")"
 }
 
 cleanup() {

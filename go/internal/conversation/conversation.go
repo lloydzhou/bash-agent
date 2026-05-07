@@ -320,12 +320,7 @@ func BuildEditToolResultSummary(path, oldString, newString string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func BuildTodoEventJSON(content string) ([]byte, error) {
-	return json.Marshal(map[string]any{
-		"type":    "todo_update",
-		"content": content,
-	})
-}
+	// ... tool result
 
 func BuildToolCallSummary(name string, fields map[string]string) string {
 	var label string

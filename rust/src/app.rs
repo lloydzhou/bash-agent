@@ -1316,9 +1316,6 @@ impl Runtime {
                         &std::collections::HashMap::from([("content", content)]),
                     );
                 }
-                "todo_update" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
-                }
                 "thinking" => {
                     // Flush text, accumulate thinking (match bash event_replay.awk)
                     Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "text");

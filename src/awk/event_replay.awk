@@ -4,7 +4,7 @@
 # Output: RESP wire format messages (consumable by read_message + display_event)
 #
 # Supports both new format (per-token text/thinking/tool_call/tool_result/stop)
-# and legacy format (user_message/assistant_message/todo_update).
+# and legacy format (user_message/assistant_message).
 
 BEGIN {
     _acc_text = ""
@@ -109,16 +109,6 @@ BEGIN {
         _flush_accumulated()
         _content = extract_str($0, "content")
         emit1("USER_MESSAGE")
-        emit(_content)
-        emit_flush()
-        next
-    }
-
-    # todo_update → TODO_UPDATE
-    if (_type == "todo_update") {
-        _flush_accumulated()
-        _content = extract_str($0, "content")
-        emit1("TODO_UPDATE")
         emit(_content)
         emit_flush()
         next

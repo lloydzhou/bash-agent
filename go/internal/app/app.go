@@ -420,8 +420,6 @@ func (rt *runtime) replayLastTurns() {
 			}
 			hadTurns = true
 			rt.displayReplayEvent(&state, "USER_MESSAGE", map[string]string{"content": content})
-		case "todo_update":
-			flushAccumulated()
 		case "thinking":
 			// Flush text, accumulate thinking (match bash event_replay.awk)
 			if accText != "" {
