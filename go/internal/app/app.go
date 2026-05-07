@@ -1105,8 +1105,13 @@ func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 		return false, err
 	}
 
-	if keepLines == 0 {
-		// DP 认为不值得 → trigger 或 safety valve 触发时 fallback
+	totalLines, err := rt.conv.TotalLines()
+	if err != nil {
+		return false, err
+	}
+
+	// DP 返回 0 或 ≥ totalLines → 都算"不压缩"，进入 fallback
+	if keepLines == 0 || (keepLines >= totalLines && totalLines > 0) {
 		shouldCompact := trigger == "plan_clear" || (contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100)
 		if shouldCompact {
 			keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
@@ -1118,10 +1123,7 @@ func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 		}
 	}
 
-	totalLines, err := rt.conv.TotalLines()
-	if err != nil {
-		return false, err
-	}
+	// 统一 guard：keep >= total 时只有 plan_clear 继续
 	if keepLines >= totalLines && trigger != "plan_clear" {
 		return false, nil
 	}

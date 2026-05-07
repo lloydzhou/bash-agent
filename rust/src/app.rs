@@ -781,13 +781,18 @@ impl Runtime {
             total_input_tokens,
         );
 
-        if keep_lines.is_none() {
-            // DP 认为不值得 → trigger 或 safety valve 触发时 fallback 到 turn_keep
+        let total_lines = all.len();
+        let needs_fallback = keep_lines.is_none()
+            || keep_lines.map_or(false, |k| k >= total_lines && total_lines > 0);
+        if needs_fallback {
+            // DP 认为不值得或全保留 → trigger 或 safety valve 触发时 fallback
             let should_compact = trigger == "plan_clear"
                 || (context_tokens > 0
                     && context_tokens > self.cfg.max_context_tokens * 90 / 100);
             if should_compact {
                 keep_lines = crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio);
+            } else {
+                return Ok(false);
             }
         }
 
@@ -795,7 +800,7 @@ impl Runtime {
             Some(v) => v,
             None => return Ok(false),
         };
-        let total_lines = all.len();
+        // 统一 guard：keep >= total 时只有 plan_clear 继续
         if k >= total_lines && trigger != "plan_clear" {
             return Ok(false);
         }

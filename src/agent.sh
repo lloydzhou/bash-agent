@@ -861,8 +861,10 @@ compact_context_window() {
     keep_lines=$(compact_dp_decision) || true
     [[ -n "$keep_lines" ]] || keep_lines=0
 
-    if (( keep_lines == 0 )); then
-        # DP 认为不值得 → trigger 或 safety valve 触发时 fallback
+    total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+
+    # DP 返回 0（不值得）或 ≥ total_lines（全保留）→ 都算"不压缩"，进入 fallback
+    if (( keep_lines == 0 )) || (( keep_lines >= total_lines && total_lines > 0 )); then
         local ct=$(stats_get 7)
         if [[ "$trigger" == "plan_clear" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
             keep_lines=$(compact_turn_keep)
@@ -871,7 +873,7 @@ compact_context_window() {
         fi
     fi
 
-    total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+    # 统一 guard：keep >= total 时只有 plan_clear 继续（drop=0，plan 照清）
     (( keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" ]] || return 1
     drop=$(( total_lines - keep_lines ))
 
