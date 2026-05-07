@@ -253,7 +253,7 @@ system prompt 首尾都是语言约束，中间内容无论多长、是否变化
 - `append_section()` 负责按顺序累加
 - 稳定内容尽量前置
 - 动态内容尽量后置
-- `current-todo` 已移除（见下文）
+- `current-todo` 已移除，见 §Todo 设计演进
 
 `using-your-tools` 指导模型如何正确使用各内置 tool。
 
@@ -297,7 +297,32 @@ skills 当前优先读取：
 - 模型从对话历史中的 tool result 获取最新 todo 状态
 - 不再有 `current-todo` system prompt section（避免每次 todo 更新导致前缀缓存失效）
 
-> 注意：之前 `current-todo` section 的方案虽然直观，但每次 `TodoWrite` 都会改变 system prompt 前缀，导致前序上下文缓存全部失效。移除后，system prompt 前缀保持稳定，TodoWrite 仅通过 tool result 传递状态，效果等价且缓存友好。
+#### 设计演进：从 system prompt section 到 tool result
+
+早期版本在 system prompt 末尾有 `current-todo` section，每次 `TodoWrite` 写入 `todo.md` 文件后，下一轮请求的 system prompt 会从 `current-todo` 段开始变化，导致**从该位置起的所有内容（包括后续整个对话历史）前缀缓存断裂**。
+
+以一段典型任务（10 轮对话，5 次 `TodoWrite`，上下文累积到 ~100K tokens）为例：
+
+| 轮次 | 事件 | 缓存影响 |
+|------|------|---------|
+| 1-2 | — | 正常缓存 |
+| 3 | TodoWrite #1 (~20K 上下文) | `current-todo` 段之后 20.1K 全价计费 |
+| 5 | TodoWrite #2 (~55K) | 55.1K 全价 |
+| 7 | TodoWrite #3 (~75K) | 75.1K 全价 |
+| 8 | TodoWrite #4 (~85K) | 85.1K 全价 |
+| 10 | TodoWrite #5 (~95K) | 95.1K 全价 |
+
+每次断裂，`current-todo` 段（~100 tokens）和之后所有对话消息从缓存价跌回全价，累积到**第 5 次时一次断裂就损失 95K 的缓存差价**。
+
+**成本对比（DeepSeek V4 Flash 价格为例）：**
+
+| | 之前（有 current-todo） | 之后（tool result 仅） |
+|---|---|---|
+| system prompt | 每轮首轮之后全部命中 | 全程命中（首轮后不变） |
+| 缓存断裂 | ~5 次 × 累积上下文 | **0 次** |
+| 每任务成本 | 基准 | **~1/28** |
+
+移除后行为完全等价——模型从工具调用的 tool result 中获取 todo 状态，效果一致，成本降低约 **28 倍**（取决于对话深度和 TodoWrite 频率）。
 
 这种方式更接近 Claude Code 的做法，也更适合结构化维护 session 级待办状态。
 
