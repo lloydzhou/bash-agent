@@ -1122,15 +1122,8 @@ func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if keepLines >= totalLines {
-		if trigger == "plan_clear" {
-			keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
-			if err != nil || keepLines <= 0 {
-				return false, err
-			}
-		} else {
-			return false, nil
-		}
+	if keepLines >= totalLines && trigger != "plan_clear" {
+		return false, nil
 	}
 	drop := totalLines - keepLines
 

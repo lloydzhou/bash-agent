@@ -796,17 +796,9 @@ impl Runtime {
             None => return Ok(false),
         };
         let total_lines = all.len();
-        let k = if k >= total_lines && trigger == "plan_clear" {
-            // DP 返回 ≥ total_lines，但 plan_clear 强制 compact → fallback 到 turn_keep
-            match crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio) {
-                Some(v) => v,
-                None => return Ok(false),
-            }
-        } else if k >= total_lines {
+        if k >= total_lines && trigger != "plan_clear" {
             return Ok(false);
-        } else {
-            k
-        };
+        }
         let drop = total_lines - k;
         let dropped_lines = &all[..drop];
 

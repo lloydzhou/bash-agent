@@ -872,13 +872,7 @@ compact_context_window() {
     fi
 
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-    if (( keep_lines >= total_lines )); then
-        if [[ "$trigger" == "plan_clear" ]]; then
-            keep_lines=$(compact_turn_keep)
-        else
-            return 1
-        fi
-    fi
+    (( keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" ]] || return 1
     drop=$(( total_lines - keep_lines ))
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
