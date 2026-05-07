@@ -1099,27 +1099,22 @@ func (rt *runtime) compactContextWindow(force bool) (bool, error) {
 	var keepLines int
 	var err error
 
-	if force {
-		// Force compact（PlanClear）：按完整 turn 数 × MinKeepRatio 保留
-		keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
-		if err != nil || keepLines <= 0 {
-			return false, err
-		}
-	} else {
-		keepLines, err = rt.conv.CompactDPDecision(dpCfg, prevCompactions, currentTurn, totalRequests, totalInputTokens)
-		if err != nil {
-			return false, err
-		}
-		if keepLines == 0 {
-			// Safety valve: DP says no, but check context size
-			if contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100 {
-				keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
-				if err != nil || keepLines <= 0 {
-					return false, err
-				}
-			} else {
-				return false, nil
+	// 始终先算 DP 决策（经济最优）
+	keepLines, err = rt.conv.CompactDPDecision(dpCfg, prevCompactions, currentTurn, totalRequests, totalInputTokens)
+	if err != nil {
+		return false, err
+	}
+
+	if keepLines == 0 {
+		// DP 认为不值得 → force 或 safety valve 触发时 fallback 到 turn_keep
+		shouldCompact := force || (contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100)
+		if shouldCompact {
+			keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
+			if err != nil || keepLines <= 0 {
+				return false, err
 			}
+		} else {
+			return false, nil
 		}
 	}
 

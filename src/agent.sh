@@ -857,22 +857,22 @@ compact_context_window() {
     local force=${1:-0}
     local total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
-    if (( force )); then
-        # Force compact（PlanClear）：按完整 turn 数 × DP_MIN_KEEP_RATIO 保留
-        keep_lines=$(compact_turn_keep)
-        [[ -n "$keep_lines" && "$keep_lines" -gt 0 ]] || return 1
-    else
-        # 正常 compact：先尝试 DP 决策
-        keep_lines=$(compact_dp_decision) || true
-        [[ -n "$keep_lines" ]] || keep_lines=0
-        if (( keep_lines == 0 )); then
-            # DP 认为不值得，但上下文超过 90% 阈值时强制 compact
+    # 始终先算 DP 决策（经济最优）
+    keep_lines=$(compact_dp_decision) || true
+    [[ -n "$keep_lines" ]] || keep_lines=0
+
+    if (( keep_lines == 0 )); then
+        # DP 认为不值得 → force 或 safety valve 触发时 fallback 到 turn_keep
+        if (( force )); then
+            local should_compact=1
+        else
             local ct=$(stats_get 7)
-            if (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
-                keep_lines=$(compact_turn_keep)
-            else
-                return 1
-            fi
+            (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )) && local should_compact=1 || local should_compact=0
+        fi
+        if (( should_compact )); then
+            keep_lines=$(compact_turn_keep)
+        else
+            return 1
         fi
     fi
 

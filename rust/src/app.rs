@@ -771,26 +771,25 @@ impl Runtime {
         };
 
         let all = self.conv.lines()?;
-        let keep_lines = if force {
-            // Force compact（PlanClear）：按完整 turn 数 × MinKeepRatio 保留
-            crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio)
-        } else {
-            let mut k = crate::compact_dp::compact_dp_decision(
-                &all,
-                &dp_cfg,
-                prev_compactions,
-                current_turn,
-                total_requests,
-                total_input_tokens,
-            );
-            if k.is_none() {
-                // Safety valve: DP says no, but check context size
-                if context_tokens > 0 && context_tokens > self.cfg.max_context_tokens * 90 / 100 {
-                    k = crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio);
-                }
+        // 始终先算 DP 决策（经济最优）
+        let mut keep_lines = crate::compact_dp::compact_dp_decision(
+            &all,
+            &dp_cfg,
+            prev_compactions,
+            current_turn,
+            total_requests,
+            total_input_tokens,
+        );
+
+        if keep_lines.is_none() {
+            // DP 认为不值得 → force 或 safety valve 触发时 fallback 到 turn_keep
+            let should_compact = force
+                || (context_tokens > 0
+                    && context_tokens > self.cfg.max_context_tokens * 90 / 100);
+            if should_compact {
+                keep_lines = crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio);
             }
-            k
-        };
+        }
 
         let k = match keep_lines {
             Some(v) => v,
