@@ -848,13 +848,13 @@ compact_turn_keep() {
         if (target > total_turns) target = total_turns
         keep = 0; found = 0
         for (i = NR; i >= 1 && found < target; i--) { keep++; if (role[i] == "user") found++ }
-        if (keep < 3) keep = 3
+        if (keep < 3) { print NR; exit }
         print keep
     }' "$CONV_FILE"
 }
 
 compact_context_window() {
-    local force=${1:-0}
+    local trigger=${1:-auto}
     local total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
     # 始终先算 DP 决策（经济最优）
@@ -862,14 +862,9 @@ compact_context_window() {
     [[ -n "$keep_lines" ]] || keep_lines=0
 
     if (( keep_lines == 0 )); then
-        # DP 认为不值得 → force 或 safety valve 触发时 fallback 到 turn_keep
-        if (( force )); then
-            local should_compact=1
-        else
-            local ct=$(stats_get 7)
-            (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )) && local should_compact=1 || local should_compact=0
-        fi
-        if (( should_compact )); then
+        # DP 认为不值得 → trigger 或 safety valve 触发时 fallback
+        local ct=$(stats_get 7)
+        if [[ "$trigger" == "plan_clear" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
             keep_lines=$(compact_turn_keep)
         else
             return 1
@@ -877,7 +872,13 @@ compact_context_window() {
     fi
 
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-    (( keep_lines < total_lines )) || return 1
+    if (( keep_lines >= total_lines )); then
+        if [[ "$trigger" == "plan_clear" ]]; then
+            keep_lines=$(compact_turn_keep)
+        else
+            return 1
+        fi
+    fi
     drop=$(( total_lines - keep_lines ))
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
@@ -898,7 +899,7 @@ compact_context_window() {
     remaining_turns=$(grep -c '"role":"user","content":"' "$CONV_FILE" 2>/dev/null || echo 0)
     stats_set 0=$remaining_turns
     if is_stream_json_mode; then
-        printf '%s\n' '{"type":"context_update","kind":"compact","trigger":"auto"}'
+        printf '{"type":"context_update","kind":"compact","trigger":"%s"}\n' "$trigger"
     else
         printf '\033[36mContext compacted automatically.\033[0m\n'
     fi
@@ -1036,7 +1037,7 @@ tool_skill() {
 }
 
 tool_plan_clear() {
-    compact_context_window 1
+    compact_context_window plan_clear
     [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"
     printf 'Plan cleared.'
 }
@@ -1206,7 +1207,7 @@ agent_loop_stream() {
             # Update context tokens and trigger compact if needed
             if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
                 stats_set 7=${_ctx_tokens}
-                compact_context_window || true
+                compact_context_window auto || true
             else
                 # No usage data (e.g. retry) — skip compact
                 :

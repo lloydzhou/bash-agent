@@ -77,10 +77,7 @@ func (s Store) CompactTurnKeep(minKeepRatio float64) (int, error) {
 		}
 	}
 	if keep < 3 {
-		keep = 3
-	}
-	if keep > len(lines) {
-		keep = len(lines)
+		return len(lines), nil
 	}
 	return keep, nil
 }

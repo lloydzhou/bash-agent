@@ -74,9 +74,8 @@ pub fn compact_turn_keep(lines: &[Value], min_keep_ratio: f64) -> Option<usize> 
             found += 1;
         }
     }
-    keep = keep.max(3);
-    if keep > lines.len() {
-        keep = lines.len();
+    if keep < 3 {
+        return Some(lines.len());
     }
     Some(keep)
 }

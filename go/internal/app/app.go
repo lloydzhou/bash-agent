@@ -595,7 +595,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
 
 				if e.Name == "PlanClear" {
-					_, _ = rt.compactContextWindow(true)
+					_, _ = rt.compactContextWindow("plan_clear")
 					_ = os.WriteFile(rt.paths.Plan, []byte{}, 0o644)
 					output = "Plan cleared."
 				}
@@ -688,7 +688,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			if rt.lastInputTokens > 0 {
 				rt.updateStatsFromLastUsage()
 			}
-			_, _ = rt.compactContextWindow(false)
+			_, _ = rt.compactContextWindow("auto")
 			// tool_use/tool_calls → loop continues; anything else → break
 			if stop != "tool_use" && stop != "tool_calls" {
 				return nil
@@ -1074,7 +1074,7 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-func (rt *runtime) compactContextWindow(force bool) (bool, error) {
+func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 	stats := rt.readStats()
 	contextTokens := int(statsFloat64(stats, "current_context_tokens"))
 	currentTurn := int(statsFloat64(stats, "current_turn_count"))
@@ -1106,8 +1106,8 @@ func (rt *runtime) compactContextWindow(force bool) (bool, error) {
 	}
 
 	if keepLines == 0 {
-		// DP 认为不值得 → force 或 safety valve 触发时 fallback 到 turn_keep
-		shouldCompact := force || (contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100)
+		// DP 认为不值得 → trigger 或 safety valve 触发时 fallback
+		shouldCompact := trigger == "plan_clear" || (contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100)
 		if shouldCompact {
 			keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
 			if err != nil || keepLines <= 0 {
@@ -1123,7 +1123,14 @@ func (rt *runtime) compactContextWindow(force bool) (bool, error) {
 		return false, err
 	}
 	if keepLines >= totalLines {
-		return false, nil
+		if trigger == "plan_clear" {
+			keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
+			if err != nil || keepLines <= 0 {
+				return false, err
+			}
+		} else {
+			return false, nil
+		}
 	}
 	drop := totalLines - keepLines
 
@@ -1150,7 +1157,7 @@ func (rt *runtime) compactContextWindow(force bool) (bool, error) {
 		rt.writeStats(stats)
 	}
 	if rt.isStreamJSONMode() {
-		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": "auto"})
+		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": trigger})
 	} else {
 		rt.info("Context compacted automatically.")
 	}

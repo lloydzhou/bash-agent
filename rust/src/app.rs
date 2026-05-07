@@ -368,7 +368,7 @@ impl Runtime {
                                 tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
 
                             if call.name == "PlanClear" {
-                                let _ = self.compact_context_window(true);
+                                let _ = self.compact_context_window("plan_clear");
                                 let _ = fs::write(&self.paths.plan, "");
                                 output = "Plan cleared.".to_string();
                             }
@@ -457,7 +457,7 @@ impl Runtime {
                     if self.last_input_tokens > 0 {
                         self.update_stats_from_usage();
                     }
-                    let _ = self.compact_context_window(false);
+                    let _ = self.compact_context_window("auto");
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
@@ -748,7 +748,7 @@ impl Runtime {
         }
     }
 
-    fn compact_context_window(&mut self, force: bool) -> Result<bool> {
+    fn compact_context_window(&mut self, trigger: &str) -> Result<bool> {
         let stats = self.read_stats();
         let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
         let current_turn = stats_get_f64(&stats, "current_turn_count") as usize;
@@ -782,8 +782,8 @@ impl Runtime {
         );
 
         if keep_lines.is_none() {
-            // DP 认为不值得 → force 或 safety valve 触发时 fallback 到 turn_keep
-            let should_compact = force
+            // DP 认为不值得 → trigger 或 safety valve 触发时 fallback 到 turn_keep
+            let should_compact = trigger == "plan_clear"
                 || (context_tokens > 0
                     && context_tokens > self.cfg.max_context_tokens * 90 / 100);
             if should_compact {
@@ -796,9 +796,17 @@ impl Runtime {
             None => return Ok(false),
         };
         let total_lines = all.len();
-        if k >= total_lines {
+        let k = if k >= total_lines && trigger == "plan_clear" {
+            // DP 返回 ≥ total_lines，但 plan_clear 强制 compact → fallback 到 turn_keep
+            match crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio) {
+                Some(v) => v,
+                None => return Ok(false),
+            }
+        } else if k >= total_lines {
             return Ok(false);
-        }
+        } else {
+            k
+        };
         let drop = total_lines - k;
         let dropped_lines = &all[..drop];
 
@@ -822,7 +830,7 @@ impl Runtime {
 
         if self.is_stream_json_mode() {
             let _ = self
-                .emit_stream(json!({"type":"context_update","kind":"compact","trigger":"auto"}));
+                .emit_stream(json!({"type":"context_update","kind":"compact","trigger": trigger}));
         } else {
             self.info("Context compacted automatically.");
         }
