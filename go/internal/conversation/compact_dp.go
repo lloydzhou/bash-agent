@@ -3,6 +3,7 @@ package conversation
 import (
 	"encoding/json"
 	"math"
+	"strings"
 )
 
 // DPCompactConfig holds the parameters for the DP compact decision.
@@ -35,6 +36,50 @@ func DefaultDPCompactConfig() DPCompactConfig {
 		Beta:         0.03,
 		MinKeepRatio: 0.12,
 	}
+}
+
+// CompactTurnKeep computes turn-aligned lines to keep using MinKeepRatio.
+// Matches bash compact_turn_keep(): counts user inputs, applies ratio, aligns to user boundary.
+func (s Store) CompactTurnKeep(minKeepRatio float64) (int, error) {
+	lines, err := s.Lines()
+	if err != nil {
+		return 0, err
+	}
+	if len(lines) == 0 {
+		return 0, nil
+	}
+
+	// Detect user role: match {"role":"user","content":"... (excludes tool_result lines)
+	roleUser := make([]bool, len(lines))
+	totalTurns := 0
+	for i, line := range lines {
+		s := string(line)
+		if strings.HasPrefix(s, `{"role":"user","content":"`) {
+			roleUser[i] = true
+			totalTurns++
+		}
+	}
+
+	target := int(float64(totalTurns)*minKeepRatio + 0.5)
+	if target < 1 {
+		target = 1
+	}
+	if target > totalTurns {
+		target = totalTurns
+	}
+
+	keep := 0
+	found := 0
+	for i := len(lines) - 1; i >= 0 && found < target; i-- {
+		keep++
+		if roleUser[i] {
+			found++
+		}
+	}
+	if keep < 3 {
+		return len(lines), nil
+	}
+	return keep, nil
 }
 
 // CompactDPDecision computes the optimal number of lines to keep.

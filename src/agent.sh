@@ -373,7 +373,6 @@ msg_to_stream_event() {
             ;;
         USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
-        TODO_UPDATE) build_todo_event_json "${REPLY_MESSAGE[1]}" ;;
         ERROR)       printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
         RETRY)       printf '{"type":"retry"}' ;;
         *)           return 1 ;;
@@ -461,7 +460,7 @@ build_system_prompt() {
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
     tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
-    plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Step-by-step**:\n  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. After user confirms, create TodoWrite checklist based on plan\n  4. Execute tasks following todo checklist (update progress in TodoWrite)\n  5. When all tasks complete, clear plan: Bash ": > PLAN_FILE"\n- **Plan vs Todo separation**:\n  - PLAN_FILE: planning document for analysis and strategy\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan file\n- **PLAN_FILE**: '${PLAN_FILE:-<not set>}
+    plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Step-by-step**:\n  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. After user confirms, create TodoWrite checklist based on plan\n  4. Execute tasks following todo checklist (update progress in TodoWrite)\n  5. When all tasks complete, use PlanClear tool to clear plan and compact context\n- **Plan vs Todo separation**:\n  - PLAN_FILE: planning document for analysis and strategy\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan file\n- **PLAN_FILE**: '${PLAN_FILE:-<not set>}
 
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
@@ -631,11 +630,6 @@ build_assistant_content_json() {
 
     content+="]"
     printf '%s' "$content"
-}
-
-build_todo_event_json() {
-    local checklist="$1"
-    printf '{"type":"todo_update","content":"%s"}' "$(json_escape "$checklist")"
 }
 
 cleanup() {
@@ -842,24 +836,43 @@ compact_dp_decision() {
             -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"
 }
 
+compact_turn_keep() {
+    awk -v r="$DP_MIN_KEEP_RATIO" '
+    BEGIN { target_turns = 0 }
+    { role[NR] = ($0 ~ /^\{"role":"user","content":"/) ? "user" : "other" }
+    END {
+        if (NR == 0) { print 0; exit }
+        for (i = 1; i <= NR; i++) if (role[i] == "user") total_turns++
+        target = int(total_turns * r + 0.5)
+        if (target < 1) target = 1
+        if (target > total_turns) target = total_turns
+        keep = 0; found = 0
+        for (i = NR; i >= 1 && found < target; i--) { keep++; if (role[i] == "user") found++ }
+        if (keep < 3) { print NR; exit }
+        print keep
+    }' "$CONV_FILE"
+}
+
 compact_context_window() {
+    local trigger=${1:-auto}
     local total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
+    # 始终先算 DP 决策（经济最优）
     keep_lines=$(compact_dp_decision) || true
     [[ -n "$keep_lines" ]] || keep_lines=0
+
     if (( keep_lines == 0 )); then
-        # Safety valve: DP says no, but check context size
+        # DP 认为不值得 → trigger 或 safety valve 触发时 fallback
         local ct=$(stats_get 7)
-        if (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
-            total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-            keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" 'BEGIN { k=int(lines*r+0.5); print k>3?k:3 }')
+        if [[ "$trigger" == "plan_clear" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
+            keep_lines=$(compact_turn_keep)
         else
             return 1
         fi
     fi
 
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-    (( keep_lines < total_lines )) || return 1
+    (( keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" ]] || return 1
     drop=$(( total_lines - keep_lines ))
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
@@ -880,7 +893,7 @@ compact_context_window() {
     remaining_turns=$(grep -c '"role":"user","content":"' "$CONV_FILE" 2>/dev/null || echo 0)
     stats_set 0=$remaining_turns
     if is_stream_json_mode; then
-        printf '%s\n' '{"type":"context_update","kind":"compact","trigger":"auto"}'
+        printf '{"type":"context_update","kind":"compact","trigger":"%s"}\n' "$trigger"
     else
         printf '\033[36mContext compacted automatically.\033[0m\n'
     fi
@@ -1017,6 +1030,12 @@ tool_skill() {
     printf 'Skill: %s\n%s' "$skill_name" "$skill_content"
 }
 
+tool_plan_clear() {
+    compact_context_window plan_clear
+    [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"
+    printf 'Plan cleared.'
+}
+
 tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlencode "q=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" -H "X-Respond-With: no-content" "https://s.jina.ai/" 2>&1; }
 
 tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlencode "url=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/" 2>&1; }
@@ -1031,6 +1050,7 @@ dispatch_tool() {
         Glob)      tool_glob "$arg1" "$arg2" ;;
         Grep)      tool_grep "$arg1" "$arg2" "$arg3" "$arg4" ;;
         TodoWrite) printf '%s' "$arg1" ;;
+        PlanClear) tool_plan_clear ;;
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
         WebFetch)  tool_web_fetch "$arg1" ;;
@@ -1181,7 +1201,7 @@ agent_loop_stream() {
             # Update context tokens and trigger compact if needed
             if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
                 stats_set 7=${_ctx_tokens}
-                compact_context_window || true
+                compact_context_window auto || true
             else
                 # No usage data (e.g. retry) — skip compact
                 :

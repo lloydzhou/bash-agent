@@ -420,8 +420,6 @@ func (rt *runtime) replayLastTurns() {
 			}
 			hadTurns = true
 			rt.displayReplayEvent(&state, "USER_MESSAGE", map[string]string{"content": content})
-		case "todo_update":
-			flushAccumulated()
 		case "thinking":
 			// Flush text, accumulate thinking (match bash event_replay.awk)
 			if accText != "" {
@@ -595,6 +593,13 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					output = "Error: tool execution failed: " + outputOrErr(output, result.Err)
 				}
 				output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
+
+				if e.Name == "PlanClear" {
+					_, _ = rt.compactContextWindow("plan_clear")
+					_ = os.WriteFile(rt.paths.Plan, []byte{}, 0o644)
+					output = "Plan cleared."
+				}
+
 				var convContent string
 				if e.Name == "Edit" {
 					// Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
@@ -683,7 +688,7 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 			if rt.lastInputTokens > 0 {
 				rt.updateStatsFromLastUsage()
 			}
-			_, _ = rt.compactContextWindow()
+			_, _ = rt.compactContextWindow("auto")
 			// tool_use/tool_calls → loop continues; anything else → break
 			if stop != "tool_use" && stop != "tool_calls" {
 				return nil
@@ -1069,7 +1074,7 @@ func (rt *runtime) stopEscInterruptListener() {
 	}
 }
 
-func (rt *runtime) compactContextWindow() (bool, error) {
+func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 	stats := rt.readStats()
 	contextTokens := int(statsFloat64(stats, "current_context_tokens"))
 	currentTurn := int(statsFloat64(stats, "current_turn_count"))
@@ -1077,7 +1082,6 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 	totalRequests := int(statsFloat64(stats, "agent_request_count"))
 	totalInputTokens := int(statsFloat64(stats, "total_input_tokens"))
 
-	// DP decision — all computation (E, L, avg) inside CompactDPDecision
 	dpCfg := conversation.DPCompactConfig{
 		PInput:       rt.cfg.DPPInput,
 		PCache:       rt.cfg.DPPCache,
@@ -1092,23 +1096,23 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 		MinKeepRatio: rt.cfg.DPMinKeepRatio,
 	}
 
-	keepLines, err := rt.conv.CompactDPDecision(dpCfg, prevCompactions, currentTurn, totalRequests, totalInputTokens)
+	var keepLines int
+	var err error
+
+	// 始终先算 DP 决策（经济最优）
+	keepLines, err = rt.conv.CompactDPDecision(dpCfg, prevCompactions, currentTurn, totalRequests, totalInputTokens)
 	if err != nil {
 		return false, err
 	}
 
 	if keepLines == 0 {
-		// Safety valve: DP says no, but check context size
-		if contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100 {
-			totalLines, _ := rt.conv.TotalLines()
-			minKeep := int(float64(totalLines)*dpCfg.MinKeepRatio + 0.5)
-			if minKeep < 3 {
-				minKeep = 3
+		// DP 认为不值得 → trigger 或 safety valve 触发时 fallback
+		shouldCompact := trigger == "plan_clear" || (contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100)
+		if shouldCompact {
+			keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
+			if err != nil || keepLines <= 0 {
+				return false, err
 			}
-			if minKeep >= totalLines {
-				return false, nil
-			}
-			keepLines = minKeep
 		} else {
 			return false, nil
 		}
@@ -1118,7 +1122,7 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if keepLines >= totalLines {
+	if keepLines >= totalLines && trigger != "plan_clear" {
 		return false, nil
 	}
 	drop := totalLines - keepLines
@@ -1146,7 +1150,7 @@ func (rt *runtime) compactContextWindow() (bool, error) {
 		rt.writeStats(stats)
 	}
 	if rt.isStreamJSONMode() {
-		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": "auto"})
+		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": trigger})
 	} else {
 		rt.info("Context compacted automatically.")
 	}

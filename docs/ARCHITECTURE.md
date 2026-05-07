@@ -158,6 +158,16 @@ $$
 - 否则不压缩
 - 安全阀：当 DP 说不压缩但 `current_context > max_context × 90%` 时，强制压缩
 
+#### Force Compact / PlanClear
+
+当用户手动触发 `PlanClear` 工具时，跳过 DP 决策，以 `DP_MIN_KEEP_RATIO`（默认 0.3）计算 turn-aligned 保留行数，执行压缩并清空 plan 文件。三步：
+
+1. **`compact_turn_keep()`** — 扫描 conversation 中的 user 消息（匹配 `{"role":"user","content":"`），从末尾按 ratio 保留完整 turn
+2. **`compact_context_window(force=true)`** — 用 turn keep 结果执行缓存对齐摘要 + 裁切
+3. **清理 plan 文件** — `printf '' > "$PLAN_FILE"`
+
+Safety valve 也改用 `compact_turn_keep()` 实现 turn 对齐（替换原简单比例计算），确保 tool_result 不会被误算为 user turn。
+
 | 项 | 含义 |
 |---|---|
 | ① | 压缩后后续 `R-1` 次 LLM 调用每次少发送 `H` token，按缓存价节省 |
@@ -253,11 +263,11 @@ system prompt 首尾都是语言约束，中间内容无论多长、是否变化
 - `append_section()` 负责按顺序累加
 - 稳定内容尽量前置
 - 动态内容尽量后置
-- `current-todo` 已移除（见下文）
+- `current-todo` 已移除，见 §Todo 设计演进
 
 `using-your-tools` 指导模型如何正确使用各内置 tool。
 
-`plan-lifecycle-guidance` 为复杂多步任务提供规划工作流（写 PLAN_FILE → 确认 → TodoWrite checklist → 执行 → 清空 plan），由 `PLAN_FILE` 环境变量标识当前 session 的 plan 路径。
+`plan-lifecycle-guidance` 为复杂多步任务提供规划工作流（写 PLAN_FILE → 确认 → TodoWrite checklist → 执行 → PlanClear 清空 plan），由 `PLAN_FILE` 环境变量标识当前 session 的 plan 路径。PLAN_FILE 清空后，system prompt 中的 plan section 会消失。
 
 ### 4. Skills
 
@@ -297,7 +307,32 @@ skills 当前优先读取：
 - 模型从对话历史中的 tool result 获取最新 todo 状态
 - 不再有 `current-todo` system prompt section（避免每次 todo 更新导致前缀缓存失效）
 
-> 注意：之前 `current-todo` section 的方案虽然直观，但每次 `TodoWrite` 都会改变 system prompt 前缀，导致前序上下文缓存全部失效。移除后，system prompt 前缀保持稳定，TodoWrite 仅通过 tool result 传递状态，效果等价且缓存友好。
+#### 设计演进：从 system prompt section 到 tool result
+
+早期版本在 system prompt 末尾有 `current-todo` section，每次 `TodoWrite` 写入 `todo.md` 文件后，下一轮请求的 system prompt 会从 `current-todo` 段开始变化，导致**从该位置起的所有内容（包括后续整个对话历史）前缀缓存断裂**。
+
+以一段典型任务（10 轮对话，5 次 `TodoWrite`，上下文累积到 ~100K tokens）为例：
+
+| 轮次 | 事件 | 缓存影响 |
+|------|------|---------|
+| 1-2 | — | 正常缓存 |
+| 3 | TodoWrite #1 (~20K 上下文) | `current-todo` 段之后 20.1K 全价计费 |
+| 5 | TodoWrite #2 (~55K) | 55.1K 全价 |
+| 7 | TodoWrite #3 (~75K) | 75.1K 全价 |
+| 8 | TodoWrite #4 (~85K) | 85.1K 全价 |
+| 10 | TodoWrite #5 (~95K) | 95.1K 全价 |
+
+每次断裂，`current-todo` 段（~100 tokens）和之后所有对话消息从缓存价跌回全价，累积到**第 5 次时一次断裂就损失 95K 的缓存差价**。
+
+**成本对比（DeepSeek V4 Flash 价格为例）：**
+
+| | 之前（有 current-todo） | 之后（tool result 仅） |
+|---|---|---|
+| system prompt | 每轮首轮之后全部命中 | 全程命中（首轮后不变） |
+| 缓存断裂 | ~5 次 × 累积上下文 | **0 次** |
+| 每任务成本 | 基准 | **~1/28** |
+
+移除后行为完全等价——模型从工具调用的 tool result 中获取 todo 状态，效果一致，成本降低约 **28 倍**（取决于对话深度和 TodoWrite 频率）。
 
 这种方式更接近 Claude Code 的做法，也更适合结构化维护 session 级待办状态。
 
@@ -312,6 +347,7 @@ skills 当前优先读取：
 - `Glob`
 - `Grep`
 - `TodoWrite`
+- `PlanClear` — 清空 plan 并触发 force compact（跳过 DP 决策，保留最后 `DP_MIN_KEEP_RATIO` 比例的完整 turn）
 - `Skill`
 - `WebSearch`
 - `WebFetch`

@@ -366,6 +366,13 @@ impl Runtime {
                             };
                             output =
                                 tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
+
+                            if call.name == "PlanClear" {
+                                let _ = self.compact_context_window("plan_clear");
+                                let _ = fs::write(&self.paths.plan, "");
+                                output = "Plan cleared.".to_string();
+                            }
+
                             let mut conv_content = String::new();
                             if call.name == "Edit" {
                                 // Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
@@ -450,7 +457,7 @@ impl Runtime {
                     if self.last_input_tokens > 0 {
                         self.update_stats_from_usage();
                     }
-                    let _ = self.compact_context_window();
+                    let _ = self.compact_context_window("auto");
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
@@ -741,7 +748,7 @@ impl Runtime {
         }
     }
 
-    fn compact_context_window(&mut self) -> Result<bool> {
+    fn compact_context_window(&mut self, trigger: &str) -> Result<bool> {
         let stats = self.read_stats();
         let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
         let current_turn = stats_get_f64(&stats, "current_turn_count") as usize;
@@ -749,7 +756,6 @@ impl Runtime {
         let total_requests = stats_get_f64(&stats, "agent_request_count") as usize;
         let total_input_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
 
-        // DP decision — all computation (E, L, avg) inside compact_dp_decision
         let dp_cfg = crate::compact_dp::DPCompactConfig {
             p_input: self.cfg.dp_p_input,
             p_cache: self.cfg.dp_p_cache,
@@ -765,6 +771,7 @@ impl Runtime {
         };
 
         let all = self.conv.lines()?;
+        // 始终先算 DP 决策（经济最优）
         let mut keep_lines = crate::compact_dp::compact_dp_decision(
             &all,
             &dp_cfg,
@@ -775,26 +782,21 @@ impl Runtime {
         );
 
         if keep_lines.is_none() {
-            // Safety valve: DP says no, but check context size
-            if context_tokens > 0 && context_tokens > self.cfg.max_context_tokens * 90 / 100 {
-                let total_lines = all.len();
-                let min_keep = {
-                    let k = (total_lines as f64 * dp_cfg.min_keep_ratio + 0.5) as usize;
-                    k.max(3)
-                };
-                if min_keep < total_lines {
-                    keep_lines = Some(min_keep);
-                } else {
-                    return Ok(false);
-                }
-            } else {
-                return Ok(false);
+            // DP 认为不值得 → trigger 或 safety valve 触发时 fallback 到 turn_keep
+            let should_compact = trigger == "plan_clear"
+                || (context_tokens > 0
+                    && context_tokens > self.cfg.max_context_tokens * 90 / 100);
+            if should_compact {
+                keep_lines = crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio);
             }
         }
 
-        let k = keep_lines.unwrap();
+        let k = match keep_lines {
+            Some(v) => v,
+            None => return Ok(false),
+        };
         let total_lines = all.len();
-        if k >= total_lines {
+        if k >= total_lines && trigger != "plan_clear" {
             return Ok(false);
         }
         let drop = total_lines - k;
@@ -820,7 +822,7 @@ impl Runtime {
 
         if self.is_stream_json_mode() {
             let _ = self
-                .emit_stream(json!({"type":"context_update","kind":"compact","trigger":"auto"}));
+                .emit_stream(json!({"type":"context_update","kind":"compact","trigger": trigger}));
         } else {
             self.info("Context compacted automatically.");
         }
@@ -1312,9 +1314,6 @@ impl Runtime {
                         "USER_MESSAGE",
                         &std::collections::HashMap::from([("content", content)]),
                     );
-                }
-                "todo_update" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                 }
                 "thinking" => {
                     // Flush text, accumulate thinking (match bash event_replay.awk)
