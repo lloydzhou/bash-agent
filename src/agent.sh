@@ -461,7 +461,7 @@ build_system_prompt() {
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
     tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
-    plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Step-by-step**:\n  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. After user confirms, create TodoWrite checklist based on plan\n  4. Execute tasks following todo checklist (update progress in TodoWrite)\n  5. When all tasks complete, clear plan: Bash ": > PLAN_FILE"\n- **Plan vs Todo separation**:\n  - PLAN_FILE: planning document for analysis and strategy\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan file\n- **PLAN_FILE**: '${PLAN_FILE:-<not set>}
+    plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Step-by-step**:\n  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. After user confirms, create TodoWrite checklist based on plan\n  4. Execute tasks following todo checklist (update progress in TodoWrite)\n  5. When all tasks complete, use PlanClear tool to clear plan and compact context\n- **Plan vs Todo separation**:\n  - PLAN_FILE: planning document for analysis and strategy\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan file\n- **PLAN_FILE**: '${PLAN_FILE:-<not set>}
 
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
@@ -843,9 +843,29 @@ compact_dp_decision() {
 }
 
 compact_context_window() {
+    local force=${1:-0}
     local total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
-    keep_lines=$(compact_dp_decision) || true
+    if (( force )); then
+        # Force compact: keep last few complete turns, turn-aligned
+        total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
+        [[ "$total_lines" -gt 0 ]] || return 1
+        keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" '
+        BEGIN { k = int(lines * r + 0.5); if (k < 3) k = 3; if (k > lines) k = lines; print k }')
+        # Align to user message boundary (turn boundary)
+        keep_lines=$(awk -v keep="$keep_lines" '
+        { role[NR] = ($0 ~ /"role":"user"/) ? "user" : "other" }
+        END {
+            if (keep >= NR) { print NR; exit }
+            cut = NR - keep + 1
+            while (cut > 1 && role[cut] != "user") cut--
+            adj = NR - cut + 1
+            if (adj < 1) adj = 1
+            print adj
+        }' "$CONV_FILE")
+        [[ -n "$keep_lines" && "$keep_lines" -gt 0 ]] || keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" 'BEGIN { k=int(lines*r+0.5); print k>3?k:3 }')
+    else
+        keep_lines=$(compact_dp_decision) || true
     [[ -n "$keep_lines" ]] || keep_lines=0
     if (( keep_lines == 0 )); then
         # Safety valve: DP says no, but check context size
@@ -853,9 +873,21 @@ compact_context_window() {
         if (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
             total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
             keep_lines=$(awk -v lines="$total_lines" -v r="$DP_MIN_KEEP_RATIO" 'BEGIN { k=int(lines*r+0.5); print k>3?k:3 }')
+            # Align to user message boundary
+            keep_lines=$(awk -v keep="$keep_lines" '
+            { role[NR] = ($0 ~ /"role":"user"/) ? "user" : "other" }
+            END {
+                if (keep >= NR) { print NR; exit }
+                cut = NR - keep + 1
+                while (cut > 1 && role[cut] != "user") cut--
+                adj = NR - cut + 1
+                if (adj < 1) adj = 1
+                print adj
+            }' "$CONV_FILE")
         else
             return 1
         fi
+    fi
     fi
 
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
@@ -1017,6 +1049,12 @@ tool_skill() {
     printf 'Skill: %s\n%s' "$skill_name" "$skill_content"
 }
 
+tool_plan_clear() {
+    compact_context_window 1
+    [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"
+    printf 'Plan cleared.'
+}
+
 tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlencode "q=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" -H "X-Respond-With: no-content" "https://s.jina.ai/" 2>&1; }
 
 tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlencode "url=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/" 2>&1; }
@@ -1031,6 +1069,7 @@ dispatch_tool() {
         Glob)      tool_glob "$arg1" "$arg2" ;;
         Grep)      tool_grep "$arg1" "$arg2" "$arg3" "$arg4" ;;
         TodoWrite) printf '%s' "$arg1" ;;
+        PlanClear) tool_plan_clear ;;
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
         WebFetch)  tool_web_fetch "$arg1" ;;
