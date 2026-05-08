@@ -1015,12 +1015,23 @@ tool_grep() {
     [[ -e "$path" ]] || { echo "Error: path not found: $path"; return 1; }
     command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for grep"; return 1; }
 
+    # 绝对路径转相对，避免 rg 输出冗长的路径前缀
+    if [[ "$path" == /* ]]; then
+        local cwd="${PWD%/}"
+        if [[ "$path" == "$cwd"* ]]; then
+            path="${path#"$cwd/"}"
+            path="${path#"$cwd"}"
+        fi
+        [[ -z "$path" ]] && path="."
+    fi
+
     local args=(-n --color never)
     [[ -n "$context" && "$context" =~ ^[0-9]+$ ]] && args+=(-C "$context")
     [[ -n "$glob" ]] && args+=(--glob "$glob")
     args+=("--" "$pattern" "$path")
 
-    rg "${args[@]}" 2>/dev/null || true
+    # Suppress rg's "Binary file matches" messages
+    rg "${args[@]}" 2>/dev/null | grep -v '^Binary file .* matches$' || true
 }
 
 tool_skill() {
