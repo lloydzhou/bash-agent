@@ -1020,8 +1020,7 @@ tool_grep() {
     [[ -n "$glob" ]] && args+=(--glob "$glob")
     args+=("--" "$pattern" "$path")
 
-    # Suppress rg's "Binary file matches" messages
-    rg "${args[@]}" 2>/dev/null | grep -v '^Binary file .* matches$' || true
+    rg "${args[@]}" 2>/dev/null || true
 }
 
 tool_skill() {
