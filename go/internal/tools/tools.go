@@ -429,9 +429,7 @@ func (r Runner) Grep(pattern, path, glob string, contextLines *int) (string, err
 		return "", errors.New("Error: rg is required for grep")
 	}
 
-	args := []string{"-n", "--color", "never"}
-
-	// Context lines
+	args := []string{"-n", "--color", "never", "--heading"}
 	if contextLines != nil && *contextLines > 0 {
 		args = append(args, "-C", fmt.Sprintf("%d", *contextLines))
 	}

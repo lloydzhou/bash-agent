@@ -354,7 +354,7 @@ impl Runner {
             .output()
             .map_err(|_| anyhow!("Error: rg is required for grep"))?;
         let mut cmd = Command::new("rg");
-        cmd.args(["-n", "--color", "never"]);
+        cmd.args(["-n", "--color", "never", "--heading"]);
         if let Some(c) = context {
             if c > 0 {
                 cmd.args(["-C", &c.to_string()]);
