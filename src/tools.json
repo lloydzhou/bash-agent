@@ -1,7 +1,7 @@
 [
   {
     "name": "Read",
-    "description": "Read a file from the local filesystem. Use multiple Read calls if you need multiple files. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.\n\nIMPORTANT - Large file handling:\n- Tool results may be truncated for large files. If you need to search for specific content, use Grep instead — it returns only matching lines and never truncates.\n- Use Grep with context to get enough surrounding lines for Edit, avoiding a separate Read.\n- Use Read with offset/limit only when you already know the target line range (e.g. from a prior Grep).",
+    "description": "Read a file from the local filesystem. Use multiple Read calls if you need multiple files. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.\n\nIMPORTANT - Prefer Grep over Read:\n- When searching for specific content, ALWAYS use Grep first — it returns only matching lines, never truncates, and keeps context small.\n- Read loads entire files into context, which rapidly inflates token usage. Use it ONLY when you already know exactly which lines you need (e.g. after a Grep located the target), or when you must understand the full file structure.\n- Grep with context provides enough surrounding lines for Edit in most cases, eliminating the need for a separate Read.\n- If a Read result is truncated (you see a truncation notice), do NOT re-read the same range — use Grep to search instead.\n- Use Read with offset/limit only when you already know the target line range (e.g. from a prior Grep).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -41,7 +41,7 @@
   },
   {
     "name": "Edit",
-    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, read the relevant portion of the file — use Read with offset/limit if you know the location, or use Grep with context to locate and capture the target text in one step. Copy the exact text before calling Edit.",
+    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, locate the exact text — prefer Grep with context to capture the target in one step; use Read with offset/limit only if you already know the exact line range. Copy the exact text before calling Edit.",
     "input_schema": {
       "type": "object",
       "properties": {
