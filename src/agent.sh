@@ -699,7 +699,7 @@ conv_init() {
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
-    stats_load && stats_show_osc
+    stats_load
 }
 
 conv_add_user() {
@@ -1450,6 +1450,7 @@ interactive_mode() {
         LOG_EVENTS="$_saved_log_events"
         [[ -n "$_match" ]] && printf "\n"
     fi
+    stats_show_osc
     while true; do
         trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
         stty echo 2>/dev/null || true
