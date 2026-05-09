@@ -1092,7 +1092,7 @@ run_summary_call() {
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
             THINKING) ;;
-            USAGE) record_usage "compact" 2>/dev/null ;;
+            USAGE) record_usage "compact" 2 >/dev/null ;;
             ERROR) last_error="${REPLY_MESSAGE[1]}" ;;
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
