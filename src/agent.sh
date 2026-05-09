@@ -11,7 +11,7 @@ MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
 TOOL_TIMEOUT_SECS=600
-: "${TOOL_RESULT_MAX_BYTES:=50000}"
+: "${TOOL_RESULT_MAX_BYTES:=100000}"
 FILE_WRITE_MAX_BYTES=1048576
 OUTPUT_FORMAT="human"
 VERBOSE=false
@@ -51,8 +51,6 @@ API_URL=""
 AWK_DIR=""
 declare -a HEADER_ARGS=()
 INTERRUPT_REQUESTED=false
-ESC_LISTENER_PID=""
-ESC_LISTENER_FLAG=""
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
 
@@ -220,19 +218,6 @@ tool_call_summary() {
     else
         printf '%s' "$name"
     fi
-}
-
-clear_interrupt_state() {
-    INTERRUPT_REQUESTED=false
-    if [[ -n "${ESC_LISTENER_FLAG:-}" && -f "${ESC_LISTENER_FLAG:-}" ]]; then
-        : > "$ESC_LISTENER_FLAG"
-    fi
-}
-
-interrupt_requested() {
-    [[ "$INTERRUPT_REQUESTED" == true ]] && return 0
-    [[ -n "${ESC_LISTENER_FLAG:-}" && -s "${ESC_LISTENER_FLAG:-}" ]] && return 0
-    return 1
 }
 
 run_with_timeout() {
@@ -631,13 +616,6 @@ build_assistant_content_json() {
     content+="]"
     printf '%s' "$content"
 }
-
-cleanup() {
-    stop_esc_interrupt_listener
-    clear_interrupt_state
-}
-trap cleanup EXIT
-trap 'INTERRUPT_REQUESTED=true; [[ -n "${ESC_LISTENER_FLAG:-}" ]] && printf 1 > "$ESC_LISTENER_FLAG"' USR1
 
 find_awk_dir() {
     if [[ -n "${AWK_DIR:-}" ]]; then
@@ -1122,7 +1100,7 @@ agent_loop_stream() {
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
         while read_message; do
-            if interrupt_requested; then
+            if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
                 break
             fi
@@ -1195,7 +1173,7 @@ agent_loop_stream() {
         esac
 
         # Tools already executed inline; persist unless interrupted
-        if ! interrupt_requested; then
+        if [[ "$INTERRUPT_REQUESTED" != true ]]; then
             conv_add_assistant "$text" "$thinking" "$tool_calls"
             if [[ -n "$tool_conv_results" ]]; then
                 conv_add_tool_results "$tool_conv_results"
@@ -1225,7 +1203,10 @@ agent_loop() {
     local user_input="$1" had_error=false
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
-    start_esc_interrupt_listener  # stop/clear before start
+    INTERRUPT_REQUESTED=false
+
+    # Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
+    trap 'INTERRUPT_REQUESTED=true' INT
 
     # Record user input event
     [[ "$LOG_EVENTS" != "false" ]] && \
@@ -1259,7 +1240,6 @@ agent_loop() {
         fi
     done < <(agent_loop_stream "$user_input")
 
-    stop_esc_interrupt_listener
     $had_error && return 1
     return 0
 }
@@ -1436,7 +1416,6 @@ interactive_mode() {
     touch "$history_file" 2>/dev/null || true
 
     history -r "$history_file" 2>/dev/null || true
-    trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
 
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
@@ -1456,6 +1435,7 @@ interactive_mode() {
         [[ -n "$_match" ]] && printf "\n"
     fi
     while true; do
+        trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
         stty echo 2>/dev/null || true
         IFS= read -e -r -p $'\001\033[32m\002> \001\033[0m\002' user_input || break
         [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
@@ -1471,33 +1451,6 @@ interactive_mode() {
     fi
 }
 
-start_esc_interrupt_listener() {
-    [[ "$INTERACTIVE" == true ]] || return 0
-    [[ -r /dev/tty ]] || return 0
-    clear_interrupt_state
-    stop_esc_interrupt_listener
-    ESC_LISTENER_FLAG=$(mktemp "${TMPDIR:-/tmp}/agent-esc.XXXXXX")
-    (
-        local c
-        while [[ -f "$ESC_LISTENER_FLAG" ]]; do
-            if IFS= read -r -s -n 1 -t 1 c < /dev/tty; then
-                [[ "$c" == $'\e' ]] && kill -USR1 "$$" 2>/dev/null || true
-            fi
-        done
-    ) &
-    ESC_LISTENER_PID=$!
-}
-
-stop_esc_interrupt_listener() {
-    if [[ -n "${ESC_LISTENER_FLAG:-}" ]]; then
-        rm -f "$ESC_LISTENER_FLAG" 2>/dev/null || true
-        ESC_LISTENER_FLAG=""
-    fi
-    if [[ -n "${ESC_LISTENER_PID:-}" ]]; then
-        wait "$ESC_LISTENER_PID" 2>/dev/null || true
-        ESC_LISTENER_PID=""
-    fi
-}
 
 main() {
     parse_args "$@"
