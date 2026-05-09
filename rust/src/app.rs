@@ -831,7 +831,7 @@ impl Runtime {
             &messages,
             &self.tools_json,
             &system_prompt,
-            self.cfg.summary_max_tokens,
+            self.cfg.max_tokens,
             self.cfg.thinking_budget,
         )?;
         let body = self.transport.convert_body(&claude_body)?;

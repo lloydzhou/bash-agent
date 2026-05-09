@@ -9,7 +9,6 @@ set -uo pipefail
 PROVIDER="claude"
 MODEL=""
 MAX_TOKENS=4096
-SUMMARY_MAX_TOKENS=1024
 TOOL_TIMEOUT_SECS=600
 : "${TOOL_RESULT_MAX_BYTES:=100000}"
 FILE_WRITE_MAX_BYTES=1048576
@@ -1097,7 +1096,7 @@ run_summary_call() {
             ERROR) last_error="${REPLY_MESSAGE[1]}" ;;
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
-    done < <(llm_call "$messages" "$SUMMARY_MAX_TOKENS" "$THINKING_BUDGET")
+    done < <(llm_call "$messages")
 
     [[ -n "$text" ]] || die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
     printf '%s' "$text"

@@ -1131,7 +1131,7 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 	if err != nil {
 		return "", fmt.Errorf("build_system_prompt: %w", err)
 	}
-	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.SummaryMaxTokens, rt.cfg.ThinkingBudget)
+	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
 	if err != nil {
 		return "", fmt.Errorf("build_summary_request: %w", err)
 	}
