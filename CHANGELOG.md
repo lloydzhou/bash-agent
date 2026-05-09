@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **summary `record_usage` 参数丢失**：`run_summary_call` 中 `record_usage "compact" 2>/dev/null` 缺少空格，`2>/dev/null` 被解析为 stderr 重定向而非传参 `2`（counter_idx），导致 stats 文件损坏、PlanClear/compact 失败（`d281c54`）
+
 ---
 
 ## [2.3.1] - 2026-05-09
