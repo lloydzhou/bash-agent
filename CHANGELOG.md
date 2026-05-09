@@ -6,9 +6,19 @@
 
 ## [Unreleased]
 
-### Added
+---
 
-- fix(go,rust): Go/Rust 入口显示 OSC 终端标题（`f765480`）
+## [2.3.1] - 2026-05-09
+
+### Fixed
+
+- **管道破裂静默退出**：Bash 版 `claude_sse.awk` END 块增加兜底——未收到 `message_stop` 时自动输出 `ERROR + STOP`，防止 `agent_loop_stream` 无错误静默退出（`ecf5d9d`）
+- **OSC 终端标题**：Go/Rust 入口显示 OSC 终端标题（`f765480`）
+
+### Docs
+
+- 新增 `CHANGELOG.md`，覆盖 v0.7.0 → v2.3.0 全部 21 个 tag（`efd65fb`）
+- 新增 `docs/ROADMAP.md`，标注适用范围与 bash-only 限制（`cff77b6`）
 
 ---
 
