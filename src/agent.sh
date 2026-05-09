@@ -11,7 +11,7 @@ MODEL=""
 MAX_TOKENS=4096
 SUMMARY_MAX_TOKENS=1024
 TOOL_TIMEOUT_SECS=600
-: "${TOOL_RESULT_MAX_BYTES:=50000}"
+: "${TOOL_RESULT_MAX_BYTES:=100000}"
 FILE_WRITE_MAX_BYTES=1048576
 OUTPUT_FORMAT="human"
 VERBOSE=false
@@ -41,6 +41,7 @@ SESSION_ID=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 PLAN_FILE=""
+PLAN_DRAFT_FILE=""
 STATS_FILE=""
 LOG_EVENTS=true
 
@@ -51,8 +52,6 @@ API_URL=""
 AWK_DIR=""
 declare -a HEADER_ARGS=()
 INTERRUPT_REQUESTED=false
-ESC_LISTENER_PID=""
-ESC_LISTENER_FLAG=""
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
 
@@ -220,19 +219,6 @@ tool_call_summary() {
     else
         printf '%s' "$name"
     fi
-}
-
-clear_interrupt_state() {
-    INTERRUPT_REQUESTED=false
-    if [[ -n "${ESC_LISTENER_FLAG:-}" && -f "${ESC_LISTENER_FLAG:-}" ]]; then
-        : > "$ESC_LISTENER_FLAG"
-    fi
-}
-
-interrupt_requested() {
-    [[ "$INTERRUPT_REQUESTED" == true ]] && return 0
-    [[ -n "${ESC_LISTENER_FLAG:-}" && -s "${ESC_LISTENER_FLAG:-}" ]] && return 0
-    return 1
 }
 
 run_with_timeout() {
@@ -460,7 +446,7 @@ build_system_prompt() {
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
     tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
-    plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Step-by-step**:\n  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. After user confirms, create TodoWrite checklist based on plan\n  4. Execute tasks following todo checklist (update progress in TodoWrite)\n  5. When all tasks complete, use PlanClear tool to clear plan and compact context\n- **Plan vs Todo separation**:\n  - PLAN_FILE: planning document for analysis and strategy\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan file\n- **PLAN_FILE**: '${PLAN_FILE:-<not set>}
+    plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n- **Step-by-step**:\n  1. Write draft to PLAN_DRAFT_FILE using Edit (markdown: goal, analysis, steps, notes)\n  2. Ask user to confirm the plan before execution\n  3. If user requests changes: update PLAN_DRAFT_FILE, ask for confirmation again. Repeat until user explicitly confirms.\n  4. If user explicitly cancels/abandons: use Bash to clear PLAN_DRAFT_FILE (e.g. `: > PLAN_DRAFT_FILE`). Do NOT use PlanClear.\n  5. When user confirms: call PlanConfirm tool — this moves draft → PLAN_FILE and triggers a context compaction (cache invalidation is already happening, so we reclaim space at the same time).\n  6. After PlanConfirm, create TodoWrite checklist based on plan\n  7. Execute tasks following todo checklist (update progress in TodoWrite)\n  8. When all tasks complete, use PlanClear tool to clear plan and compact context\n- **Plan vs Todo separation**:\n  - PLAN_FILE: locked-in plan (only written via PlanConfirm)\n  - PLAN_DRAFT_FILE: working draft during planning (safe to edit freely)\n  - TodoWrite: execution checklist for real-time progress tracking\n  - Do NOT mix todo checkboxes into plan files\n- **Files**:\n  - PLAN_DRAFT_FILE: '${PLAN_DRAFT_FILE:-<not set>}'\n  - PLAN_FILE: '${PLAN_FILE:-<not set>}
 
     instruction_files=$(build_instruction_files_section)
     skill_index=$(build_skill_index_section)
@@ -632,13 +618,6 @@ build_assistant_content_json() {
     printf '%s' "$content"
 }
 
-cleanup() {
-    stop_esc_interrupt_listener
-    clear_interrupt_state
-}
-trap cleanup EXIT
-trap 'INTERRUPT_REQUESTED=true; [[ -n "${ESC_LISTENER_FLAG:-}" ]] && printf 1 > "$ESC_LISTENER_FLAG"' USR1
-
 find_awk_dir() {
     if [[ -n "${AWK_DIR:-}" ]]; then
         [[ -d "$AWK_DIR" ]] && return
@@ -708,6 +687,7 @@ conv_init() {
     SESSION_EVENT_FILE="${session_dir}/events.jsonl"
     CONTEXT_SUMMARY_FILE="${session_dir}/summary.txt"
     PLAN_FILE="${session_dir}/plan.md"
+    PLAN_DRAFT_FILE="${session_dir}/plan.draft"
     STATS_FILE="${session_dir}/stats.json"
     local new_session=false
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
@@ -715,6 +695,7 @@ conv_init() {
     touch "$SESSION_EVENT_FILE"
     touch "$CONTEXT_SUMMARY_FILE"
     touch "$PLAN_FILE"
+    touch "$PLAN_DRAFT_FILE"
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
@@ -866,15 +847,15 @@ compact_context_window() {
     # DP 返回 0（不值得）或 ≥ total_lines（全保留）→ 都算"不压缩"，进入 fallback
     if (( keep_lines == 0 )) || (( keep_lines >= total_lines && total_lines > 0 )); then
         local ct=$(stats_get 7)
-        if [[ "$trigger" == "plan_clear" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
+        if [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
             keep_lines=$(compact_turn_keep)
         else
             return 1
         fi
     fi
 
-    # 统一 guard：keep >= total 时只有 plan_clear 继续（drop=0，plan 照清）
-    (( keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" ]] || return 1
+    # 统一 guard：keep >= total 时只有 plan_clear/plan_confirm 继续
+    (( keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || return 1
     drop=$(( total_lines - keep_lines ))
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
@@ -1032,6 +1013,18 @@ tool_skill() {
     printf 'Skill: %s\n%s' "$skill_name" "$skill_content"
 }
 
+tool_plan_confirm() {
+    # 将 draft 移至正式 plan，触发 compact（plan 写入 system prompt 会使缓存失效，趁机 compact）
+    if [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; then
+        mv "$PLAN_DRAFT_FILE" "$PLAN_FILE"
+        : > "$PLAN_DRAFT_FILE"   # 重新创建空 draft，供下次规划使用
+        compact_context_window plan_confirm
+        printf 'Plan confirmed and locked in.'
+    else
+        printf 'Error: no plan draft found to confirm.'
+    fi
+}
+
 tool_plan_clear() {
     compact_context_window plan_clear
     [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"
@@ -1052,6 +1045,7 @@ dispatch_tool() {
         Glob)      tool_glob "$arg1" "$arg2" ;;
         Grep)      tool_grep "$arg1" "$arg2" "$arg3" "$arg4" ;;
         TodoWrite) printf '%s' "$arg1" ;;
+        PlanConfirm) tool_plan_confirm ;;
         PlanClear) tool_plan_clear ;;
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
@@ -1122,7 +1116,7 @@ agent_loop_stream() {
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
         while read_message; do
-            if interrupt_requested; then
+            if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
                 break
             fi
@@ -1195,7 +1189,7 @@ agent_loop_stream() {
         esac
 
         # Tools already executed inline; persist unless interrupted
-        if ! interrupt_requested; then
+        if [[ "$INTERRUPT_REQUESTED" != true ]]; then
             conv_add_assistant "$text" "$thinking" "$tool_calls"
             if [[ -n "$tool_conv_results" ]]; then
                 conv_add_tool_results "$tool_conv_results"
@@ -1225,7 +1219,10 @@ agent_loop() {
     local user_input="$1" had_error=false
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
-    start_esc_interrupt_listener  # stop/clear before start
+    INTERRUPT_REQUESTED=false
+
+    # Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
+    trap 'INTERRUPT_REQUESTED=true' INT
 
     # Record user input event
     [[ "$LOG_EVENTS" != "false" ]] && \
@@ -1259,7 +1256,6 @@ agent_loop() {
         fi
     done < <(agent_loop_stream "$user_input")
 
-    stop_esc_interrupt_listener
     $had_error && return 1
     return 0
 }
@@ -1436,7 +1432,6 @@ interactive_mode() {
     touch "$history_file" 2>/dev/null || true
 
     history -r "$history_file" 2>/dev/null || true
-    trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
 
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
@@ -1456,6 +1451,7 @@ interactive_mode() {
         [[ -n "$_match" ]] && printf "\n"
     fi
     while true; do
+        trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
         stty echo 2>/dev/null || true
         IFS= read -e -r -p $'\001\033[32m\002> \001\033[0m\002' user_input || break
         [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
@@ -1471,33 +1467,6 @@ interactive_mode() {
     fi
 }
 
-start_esc_interrupt_listener() {
-    [[ "$INTERACTIVE" == true ]] || return 0
-    [[ -r /dev/tty ]] || return 0
-    clear_interrupt_state
-    stop_esc_interrupt_listener
-    ESC_LISTENER_FLAG=$(mktemp "${TMPDIR:-/tmp}/agent-esc.XXXXXX")
-    (
-        local c
-        while [[ -f "$ESC_LISTENER_FLAG" ]]; do
-            if IFS= read -r -s -n 1 -t 1 c < /dev/tty; then
-                [[ "$c" == $'\e' ]] && kill -USR1 "$$" 2>/dev/null || true
-            fi
-        done
-    ) &
-    ESC_LISTENER_PID=$!
-}
-
-stop_esc_interrupt_listener() {
-    if [[ -n "${ESC_LISTENER_FLAG:-}" ]]; then
-        rm -f "$ESC_LISTENER_FLAG" 2>/dev/null || true
-        ESC_LISTENER_FLAG=""
-    fi
-    if [[ -n "${ESC_LISTENER_PID:-}" ]]; then
-        wait "$ESC_LISTENER_PID" 2>/dev/null || true
-        ESC_LISTENER_PID=""
-    fi
-}
 
 main() {
     parse_args "$@"

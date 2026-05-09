@@ -62,7 +62,7 @@ func Default() Config {
 		MaxTokens:          4096,
 		SummaryMaxTokens:   1024,
 		ToolTimeoutSecs:    600,
-		ToolResultMaxBytes: 50000,
+		ToolResultMaxBytes: 100000,
 		FileWriteMaxBytes:  1048576,
 		OutputFormat:       OutputHuman,
 		MaxTurns:           40,

@@ -53,7 +53,7 @@ impl Default for Config {
             max_tokens: 4096,
             summary_max_tokens: 1024,
             tool_timeout_secs: 600,
-            tool_result_max_bytes: 50_000,
+            tool_result_max_bytes: 100_000,
             file_write_max_bytes: 1_048_576,
             output_format: OutputFormat::Human,
             verbose: false,

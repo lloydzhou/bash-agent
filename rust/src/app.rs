@@ -19,8 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 type TransportRef = Arc<dyn crate::transport::Transport>;
 
@@ -75,8 +74,6 @@ struct Runtime {
     http: StreamClient,
     transport: TransportRef,
     interrupted: Arc<AtomicBool>,
-    esc_stop: Option<Arc<AtomicBool>>,
-    esc_thread: Option<JoinHandle<()>>,
     last_context_tokens: usize,
     last_input_tokens: usize,
     last_output_tokens: usize,
@@ -180,6 +177,7 @@ impl Runtime {
             &paths.summary,
             &paths.todo,
             &paths.plan,
+            &paths.plan_draft,
         ] {
             touch(f)?;
         }
@@ -214,8 +212,6 @@ impl Runtime {
             http: StreamClient::new()?,
             transport,
             interrupted,
-            esc_stop: None,
-            esc_thread: None,
             last_context_tokens: 0,
             last_input_tokens: 0,
             last_output_tokens: 0,
@@ -288,7 +284,13 @@ impl Runtime {
 
     fn agent_loop_stream(&mut self, user_input: String) -> Result<()> {
         self.interrupted.store(false, Ordering::SeqCst);
-        self.start_esc_interrupt_listener();
+
+        // Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
+        let interrupted = self.interrupted.clone();
+        ctrlc::set_handler(move || {
+            interrupted.store(true, Ordering::SeqCst);
+        }).ok(); // Ignore error if handler already set
+
         let result = (|| -> Result<()> {
             self.conv.add_user(&user_input)?;
             self.append_event(json!({"type":"user_input","content":user_input}))?;
@@ -371,6 +373,21 @@ impl Runtime {
                                 let _ = self.compact_context_window("plan_clear");
                                 let _ = fs::write(&self.paths.plan, "");
                                 output = "Plan cleared.".to_string();
+                            }
+
+                            if call.name == "PlanConfirm" {
+                                // Move draft → plan, trigger compact
+                                match fs::read(&self.paths.plan_draft) {
+                                    Ok(data) if !data.is_empty() => {
+                                        let _ = fs::write(&self.paths.plan, &data);
+                                        let _ = fs::write(&self.paths.plan_draft, "");
+                                        let _ = self.compact_context_window("plan_confirm");
+                                        output = "Plan confirmed and locked in.".to_string();
+                                    }
+                                    _ => {
+                                        output = "Error: no plan draft found to confirm.".to_string();
+                                    }
+                                }
                             }
 
                             let mut conv_content = String::new();
@@ -481,7 +498,6 @@ impl Runtime {
             self.error(&format!("Max turns ({}) reached", self.cfg.max_turns));
             Ok(())
         })();
-        self.stop_esc_interrupt_listener();
         result
     }
 
@@ -647,6 +663,7 @@ impl Runtime {
             skills: self.cfg.skills.clone(),
             summary_file: self.paths.summary.clone(),
             plan_file: self.paths.plan.clone(),
+            plan_draft_file: self.paths.plan_draft.clone(),
         }
         .build_system_prompt()?;
 
@@ -703,51 +720,6 @@ impl Runtime {
         })
     }
 
-    fn start_esc_interrupt_listener(&mut self) {
-        if !self.cfg.interactive {
-            return;
-        }
-        if !Path::new("/dev/tty").exists() {
-            return;
-        }
-        self.stop_esc_interrupt_listener();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_flag = stop.clone();
-        let interrupted = self.interrupted.clone();
-        let handle = std::thread::spawn(move || {
-            use crossterm::event::{self, Event, KeyCode};
-            use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-            if enable_raw_mode().is_err() {
-                return;
-            }
-            while !stop_flag.load(Ordering::SeqCst) {
-                match event::poll(Duration::from_millis(100)) {
-                    Ok(true) => {
-                        if let Ok(Event::Key(key)) = event::read() {
-                            if key.code == KeyCode::Esc {
-                                interrupted.store(true, Ordering::SeqCst);
-                            }
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(_) => break,
-                }
-            }
-            let _ = disable_raw_mode();
-        });
-        self.esc_stop = Some(stop);
-        self.esc_thread = Some(handle);
-    }
-
-    fn stop_esc_interrupt_listener(&mut self) {
-        if let Some(stop) = self.esc_stop.take() {
-            stop.store(true, Ordering::SeqCst);
-        }
-        if let Some(handle) = self.esc_thread.take() {
-            let _ = handle.join();
-        }
-    }
-
     fn compact_context_window(&mut self, trigger: &str) -> Result<bool> {
         let stats = self.read_stats();
         let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
@@ -786,7 +758,7 @@ impl Runtime {
             || keep_lines.map_or(false, |k| k >= total_lines && total_lines > 0);
         if needs_fallback {
             // DP 认为不值得或全保留 → trigger 或 safety valve 触发时 fallback
-            let should_compact = trigger == "plan_clear"
+            let should_compact = trigger == "plan_clear" || trigger == "plan_confirm"
                 || (context_tokens > 0
                     && context_tokens > self.cfg.max_context_tokens * 90 / 100);
             if should_compact {
@@ -800,8 +772,8 @@ impl Runtime {
             Some(v) => v,
             None => return Ok(false),
         };
-        // 统一 guard：keep >= total 时只有 plan_clear 继续
-        if k >= total_lines && trigger != "plan_clear" {
+        // 统一 guard：keep >= total 时只有 plan_clear/plan_confirm 继续
+        if k >= total_lines && trigger != "plan_clear" && trigger != "plan_confirm" {
             return Ok(false);
         }
         let drop = total_lines - k;
@@ -848,6 +820,7 @@ impl Runtime {
             skills: self.cfg.skills.clone(),
             summary_file: self.paths.summary.clone(),
             plan_file: self.paths.plan.clone(),
+            plan_draft_file: self.paths.plan_draft.clone(),
         }
         .build_system_prompt()?;
 

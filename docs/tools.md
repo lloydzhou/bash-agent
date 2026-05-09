@@ -94,6 +94,25 @@
 - 状态保存在 session 目录的 `todo.md`
 - `status` 取值：`pending` / `in_progress` / `completed`
 
+## `PlanConfirm`
+
+确认并锁定当前 plan draft。
+
+无参数。
+
+- 仅在用户明确确认 plan 时调用
+- 将 `plan.draft` 移至 `plan.md` 并触发上下文压缩
+- 不要在规划阶段或用户要求修改时调用
+
+## `PlanClear`
+
+清空当前 plan。
+
+无参数。
+
+- 在 plan 执行完毕、所有任务完成后调用
+- 调用后 system prompt 中不再包含 plan section
+
 ## `Skill`
 
 按需加载 skill。

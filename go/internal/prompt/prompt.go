@@ -9,11 +9,12 @@ import (
 )
 
 type Builder struct {
-	Cwd         string
-	Home        string
-	Skills      []string
-	SummaryFile string
-	PlanFile    string
+	Cwd            string
+	Home           string
+	Skills         []string
+	SummaryFile    string
+	PlanFile       string
+	PlanDraftFile  string
 }
 
 func (b Builder) BuildSystemPrompt() (string, error) {
@@ -49,18 +50,29 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	if planFile == "" {
 		planFile = "<not set>"
 	}
+	planDraftFile := b.PlanDraftFile
+	if planDraftFile == "" {
+		planDraftFile = "<not set>"
+	}
 	planLifecycleGuidance := fmt.Sprintf(`- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)
+- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.
 - **Step-by-step**:
-  1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)
+  1. Write draft to PLAN_DRAFT_FILE using Edit (markdown: goal, analysis, steps, notes)
   2. Ask user to confirm the plan before execution
-  3. After user confirms, create TodoWrite checklist based on plan
-  4. Execute tasks following todo checklist (update progress in TodoWrite)
-  5. When all tasks complete, clear plan: Bash ": > PLAN_FILE"
+  3. If user requests changes: update PLAN_DRAFT_FILE, ask for confirmation again. Repeat until user explicitly confirms.
+  4. If user explicitly cancels/abandons: use Bash to clear PLAN_DRAFT_FILE (e.g. `+"`: > PLAN_DRAFT_FILE`"+`). Do NOT use PlanClear.
+  5. When user confirms: call PlanConfirm tool — this moves draft → PLAN_FILE and triggers a context compaction (cache invalidation is already happening, so we reclaim space at the same time).
+  6. After PlanConfirm, create TodoWrite checklist based on plan
+  7. Execute tasks following todo checklist (update progress in TodoWrite)
+  8. When all tasks complete, use PlanClear tool to clear plan and compact context
 - **Plan vs Todo separation**:
-  - PLAN_FILE: planning document for analysis and strategy
+  - PLAN_FILE: locked-in plan (only written via PlanConfirm)
+  - PLAN_DRAFT_FILE: working draft during planning (safe to edit freely)
   - TodoWrite: execution checklist for real-time progress tracking
-  - Do NOT mix todo checkboxes into plan file
-- **PLAN_FILE**: %s`, planFile)
+  - Do NOT mix todo checkboxes into plan files
+- **Files**:
+  - PLAN_DRAFT_FILE: %s
+  - PLAN_FILE: %s`, planDraftFile, planFile)
 	sections = appendSection(sections, "plan-lifecycle-guidance", planLifecycleGuidance, "")
 	if section, err := b.buildInstructionFilesSection(); err != nil {
 		return "en_US", err

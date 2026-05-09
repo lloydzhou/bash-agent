@@ -7,15 +7,15 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	goprompt "github.com/joeycumines/go-prompt"
-	"golang.org/x/sys/unix"
-	"golang.org/x/term"
 
 	"github.com/lloydzhou/bash-agent/internal/assets"
 	"github.com/lloydzhou/bash-agent/internal/config"
@@ -42,10 +42,6 @@ type runtime struct {
 	conv                    conversation.Store
 	http                    httpclient.StreamClient
 	transport               transport.Transport
-	escTTY                  *os.File
-	escState                *term.State
-	escStop                 chan struct{}
-	escDone                 chan struct{}
 	interrupted             atomic.Bool
 	lastContextTokens       int
 	lastInputTokens         int
@@ -172,7 +168,7 @@ func (rt *runtime) initState() error {
 		return err
 	}
 	newSession := !fileExists(rt.paths.Events)
-	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan} {
+	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan, rt.paths.PlanDraft} {
 		if err := touch(path); err != nil {
 			return err
 		}
@@ -524,8 +520,16 @@ type displayState struct {
 
 func (rt *runtime) agentLoopStream(userInput string) error {
 	rt.interrupted.Store(false)
-	rt.startEscInterruptListener()
-	defer rt.stopEscInterruptListener()
+
+	// Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT)
+	defer signal.Stop(sigChan)
+	go func() {
+		for range sigChan {
+			rt.interrupted.Store(true)
+		}
+	}()
 
 	if err := rt.conv.AddUser(userInput); err != nil {
 		return err
@@ -598,6 +602,19 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					_, _ = rt.compactContextWindow("plan_clear")
 					_ = os.WriteFile(rt.paths.Plan, []byte{}, 0o644)
 					output = "Plan cleared."
+				}
+
+				if e.Name == "PlanConfirm" {
+					// Move draft → plan, trigger compact (plan in system prompt invalidates cache, so compact at same time)
+					draftData, err := os.ReadFile(rt.paths.PlanDraft)
+					if err == nil && len(draftData) > 0 {
+						_ = os.WriteFile(rt.paths.Plan, draftData, 0o644)
+						_ = os.WriteFile(rt.paths.PlanDraft, []byte{}, 0o644) // Reset draft
+						_, _ = rt.compactContextWindow("plan_confirm")
+						output = "Plan confirmed and locked in."
+					} else {
+						output = "Error: no plan draft found to confirm."
+					}
 				}
 
 				var convContent string
@@ -764,11 +781,12 @@ func (rt *runtime) buildLLMRequest() ([]byte, error) {
 		return nil, fmt.Errorf("build_request: %w", err)
 	}
 	systemPrompt, err := prompt.Builder{
-		Cwd:         rt.cwd,
-		Home:        rt.home,
-		Skills:      rt.cfg.Skills,
-		SummaryFile: rt.paths.Summary,
-		PlanFile:    rt.paths.Plan,
+		Cwd:           rt.cwd,
+		Home:          rt.home,
+		Skills:        rt.cfg.Skills,
+		SummaryFile:   rt.paths.Summary,
+		PlanFile:      rt.paths.Plan,
+		PlanDraftFile: rt.paths.PlanDraft,
 	}.BuildSystemPrompt()
 	if err != nil {
 		return nil, fmt.Errorf("build_request: %w", err)
@@ -991,89 +1009,6 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 	return nil
 }
 
-func (rt *runtime) startEscInterruptListener() {
-	if !rt.cfg.Interactive {
-		return
-	}
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return
-	}
-	rt.stopEscInterruptListener()
-	oldState, err := term.MakeRaw(int(tty.Fd()))
-	if err != nil {
-		_ = tty.Close()
-		return
-	}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	rt.escTTY = tty
-	rt.escState = oldState
-	rt.escStop = stop
-	rt.escDone = done
-
-	go func() {
-		defer close(done)
-		fd := int(tty.Fd())
-		buf := make([]byte, 1)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-
-			var readfds unix.FdSet
-			readfds.Set(fd)
-			timeout := unix.Timeval{Sec: 0, Usec: 100000} // 100ms
-			n, err := unix.Select(fd+1, &readfds, nil, nil, &timeout)
-			if err != nil {
-				if errors.Is(err, unix.EINTR) {
-					continue
-				}
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				return
-			}
-			if n == 0 || !readfds.IsSet(fd) {
-				continue
-			}
-			n, err = unix.Read(fd, buf)
-			if err != nil {
-				if errors.Is(err, unix.EINTR) || errors.Is(err, unix.EAGAIN) {
-					continue
-				}
-				return
-			}
-			if n == 1 && buf[0] == 0x1b {
-				rt.interrupted.Store(true)
-			}
-		}
-	}()
-}
-
-func (rt *runtime) stopEscInterruptListener() {
-	if rt.escStop != nil {
-		close(rt.escStop)
-		rt.escStop = nil
-	}
-	if rt.escDone != nil {
-		<-rt.escDone
-		rt.escDone = nil
-	}
-	if rt.escTTY != nil && rt.escState != nil {
-		_ = term.Restore(int(rt.escTTY.Fd()), rt.escState)
-		rt.escState = nil
-	}
-	if rt.escTTY != nil {
-		_ = rt.escTTY.Close()
-		rt.escTTY = nil
-	}
-}
-
 func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 	stats := rt.readStats()
 	contextTokens := int(statsFloat64(stats, "current_context_tokens"))
@@ -1112,7 +1047,7 @@ func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 
 	// DP 返回 0 或 ≥ totalLines → 都算"不压缩"，进入 fallback
 	if keepLines == 0 || (keepLines >= totalLines && totalLines > 0) {
-		shouldCompact := trigger == "plan_clear" || (contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100)
+		shouldCompact := trigger == "plan_clear" || trigger == "plan_confirm" || (contextTokens > 0 && contextTokens > rt.cfg.MaxContextTokens*90/100)
 		if shouldCompact {
 			keepLines, err = rt.conv.CompactTurnKeep(dpCfg.MinKeepRatio)
 			if err != nil || keepLines <= 0 {
@@ -1123,8 +1058,8 @@ func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 		}
 	}
 
-	// 统一 guard：keep >= total 时只有 plan_clear 继续
-	if keepLines >= totalLines && trigger != "plan_clear" {
+	// 统一 guard：keep >= total 时只有 plan_clear/plan_confirm 继续
+	if keepLines >= totalLines && trigger != "plan_clear" && trigger != "plan_confirm" {
 		return false, nil
 	}
 	drop := totalLines - keepLines
@@ -1176,11 +1111,12 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 	lines = append(lines, msg)
 
 	systemPrompt, err := prompt.Builder{
-		Cwd:         rt.cwd,
-		Home:        rt.home,
-		Skills:      rt.cfg.Skills,
-		SummaryFile: rt.paths.Summary,
-		PlanFile:    rt.paths.Plan,
+		Cwd:           rt.cwd,
+		Home:          rt.home,
+		Skills:        rt.cfg.Skills,
+		SummaryFile:   rt.paths.Summary,
+		PlanFile:      rt.paths.Plan,
+		PlanDraftFile: rt.paths.PlanDraft,
 	}.BuildSystemPrompt()
 	if err != nil {
 		return "", fmt.Errorf("build_system_prompt: %w", err)

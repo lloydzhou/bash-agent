@@ -123,6 +123,7 @@ session 数据按当前项目目录归档：
     events.jsonl
     summary.txt
     plan.md
+    plan.draft
     stats.json
 ```
 
@@ -135,7 +136,9 @@ session 数据按当前项目目录归档：
 - `summary.txt`
   - compact 后留下的历史摘要
 - `plan.md`
-  - 当前 session 的计划文档，由 `plan-lifecycle-guidance` 机制维护
+  - 当前 session 的已确认计划文档，由 `plan-lifecycle-guidance` 机制维护
+- `plan.draft`
+  - 规划阶段的工作草稿，确认后通过 `PlanConfirm` 工具移至 `plan.md`
 - `stats.json`
   - session 统计数据（LLM 调用次数、输入 token 总量、compact 次数、当前 turn 等）
 
@@ -158,13 +161,18 @@ $$
 - 否则不压缩
 - 安全阀：当 DP 说不压缩但 `current_context > max_context × 90%` 时，强制压缩
 
-#### Force Compact / PlanClear
+#### Force Compact / PlanConfirm / PlanClear
 
-当用户手动触发 `PlanClear` 工具时，跳过 DP 决策，以 `DP_MIN_KEEP_RATIO`（默认 0.3）计算 turn-aligned 保留行数，执行压缩并清空 plan 文件。三步：
+Plan 相关的两个工具都会跳过 DP 决策，以 `DP_MIN_KEEP_RATIO`（默认 0.3）计算 turn-aligned 保留行数，执行缓存对齐摘要 + 裁切：
+
+- **`PlanConfirm`** — 用户确认 plan 时调用：将 `plan.draft` 移至 `plan.md`，触发 force compact
+- **`PlanClear`** — plan 执行完毕时调用：清空 `plan.md`，触发 force compact
+
+三步：
 
 1. **`compact_turn_keep()`** — 扫描 conversation 中的 user 消息（匹配 `{"role":"user","content":"`），从末尾按 ratio 保留完整 turn
 2. **`compact_context_window(force=true)`** — 用 turn keep 结果执行缓存对齐摘要 + 裁切
-3. **清理 plan 文件** — `printf '' > "$PLAN_FILE"`
+3. **`PlanConfirm`**：`mv plan.draft → plan.md` + 重建空 draft；**`PlanClear`**：`printf '' > plan.md`
 
 Safety valve 也改用 `compact_turn_keep()` 实现 turn 对齐（替换原简单比例计算），确保 tool_result 不会被误算为 user turn。
 
@@ -267,7 +275,7 @@ system prompt 首尾都是语言约束，中间内容无论多长、是否变化
 
 `using-your-tools` 指导模型如何正确使用各内置 tool。
 
-`plan-lifecycle-guidance` 为复杂多步任务提供规划工作流（写 PLAN_FILE → 确认 → TodoWrite checklist → 执行 → PlanClear 清空 plan），由 `PLAN_FILE` 环境变量标识当前 session 的 plan 路径。PLAN_FILE 清空后，system prompt 中的 plan section 会消失。
+`plan-lifecycle-guidance` 为复杂多步任务提供两阶段规划工作流：规划阶段写入 `plan.draft`（不进入 system prompt，不影响缓存）→ 用户确认后通过 `PlanConfirm` 工具将 draft 移至 `plan.md`（触发 compact，乘缓存失效之机回收上下文窗口）→ TodoWrite checklist → 执行 → `PlanClear` 清空 plan 并 compact。由 `PLAN_DRAFT_FILE` 和 `PLAN_FILE` 环境变量标识路径。`PlanClear` 后，system prompt 中的 plan section 会消失。
 
 ### 4. Skills
 
@@ -347,6 +355,7 @@ skills 当前优先读取：
 - `Glob`
 - `Grep`
 - `TodoWrite`
+- `PlanConfirm` — 确认 plan draft，将 draft 移至 plan.md 并触发 force compact（乘缓存失效之机回收上下文窗口）
 - `PlanClear` — 清空 plan 并触发 force compact（跳过 DP 决策，保留最后 `DP_MIN_KEEP_RATIO` 比例的完整 turn）
 - `Skill`
 - `WebSearch`

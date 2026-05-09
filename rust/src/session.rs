@@ -11,6 +11,7 @@ pub struct Paths {
     pub summary: PathBuf,
     pub todo: PathBuf,
     pub plan: PathBuf,
+    pub plan_draft: PathBuf,
     pub stats: PathBuf,
 }
 
@@ -44,6 +45,7 @@ pub fn paths_for(home: &Path, cwd: &Path, session_id: &str) -> Paths {
         summary: session_dir.join("summary.txt"),
         todo: session_dir.join("todo.md"),
         plan: session_dir.join("plan.md"),
+        plan_draft: session_dir.join("plan.draft"),
         stats: session_dir.join("stats.json"),
     }
 }
