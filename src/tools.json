@@ -152,8 +152,16 @@
     }
   },
   {
+    "name": "PlanConfirm",
+    "description": "Confirm and lock in the current plan draft. Call this ONLY when the user explicitly confirms the plan. Do NOT call this during drafting or when the user requests changes — only on explicit confirmation.",
+    "input_schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
     "name": "PlanClear",
-    "description": "Clear the current plan and compact context. Call this when the current plan is fully completed. This triggers a context compaction to preserve conversation history as a summary, reducing future costs. After calling this, the system prompt will no longer include the plan section.",
+    "description": "Clear the current plan. Call this when the current plan is fully completed and all tasks are done. After calling this, the system prompt will no longer include the plan section.",
     "input_schema": {
       "type": "object",
       "properties": {}
