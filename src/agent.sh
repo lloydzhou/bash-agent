@@ -1086,19 +1086,20 @@ llm_call() {
 }
 
 run_summary_call() {
-    local dropped_messages="$1" text="" messages summary_instruction=$'The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:'
+    local dropped_messages="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:'
     messages=$(conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(json_escape "$summary_instruction")\"}")
 
     while read_message; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
             THINKING) ;;
-            USAGE) record_usage "compact" 2 >/dev/null ;;
-            ERROR) die "${REPLY_MESSAGE[1]}" ;;
+            USAGE) record_usage "compact" 2>/dev/null ;;
+            ERROR) last_error="${REPLY_MESSAGE[1]}" ;;
+            STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
     done < <(llm_call "$messages" "$SUMMARY_MAX_TOKENS" "$THINKING_BUDGET")
 
-    [[ -n "$text" ]] || die "Failed to generate context summary"
+    [[ -n "$text" ]] || die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
     printf '%s' "$text"
 }
 
