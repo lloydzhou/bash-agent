@@ -812,7 +812,7 @@ impl Runtime {
         // Build messages: dropped conversation lines + summary instruction
         // Cache-Aligned Summarization: uses same system prompt + tools +
         // thinking as normal requests for prefix cache hit.
-        let summary_instruction = "The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:";
+        let summary_instruction = "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:";
         let mut messages: Vec<Value> = dropped_lines.to_vec();
         messages.push(json!({"role":"user","content":summary_instruction}));
 
@@ -831,7 +831,7 @@ impl Runtime {
             &messages,
             &self.tools_json,
             &system_prompt,
-            self.cfg.summary_max_tokens,
+            self.cfg.max_tokens,
             self.cfg.thinking_budget,
         )?;
         let body = self.transport.convert_body(&claude_body)?;
@@ -845,6 +845,8 @@ impl Runtime {
             }
         };
         let mut out = String::new();
+        let mut last_error = String::new();
+        let mut stop_reason = String::new();
         let mut parse_emit = |evt: Event| -> Result<()> {
             match evt {
                 Event::Text(TextEvent { content }) => out.push_str(&content),
@@ -895,14 +897,19 @@ impl Runtime {
                     );
                     self.write_stats(&stats);
                 }
-                Event::Error(ErrorEvent { message }) => return Err(anyhow!(message)),
+                Event::Error(ErrorEvent { message }) => { last_error = message.clone(); },
+                Event::Stop(StopEvent { reason }) => { stop_reason = reason.clone(); },
                 _ => {}
             }
             Ok(())
         };
         self.transport.parse_sse(Box::new(resp), &mut parse_emit)?;
         if out.is_empty() {
-            bail!("failed to generate context summary");
+            bail!(
+                "failed to generate context summary: empty text response (stop_reason={}, error={})",
+                if stop_reason.is_empty() { "none" } else { &stop_reason },
+                if last_error.is_empty() { "none" } else { &last_error }
+            );
         }
         Ok(out)
     }

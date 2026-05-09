@@ -21,7 +21,6 @@ type Config struct {
 	Provider           string
 	Model              string
 	MaxTokens          int
-	SummaryMaxTokens   int
 	ToolTimeoutSecs    int
 	ToolResultMaxBytes int
 	FileWriteMaxBytes  int
@@ -60,7 +59,6 @@ func Default() Config {
 	return Config{
 		Provider:           "claude",
 		MaxTokens:          4096,
-		SummaryMaxTokens:   1024,
 		ToolTimeoutSecs:    600,
 		ToolResultMaxBytes: 100000,
 		FileWriteMaxBytes:  1048576,

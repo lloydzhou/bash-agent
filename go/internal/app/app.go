@@ -1097,11 +1097,18 @@ func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 	return true, nil
 }
 
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
 func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error) {
 	// Build messages: dropped conversation lines + summary instruction
 	// Cache-Aligned Summarization: uses same system prompt + tools +
 	// thinking as normal requests for prefix cache hit.
-	summaryInstruction := "The conversation context above needs to be compacted. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:"
+	summaryInstruction := "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:"
 	msg, err := json.Marshal(map[string]any{
 		"role":    "user",
 		"content": summaryInstruction,
@@ -1124,7 +1131,7 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 	if err != nil {
 		return "", fmt.Errorf("build_system_prompt: %w", err)
 	}
-	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.SummaryMaxTokens, rt.cfg.ThinkingBudget)
+	claudeBody, err := provider.BuildClaudeRequest(rt.cfg, lines, rt.toolsJSON, systemPrompt, rt.cfg.MaxTokens, rt.cfg.ThinkingBudget)
 	if err != nil {
 		return "", fmt.Errorf("build_summary_request: %w", err)
 	}
@@ -1145,6 +1152,7 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 	}
 	defer respBody.Close()
 	var b strings.Builder
+	var lastError, stopReason string
 	parserEmit := func(evt protocol.Event) error {
 		switch e := evt.(type) {
 		case protocol.TextEvent:
@@ -1152,7 +1160,9 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 		case protocol.UsageEvent:
 			_ = rt.recordUsage("compact", "compact_request_count", e)
 		case protocol.ErrorEvent:
-			return fmt.Errorf("%s", e.Message)
+			lastError = e.Message
+		case protocol.StopEvent:
+			stopReason = e.Reason
 		}
 		return nil
 	}
@@ -1160,7 +1170,9 @@ func (rt *runtime) runSummaryCall(droppedLines []json.RawMessage) (string, error
 		return "", fmt.Errorf("sse_parse: %w", err)
 	}
 	if b.Len() == 0 {
-		return "", errors.New("failed to generate context summary")
+		return "", fmt.Errorf("failed to generate context summary: empty text response (stop_reason=%s, error=%s)",
+			orDefault(stopReason, "none"),
+			orDefault(lastError, "none"))
 	}
 	return b.String(), nil
 }
