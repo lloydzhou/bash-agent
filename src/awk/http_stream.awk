@@ -55,6 +55,5 @@ END {
         if (error_body == "") error_body = "(empty)"
         printf "ERROR:%s\tHTTP %s: %s\n", http_code, http_code, error_body
         fflush()
-        exit 1
     }
 }
