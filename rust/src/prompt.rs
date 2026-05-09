@@ -9,6 +9,7 @@ pub struct Builder {
     pub skills: Vec<String>,
     pub summary_file: PathBuf,
     pub plan_file: PathBuf,
+    pub plan_draft_file: PathBuf,
 }
 
 impl Builder {
@@ -58,20 +59,32 @@ impl Builder {
         } else {
             self.plan_file.display().to_string()
         };
+        let plan_draft_file_display = if self.plan_draft_file.as_os_str().is_empty() {
+            "<not set>".to_string()
+        } else {
+            self.plan_draft_file.display().to_string()
+        };
         let plan_lifecycle_guidance = format!(
             "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n\
+             - **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n\
              - **Step-by-step**:\n\
-               1. Write plan to PLAN_FILE using Edit (markdown: goal, analysis, steps, notes)\n\
+               1. Write draft to PLAN_DRAFT_FILE using Edit (markdown: goal, analysis, steps, notes)\n\
                2. Ask user to confirm the plan before execution\n\
-               3. After user confirms, create TodoWrite checklist based on plan\n\
-               4. Execute tasks following todo checklist (update progress in TodoWrite)\n\
-               5. When all tasks complete, clear plan: Bash \": > PLAN_FILE\"\n\
+               3. If user requests changes: update PLAN_DRAFT_FILE, ask for confirmation again. Repeat until user explicitly confirms.\n\
+               4. If user explicitly cancels/abandons: use Bash to clear PLAN_DRAFT_FILE (e.g. `: > PLAN_DRAFT_FILE`). Do NOT use PlanClear.\n\
+               5. When user confirms: call PlanConfirm tool — this moves draft → PLAN_FILE and triggers a context compaction (cache invalidation is already happening, so we reclaim space at the same time).\n\
+               6. After PlanConfirm, create TodoWrite checklist based on plan\n\
+               7. Execute tasks following todo checklist (update progress in TodoWrite)\n\
+               8. When all tasks complete, use PlanClear tool to clear plan and compact context\n\
              - **Plan vs Todo separation**:\n\
-               - PLAN_FILE: planning document for analysis and strategy\n\
+               - PLAN_FILE: locked-in plan (only written via PlanConfirm)\n\
+               - PLAN_DRAFT_FILE: working draft during planning (safe to edit freely)\n\
                - TodoWrite: execution checklist for real-time progress tracking\n\
-               - Do NOT mix todo checkboxes into plan file\n\
-             - **PLAN_FILE**: {}",
-            plan_file_display
+               - Do NOT mix todo checkboxes into plan files\n\
+             - **Files**:\n\
+               - PLAN_DRAFT_FILE: {}\n\
+               - PLAN_FILE: {}",
+            plan_draft_file_display, plan_file_display
         );
         sections.push(wrap_section(
             "plan-lifecycle-guidance",

@@ -1,7 +1,7 @@
 [
   {
     "name": "Read",
-    "description": "Read a file from the local filesystem. Use multiple Read calls if you need multiple files. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.\n\nIMPORTANT - Large file handling:\n- Tool results may be truncated for large files. If you need to search for specific content, use Grep instead — it returns only matching lines and never truncates.\n- Use Grep with context to get enough surrounding lines for Edit, avoiding a separate Read.\n- Use Read with offset/limit only when you already know the target line range (e.g. from a prior Grep).",
+    "description": "Read a file from the local filesystem. Use multiple Read calls if you need multiple files. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.\n\nIMPORTANT - Prefer Grep over Read:\n- When searching for specific content, ALWAYS use Grep first \u2014 it returns only matching lines, never truncates, and keeps context small.\n- Read loads entire files into context, which rapidly inflates token usage. Use it ONLY when you already know exactly which lines you need (e.g. after a Grep located the target), or when you must understand the full file structure.\n- Grep with context provides enough surrounding lines for Edit in most cases, eliminating the need for a separate Read.\n- If a Read result is truncated (you see a truncation notice), do NOT re-read the same range \u2014 use Grep to search instead.\n- Use Read with offset/limit only when you already know the target line range (e.g. from a prior Grep).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -18,7 +18,9 @@
           "description": "Number of lines to read. Only provide when reading a specific portion of the file."
         }
       },
-      "required": ["path"]
+      "required": [
+        "path"
+      ]
     }
   },
   {
@@ -36,12 +38,15 @@
           "description": "Content to write to the file"
         }
       },
-      "required": ["path", "content"]
+      "required": [
+        "path",
+        "content"
+      ]
     }
   },
   {
     "name": "Edit",
-    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, read the relevant portion of the file — use Read with offset/limit if you know the location, or use Grep with context to locate and capture the target text in one step. Copy the exact text before calling Edit.",
+    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, locate the exact text \u2014 prefer Grep with context to capture the target in one step; use Read with offset/limit only if you already know the exact line range. Copy the exact text before calling Edit.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -58,7 +63,11 @@
           "description": "The replacement text"
         }
       },
-      "required": ["path", "old_string", "new_string"]
+      "required": [
+        "path",
+        "old_string",
+        "new_string"
+      ]
     }
   },
   {
@@ -76,7 +85,9 @@
           "description": "Timeout in seconds. If the command exceeds this duration, it will be killed. Only use for commands expected to take a long time (e.g. build, test, server start). Default: uses --tool-timeout setting."
         }
       },
-      "required": ["command"]
+      "required": [
+        "command"
+      ]
     }
   },
   {
@@ -94,12 +105,14 @@
           "description": "Optional directory to search from. Defaults to ."
         }
       },
-      "required": ["pattern"]
+      "required": [
+        "pattern"
+      ]
     }
   },
   {
     "name": "Grep",
-    "description": "Search file contents with ripgrep. Supports regex patterns.\n- Use context to show surrounding lines — often enough for Edit without a separate Read\n- Use multiple Grep calls if you need multiple patterns",
+    "description": "Search file contents with ripgrep. Supports regex patterns.\n- Use context to show surrounding lines \u2014 often enough for Edit without a separate Read\n- Use multiple Grep calls if you need multiple patterns",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -120,7 +133,9 @@
           "description": "Number of lines before and after each match. Useful for getting enough context to Edit directly from Grep output."
         }
       },
-      "required": ["pattern"]
+      "required": [
+        "pattern"
+      ]
     }
   },
   {
@@ -144,16 +159,29 @@
                 "description": "Task status: pending, in_progress, or completed. Prefer exactly one in_progress item while actively working."
               }
             },
-            "required": ["content", "status"]
+            "required": [
+              "content",
+              "status"
+            ]
           }
         }
       },
-      "required": ["todos"]
+      "required": [
+        "todos"
+      ]
+    }
+  },
+  {
+    "name": "PlanConfirm",
+    "description": "Confirm and lock in the current plan draft. Call this ONLY when the user explicitly confirms the plan. Do NOT call this during drafting or when the user requests changes \u2014 only on explicit confirmation.",
+    "input_schema": {
+      "type": "object",
+      "properties": {}
     }
   },
   {
     "name": "PlanClear",
-    "description": "Clear the current plan and compact context. Call this when the current plan is fully completed. This triggers a context compaction to preserve conversation history as a summary, reducing future costs. After calling this, the system prompt will no longer include the plan section.",
+    "description": "Clear the current plan. Call this when the current plan is fully completed and all tasks are done. After calling this, the system prompt will no longer include the plan section.",
     "input_schema": {
       "type": "object",
       "properties": {}
@@ -170,7 +198,9 @@
           "description": "The skill name selected from the skill-index section of the prompt"
         }
       },
-      "required": ["name"]
+      "required": [
+        "name"
+      ]
     }
   },
   {
@@ -184,7 +214,9 @@
           "description": "The search query to use"
         }
       },
-      "required": ["query"]
+      "required": [
+        "query"
+      ]
     }
   },
   {
@@ -198,7 +230,9 @@
           "description": "The URL to fetch content from"
         }
       },
-      "required": ["url"]
+      "required": [
+        "url"
+      ]
     }
   }
 ]
