@@ -186,6 +186,9 @@ func (rt *runtime) initState() error {
 func (rt *runtime) interactiveMode() error {
 	_, _ = fmt.Fprintln(rt.stdout, "bash-agent interactive mode (type 'exit' or Ctrl+D to quit)")
 
+	// Show terminal title with stats (matches bash: stats_show_osc on entry)
+	rt.updateTermTitle()
+
 	// Replay recent turns for resumed sessions
 	rt.replayLastTurns()
 
