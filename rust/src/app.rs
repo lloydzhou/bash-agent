@@ -228,6 +228,8 @@ impl Runtime {
 
     fn interactive_mode(&mut self) -> Result<()> {
         self.info("bash-agent interactive mode (type 'exit' or Ctrl+D to quit)");
+        // Show terminal title with stats (matches bash: stats_show_osc on entry)
+        self.update_term_title();
         self.replay_last_turns();
         let history_path = self.home.join(".bash-agent/history");
         if let Some(parent) = history_path.parent() {

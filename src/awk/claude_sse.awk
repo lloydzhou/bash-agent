@@ -124,6 +124,12 @@ END {
     if (pending_stop_reason != "") {
         emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_read_tokens + 0); emit(pending_cache_creation_tokens + 0); emit_flush()
         emit1("STOP"); emit(pending_stop_reason); emit_flush()
+    } else {
+        # No message_stop received — emit an error STOP so the caller loop
+        # always terminates cleanly instead of silently exiting.
+        # Covers: curl timeout, connection reset, early termination, etc.
+        emit1("ERROR"); emit("Stream interrupted (no message_stop received)"); emit_flush()
+        emit1("STOP"); emit("error"); emit_flush()
     }
 }
 
