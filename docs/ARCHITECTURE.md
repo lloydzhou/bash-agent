@@ -141,6 +141,8 @@ session 数据按当前项目目录归档：
   - 规划阶段的工作草稿，确认后通过 `PlanConfirm` 工具移至 `plan.md`
 - `stats.json`
   - session 统计数据（LLM 调用次数、输入 token 总量、compact 次数、当前 turn 等）
+  - bash 版**不使用内存缓存**，每次 `stats_inc`/`stats_set`/`stats_get` 直接通过 `stats.awk action=update` 对文件做 read-modify-write。原因是 bash 的 `agent_loop_stream` 运行在 `<(…)` 子进程中，`$()` 命令替换会创建额外子 shell，bash 没有进程间共享变量的 IPC 机制——内存缓存在任何子进程场景下都无法同步，会导致数据丢失/归零。
+  - Go/Rust 版使用全局 `StatsCache` 结构体是合理的：它们运行在单进程多 goroutine/task 模型下，共享内存天然可用，配合读写锁即可安全并发。
 
 ### 2. Context / compact
 
