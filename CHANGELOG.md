@@ -17,8 +17,18 @@
 
 ### Fixed
 
-- **summary `record_usage` 参数丢失**：`run_summary_call` 中 `record_usage "compact" 2>/dev/null` 缺少空格，`2>/dev/null` 被解析为 stderr 重定向而非传参 `2`（counter_idx），导致 stats 文件损坏、PlanClear/compact 失败（`d281c54`）
 - **Edit 工具 `unbound variable`**：`tool_edit` 合并 local 声明时 `label="${path#/}"` 引用了同语句中尚未赋值的 `path`，在 `set -u` 模式下报错；改用 `${1#/}` 直接引用位置参数（`968f5b3`）
+- **缓存命中率计算**：修正公式为 `cache_read / (input + cache_read)`，之前误用 `cache_read / input` 导致超过 100%（`8e188f5`）
+
+---
+
+## [2.3.2] - 2026-05-10
+
+### Fixed
+
+- **summary 空文本响应**：`run_summary_call` 在 bash/Go/Rust 三端缺少必要参数，导致 summary 返回空文本（`2fc6813`, `11a2513`）
+- **SUMMARY_MAX_TOKENS 冗余**：移除独立常量，复用全局 `MAX_TOKENS`（`852b4cf`）
+- **summary `record_usage` 参数丢失**：`run_summary_call` 中 `record_usage "compact" 2>/dev/null` 缺少空格，`2>/dev/null` 被解析为 stderr 重定向而非传参 `2`（counter_idx），导致 stats 文件损坏（`d281c54`）
 
 ---
 
@@ -332,7 +342,8 @@
 ---
 
 [Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v2.4.0...HEAD
-[2.4.0]: https://github.com/lloydzhou/bash-agent/compare/v2.3.1...v2.4.0
+[2.4.0]: https://github.com/lloydzhou/bash-agent/compare/v2.3.2...v2.4.0
+[2.3.2]: https://github.com/lloydzhou/bash-agent/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/lloydzhou/bash-agent/compare/v2.3.0...v2.3.1
 [2.2.1]: https://github.com/lloydzhou/bash-agent/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/lloydzhou/bash-agent/compare/v2.1.0...v2.2.0
