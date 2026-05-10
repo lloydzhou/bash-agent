@@ -4,7 +4,11 @@
 
 ---
 
-## [Unreleased]
+## [2.4.0] - 2026-05-10
+
+### Added
+
+- **OSC 标题栏缓存命中率**：终端标题 `I` 后显示缓存命中率百分比，格式 `I:12,345(72%)`，bash/Go/Rust 三端同步（`fc4164a`）
 
 ### Changed
 
@@ -327,8 +331,9 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v2.3.0...HEAD
-[2.3.0]: https://github.com/lloydzhou/bash-agent/compare/v2.2.1...v2.3.0
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/lloydzhou/bash-agent/compare/v2.3.1...v2.4.0
+[2.3.1]: https://github.com/lloydzhou/bash-agent/compare/v2.3.0...v2.3.1
 [2.2.1]: https://github.com/lloydzhou/bash-agent/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/lloydzhou/bash-agent/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/lloydzhou/bash-agent/compare/v2.0.2...v2.1.0
