@@ -777,16 +777,18 @@ record_usage() {
 }
 
 stats_show_osc() {
-    local _dump t r i o c
+    local _dump t r i o c cr
     _dump=$(awk_run -v action=dump -f "$AWK_DIR/stats.awk" "$STATS_FILE" 2>/dev/null)
     t=$(echo "$_dump" | awk -F'\t' '$1=="current_turn_count"{print $2}')
     r=$(echo "$_dump" | awk -F'\t' '$1=="agent_request_count"{print $2}')
     i=$(echo "$_dump" | awk -F'\t' '$1=="total_input_tokens"{print $2}')
     o=$(echo "$_dump" | awk -F'\t' '$1=="total_output_tokens"{print $2}')
     c=$(echo "$_dump" | awk -F'\t' '$1=="current_context_tokens"{print $2}')
-    awk -v m="$MODEL" -v t="${t:-0}" -v r="${r:-0}" -v i="${i:-0}" -v o="${o:-0}" -v c="${c:-0}" '
+    cr=$(echo "$_dump" | awk -F'\t' '$1=="total_cache_read_tokens"{print $2}')
+    awk -v m="$MODEL" -v t="${t:-0}" -v r="${r:-0}" -v i="${i:-0}" -v o="${o:-0}" -v c="${c:-0}" -v cr="${cr:-0}" '
     function f(n,s,r){s=sprintf("%d",n);while(length(s)>3){r=","substr(s,length(s)-2)r;s=substr(s,1,length(s)-3)}return s r}
-    BEGIN{printf "\033]0;%s T:%s R:%s I:%s O:%s C:%s\007",m,f(t),f(r),f(i),f(o),f(c) > "/dev/stderr"}'
+    function pct(num,den){if(den+0>0)return sprintf("%.0f%%",num/den*100);return "—"}
+    BEGIN{printf "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",m,f(t),f(r),f(i),pct(cr,i),f(o),f(c) > "/dev/stderr"}'
 }
 
 # --- Dynamic Planning Compact Decision ---

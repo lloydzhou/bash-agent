@@ -146,7 +146,28 @@ session 数据按当前项目目录归档：
 
 ### 2. Context / compact
 
-compact 使用**缓存对齐摘要（Cache-Aligned Summarization）**和基于缓存经济学的动态规划算法，在每一步计算压缩的净收益，自动决定是否压缩和保留多少消息。
+compact 使用**缓存对齐摘要（Cache-Aligned Summarization）**和基于缓存经济学的动态规划算法，自动决定是否压缩和保留多少消息。
+
+#### 触发时机
+
+compact 在 `agent_loop_stream()` 的 **每次 LLM 调用前** 执行：
+
+```text
+while turn < MAX_TURNS:
+    ① compact_context_window auto     ← 使用上一轮 USAGE 记录的 ctx_tokens
+    ② llm_call()
+    ③ 流式处理：TEXT / THINKING / TOOL_CALL / USAGE / STOP
+    ④ 持久化 assistant + tool_results
+    ⑤ stats_set current_context_tokens = _ctx_tokens   ← 供下一轮 compact 使用
+```
+
+数据流时序：
+
+1. LLM 流中收到 `USAGE` 事件 → `record_usage()` 解析 input_tokens 并返回 → 赋值给 `_ctx_tokens`
+2. 流结束后，`_ctx_tokens > 0` 时写入 `stats.current_context_tokens`
+3. **下一轮循环迭代**开头的 `compact_context_window` 读取该值做 DP 决策和安全阀判断
+
+这意味着首次 LLM 调用前 `current_context_tokens` 为 0，compact 不会触发（DP 和安全阀都跳过）。这是正确行为——首轮没有历史需要压缩。
 
 #### 决策公式
 
@@ -167,14 +188,16 @@ $$
 
 Plan 相关的两个工具都会跳过 DP 决策，以 `DP_MIN_KEEP_RATIO`（默认 0.3）计算 turn-aligned 保留行数，执行缓存对齐摘要 + 裁切：
 
-- **`PlanConfirm`** — 用户确认 plan 时调用：将 `plan.draft` 移至 `plan.md`，触发 force compact
-- **`PlanClear`** — plan 执行完毕时调用：清空 `plan.md`，触发 force compact
+- **`PlanConfirm`** — 用户确认 plan 时调用：先 force compact（复用旧缓存前缀），再将 `plan.draft` 移至 `plan.md`（此时才触发缓存失效），总共只产生一次冷启动
+- **`PlanClear`** — plan 执行完毕时调用：先 force compact，再清空 `plan.md`
 
-三步：
+执行顺序（以 `PlanConfirm` 为例）：
 
 1. **`compact_turn_keep()`** — 扫描 conversation 中的 user 消息（匹配 `{"role":"user","content":"`），从末尾按 ratio 保留完整 turn
-2. **`compact_context_window(force=true)`** — 用 turn keep 结果执行缓存对齐摘要 + 裁切
-3. **`PlanConfirm`**：`mv plan.draft → plan.md` + 重建空 draft；**`PlanClear`**：`printf '' > plan.md`
+2. **`compact_context_window(plan_confirm)`** — 用 turn keep 结果执行缓存对齐摘要 + 裁切（此时 system prompt 前缀未变，cache 命中）
+3. **`mv plan.draft → plan.md`** + 重建空 draft（compact 后才移动，确保 compact 阶段前缀缓存命中）
+
+关键：compact 在 mv 之前执行。因为 compact 的 summary 调用需要前缀缓存命中来降低成本，如果先 mv 导致 `plan.md` 内容变化、system prompt 前缀改变，compact 就会失去缓存对齐的优势。
 
 Safety valve 也改用 `compact_turn_keep()` 实现 turn 对齐（替换原简单比例计算），确保 tool_result 不会被误算为 user turn。
 
@@ -277,7 +300,7 @@ system prompt 首尾都是语言约束，中间内容无论多长、是否变化
 
 `using-your-tools` 指导模型如何正确使用各内置 tool。
 
-`plan-lifecycle-guidance` 为复杂多步任务提供两阶段规划工作流：规划阶段写入 `plan.draft`（不进入 system prompt，不影响缓存）→ 用户确认后通过 `PlanConfirm` 工具将 draft 移至 `plan.md`（触发 compact，乘缓存失效之机回收上下文窗口）→ TodoWrite checklist → 执行 → `PlanClear` 清空 plan 并 compact。由 `PLAN_DRAFT_FILE` 和 `PLAN_FILE` 环境变量标识路径。`PlanClear` 后，system prompt 中的 plan section 会消失。
+`plan-lifecycle-guidance` 为复杂多步任务提供两阶段规划工作流：规划阶段写入 `plan.draft`（不进入 system prompt，不影响缓存）→ 用户确认后通过 `PlanConfirm` 工具先执行 force compact（复用旧前缀缓存）再将 draft 移至 `plan.md`（此时缓存才失效，正好 compact 已回收了上下文窗口）→ TodoWrite checklist → 执行 → `PlanClear` 清空 plan 并 compact。由 `PLAN_DRAFT_FILE` 和 `PLAN_FILE` 环境变量标识路径。`PlanClear` 后，system prompt 中的 plan section 会消失。
 
 ### 4. Skills
 
@@ -357,8 +380,8 @@ skills 当前优先读取：
 - `Glob`
 - `Grep`
 - `TodoWrite`
-- `PlanConfirm` — 确认 plan draft，将 draft 移至 plan.md 并触发 force compact（乘缓存失效之机回收上下文窗口）
-- `PlanClear` — 清空 plan 并触发 force compact（跳过 DP 决策，保留最后 `DP_MIN_KEEP_RATIO` 比例的完整 turn）
+- `PlanConfirm` — 确认 plan draft：先 force compact（复用旧缓存前缀），再 mv draft → plan.md（触发缓存失效），总共一次冷启动
+- `PlanClear` — 清空 plan：先 force compact（跳过 DP 决策，保留最后 `DP_MIN_KEEP_RATIO` 比例的完整 turn），再清空 plan.md
 - `Skill`
 - `WebSearch`
 - `WebFetch`
@@ -491,6 +514,18 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
 - `input_tokens`
 - `output_tokens`
 - `cache_input_tokens`
+
+`record_usage(key, counter, verbose)` 内部处理流程：
+
+1. 从 RESP-like `USAGE` 事件中提取 `input_tokens`
+2. 计算 `ctx_tokens = input_tokens`（含 cache tokens 的原始值，直接反映当前请求的上下文窗口大小）
+3. 累加到 `total_input_tokens` / `total_output_tokens`
+4. 递增 `counter`（如 `agent_request_count` / `compact_request_count`）
+5. 返回 `ctx_tokens` 字符串（供调用方缓存到 `_ctx_tokens`，循环末尾写入 `stats.current_context_tokens`）
+
+注意：`record_usage` 只更新累加字段，不直接写入 `current_context_tokens`。该值由 `agent_loop_stream` 在流结束后显式设置，确保 compact 决策使用的是**上一轮**的完整上下文大小。
+
+`context_update` 事件：当 `compact_context_window` 实际执行压缩时，通过 `write_message "CONTEXT_UPDATE" "compact" "auto"` 发出，通知 display 层上下文已被压缩。
 
 ## 当前重要实现细节
 

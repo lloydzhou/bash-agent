@@ -1327,9 +1327,14 @@ func (rt *runtime) updateTermTitle() {
 	ai := int(statsFloat64(stats, "total_input_tokens"))
 	ao := int(statsFloat64(stats, "total_output_tokens"))
 	ctx := int(statsFloat64(stats, "current_context_tokens"))
-	_, _ = fmt.Fprintf(rt.stderr, "\033]0;%s T:%s R:%s I:%s O:%s C:%s\007",
+	cr := int(statsFloat64(stats, "total_cache_read_tokens"))
+	cachePct := "—"
+	if ai > 0 {
+		cachePct = fmt.Sprintf("%d%%", cr*100/ai)
+	}
+	_, _ = fmt.Fprintf(rt.stderr, "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",
 		rt.cfg.Model,
-		fmtNum(tc), fmtNum(ar), fmtNum(ai), fmtNum(ao), fmtNum(ctx))
+		fmtNum(tc), fmtNum(ar), fmtNum(ai), cachePct, fmtNum(ao), fmtNum(ctx))
 }
 
 func (rt *runtime) buildAssistantEvent(text string, calls []protocol.ToolCallEvent) map[string]any {
