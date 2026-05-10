@@ -907,7 +907,7 @@ tool_write() {
 }
 
 tool_edit() {
-    local path="$1" old_string="$2" new_string="$3" tmp diff_output added removed label="${path#/}"
+    local path="$1" old_string="$2" new_string="$3" tmp diff_output added removed label="${1#/}"
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     tmp=$(mktemp "${TMPDIR:-/tmp}/edit.XXXXXX")
