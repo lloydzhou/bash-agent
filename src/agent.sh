@@ -1014,11 +1014,11 @@ tool_skill() {
 }
 
 tool_plan_confirm() {
-    # 将 draft 移至正式 plan，触发 compact（plan 写入 system prompt 会使缓存失效，趁机 compact）
+    # 先 compact 再 mv：compact 复用旧缓存前缀，mv 后才触发缓存失效——总共一次冷启动
     if [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; then
+        compact_context_window plan_confirm
         mv "$PLAN_DRAFT_FILE" "$PLAN_FILE"
         : > "$PLAN_DRAFT_FILE"   # 重新创建空 draft，供下次规划使用
-        compact_context_window plan_confirm
         printf 'Plan confirmed and locked in.'
     else
         printf 'Error: no plan draft found to confirm.'
