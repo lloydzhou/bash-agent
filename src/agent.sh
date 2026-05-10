@@ -292,9 +292,7 @@ tool_file_summary() {
     printf '%s(%s) [%s lines, %s bytes]' "$kind" "$path" "$lines" "$bytes"
 }
 
-is_stream_json_mode() {
-    [[ "$OUTPUT_FORMAT" == "stream-json" ]]
-}
+is_stream_json_mode() { [[ "$OUTPUT_FORMAT" == "stream-json" ]]; }
 
 wrap_section() {
     local tag="$1" content="$2" name="${3:-}"
@@ -357,8 +355,9 @@ msg_to_stream_event() {
                 "$(json_escape "${REPLY_MESSAGE[2]}")" \
                 "$(json_escape "${REPLY_MESSAGE[3]}")"
             ;;
-        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
+        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"agent"}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
+        CONTEXT_UPDATE) printf '{"type":"context_update","kind":"%s","trigger":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" "$(json_escape "${REPLY_MESSAGE[2]}")" ;;
         ERROR)       printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
         RETRY)       printf '{"type":"retry"}' ;;
         *)           return 1 ;;
@@ -430,6 +429,9 @@ display_event() {
             DISPLAY_LAST_CHAR=$'\n'
             ;;
         STOP)  display_ensure_newline ;;
+        CONTEXT_UPDATE)
+            display_ensure_newline; printf '\033[36mContext compacted (%s).\033[0m\n' "${REPLY_MESSAGE[2]}"; DISPLAY_LAST_CHAR=$'\n'
+            ;;
         ERROR) display_ensure_newline; printf '\033[31mError: %s\033[0m\n' "${REPLY_MESSAGE[1]}" >&2 ;;
         *)     return 0 ;;
     esac
@@ -773,17 +775,16 @@ stats_get() {
 }
 
 record_usage() {
-    # Args: kind counter_key
-    # Reads REPLY_MESSAGE[1..4], logs event, updates stats.
+    # Args: kind counter_key [write_event]
+    # Reads REPLY_MESSAGE[1..4], updates stats, optionally logs event.
     # Returns context token count (input+output+cache_read+cache_creation).
-    local kind="$1" counter_key="$2"
-    local _in="${REPLY_MESSAGE[1]:-0}" _out="${REPLY_MESSAGE[2]:-0}" _cr="${REPLY_MESSAGE[3]:-0}" _cc="${REPLY_MESSAGE[4]:-0}" _event
-    if [[ -n "$kind" ]]; then
+    local kind="$1" counter_key="$2" write_event="${3:-true}"
+    local _in="${REPLY_MESSAGE[1]:-0}" _out="${REPLY_MESSAGE[2]:-0}" _cr="${REPLY_MESSAGE[3]:-0}" _cc="${REPLY_MESSAGE[4]:-0}"
+    if [[ "$write_event" == "true" ]]; then
+        local _event
         _event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"%s"}' "$_in" "$_out" "$_cr" "$_cc" "$kind")
-    else
-        _event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "$_in" "$_out" "$_cr" "$_cc")
+        [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_event"
     fi
-    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_event"
     stats_inc ${counter_key}=1 total_input_tokens=${_in} total_output_tokens=${_out} total_cache_read_tokens=${_cr} total_cache_creation_tokens=${_cc}
     echo $(( _in + _out + _cr + _cc ))
 }
@@ -875,11 +876,6 @@ compact_context_window() {
     local remaining_turns
     remaining_turns=$(grep -c '"role":"user","content":"' "$CONV_FILE" 2>/dev/null || echo 0)
     stats_set current_turn_count=$remaining_turns
-    if is_stream_json_mode; then
-        printf '{"type":"context_update","kind":"compact","trigger":"%s"}\n' "$trigger"
-    else
-        printf '\033[36mContext compacted automatically.\033[0m\n'
-    fi
     return 0
 }
 
@@ -1109,6 +1105,9 @@ agent_loop_stream() {
     local user_input="$1"
     conv_add_user "$user_input"
 
+    # Compact before first LLM call: uses ctx_tokens from previous turn's USAGE
+    compact_context_window auto && write_message "CONTEXT_UPDATE" "compact" "auto"
+
     local turn=0
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
@@ -1175,7 +1174,7 @@ agent_loop_stream() {
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
                 USAGE)
-                    _ctx_tokens=$(record_usage "agent" agent_request_count)
+                    _ctx_tokens=$(record_usage "agent" agent_request_count false)
                     ;;
             esac
         done < <(llm_call "$(conv_get_messages "$(<"$CONV_FILE")")")
@@ -1194,13 +1193,9 @@ agent_loop_stream() {
             if [[ -n "$tool_conv_results" ]]; then
                 conv_add_tool_results "$tool_conv_results"
             fi
-            # Update context tokens and trigger compact if needed
+            # Update context tokens from USAGE (used by next turn's compact check)
             if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
                 stats_set current_context_tokens=${_ctx_tokens}
-                compact_context_window auto || true
-            else
-                # No usage data (e.g. retry) — skip compact
-                :
             fi
             # tool_use/tool_calls → loop continues; anything else → break
             [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
