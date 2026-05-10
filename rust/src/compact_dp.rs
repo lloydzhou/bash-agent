@@ -42,19 +42,16 @@ pub fn compact_turn_keep(lines: &[Value], min_keep_ratio: f64) -> Option<usize> 
         return None;
     }
 
-    // Detect user role: match {"role":"user","content":"... (excludes tool_result lines)
+    // Detect user role via JSON object field access (field order is not guaranteed by serde).
+    // A "user turn" has role="user" and content is a plain string (excludes tool_result lines).
     let mut is_user = Vec::with_capacity(lines.len());
     let mut total_turns = 0usize;
     for line in lines {
-        if let Some(s) = line.as_str() {
-            if s.starts_with("{\"role\":\"user\",\"content\":\"") {
-                is_user.push(true);
-                total_turns += 1;
-            } else {
-                is_user.push(false);
-            }
-        } else {
-            is_user.push(false);
+        let user = line.get("role").and_then(Value::as_str) == Some("user")
+            && line.get("content").is_some_and(|c| c.is_string());
+        is_user.push(user);
+        if user {
+            total_turns += 1;
         }
     }
 
@@ -74,8 +71,8 @@ pub fn compact_turn_keep(lines: &[Value], min_keep_ratio: f64) -> Option<usize> 
             found += 1;
         }
     }
-    if keep < 3 {
-        return Some(lines.len());
+    if keep == 0 {
+        return None;
     }
     Some(keep)
 }
@@ -211,4 +208,8 @@ pub fn compact_dp_decision(
         adj = 1;
     }
     Some(adj)
+}
+
+#[cfg(test)]
+mod order_test {
 }

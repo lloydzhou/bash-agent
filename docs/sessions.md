@@ -77,6 +77,7 @@ session 统计数据，JSON 格式，包含以下字段：
 
 用途：
 - DP compact 算法计算预期剩余步数和成本
+- `current_context_tokens` 在每次 LLM 调用结束后由主循环更新，供下一轮 compact 决策使用
 - 追踪 session 的 token 使用情况
 - 交互模式标题栏显示统计信息
 

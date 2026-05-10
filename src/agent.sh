@@ -54,10 +54,11 @@ INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
 
-# --- Stats Cache (in-memory) --- Indexes match stats.awk _init_fields() order:
-#   0:current_turn_count  1:agent_request_count  2:compact_request_count 3:total_input_tokens  4:total_output_tokens
-#   5:total_cache_read_tokens 6:total_cache_creation_tokens  7:current_context_tokens  8:last_updated
-STATS_CACHE=(0 0 0 0 0 0 0 0 "")
+# --- Stats (file-based, no in-memory cache) ---
+# All stats operations go directly to stats.json via awk action=update.
+# Keys: current_turn_count agent_request_count compact_request_count
+#        total_input_tokens total_output_tokens total_cache_read_tokens
+#        total_cache_creation_tokens current_context_tokens
 
 # --- Environment Defaults ---
 : "${ANTHROPIC_API_KEY:=}"
@@ -114,8 +115,7 @@ new_session_id() {
 }
 
 deny_bash_command_reason() {
-    local cmd="$1"
-    local device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
+    local cmd="$1" device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
 
     [[ -z "$cmd" ]] && return 1
 
@@ -163,17 +163,14 @@ tool_param_keys() {
 }
 
 tool_args_from_msg() {
-    local name="$1"
-    # Extract known params from flattened KV pairs at REPLY_MESSAGE[4..]
-    local param_key_string="" param_keys=() idx param_value=""
+    local name="$1" param_key_string="" param_keys=() idx param_value="" _n=${#REPLY_MESSAGE[@]} _pkey i
     local -a _outvars=("$2" "$3" "$4" "$5")
-    local _n=${#REPLY_MESSAGE[@]}
 
     param_key_string=$(tool_param_keys "$name")
     if [[ -n "$param_key_string" ]]; then
         IFS=' ' read -r -a param_keys <<< "$param_key_string"
         for idx in "${!param_keys[@]}"; do
-            local _pkey="${param_keys[idx]}" i
+            _pkey="${param_keys[idx]}"
             param_value=""
             for (( i = 4; i + 1 < _n; i += 2 )); do
                 if [[ "${REPLY_MESSAGE[i]}" == "$_pkey" ]]; then
@@ -187,7 +184,7 @@ tool_args_from_msg() {
 }
 
 tool_call_summary() {
-    local name="$1" label="" key=""
+    local name="$1" label="" key="" i value="" _vi
     shift
     case "$name" in
         Read|Write|Edit) key="path" ;;
@@ -199,10 +196,9 @@ tool_call_summary() {
         WebFetch) key="url" ;;
     esac
     if [[ -n "$key" && $# -gt 0 ]]; then
-        local i value=""
         for (( i = 1; i + 1 <= $#; i += 2 )); do
             if [[ "${!i}" == "$key" ]]; then
-                local _vi=$(( i + 1 ))
+                _vi=$(( i + 1 ))
                 value="${!_vi}"
                 break
             fi
@@ -260,20 +256,18 @@ json_escape() {
 }
 
 format_tool_result() {
-    local output="$1"
+    local output="$1" size marker marker_len tail_lines=5 tail_text tail_len head_len
     if (( ${#output} <= TOOL_RESULT_MAX_BYTES )); then
         printf '%s' "$output"
         return 0
     fi
 
-    local size=${#output}
-    local marker=$'\n\n[... truncated: showing first/last portions of %d bytes ...]\n\n'
-    local marker_len=$(( ${#marker} + 20 ))
-    local tail_lines=5
-    local tail_text
+    size=${#output}
+    marker=$'\n\n[... truncated: showing first/last portions of %d bytes ...]\n\n'
+    marker_len=$(( ${#marker} + 20 ))
     tail_text=$(printf '%s' "$output" | tail -n "$tail_lines")
-    local tail_len=${#tail_text}
-    local head_len=$(( TOOL_RESULT_MAX_BYTES - marker_len - tail_len ))
+    tail_len=${#tail_text}
+    head_len=$(( TOOL_RESULT_MAX_BYTES - marker_len - tail_len ))
     (( head_len > 0 )) || head_len=$(( TOOL_RESULT_MAX_BYTES / 2 ))
 
     printf '%s' "${output:0:$head_len}"
@@ -291,9 +285,7 @@ tool_file_summary() {
     printf '%s(%s) [%s lines, %s bytes]' "$kind" "$path" "$lines" "$bytes"
 }
 
-is_stream_json_mode() {
-    [[ "$OUTPUT_FORMAT" == "stream-json" ]]
-}
+is_stream_json_mode() { [[ "$OUTPUT_FORMAT" == "stream-json" ]]; }
 
 wrap_section() {
     local tag="$1" content="$2" name="${3:-}"
@@ -356,8 +348,9 @@ msg_to_stream_event() {
                 "$(json_escape "${REPLY_MESSAGE[2]}")" \
                 "$(json_escape "${REPLY_MESSAGE[3]}")"
             ;;
-        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
+        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"agent"}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
+        CONTEXT_UPDATE) printf '{"type":"context_update","kind":"%s","trigger":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" "$(json_escape "${REPLY_MESSAGE[2]}")" ;;
         ERROR)       printf '{"type":"error","message":"%s"}' "$(json_escape "${REPLY_MESSAGE[1]}")" ;;
         RETRY)       printf '{"type":"retry"}' ;;
         *)           return 1 ;;
@@ -368,7 +361,7 @@ msg_to_stream_event() {
 display_event() {
     # REPLY_MESSAGE[0]=type, rest varies by type
     # Pure human-text rendering only. JSON event construction is in msg_to_stream_event().
-    local _type="${REPLY_MESSAGE[0]}"
+    local _type="${REPLY_MESSAGE[0]}" _tc_kv=() i _n _tc_summary="" _tr_name _tr_text="" _um_text
 
     case "$_type" in
         TEXT)
@@ -390,7 +383,7 @@ display_event() {
             PREV_WAS_THINKING=true
             ;;
         TOOL_CALL)
-            local _tc_kv=() i _n=${#REPLY_MESSAGE[@]} _tc_summary=""
+            _n=${#REPLY_MESSAGE[@]} _tc_kv=() _tc_summary=""
             for (( i = 4; i + 1 < _n; i += 2 )); do
                 _tc_kv+=("${REPLY_MESSAGE[i]}" "${REPLY_MESSAGE[i+1]}")
             done
@@ -404,7 +397,7 @@ display_event() {
             DISPLAY_LAST_CHAR=$'\n'
             ;;
         TOOL_RESULT)
-            local _tr_name="${REPLY_MESSAGE[2]}" _tr_text=""
+            _tr_name="${REPLY_MESSAGE[2]}" _tr_text=""
             if [[ "$_tr_name" == "Edit" ]]; then
                 _tr_text="${REPLY_MESSAGE[3]}"$'\n'
             elif [[ "$_tr_name" == "Read" || "$_tr_name" == "Write" ]]; then
@@ -423,12 +416,15 @@ display_event() {
             ;;
         USER_MESSAGE)
             display_ensure_newline
-            local _um_text="${REPLY_MESSAGE[1]%%$'\n'*}"
+            _um_text="${REPLY_MESSAGE[1]%%$'\n'*}"
             (( ${#_um_text} > 80 )) && _um_text="${_um_text:0:77}..."
             printf '\033[32m> %s\033[0m\n' "$_um_text"
             DISPLAY_LAST_CHAR=$'\n'
             ;;
         STOP)  display_ensure_newline ;;
+        CONTEXT_UPDATE)
+            display_ensure_newline; printf '\033[36mContext compacted (%s).\033[0m\n' "${REPLY_MESSAGE[2]}"; DISPLAY_LAST_CHAR=$'\n'
+            ;;
         ERROR) display_ensure_newline; printf '\033[31mError: %s\033[0m\n' "${REPLY_MESSAGE[1]}" >&2 ;;
         *)     return 0 ;;
     esac
@@ -601,14 +597,12 @@ build_tool_result_json_object() {
 }
 
 build_assistant_content_json() {
-    local text="$1" thinking="$2" calls="$3"
-    local content="["
+    local text="$1" thinking="$2" calls="$3" content="[" name id input
     content+="{\"type\":\"thinking\",\"thinking\":\"$(json_escape "$thinking")\"}"
     content+=",{\"type\":\"text\",\"text\":\"$(json_escape "$text")\"}"
 
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
-        local name id input
         IFS=$'\t' read -r name id input _ <<< "$tc"
         content+=",$(build_tool_call_json_object "$name" "$id" "$input")"
     done <<< "$calls"
@@ -632,8 +626,7 @@ find_awk_dir() {
     die "Cannot find awk/ directory. Set AWK_DIR or ensure awk/ exists alongside agent.sh"
 }
 get_session_dir() {
-    local cwd="${PWD:-$(pwd)}"
-    local project_key base="${BASH_AGENT_HOME:-${HOME}}"
+    local cwd="${PWD:-$(pwd)}" project_key base="${BASH_AGENT_HOME:-${HOME}}"
     cwd="$(cd "$cwd" && pwd -P)"
     project_key="$(printf '%s' "$cwd" | awk_run '
     {
@@ -649,10 +642,9 @@ get_session_dir() {
 }
 
 get_latest_session_dir() {
-    local project_dir
+    local project_dir latest="" latest_ts=0 dir ts
     project_dir="$(get_session_dir)"
     [[ -d "$project_dir" ]] || return 1
-    local latest="" latest_ts=0 dir ts
     for dir in "$project_dir"/*/; do
         [[ -d "$dir" ]] || continue
         ts=$(stat -f "%m" "$dir/events.jsonl" 2>/dev/null || stat -f "%m" "$dir" 2>/dev/null || echo 0)
@@ -677,7 +669,7 @@ conv_init() {
     if [[ -z "$SESSION_ID" ]]; then
         SESSION_ID="$(new_session_id)"
     fi
-    local project_dir session_dir
+    local project_dir session_dir new_session=false
     project_dir="$(get_session_dir)"
     session_dir="${project_dir}/${SESSION_ID}"
     mkdir -p "$session_dir"
@@ -688,7 +680,6 @@ conv_init() {
     PLAN_FILE="${session_dir}/plan.md"
     PLAN_DRAFT_FILE="${session_dir}/plan.draft"
     STATS_FILE="${session_dir}/stats.json"
-    local new_session=false
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
     touch "$CONV_FILE"
     touch "$SESSION_EVENT_FILE"
@@ -698,7 +689,6 @@ conv_init() {
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
-    stats_load
 }
 
 conv_add_user() {
@@ -744,61 +734,61 @@ context_append_summary() {
     printf '%s\n' "$text" > "$CONTEXT_SUMMARY_FILE"
 }
 
-stats_load() {
-    local idx=0
-    while IFS=$'\t' read -r key val; do
-        [[ -z "$key" ]] && continue
-        STATS_CACHE[idx]="$val"
-        idx=$(( idx + 1 ))
-    done < <(awk_run -v action=dump -f "$AWK_DIR/stats.awk" "$STATS_FILE" 2>/dev/null)
-}
-
-_stats_sync() {
-    printf '%s\n' "${STATS_CACHE[@]}" | awk_run -v action=sync -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+stats_inc() {
+    # Args: key=delta ...  e.g. stats_inc agent_request_count=1 total_input_tokens=500
+    local entry key val line=""
+    for entry in "$@"; do
+        key="${entry%%=*}" val="${entry#*=}"
+        line+="${key}	+${val}"$'\n'
+    done
+    printf '%s' "$line" | awk_run -v action=update -f "$AWK_DIR/stats.awk" "$STATS_FILE"
     stats_show_osc
 }
 
-stats_inc() {
-    for entry in "$@"; do
-        local idx="${entry%%=*}" val="${entry#*=}"
-        STATS_CACHE[idx]=$(( STATS_CACHE[idx] + val ))
-    done
-    _stats_sync
-}
-
 stats_set() {
+    # Args: key=val ...  e.g. stats_set current_context_tokens=7794
+    local entry key val line=""
     for entry in "$@"; do
-        local idx="${entry%%=*}" val="${entry#*=}"
-        STATS_CACHE[idx]="$val"
+        key="${entry%%=*}" val="${entry#*=}"
+        line+="${key}	${val}"$'\n'
     done
-    _stats_sync
+    printf '%s' "$line" | awk_run -v action=update -f "$AWK_DIR/stats.awk" "$STATS_FILE"
+    stats_show_osc
 }
 
 stats_get() {
-    echo "${STATS_CACHE[$1]:-0}"
+    # Args: key  e.g. stats_get current_context_tokens
+    awk_run -v action=dump -f "$AWK_DIR/stats.awk" "$STATS_FILE" 2>/dev/null | \
+        awk -F'\t' -v k="$1" '$1 == k { print $2 }'
 }
 
 record_usage() {
-    # Args: kind counter_idx
-    # Reads REPLY_MESSAGE[1..4], logs event, updates stats.
+    # Args: kind counter_key [write_event=true]
+    # Reads REPLY_MESSAGE[1..4], updates stats, optionally logs event.
     # Returns context token count (input+output+cache_read+cache_creation).
-    local kind="$1" counter_idx="$2"
-    local _in="${REPLY_MESSAGE[1]:-0}" _out="${REPLY_MESSAGE[2]:-0}" _cr="${REPLY_MESSAGE[3]:-0}" _cc="${REPLY_MESSAGE[4]:-0}" _event
-    if [[ -n "$kind" ]]; then
+    local kind="$1" counter_key="$2" write_event="${3:-true}" _event \
+          _in="${REPLY_MESSAGE[1]:-0}" _out="${REPLY_MESSAGE[2]:-0}" _cr="${REPLY_MESSAGE[3]:-0}" _cc="${REPLY_MESSAGE[4]:-0}"
+    if [[ "$write_event" == "true" ]]; then
         _event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"%s"}' "$_in" "$_out" "$_cr" "$_cc" "$kind")
-    else
-        _event=$(printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s}' "$_in" "$_out" "$_cr" "$_cc")
+        session_append_line "$_event"
     fi
-    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_event"
-    stats_inc ${counter_idx}=1 3=${_in} 4=${_out} 5=${_cr} 6=${_cc}
+    stats_inc ${counter_key}=1 total_input_tokens=${_in} total_output_tokens=${_out} total_cache_read_tokens=${_cr} total_cache_creation_tokens=${_cc}
     echo $(( _in + _out + _cr + _cc ))
 }
 
 stats_show_osc() {
-    awk -v m="$MODEL" -v t="${STATS_CACHE[0]:-0}" -v r="${STATS_CACHE[1]:-0}" \
-        -v i="${STATS_CACHE[3]:-0}" -v o="${STATS_CACHE[4]:-0}" -v c="${STATS_CACHE[7]:-0}" '
+    local _dump t r i o c cr
+    _dump=$(awk_run -v action=dump -f "$AWK_DIR/stats.awk" "$STATS_FILE" 2>/dev/null)
+    t=$(echo "$_dump" | awk -F'\t' '$1=="current_turn_count"{print $2}')
+    r=$(echo "$_dump" | awk -F'\t' '$1=="agent_request_count"{print $2}')
+    i=$(echo "$_dump" | awk -F'\t' '$1=="total_input_tokens"{print $2}')
+    o=$(echo "$_dump" | awk -F'\t' '$1=="total_output_tokens"{print $2}')
+    c=$(echo "$_dump" | awk -F'\t' '$1=="current_context_tokens"{print $2}')
+    cr=$(echo "$_dump" | awk -F'\t' '$1=="total_cache_read_tokens"{print $2}')
+    awk -v m="$MODEL" -v t="${t:-0}" -v r="${r:-0}" -v i="${i:-0}" -v o="${o:-0}" -v c="${c:-0}" -v cr="${cr:-0}" '
     function f(n,s,r){s=sprintf("%d",n);while(length(s)>3){r=","substr(s,length(s)-2)r;s=substr(s,1,length(s)-3)}return s r}
-    BEGIN{printf "\033]0;%s T:%s R:%s I:%s O:%s C:%s\007",m,f(t),f(r),f(i),f(o),f(c) > "/dev/stderr"}'
+    function pct(num,den){if(den+0>0)return sprintf("%.0f%%",num/den*100);return "—"}
+    BEGIN{printf "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",m,f(t),f(r),f(i),pct(cr,i),f(o),f(c) > "/dev/stderr"}'
 }
 
 # --- Dynamic Planning Compact Decision ---
@@ -808,8 +798,8 @@ stats_show_osc() {
 # Formula: NetBenefit(k) = ①savings - ②cache_miss - ③compact_cost - ④info_loss
 # Returns: number of lines to keep (turn-aligned), or "0" if no compact beneficial.
 compact_dp_decision() {
-    awk_run -v t="$(stats_get 0)" -v total_requests="$(stats_get 1)" \
-            -v total_compact="$(stats_get 2)" -v total_input="$(stats_get 3)" \
+    awk_run -v t="$(stats_get current_turn_count)" -v total_requests="$(stats_get agent_request_count)" \
+            -v total_compact="$(stats_get compact_request_count)" -v total_input="$(stats_get total_input_tokens)" \
             -v baseline_e="${DP_BASELINE_E:-8}" -v e_fixed="${DP_E_FIXED:-0}" -v L_fixed="${DP_L:-0}" \
             -v V="$DP_V" -v p_input="$DP_P_INPUT" -v p_cache="$DP_P_CACHE" -v p_out="$DP_P_OUT" \
             -v S="$DP_S" -v min_keep_ratio="$DP_MIN_KEEP_RATIO" -v r="$DP_R" -v beta="$DP_BETA" \
@@ -819,7 +809,7 @@ compact_dp_decision() {
 compact_turn_keep() {
     awk -v r="$DP_MIN_KEEP_RATIO" '
     BEGIN { target_turns = 0 }
-    { role[NR] = ($0 ~ /^\{"role":"user","content":"/) ? "user" : "other" }
+    { role[NR] = ($0 ~ /"role":"user"/ && $0 !~ /"content":\[/) ? "user" : "other" }
     END {
         if (NR == 0) { print 0; exit }
         for (i = 1; i <= NR; i++) if (role[i] == "user") total_turns++
@@ -828,14 +818,13 @@ compact_turn_keep() {
         if (target > total_turns) target = total_turns
         keep = 0; found = 0
         for (i = NR; i >= 1 && found < target; i--) { keep++; if (role[i] == "user") found++ }
-        if (keep < 3) { print NR; exit }
+        if (keep == 0) { print 0; exit }
         print keep
     }' "$CONV_FILE"
 }
 
 compact_context_window() {
-    local trigger=${1:-auto}
-    local total_lines keep_lines drop tmp_dropped dropped_messages summary_response
+    local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
     # 始终先算 DP 决策（经济最优）
     keep_lines=$(compact_dp_decision) || true
@@ -845,7 +834,7 @@ compact_context_window() {
 
     # DP 返回 0（不值得）或 ≥ total_lines（全保留）→ 都算"不压缩"，进入 fallback
     if (( keep_lines == 0 )) || (( keep_lines >= total_lines && total_lines > 0 )); then
-        local ct=$(stats_get 7)
+        local ct=$(stats_get current_context_tokens)
         if [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
             keep_lines=$(compact_turn_keep)
         else
@@ -853,8 +842,8 @@ compact_context_window() {
         fi
     fi
 
-    # 统一 guard：keep >= total 时只有 plan_clear/plan_confirm 继续
-    (( keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || return 1
+    # 统一 guard：keep >= total 或 keep==0 时只有 plan_clear/plan_confirm 继续
+    (( keep_lines > 0 && keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || return 1
     drop=$(( total_lines - keep_lines ))
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
@@ -872,13 +861,8 @@ compact_context_window() {
 
     rm -f "$tmp_dropped"
     local remaining_turns
-    remaining_turns=$(grep -c '"role":"user","content":"' "$CONV_FILE" 2>/dev/null || echo 0)
-    stats_set 0=$remaining_turns
-    if is_stream_json_mode; then
-        printf '{"type":"context_update","kind":"compact","trigger":"%s"}\n' "$trigger"
-    else
-        printf '\033[36mContext compacted automatically.\033[0m\n'
-    fi
+    remaining_turns=$(awk '/"role":"user"/ && ! /"content":\[/{n++} END{print n+0}' "$CONV_FILE" 2>/dev/null)
+    stats_set current_turn_count=$remaining_turns
     return 0
 }
 
@@ -925,8 +909,7 @@ tool_write() {
 }
 
 tool_edit() {
-    local path="$1" old_string="$2" new_string="$3"
-    local tmp diff_output added removed
+    local path="$1" old_string="$2" new_string="$3" tmp diff_output added removed label="${1#/}"
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     tmp=$(mktemp "${TMPDIR:-/tmp}/edit.XXXXXX")
@@ -936,7 +919,6 @@ tool_edit() {
         cat "$tmp"; rm -f "$tmp"; return 1
     fi
     (( $(wc -c < "$tmp") > 0 )) || { echo "Error: edit produced empty result"; rm -f "$tmp"; return 1; }
-    local label="${path#/}"
     diff_output=$(diff -u --color=always --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
     [[ "$diff_output" == *"unsupported --color"* || "$diff_output" == *"unrecognized option '--color'"* ]] \
         && diff_output=$(diff -u --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
@@ -949,8 +931,7 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}"
-    local reason output tool_rc
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" reason output tool_rc tmpout
 
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
     reason=$(deny_bash_command_reason "$cmd") || reason=""
@@ -959,7 +940,6 @@ tool_bash() {
         return 1
     fi
 
-    local tmpout
     tmpout=$(mktemp)
 
     if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
@@ -988,14 +968,13 @@ tool_glob() {
 }
 
 tool_grep() {
-    local pattern="$1" path="$2" glob="$3" context="$4"
+    local pattern="$1" path="$2" glob="$3" context="$4" args=(-n --color never --heading)
 
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
     [[ -e "$path" ]] || { echo "Error: path not found: $path"; return 1; }
     command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for grep"; return 1; }
 
-    local args=(-n --color never --heading)
     [[ -n "$context" && "$context" =~ ^[0-9]+$ ]] && args+=(-C "$context")
     [[ -n "$glob" ]] && args+=(--glob "$glob")
     args+=("--" "$pattern" "$path")
@@ -1013,11 +992,11 @@ tool_skill() {
 }
 
 tool_plan_confirm() {
-    # 将 draft 移至正式 plan，触发 compact（plan 写入 system prompt 会使缓存失效，趁机 compact）
+    # 先 compact 再 mv：compact 复用旧缓存前缀，mv 后才触发缓存失效——总共一次冷启动
     if [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; then
+        compact_context_window plan_confirm
         mv "$PLAN_DRAFT_FILE" "$PLAN_FILE"
         : > "$PLAN_DRAFT_FILE"   # 重新创建空 draft，供下次规划使用
-        compact_context_window plan_confirm
         printf 'Plan confirmed and locked in.'
     else
         printf 'Error: no plan draft found to confirm.'
@@ -1092,7 +1071,7 @@ run_summary_call() {
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
             THINKING) ;;
-            USAGE) record_usage "compact" 2 >/dev/null ;;
+            USAGE) record_usage "compact" compact_request_count >/dev/null ;;
             ERROR) last_error="${REPLY_MESSAGE[1]}" ;;
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
@@ -1105,13 +1084,14 @@ run_summary_call() {
 # --- Agent Loop ---
 
 agent_loop_stream() {
-    local user_input="$1"
+    local user_input="$1" turn=0
     conv_add_user "$user_input"
 
-    local turn=0
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
-        stats_set 9=$turn
+
+        # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
+        compact_context_window auto && write_message "CONTEXT_UPDATE" "compact" "auto"
 
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
@@ -1129,7 +1109,7 @@ agent_loop_stream() {
                 TEXT)     text+="${REPLY_MESSAGE[1]}" ;;
                 THINKING) thinking+="${REPLY_MESSAGE[1]}" ;;
                 TOOL_CALL)
-                    local cur_tool_name cur_tool_id input
+                    local cur_tool_name cur_tool_id input arg1="" arg2="" arg3="" arg4="" output tool_rc=0 result_for_conv="" _tr_args=() i _n=${#REPLY_MESSAGE[@]}
                     cur_tool_name="${REPLY_MESSAGE[1]}"
                     cur_tool_id="${REPLY_MESSAGE[2]}"
                     input="${REPLY_MESSAGE[3]}"
@@ -1137,19 +1117,17 @@ agent_loop_stream() {
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
 
                     # Execute tool immediately, output result
-                    local arg1="" arg2="" arg3="" arg4=""
                     tool_args_from_msg "$cur_tool_name" arg1 arg2 arg3 arg4
 
-                    local output
                     output=$(dispatch_tool "$cur_tool_name" "$arg1" "$arg2" "$arg3" "$arg4" 2>&1)
-                    local tool_rc=$?
+                    tool_rc=$?
 
                     if (( tool_rc != 0 )); then
                         output="Error: tool execution failed: $output"
                     fi
                     output=$(format_tool_result "$output")
 
-                    local result_for_conv="$output"
+                    result_for_conv="$output"
                     if [[ "$cur_tool_name" == "Edit" ]]; then
                         result_for_conv="$(printf '%s' "$output" | sed -n '1p')"
                     fi
@@ -1161,11 +1139,10 @@ agent_loop_stream() {
                     fi
 
                     # TOOL_RESULT: [0]=type [1]=id [2]=name [3]=output [4..]=checklist/summary
-                    local _tr_args=("TOOL_RESULT" "$cur_tool_id" "$cur_tool_name" "$output")
+                    _tr_args=("TOOL_RESULT" "$cur_tool_id" "$cur_tool_name" "$output")
                     [[ -n "$arg1" ]] && _tr_args+=("$arg1")
                     [[ -n "$arg2" ]] && _tr_args+=("$arg2")
                     # Search for checklist/summary in TOOL_CALL flattened KV pairs
-                    local i _n=${#REPLY_MESSAGE[@]}
                     for (( i = 4; i + 1 < _n; i += 2 )); do
                         if [[ "${REPLY_MESSAGE[i]}" == "checklist" ]]; then _tr_args+=("checklist" "${REPLY_MESSAGE[i+1]}"); fi
                         if [[ "${REPLY_MESSAGE[i]}" == "summary" ]]; then _tr_args+=("summary" "${REPLY_MESSAGE[i+1]}"); fi
@@ -1175,7 +1152,7 @@ agent_loop_stream() {
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
                 USAGE)
-                    _ctx_tokens=$(record_usage "agent" 1)
+                    _ctx_tokens=$(record_usage "agent" agent_request_count false)
                     ;;
             esac
         done < <(llm_call "$(conv_get_messages "$(<"$CONV_FILE")")")
@@ -1194,13 +1171,9 @@ agent_loop_stream() {
             if [[ -n "$tool_conv_results" ]]; then
                 conv_add_tool_results "$tool_conv_results"
             fi
-            # Update context tokens and trigger compact if needed
+            # Update context tokens from USAGE (used by next turn's compact check)
             if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
-                stats_set 7=${_ctx_tokens}
-                compact_context_window auto || true
-            else
-                # No usage data (e.g. retry) — skip compact
-                :
+                stats_set current_context_tokens=${_ctx_tokens}
             fi
             # tool_use/tool_calls → loop continues; anything else → break
             [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
@@ -1216,7 +1189,7 @@ agent_loop_stream() {
 }
 
 agent_loop() {
-    local user_input="$1" had_error=false
+    local user_input="$1" had_error=false _se=""
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
     INTERRUPT_REQUESTED=false
@@ -1228,9 +1201,8 @@ agent_loop() {
     [[ "$LOG_EVENTS" != "false" ]] && \
         session_append_line "{\"type\":\"user_input\",\"content\":\"$(json_escape "$user_input")\"}"
     # Increment turn count
-    stats_inc 0=1
+    stats_inc current_turn_count=1
 
-    local _se=""
     while read_message; do
         [[ "${REPLY_MESSAGE[0]}" == "ERROR" ]] && had_error=true
 
@@ -1357,14 +1329,13 @@ parse_args() {
 }
 
 list_sessions() {
-    local dir
+    local dir session_dir name mod preview summary_file
     dir="$(get_session_dir)"
     if [[ ! -d "$dir" ]]; then
         echo "No sessions found."
         return
     fi
     printf "%-40s %-16s %s\n" "NAME" "MODIFIED" "PREVIEW"
-    local session_dir name mod preview summary_file
     for session_dir in "$dir"/*/; do
         [[ -d "$session_dir" ]] || continue
         name=$(basename "$session_dir")
@@ -1426,7 +1397,7 @@ validate_config() {
 }
 
 interactive_mode() {
-    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history"
+    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line
 
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
     touch "$history_file" 2>/dev/null || true
@@ -1436,9 +1407,7 @@ interactive_mode() {
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
     if [[ -s "${SESSION_EVENT_FILE:-}" ]]; then
-        local _saved_log_events="${LOG_EVENTS:-true}"
         LOG_EVENTS=false
-        local _efile="${SESSION_EVENT_FILE:-}" _match _from_line
         _match=$(grep -n '"type":"user_input"' "$_efile" 2>/dev/null | tail -n 10 | head -n 1) || true
         _from_line="${_match%%:*}"
         [[ -n "$_from_line" && "$_from_line" -ge 1 ]] || _from_line=1

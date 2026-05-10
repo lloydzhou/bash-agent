@@ -545,6 +545,10 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 	state := displayState{lastChar: "\n"}
 	for turn < rt.cfg.MaxTurns {
 		turn++
+
+		// Compact before each LLM call: uses ctx_tokens from previous call's USAGE
+		rt.compactContextWindow("auto")
+
 		text := ""
 		thinking := ""
 		var calls []protocol.ToolCallEvent
@@ -602,18 +606,18 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				output = tools.FormatToolResult(output, rt.cfg.ToolResultMaxBytes)
 
 				if e.Name == "PlanClear" {
-					_, _ = rt.compactContextWindow("plan_clear")
+					rt.compactContextWindow("plan_clear")
 					_ = os.WriteFile(rt.paths.Plan, []byte{}, 0o644)
 					output = "Plan cleared."
 				}
 
 				if e.Name == "PlanConfirm" {
-					// Move draft → plan, trigger compact (plan in system prompt invalidates cache, so compact at same time)
+					// 先 compact 再写 plan：compact 复用旧缓存前缀，写 plan 后才触发缓存失效——总共一次冷启动
 					draftData, err := os.ReadFile(rt.paths.PlanDraft)
 					if err == nil && len(draftData) > 0 {
+						rt.compactContextWindow("plan_confirm")
 						_ = os.WriteFile(rt.paths.Plan, draftData, 0o644)
 						_ = os.WriteFile(rt.paths.PlanDraft, []byte{}, 0o644) // Reset draft
-						_, _ = rt.compactContextWindow("plan_confirm")
 						output = "Plan confirmed and locked in."
 					} else {
 						output = "Error: no plan draft found to confirm."
@@ -704,11 +708,10 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				}
 				// Note: granular tool_result events already written by displayEvent inline
 			}
-			// Update stats with captured usage from this turn (matches bash agent_loop_stream)
+			// Update context tokens from USAGE (used by next turn's compact check)
 			if rt.lastInputTokens > 0 {
 				rt.updateStatsFromLastUsage()
 			}
-			_, _ = rt.compactContextWindow("auto")
 			// tool_use/tool_calls → loop continues; anything else → break
 			if stop != "tool_use" && stop != "tool_calls" {
 				return nil
@@ -932,6 +935,7 @@ func (rt *runtime) displayEvent(state *displayState, evt any) error {
 			"output_tokens":               e.OutputTokens,
 			"cache_read_input_tokens":     e.CacheReadInputTokens,
 			"cache_creation_input_tokens": e.CacheCreationInputTokens,
+			"kind":                        "agent",
 		}
 		if err := rt.emitAndAppendEvent(usageEvt); err != nil {
 			return err
@@ -1089,11 +1093,7 @@ func (rt *runtime) compactContextWindow(trigger string) (bool, error) {
 		stats["last_updated"] = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 		rt.writeStats(stats)
 	}
-	if rt.isStreamJSONMode() {
-		_ = rt.emitStream(map[string]any{"type": "context_update", "kind": "compact", "trigger": trigger})
-	} else {
-		rt.info("Context compacted automatically.")
-	}
+	_ = rt.emitContextUpdate(trigger)
 	return true, nil
 }
 
@@ -1327,9 +1327,14 @@ func (rt *runtime) updateTermTitle() {
 	ai := int(statsFloat64(stats, "total_input_tokens"))
 	ao := int(statsFloat64(stats, "total_output_tokens"))
 	ctx := int(statsFloat64(stats, "current_context_tokens"))
-	_, _ = fmt.Fprintf(rt.stderr, "\033]0;%s T:%s R:%s I:%s O:%s C:%s\007",
+	cr := int(statsFloat64(stats, "total_cache_read_tokens"))
+	cachePct := "—"
+	if ai > 0 {
+		cachePct = fmt.Sprintf("%d%%", cr*100/ai)
+	}
+	_, _ = fmt.Fprintf(rt.stderr, "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",
 		rt.cfg.Model,
-		fmtNum(tc), fmtNum(ar), fmtNum(ai), fmtNum(ao), fmtNum(ctx))
+		fmtNum(tc), fmtNum(ar), fmtNum(ai), cachePct, fmtNum(ao), fmtNum(ctx))
 }
 
 func (rt *runtime) buildAssistantEvent(text string, calls []protocol.ToolCallEvent) map[string]any {
@@ -1350,6 +1355,17 @@ func (rt *runtime) buildAssistantEvent(text string, calls []protocol.ToolCallEve
 
 func (rt *runtime) isStreamJSONMode() bool {
 	return rt.cfg.OutputFormat == config.OutputStreamJSON
+}
+
+// emitContextUpdate emits a context_update event (stream-json) or prints info (human mode).
+func (rt *runtime) emitContextUpdate(trigger string) error {
+	evt := map[string]any{"type": "context_update", "kind": "compact", "trigger": trigger}
+	_ = rt.appendEvent(evt)
+	if rt.isStreamJSONMode() {
+		return rt.emitStream(evt)
+	}
+	rt.info("Context compacted (%s).", trigger)
+	return nil
 }
 
 func (rt *runtime) emitStream(v any) error {

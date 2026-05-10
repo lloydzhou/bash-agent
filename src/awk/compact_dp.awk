@@ -26,7 +26,7 @@
 # Output: number of lines to keep (turn-aligned), or "0" if no compact
 {
     sizes[NR] = int((length($0) + 3) / 4) + 1
-    role[NR]  = ($0 ~ /^\{"role":"user","content":"/) ? "user" : "other"
+    role[NR]  = ($0 ~ /"role":"user"/ && $0 !~ /"content":\[/) ? "user" : "other"
 }
 END {
     if (NR == 0) { print "0"; exit }
