@@ -3,7 +3,6 @@ package conversation
 import (
 	"encoding/json"
 	"math"
-	"strings"
 )
 
 // DPCompactConfig holds the parameters for the DP compact decision.
@@ -49,14 +48,20 @@ func (s Store) CompactTurnKeep(minKeepRatio float64) (int, error) {
 		return 0, nil
 	}
 
-	// Detect user role: match {"role":"user","content":"... (excludes tool_result lines)
+	// Detect user role via JSON field access (map key order is not guaranteed by Go's json.Marshal).
+	// A "user turn" has role="user" and content is a plain string (excludes tool_result lines).
 	roleUser := make([]bool, len(lines))
 	totalTurns := 0
 	for i, line := range lines {
-		s := string(line)
-		if strings.HasPrefix(s, `{"role":"user","content":"`) {
-			roleUser[i] = true
-			totalTurns++
+		var msg struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(line, &msg); err == nil {
+			if msg.Role == "user" && len(msg.Content) > 0 && msg.Content[0] == '"' {
+				roleUser[i] = true
+				totalTurns++
+			}
 		}
 	}
 
@@ -76,8 +81,8 @@ func (s Store) CompactTurnKeep(minKeepRatio float64) (int, error) {
 			found++
 		}
 	}
-	if keep < 3 {
-		return len(lines), nil
+	if keep == 0 {
+		return 0, nil
 	}
 	return keep, nil
 }

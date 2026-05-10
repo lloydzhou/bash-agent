@@ -307,6 +307,10 @@ impl Runtime {
 
             while turn < self.cfg.max_turns {
                 turn += 1;
+
+                // Compact before each LLM call: uses ctx_tokens from previous call's USAGE
+                let _ = self.compact_context_window("auto");
+
                 let mut text = String::new();
                 let mut thinking = String::new();
                 let mut calls: Vec<ToolCallEvent> = Vec::new();
@@ -472,11 +476,10 @@ impl Runtime {
                         self.conv.add_tool_results(&tool_results)?;
                         // Note: granular tool_result events already written by display_event via emit_and_append_event
                     }
-                    // Update stats with captured usage from this turn (matches bash)
+                    // Update context tokens from USAGE (used by next turn's compact check)
                     if self.last_input_tokens > 0 {
                         self.update_stats_from_usage();
                     }
-                    let _ = self.compact_context_window("auto");
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         return Ok(());
@@ -582,7 +585,8 @@ impl Runtime {
                     "input_tokens":input_tokens,
                     "output_tokens":output_tokens,
                     "cache_read_input_tokens":cache_read_input_tokens,
-                    "cache_creation_input_tokens":cache_creation_input_tokens
+                    "cache_creation_input_tokens":cache_creation_input_tokens,
+                    "kind":"agent"
                 }))?;
                 // No human display for usage events
                 // context = input + output + cache_read + cache_creation
@@ -771,6 +775,7 @@ impl Runtime {
         }
 
         let k = match keep_lines {
+            Some(0) => return Ok(false),
             Some(v) => v,
             None => return Ok(false),
         };
@@ -799,12 +804,7 @@ impl Runtime {
             self.write_stats(&stats);
         }
 
-        if self.is_stream_json_mode() {
-            let _ = self
-                .emit_stream(json!({"type":"context_update","kind":"compact","trigger": trigger}));
-        } else {
-            self.info("Context compacted automatically.");
-        }
+        self.emit_context_update(trigger)?;
         Ok(true)
     }
 
@@ -1091,6 +1091,18 @@ impl Runtime {
 
     fn is_stream_json_mode(&self) -> bool {
         self.cfg.output_format == OutputFormat::StreamJson
+    }
+
+    /// Emit a context_update event: write to events.jsonl + emit to stream-json or print info.
+    fn emit_context_update(&self, trigger: &str) -> Result<()> {
+        let evt = json!({"type":"context_update","kind":"compact","trigger":trigger});
+        self.append_event(evt.clone())?;
+        if self.is_stream_json_mode() {
+            self.emit_stream(evt)?;
+        } else {
+            self.info(&format!("Context compacted ({}).", trigger));
+        }
+        Ok(())
     }
 
     fn emit_stream(&self, value: Value) -> Result<()> {

@@ -807,7 +807,7 @@ compact_dp_decision() {
 compact_turn_keep() {
     awk -v r="$DP_MIN_KEEP_RATIO" '
     BEGIN { target_turns = 0 }
-    { role[NR] = ($0 ~ /^\{"role":"user","content":"/) ? "user" : "other" }
+    { role[NR] = ($0 ~ /"role":"user"/ && $0 !~ /"content":\[/) ? "user" : "other" }
     END {
         if (NR == 0) { print 0; exit }
         for (i = 1; i <= NR; i++) if (role[i] == "user") total_turns++
@@ -816,7 +816,7 @@ compact_turn_keep() {
         if (target > total_turns) target = total_turns
         keep = 0; found = 0
         for (i = NR; i >= 1 && found < target; i--) { keep++; if (role[i] == "user") found++ }
-        if (keep < 3) { print NR; exit }
+        if (keep == 0) { print 0; exit }
         print keep
     }' "$CONV_FILE"
 }
@@ -840,8 +840,8 @@ compact_context_window() {
         fi
     fi
 
-    # 统一 guard：keep >= total 时只有 plan_clear/plan_confirm 继续
-    (( keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || return 1
+    # 统一 guard：keep >= total 或 keep==0 时只有 plan_clear/plan_confirm 继续
+    (( keep_lines > 0 && keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || return 1
     drop=$(( total_lines - keep_lines ))
 
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
@@ -859,7 +859,7 @@ compact_context_window() {
 
     rm -f "$tmp_dropped"
     local remaining_turns
-    remaining_turns=$(grep -c '"role":"user","content":"' "$CONV_FILE" 2>/dev/null || echo 0)
+    remaining_turns=$(awk '/"role":"user"/ && ! /"content":\[/{n++} END{print n+0}' "$CONV_FILE" 2>/dev/null)
     stats_set current_turn_count=$remaining_turns
     return 0
 }
@@ -1085,11 +1085,11 @@ agent_loop_stream() {
     local user_input="$1" turn=0
     conv_add_user "$user_input"
 
-    # Compact before first LLM call: uses ctx_tokens from previous turn's USAGE
-    compact_context_window auto && write_message "CONTEXT_UPDATE" "compact" "auto"
-
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
+
+        # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
+        compact_context_window auto && write_message "CONTEXT_UPDATE" "compact" "auto"
 
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
