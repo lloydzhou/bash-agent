@@ -608,12 +608,12 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 				}
 
 				if e.Name == "PlanConfirm" {
-					// Move draft → plan, trigger compact (plan in system prompt invalidates cache, so compact at same time)
+					// 先 compact 再写 plan：compact 复用旧缓存前缀，写 plan 后才触发缓存失效——总共一次冷启动
 					draftData, err := os.ReadFile(rt.paths.PlanDraft)
 					if err == nil && len(draftData) > 0 {
+						_, _ = rt.compactContextWindow("plan_confirm")
 						_ = os.WriteFile(rt.paths.Plan, draftData, 0o644)
 						_ = os.WriteFile(rt.paths.PlanDraft, []byte{}, 0o644) // Reset draft
-						_, _ = rt.compactContextWindow("plan_confirm")
 						output = "Plan confirmed and locked in."
 					} else {
 						output = "Error: no plan draft found to confirm."

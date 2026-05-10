@@ -378,12 +378,12 @@ impl Runtime {
                             }
 
                             if call.name == "PlanConfirm" {
-                                // Move draft → plan, trigger compact
+                                // 先 compact 再写 plan：compact 复用旧缓存前缀，写 plan 后才触发缓存失效——总共一次冷启动
                                 match fs::read(&self.paths.plan_draft) {
                                     Ok(data) if !data.is_empty() => {
+                                        let _ = self.compact_context_window("plan_confirm");
                                         let _ = fs::write(&self.paths.plan, &data);
                                         let _ = fs::write(&self.paths.plan_draft, "");
-                                        let _ = self.compact_context_window("plan_confirm");
                                         output = "Plan confirmed and locked in.".to_string();
                                     }
                                     _ => {
