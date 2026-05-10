@@ -1329,8 +1329,9 @@ func (rt *runtime) updateTermTitle() {
 	ctx := int(statsFloat64(stats, "current_context_tokens"))
 	cr := int(statsFloat64(stats, "total_cache_read_tokens"))
 	cachePct := "—"
-	if ai > 0 {
-		cachePct = fmt.Sprintf("%d%%", cr*100/ai)
+	total := ai + cr
+	if total > 0 {
+		cachePct = fmt.Sprintf("%d%%", cr*100/total)
 	}
 	_, _ = fmt.Fprintf(rt.stderr, "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",
 		rt.cfg.Model,

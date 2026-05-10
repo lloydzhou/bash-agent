@@ -1078,10 +1078,13 @@ impl Runtime {
         let ao = stats_get_f64(&stats, "total_output_tokens") as usize;
         let ctx = stats_get_f64(&stats, "current_context_tokens") as usize;
         let cr = stats_get_f64(&stats, "total_cache_read_tokens") as usize;
-        let cache_pct = if ai > 0 {
-            format!("{}%", cr * 100 / ai)
-        } else {
-            "—".to_string()
+        let cache_pct = {
+            let total = ai + cr;
+            if total > 0 {
+                format!("{}%", cr * 100 / total)
+            } else {
+                "—".to_string()
+            }
         };
         eprint!(
             "\x1b]0;{} T:{} R:{} I:{}({}) O:{} C:{}\x07",
