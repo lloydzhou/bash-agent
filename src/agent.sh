@@ -54,11 +54,7 @@ INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
 
-# --- Stats (file-based, no in-memory cache) ---
-# All stats operations go directly to stats.json via awk action=update.
-# Keys: current_turn_count agent_request_count compact_request_count
-#        total_input_tokens total_output_tokens total_cache_read_tokens
-#        total_cache_creation_tokens current_context_tokens
+
 
 # --- Environment Defaults ---
 : "${ANTHROPIC_API_KEY:=}"
