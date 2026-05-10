@@ -9,16 +9,16 @@
 
 ### 1. 进程隔离输入与 Agent 循环
 
-**适用范围**：bash / go / rust
+**适用范围**：go / rust
 
 **现状**：`interactive_mode` 中读取输入和 `agent_loop` 在同一个主进程，agent 执行工具或等待 API 时整个进程阻塞，无法接收新输入。
 
 **方案**：
-- **bash**：用 `coproc` 将输入监听放到独立进程，通过管道与主循环通信。
+- ~~**bash**：用 `coproc` 将输入监听放到独立进程，通过管道与主循环通信。~~ 放弃 — bash 3.2 不支持 coproc；named pipe 替代方案在多行输入、scroll region 溢出、readline 兼容性等方面问题多，得不偿失。
 - **go**：独立 goroutine 读取 stdin，通过 channel 将输入发送到 agent 主循环。
 - **rust**：`tokio::spawn` 独立任务读取 stdin，通过 `mpsc` channel 通信。
 
-**状态**：⬚ 待开始
+**状态**：❌ bash 放弃；go/rust ⬚ 待开始
 
 ---
 
