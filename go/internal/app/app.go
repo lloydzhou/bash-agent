@@ -1335,7 +1335,7 @@ func (rt *runtime) updateTermTitle() {
 	}
 	_, _ = fmt.Fprintf(rt.stderr, "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",
 		rt.cfg.Model,
-		fmtNum(tc), fmtNum(ar), fmtNum(ai), cachePct, fmtNum(ao), fmtNum(ctx))
+		fmtNum(tc), fmtNum(ar), fmtNum(total), cachePct, fmtNum(ao), fmtNum(ctx))
 }
 
 func (rt *runtime) buildAssistantEvent(text string, calls []protocol.ToolCallEvent) map[string]any {

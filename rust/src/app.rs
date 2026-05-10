@@ -1091,7 +1091,7 @@ impl Runtime {
             self.cfg.model,
             Self::fmt_num(tc),
             Self::fmt_num(ar),
-            Self::fmt_num(ai),
+            Self::fmt_num(ai + cr),
             cache_pct,
             Self::fmt_num(ao),
             Self::fmt_num(ctx)
