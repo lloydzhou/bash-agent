@@ -285,7 +285,7 @@ system prompt 采用稳定 section 顺序拼装，而不是重型模板系统。
 8. `skill-index`
 9. `selected-skills`
 10. `current-plan`
-11. `context-summary`
+11. `context-snapshot`
 12. `output-language`（尾部重申，语言约束作为 system prompt 的最后内容——近因锚定）
 
 system prompt 首尾都是语言约束，中间内容无论多长、是否变化，语言锚定效应始终被两端强化。
@@ -300,7 +300,7 @@ system prompt 首尾都是语言约束，中间内容无论多长、是否变化
 
 `using-your-tools` 指导模型如何正确使用各内置 tool。
 
-`plan-lifecycle-guidance` 为复杂多步任务提供两阶段规划工作流：规划阶段写入 `plan.draft`（不进入 system prompt，不影响缓存）→ 用户确认后通过 `PlanConfirm` 工具先执行 force compact（复用旧前缀缓存）再将 draft 移至 `plan.md`（此时缓存才失效，正好 compact 已回收了上下文窗口）→ TodoWrite checklist → 执行 → `PlanClear` 清空 plan 并 compact。由 `PLAN_DRAFT_FILE` 和 `PLAN_FILE` 环境变量标识路径。`PlanClear` 后，system prompt 中的 plan section 会消失。
+`plan-lifecycle-guidance` 为复杂多步任务提供规划工作流，采用状态机模型：用户回复必须归类为 REVISE（更新 draft 并继续规划）、CONFIRM（调用 PlanConfirm 确认并进入执行）、CANCEL（清空 draft 并退出规划）之一。规划阶段写入 `plan.draft`（不进入 system prompt，不影响缓存）→ 用户确认后通过 `PlanConfirm` 工具先执行 force compact（复用旧缓存前缀）再将 draft 移至 `plan.md`（此时缓存才失效，正好 compact 已回收了上下文窗口）→ TodoWrite checklist → 执行 → `PlanClear` 清空 plan 并 compact。由 `PLAN_DRAFT_FILE` 和 `PLAN_FILE` 环境变量标识路径。`PlanClear` 后，system prompt 中的 plan section 会消失。
 
 ### 4. Skills
 
