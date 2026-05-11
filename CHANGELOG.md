@@ -4,6 +4,19 @@
 
 ---
 
+## [2.4.1] - 2026-05-11
+
+### Added
+
+- **Summary Reflections 字段**：compact summary 字段列表末尾增加 `Reflections:`，让压缩时显式保留失败教训和策略调整等隐性知识（bash/Go/Rust 三端同步）（`ea793ee`）
+
+### Changed
+
+- **context-summary → context-snapshot**：bash 端 section name 统一为 `context-snapshot`，与 Go/Rust 端一致（`ea793ee`）
+- **plan-lifecycle-guidance 精简**：将 8 步线性列表 + 4 条分离规则重写为状态机三分类（REVISE/CONFIRM/CANCEL），渲染后从 ~1650 字节精简至 ~1140 字节；变量引用从行尾移至 Files 行中间，避免字符串闭合错觉（`ea793ee`）
+
+---
+
 ## [2.4.0] - 2026-05-10
 
 ### Added
