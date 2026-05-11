@@ -97,7 +97,7 @@ func (b Builder) BuildSystemPrompt() (string, error) {
 	if section, err := readOptionalFile(b.SummaryFile); err != nil {
 		return "", err
 	} else {
-		sections = appendSection(sections, "context-summary", section, "")
+		sections = appendSection(sections, "context-snapshot", section, "")
 	}
 	outputLanguageReaffirm := fmt.Sprintf("MUST use \"%s\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.", locale)
 	if strings.HasPrefix(locale, "zh") {
