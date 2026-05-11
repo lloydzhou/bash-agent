@@ -70,7 +70,7 @@ impl Builder {
              - **Step-by-step**:\n\
                1. Write draft to PLAN_DRAFT_FILE using Edit (markdown: goal, analysis, steps, notes)\n\
                2. Ask user to confirm the plan before execution\n\
-               3. If user requests changes: update PLAN_DRAFT_FILE, ask for confirmation again. Repeat until user explicitly confirms.\n\
+               3. **Draft revision loop**: while PLAN_DRAFT_FILE is non-empty and user has NOT said \"confirmed\"/\"ok\"/\"go ahead\" (or equivalent), ANY user reply (questions, suggestions, objections, or implicit change requests) MUST be treated as revision feedback. ALWAYS update PLAN_DRAFT_FILE to reflect the discussion, then ask for confirmation again. NEVER just answer without updating the draft.\n\
                4. If user explicitly cancels/abandons: use Bash to clear PLAN_DRAFT_FILE (e.g. `: > PLAN_DRAFT_FILE`). Do NOT use PlanClear.\n\
                5. When user confirms: call PlanConfirm tool — this moves draft → PLAN_FILE and triggers a context compaction (cache invalidation is already happening, so we reclaim space at the same time).\n\
                6. After PlanConfirm, create TodoWrite checklist based on plan\n\
