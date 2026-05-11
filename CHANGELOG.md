@@ -14,11 +14,13 @@
 
 - **compact 触发时机**：`compact_context_window` 从循环外移到 `agent_loop_stream` 的每次 LLM 调用前，确保每轮都能基于最新的 `current_context_tokens` 做决策（`a5692d7`）
 - **usage → ctx_tokens 数据流**：`record_usage` 返回 `ctx_tokens` 但不再直接写入 `current_context_tokens`；改由主循环在流结束后显式写入，compact 始终使用上一轮的完整上下文大小（`a5692d7`）
+- **OSC 标题 I 展示总输入量**：`I` 改为展示 `input + cache_read` 总输入 token 数，而非仅未命中部分（`75751b0`）
 
 ### Fixed
 
 - **Edit 工具 `unbound variable`**：`tool_edit` 合并 local 声明时 `label="${path#/}"` 引用了同语句中尚未赋值的 `path`，在 `set -u` 模式下报错；改用 `${1#/}` 直接引用位置参数（`968f5b3`）
 - **缓存命中率计算**：修正公式为 `cache_read / (input + cache_read)`，之前误用 `cache_read / input` 导致超过 100%（`8e188f5`）
+- **Plan draft 修订循环**：将第3步从被动的 "If user requests changes" 改为主动的 "draft 非空时，任何非确认回复都必须更新 draft"，防止 AI 只回答而不更新计划（`aa9074f`）
 
 ---
 
