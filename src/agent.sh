@@ -36,13 +36,13 @@ declare -a SKILL_NAMES=()
 
 # --- Runtime Mode & Session State ---
 INTERACTIVE=false
-SCROLL_BOTTOM=0
 SESSION_ID=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
 PLAN_FILE=""
 PLAN_DRAFT_FILE=""
 STATS_FILE=""
+INPUT_FIFO=""
 LOG_EVENTS=true
 
 # --- Internal Runtime State ---
@@ -62,9 +62,7 @@ PREV_WAS_THINKING=false
 : "${OPENAI_BASE_URL:=}"
 
 # --- Utility Functions ---
-awk_run() {
-    LC_ALL=C LANG=C awk "$@"
-}
+awk_run() { LC_ALL=C LANG=C awk "$@"; }
 
 write_message() {
     # Args: field0 field1 field2 ...
@@ -113,14 +111,12 @@ deny_bash_command_reason() {
     local cmd="$1" device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
 
     [[ -z "$cmd" ]] && return 1
-
     case "$cmd" in
         sudo\ *|shutdown*|reboot*|halt*|poweroff*|mkfs*|fdisk*)
             printf 'blocked dangerous command prefix'
             return 0
             ;;
     esac
-
     [[ "$cmd" == *'rm -rf /'* || "$cmd" == *'rm -fr /'* ]] && {
         printf 'blocked destructive root deletion pattern'
         return 0
@@ -256,7 +252,6 @@ format_tool_result() {
         printf '%s' "$output"
         return 0
     fi
-
     size=${#output}
     marker=$'\n\n[... truncated: showing first/last portions of %d bytes ...]\n\n'
     marker_len=$(( ${#marker} + 20 ))
@@ -264,7 +259,6 @@ format_tool_result() {
     tail_len=${#tail_text}
     head_len=$(( TOOL_RESULT_MAX_BYTES - marker_len - tail_len ))
     (( head_len > 0 )) || head_len=$(( TOOL_RESULT_MAX_BYTES / 2 ))
-
     printf '%s'"$marker"'%s' "${output:0:$head_len}" "$size" "$tail_text"
 }
 
@@ -322,8 +316,7 @@ display_human_text() {
     fi
 }
 
-# Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output).
-# Prints JSON to stdout; returns 1 if type has no event representation.
+# Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output). Prints JSON to stdout; returns 1 if type has no event representation.
 msg_to_stream_event() {
     local _type="${REPLY_MESSAGE[0]}"
     case "$_type" in
@@ -414,7 +407,7 @@ display_event() {
             printf '\033[32m> %s\033[0m\n' "$_um_text"
             DISPLAY_LAST_CHAR=$'\n'
             ;;
-        STOP)  (( SCROLL_BOTTOM == 0 )) && display_ensure_newline ;;
+        STOP)  display_ensure_newline ;;
         CONTEXT_UPDATE)
             display_ensure_newline; printf '\033[36mContext compacted (%s).\033[0m\n' "${REPLY_MESSAGE[2]}"; DISPLAY_LAST_CHAR=$'\n'
             ;;
@@ -458,10 +451,7 @@ build_system_prompt() {
     printf '%s' "${output%$'\n'}"
 }
 
-read_optional_file() {
-    local path="$1"
-    [[ -n "$path" && -s "$path" ]] && printf '%s' "$(<"$path")"
-}
+read_optional_file() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 
 find_skill_base_dirs() {
     local cwd home
@@ -516,12 +506,10 @@ build_skill_index_section() {
 
 build_selected_skills_section() {
     local output="" skill_name skill_content
-
     if [[ ${#SKILL_NAMES[@]} -eq 0 ]]; then
         printf ''
         return 0
     fi
-
     for skill_name in "${SKILL_NAMES[@]}"; do
         skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md or ~/.claude/skills/$skill_name/SKILL.md)"
         append_section output "skill" "$skill_content" "$skill_name"
@@ -555,12 +543,10 @@ build_instruction_files_section() {
         global_content=$(<"$global_file") || return 1
         append_section output "instruction-file" "$global_content" "global"
     fi
-
     if [[ -n "$project_file" ]]; then
         project_content=$(<"$project_file") || return 1
         append_section output "instruction-file" "$project_content" "project"
     fi
-
     printf '%s' "${output%$'\n'}"
 }
 
@@ -660,17 +646,20 @@ main_loop() {
     while read_message <&3; do
         case "${REPLY_MESSAGE[0]}" in
             USER_INPUT)
-                (( SCROLL_BOTTOM > 0 )) && printf '\033[%d;1H\n\033[32m> %s\033[0m\n' "$SCROLL_BOTTOM" "${REPLY_MESSAGE[1]}"
-                stty echo 2>/dev/null || true
-                agent_loop "${REPLY_MESSAGE[1]}"
-                (( SCROLL_BOTTOM > 0 )) && printf '\033[%d;3H' "$((SCROLL_BOTTOM + 1))"
+                local _input="${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
+                [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
+                agent_loop "$_input"
+                if [[ "$INTERACTIVE" == true ]]; then
+                    [[ "$DISPLAY_LAST_CHAR" != $'\n' ]] && printf '\n'
+                    printf '\033[32m>\033[0m '
+                fi
                 ;;
         esac
     done
     exec 3<&-
 }
 
-# --- Conversation Management (temp file, one JSON message per line) ---
+
 
 conv_init() {
     if [[ -z "$SESSION_ID" ]]; then
@@ -773,8 +762,7 @@ stats_get() {
 
 record_usage() {
     # Args: kind counter_key [write_event=true]
-    # Reads REPLY_MESSAGE[1..4], updates stats, optionally logs event.
-    # Returns context token count (input+output+cache_read+cache_creation).
+    # Reads REPLY_MESSAGE[1..4], updates stats, optionally logs event. Returns context token count (input+output+cache_read+cache_creation).
     local kind="$1" counter_key="$2" write_event="${3:-true}" _event \
           _in="${REPLY_MESSAGE[1]:-0}" _out="${REPLY_MESSAGE[2]:-0}" _cr="${REPLY_MESSAGE[3]:-0}" _cc="${REPLY_MESSAGE[4]:-0}"
     if [[ "$write_event" == "true" ]]; then
@@ -800,12 +788,7 @@ stats_show_osc() {
     BEGIN{printf "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",m,f(t),f(r),f(i+cr),pct(cr,cr+i),f(o),f(c) > "/dev/stderr"}'
 }
 
-# --- Dynamic Planning Compact Decision ---
-# DP compact decision: find optimal k via cache-aware economics.
-# Cache-Aligned Summarization: the summary call reuses the main agent's
-# prefix (system prompt + tools + cache-control markers) for cache hits.
-# Formula: NetBenefit(k) = ①savings - ②cache_miss - ③compact_cost - ④info_loss
-# Returns: number of lines to keep (turn-aligned), or "0" if no compact beneficial.
+# DP compact decision: find optimal k via cache-aware economics. Returns lines to keep or "0".
 compact_dp_decision() {
     awk_run -v t="$(stats_get current_turn_count)" -v total_requests="$(stats_get agent_request_count)" \
             -v total_compact="$(stats_get compact_request_count)" -v total_input="$(stats_get total_input_tokens)" \
@@ -838,9 +821,7 @@ compact_context_window() {
     # 始终先算 DP 决策（经济最优）
     keep_lines=$(compact_dp_decision) || true
     [[ -n "$keep_lines" ]] || keep_lines=0
-
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-
     # DP 返回 0（不值得）或 ≥ total_lines（全保留）→ 都算"不压缩"，进入 fallback
     if (( keep_lines == 0 )) || (( keep_lines >= total_lines && total_lines > 0 )); then
         local ct=$(stats_get current_context_tokens)
@@ -854,20 +835,17 @@ compact_context_window() {
     # 统一 guard：keep >= total 或 keep==0 时只有 plan_clear/plan_confirm 继续
     (( keep_lines > 0 && keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || return 1
     drop=$(( total_lines - keep_lines ))
-
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
     dropped_messages=$(<"$tmp_dropped")
 
     summary_response=$(run_summary_call "$dropped_messages")
     context_append_summary "$summary_response"
-
     if (( keep_lines < total_lines )); then
         tmp=$(mktemp "${TMPDIR:-/tmp}/conv_trim.XXXXXX")
         tail -n "$keep_lines" "$CONV_FILE" > "$tmp"
         mv "$tmp" "$CONV_FILE"
     fi
-
     rm -f "$tmp_dropped"
     local remaining_turns
     remaining_turns=$(awk '/"role":"user"/ && ! /"content":\[/{n++} END{print n+0}' "$CONV_FILE" 2>/dev/null)
@@ -876,7 +854,6 @@ compact_context_window() {
 }
 
 # --- Tool Definitions (auto-generated JSON) ---
-
 load_tool_defs() {
     local tools_file script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -886,14 +863,11 @@ load_tool_defs() {
 }
 
 # --- Tool Implementations ---
-
 tool_read() {
     local path="$1" offset="${2:-1}" limit="${3:-0}"
-
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
-
     if (( limit > 0 )); then
         sed -n "${offset},$((offset + limit - 1))p" "$path"
     else
@@ -903,7 +877,6 @@ tool_read() {
 
 tool_write() {
     local path="$1" content="$2" content_size
-
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     content_size=$(printf '%s' "$content" | wc -c)
     content_size=${content_size//[[:space:]]/}
@@ -911,7 +884,6 @@ tool_write() {
         echo "Error: content too large for write_file (${content_size} bytes > ${FILE_WRITE_MAX_BYTES} bytes)"
         return 1
     fi
-
     mkdir -p "$(dirname "$path")" 2>/dev/null
     printf '%s' "$content" > "$path"
     echo "OK: wrote $(wc -c < "$path" 2>/dev/null || echo '?') bytes to $path"
@@ -941,16 +913,13 @@ tool_edit() {
 
 tool_bash() {
     local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" reason output tool_rc tmpout
-
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
     reason=$(deny_bash_command_reason "$cmd") || reason=""
     if [[ -n "$reason" ]]; then
         echo "Error: command blocked by bash safety policy ($reason)"
         return 1
     fi
-
     tmpout=$(mktemp)
-
     if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
         run_with_timeout "$timeout_secs" bash -lc "$cmd" > "$tmpout" 2>&1
         tool_rc=$?
@@ -968,7 +937,6 @@ tool_bash() {
 
 tool_glob() {
     local pattern="$1" path="$2"
-
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
     [[ -d "$path" ]] || { echo "Error: directory not found: $path"; return 1; }
@@ -978,16 +946,13 @@ tool_glob() {
 
 tool_grep() {
     local pattern="$1" path="$2" glob="$3" context="$4" args=(-n --color never --heading)
-
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
     [[ -e "$path" ]] || { echo "Error: path not found: $path"; return 1; }
     command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for grep"; return 1; }
-
     [[ -n "$context" && "$context" =~ ^[0-9]+$ ]] && args+=(-C "$context")
     [[ -n "$glob" ]] && args+=(--glob "$glob")
     args+=("--" "$pattern" "$path")
-
     rg "${args[@]}" 2>/dev/null || true
 }
 
@@ -1045,37 +1010,28 @@ dispatch_tool() {
 }
 
 # --- API Calls (curl) ---
-
 _stream_curl() {
     curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"
 }
 
 # --- LLM Call (internal) ---
-
 llm_call() {
     local messages="$1" max_tokens="${2:-$MAX_TOKENS}" thinking_budget="${3:-$THINKING_BUDGET}" body system_prompt
     system_prompt=$(build_system_prompt)
-
     body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
-
     if (( thinking_budget > 0 )); then
         body+=",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":${thinking_budget}}"
     fi
-
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(json_escape "$system_prompt")\""
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
-
     body+=",\"messages\":${messages}}"
-
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
-
     printf '%s' "$body" | body_convert | _stream_curl | sse_convert | sse_parse
 }
 
 run_summary_call() {
     local dropped_messages="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
     messages=$(conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(json_escape "$summary_instruction")\"}")
-
     while read_message; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
@@ -1085,34 +1041,30 @@ run_summary_call() {
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
     done < <(llm_call "$messages")
-
     [[ -n "$text" ]] || die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
     printf '%s' "$text"
 }
 
 # --- Agent Loop ---
-
 agent_loop_stream() {
     local user_input="$1" turn=0
     conv_add_user "$user_input"
-
+    # Trap SIGINT: close pipe FD to unblock read
+    trap 'INTERRUPT_REQUESTED=true; exec 5<&- 2>/dev/null' INT
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
-
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         compact_context_window auto && write_message "CONTEXT_UPDATE" "compact" "auto"
-
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
-        while read_message; do
+        exec 5< <(llm_call "$(conv_get_messages "$(<"$CONV_FILE")")")
+        while read_message <&5; do
             if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
                 break
             fi
             [[ "$VERBOSE" == true ]] && printf '[debug] type=<%s> nfields=%d\n' "${REPLY_MESSAGE[0]}" "${#REPLY_MESSAGE[@]}" >&2
-            # Forward to display
-            write_message "${REPLY_MESSAGE[@]}"
-
+            write_message "${REPLY_MESSAGE[@]}" # Forward to display
             case "${REPLY_MESSAGE[0]}" in
                 RETRY)    text="" thinking="" tool_calls="" tool_conv_results="" _ctx_tokens="" ;;
                 TEXT)     text+="${REPLY_MESSAGE[1]}" ;;
@@ -1122,31 +1074,24 @@ agent_loop_stream() {
                     cur_tool_name="${REPLY_MESSAGE[1]}"
                     cur_tool_id="${REPLY_MESSAGE[2]}"
                     input="${REPLY_MESSAGE[3]}"
-
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
-
                     # Execute tool immediately, output result
                     tool_args_from_msg "$cur_tool_name" arg1 arg2 arg3 arg4
-
                     output=$(dispatch_tool "$cur_tool_name" "$arg1" "$arg2" "$arg3" "$arg4" 2>&1)
                     tool_rc=$?
-
                     if (( tool_rc != 0 )); then
                         output="Error: tool execution failed: $output"
                     fi
                     output=$(format_tool_result "$output")
-
                     result_for_conv="$output"
                     if [[ "$cur_tool_name" == "Edit" ]]; then
                         result_for_conv="$(printf '%s' "$output" | sed -n '1p')"
                     fi
                     tool_conv_results+="${cur_tool_id}"$'\t'"$(json_escape "$result_for_conv")"$'\n'
-
                     # Prepend file summary header for Read/Write so events.jsonl captures it
                     if [[ "$cur_tool_name" == "Read" || "$cur_tool_name" == "Write" ]]; then
                         output="$(tool_file_summary "$cur_tool_name" "$arg1")"$'\n'"$output"
                     fi
-
                     # TOOL_RESULT: [0]=type [1]=id [2]=name [3]=output [4..]=checklist/summary
                     _tr_args=("TOOL_RESULT" "$cur_tool_id" "$cur_tool_name" "$output")
                     [[ -n "$arg1" ]] && _tr_args+=("$arg1")
@@ -1160,12 +1105,10 @@ agent_loop_stream() {
                     ;;
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
-                USAGE)
-                    _ctx_tokens=$(record_usage "agent" agent_request_count false)
-                    ;;
+                USAGE) _ctx_tokens=$(record_usage "agent" agent_request_count false) ;;
             esac
-        done < <(llm_call "$(conv_get_messages "$(<"$CONV_FILE")")")
-
+        done
+        exec 5<&-
         # Fatal stop reasons exit immediately
         case "$stop" in
             error|max_tokens|length)
@@ -1173,7 +1116,6 @@ agent_loop_stream() {
                 return 1
                 ;;
         esac
-
         # Tools already executed inline; persist unless interrupted
         if [[ "$INTERRUPT_REQUESTED" != true ]]; then
             conv_add_assistant "$text" "$thinking" "$tool_calls"
@@ -1191,7 +1133,6 @@ agent_loop_stream() {
             break
         fi
     done
-
     if (( turn >= MAX_TURNS )); then
         write_message "ERROR" "Max turns ($MAX_TURNS) reached"
     fi
@@ -1202,24 +1143,18 @@ agent_loop() {
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
     INTERRUPT_REQUESTED=false
-
-    # Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
-    trap 'INTERRUPT_REQUESTED=true' INT
-
-    # Record user input event
-    [[ "$LOG_EVENTS" != "false" ]] && \
-        session_append_line "{\"type\":\"user_input\",\"content\":\"$(json_escape "$user_input")\"}"
-    # Increment turn count
+    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read
+    trap 'INTERRUPT_REQUESTED=true; exec 4<&- 2>/dev/null' INT
+    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "{\"type\":\"user_input\",\"content\":\"$(json_escape "$user_input")\"}"
     stats_inc current_turn_count=1
-
-    while read_message; do
+    # Open the process substitution
+    exec 4< <(agent_loop_stream "$user_input")
+    while read_message <&4; do
         [[ "${REPLY_MESSAGE[0]}" == "ERROR" ]] && had_error=true
-
         # Layer 1: Always convert and write to events.jsonl
         _se=$(msg_to_stream_event) && [[ -n "$_se" ]] && {
             [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_se"
         }
-
         # Layer 2: stdout — stream-json or human display
         if [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]]; then
             if is_stream_json_mode; then
@@ -1235,13 +1170,11 @@ agent_loop() {
         else
             display_event
         fi
-    done < <(agent_loop_stream "$user_input")
-
+    done
+    exec 4<&-
     $had_error && return 1
     return 0
 }
-
-# --- CLI ---
 
 usage() {
     cat <<'EOF'
@@ -1331,9 +1264,7 @@ parse_args() {
 
     case "$OUTPUT_FORMAT" in
         human|stream-json) ;;
-        *)
-            die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json)"
-            ;;
+        *) die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json)" ;;
     esac
 }
 
@@ -1406,17 +1337,11 @@ validate_config() {
 }
 
 interactive_mode() {
-    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line line _ml_pid term_lines scroll_bottom
-    local _input_interrupted=false
+    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line line
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
     touch "$history_file" 2>/dev/null || true
     history -r "$history_file" 2>/dev/null || true
-
-    term_lines=$(tput lines 2>/dev/null || echo 24)
-    scroll_bottom=$((term_lines - 3))
-    (( scroll_bottom < 5 )) && scroll_bottom=$((term_lines - 1))
-    SCROLL_BOTTOM=$scroll_bottom
-    printf '\033[1;%dr\033[1;1H\033[J\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n' "$scroll_bottom"
+    printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
     if [[ -s "${SESSION_EVENT_FILE:-}" ]]; then
         LOG_EVENTS=false
@@ -1428,57 +1353,49 @@ interactive_mode() {
             | while read_message; do
                 display_event
             done
+        printf '\n'
+        DISPLAY_LAST_CHAR=$'\n'
         LOG_EVENTS="$_saved_log_events"
     fi
     stats_show_osc
-
-    # 子进程运行 main_loop，stdout 在滚动区域，stdin → /dev/null
-    main_loop </dev/null &
-    _ml_pid=$!
-
-    # 前台：底部输入区，read -e → 写 FIFO（不阻塞）
-    exec 4> "$INPUT_FIFO"
-    trap '_input_interrupted=true; kill -INT "$_ml_pid" 2>/dev/null || true; printf "\n"' INT TERM
-    while true; do
-        printf '\033[%d;1H\033[2K' "$((scroll_bottom + 1))"
-        stty echo 2>/dev/null || true
-        if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line; then
-            if [[ "$_input_interrupted" == true ]]; then
-                _input_interrupted=false
-                continue
+    {
+        exec 4> "$INPUT_FIFO"
+        while true; do
+            stty echo 2>/dev/null || true
+            if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
+                break
             fi
-            break
-        fi
-        [[ "$line" == "exit" || "$line" == "quit" ]] && break
-        [[ -z "$line" ]] && continue
-        history -s -- "$line" 2>/dev/null || true
-        history -a "$history_file" 2>/dev/null || true
-        write_message "USER_INPUT" "$line" >&4
-    done
-    trap - INT TERM
-    exec 4>&-
-    kill "$_ml_pid" 2>/dev/null
-    wait "$_ml_pid" 2>/dev/null
+            [[ "$line" == "exit" || "$line" == "quit" ]] && break
+            [[ -z "$line" ]] && continue
+            history -s -- "$line" 2>/dev/null || true
+            history -a "$history_file" 2>/dev/null || true
+            write_message "USER_INPUT" "0" "$line" >&4
+        done
+        exec 4>&-
+    } &
+    local _stdin_pid=$!
 
-    printf '\033[r\033[%d;1H\033[J\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$scroll_bottom" "$SESSION_ID"
+    main_loop
+    trap - INT
+    # 清理子进程（包括 stdin_reader 和所有后台任务）
+    kill -INT -- "-$_stdin_pid" 2>/dev/null || kill -INT "$_stdin_pid" 2>/dev/null || true
+    wait "$_stdin_pid" 2>/dev/null || true
     history -w "$history_file" 2>/dev/null || true
+    printf '\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
 }
-
 
 main() {
     parse_args "$@"
-
     find_awk_dir
     validate_config
     conv_init
     load_tool_defs
-
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode
     elif [[ -n "$USER_INPUT" || ! -t 0 ]]; then
         local input="$USER_INPUT"
         [[ -z "$input" ]] && input=$(cat)
-        ( exec 3> "$INPUT_FIFO"; write_message "USER_INPUT" "$input" >&3 ) &
+        ( exec 3> "$INPUT_FIFO"; write_message "USER_INPUT" "0" "$input" >&3 ) &
         main_loop
     else
         INTERACTIVE=true
