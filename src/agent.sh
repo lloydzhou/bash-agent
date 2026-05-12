@@ -265,9 +265,7 @@ format_tool_result() {
     head_len=$(( TOOL_RESULT_MAX_BYTES - marker_len - tail_len ))
     (( head_len > 0 )) || head_len=$(( TOOL_RESULT_MAX_BYTES / 2 ))
 
-    printf '%s' "${output:0:$head_len}"
-    printf "$marker" "$size"
-    printf '%s' "$tail_text"
+    printf '%s'"$marker"'%s' "${output:0:$head_len}" "$size" "$tail_text"
 }
 
 tool_file_summary() {
@@ -462,9 +460,7 @@ build_system_prompt() {
 
 read_optional_file() {
     local path="$1"
-    if [[ -n "$path" && -s "$path" ]]; then
-        printf '%s' "$(<"$path")"
-    fi
+    [[ -n "$path" && -s "$path" ]] && printf '%s' "$(<"$path")"
 }
 
 find_skill_base_dirs() {
@@ -664,10 +660,7 @@ main_loop() {
     while read_message <&3; do
         case "${REPLY_MESSAGE[0]}" in
             USER_INPUT)
-                (( SCROLL_BOTTOM > 0 )) && {
-                    printf '\033[%d;1H\n' "$SCROLL_BOTTOM"
-                    printf '\033[32m> %s\033[0m\n' "${REPLY_MESSAGE[1]}"
-                }
+                (( SCROLL_BOTTOM > 0 )) && printf '\033[%d;1H\n\033[32m> %s\033[0m\n' "$SCROLL_BOTTOM" "${REPLY_MESSAGE[1]}"
                 stty echo 2>/dev/null || true
                 agent_loop "${REPLY_MESSAGE[1]}"
                 (( SCROLL_BOTTOM > 0 )) && printf '\033[%d;3H' "$((SCROLL_BOTTOM + 1))"
@@ -1467,11 +1460,8 @@ interactive_mode() {
     kill "$_ml_pid" 2>/dev/null
     wait "$_ml_pid" 2>/dev/null
 
-    printf '\033[r\033[%d;1H\033[J\033[36mGoodbye!\033[0m\n' "$scroll_bottom"
+    printf '\033[r\033[%d;1H\033[J\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$scroll_bottom" "$SESSION_ID"
     history -w "$history_file" 2>/dev/null || true
-    if [[ -n "${SESSION_ID:-}" ]]; then
-        printf '\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
-    fi
 }
 
 
