@@ -143,3 +143,38 @@
 - 结构化日志，支持按级别过滤。
 
 **状态**：⬚ 待开始
+
+---
+
+## 已完成
+
+### SubAgent 内置工具
+
+**适用范围**：bash
+
+**状态**：✅ 已完成（`000d11e`）
+
+- `SubAgent` 工具：启动独立子 agent 会话，子 agent 拥有独立 conversation context
+- 子 agent 完成后结果以 user message 注入父会话
+- 同一轮多个 SubAgent 并发执行
+- 系统提示词新增 `sub-agent-guidance` section，指导何时使用/不使用、prompt 设计、结果处理
+- 全量测试通过（73 passed）
+
+### FIFO 会话子目录隔离
+
+**适用范围**：bash
+
+**状态**：✅ 已完成（`ce66b4d`）
+
+- 对话历史存储路径从 `~/.bash-agent/projects/<key>/` 迁移至 `~/.bash-agent/projects/<key>/<session_id>/`
+- 每个会话独立子目录，避免多会话互相覆盖
+- 统一 FIFO 架构（`bc78082`）
+
+### history 文件写入修复
+
+**适用范围**：bash
+
+**状态**：✅ 已完成（`000d11e`）
+
+- 子 shell 中 `history -s/-a/-w` 无效，改用 `printf >>` 追加写入
+- `history -w` 是覆盖写入，父 shell 退出时会覆盖子 shell 的追加内容，已修复为正确的追加策略

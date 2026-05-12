@@ -385,6 +385,7 @@ skills 当前优先读取：
 - `Skill`
 - `WebSearch`
 - `WebFetch`
+- `SubAgent` — 启动独立子 agent 会话，支持并发执行；子 agent 无法看到父会话上下文，prompt 必须自包含
 
 设计原则：
 
@@ -609,7 +610,7 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
   - skill tool 化
   - 更丰富的搜索工具
   - memory
-  - worktree / subagent
+  - worktree
 
 ## 不做什么
 

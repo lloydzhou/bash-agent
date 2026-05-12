@@ -113,6 +113,24 @@
 - 在 plan 执行完毕、所有任务完成后调用
 - 调用后 system prompt 中不再包含 plan section
 
+## `SubAgent`
+
+启动独立的子 agent 会话。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `prompt` | string | 子 agent 的任务描述 |
+| `description` | string | 简短任务摘要（用于状态显示） |
+
+- 子 agent 拥有独立的 conversation context，**无法**看到父会话的对话历史
+- prompt 必须是自包含的：包含所有文件路径、函数名、错误信息、约束条件
+- 子 agent 完成后，结果以 user message 注入父会话，格式为 `[Sub-agent result | session_id=... | status=ok|failed | tokens_in=... tokens_out=...]`
+- 同一轮中的多个 `SubAgent` 调用**并发**执行
+- 失败时（`status=failed`）结果可能部分或为空，不要自动重试
+- 子 agent 的 token 用量单独统计，不计入父会话
+
+适用场景：独立的文件调查、聚焦搜索、隔离假设验证等**不需要父会话上下文**的子任务。
+
 ## `Skill`
 
 按需加载 skill。
