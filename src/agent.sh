@@ -657,7 +657,7 @@ handle_sub_agent_result() {
     local _cr="${REPLY_MESSAGE[6]:-0}" _cc="${REPLY_MESSAGE[7]:-0}" _reqs="${REPLY_MESSAGE[8]:-0}"
     # 记录 usage（带 kind=sub_agent, sub_session_id）
     session_append_line "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"request_count\":$_reqs,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(json_escape "$session_id")\"}"
-    stats_inc total_input_tokens=$_in total_output_tokens=$_out total_cache_read_tokens=$_cr total_cache_creation_tokens=$_cc
+    stats_inc total_input_tokens=$_in total_output_tokens=$_out total_cache_read_tokens=$_cr total_cache_creation_tokens=$_cc sub_agent_request_count=1
     # 记录 sub_agent_end 事件
     session_append_line "{\"type\":\"sub_agent_end\",\"session_id\":\"$(json_escape "$session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$status\"}"
     ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT - 1 ))
