@@ -1,6 +1,16 @@
 BEGIN {
     _init_fields()
 
+    if (action == "get" && ARGC > 1) {
+        filepath = ARGV[1]
+        ARGV[1] = ""
+        _read_file(filepath)
+        if (key != "") {
+            print _vals[key]
+        }
+        exit
+    }
+
     if (action == "dump" && ARGC > 1) {
         _read_file(ARGV[1])
         _dump()

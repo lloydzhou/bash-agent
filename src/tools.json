@@ -208,5 +208,23 @@
       },
       "required": ["url"]
     }
+  },
+  {
+    "name": "SubAgent",
+    "description": "Launches a sub-agent that runs asynchronously in the background. The sub-agent executes the given prompt as an independent agent session and returns the result when complete. Use this for delegating sub-tasks that can run in parallel.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "The prompt/task to delegate to the sub-agent"
+        },
+        "description": {
+          "type": "string",
+          "description": "Short description of the sub-agent task (for logging)"
+        }
+      },
+      "required": ["prompt"]
+    }
   }
 ]
