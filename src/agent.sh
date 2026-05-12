@@ -1109,6 +1109,7 @@ agent_loop_stream() {
             esac
         done
         exec 5<&-
+        [[ "$INTERRUPT_REQUESTED" == true ]] && { write_message "STOP" "interrupted"; break; }
         # Fatal stop reasons exit immediately
         case "$stop" in
             error|max_tokens|length)
@@ -1156,15 +1157,7 @@ agent_loop() {
             [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_se"
         }
         # Layer 2: stdout — stream-json or human display
-        if [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]]; then
-            if is_stream_json_mode; then
-                [[ -n "$_se" ]] && printf '%s\n' "$_se"
-            else
-                display_event
-                printf '\033[36mInterrupted.\033[0m\n'
-            fi
-            break
-        fi
+        [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]] && break
         if is_stream_json_mode; then
             [[ -n "$_se" ]] && printf '%s\n' "$_se"
         else
@@ -1172,6 +1165,13 @@ agent_loop() {
         fi
     done
     exec 4<&-
+    if [[ "$INTERRUPT_REQUESTED" == true ]]; then
+        if is_stream_json_mode; then
+            printf '{"type":"stop","reason":"interrupted"}\n'
+        else
+            printf '\033[36mInterrupted.\033[0m\n'
+        fi
+    fi
     $had_error && return 1
     return 0
 }
