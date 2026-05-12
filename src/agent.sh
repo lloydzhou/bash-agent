@@ -36,6 +36,7 @@ declare -a SKILL_NAMES=()
 
 # --- Runtime Mode & Session State ---
 INTERACTIVE=false
+SCROLL_BOTTOM=0
 SESSION_ID=""
 SESSION_EVENT_FILE=""
 CONTEXT_SUMMARY_FILE=""
@@ -53,8 +54,6 @@ declare -a HEADER_ARGS=()
 INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
-
-
 
 # --- Environment Defaults ---
 : "${ANTHROPIC_API_KEY:=}"
@@ -417,7 +416,7 @@ display_event() {
             printf '\033[32m> %s\033[0m\n' "$_um_text"
             DISPLAY_LAST_CHAR=$'\n'
             ;;
-        STOP)  display_ensure_newline ;;
+        STOP)  (( SCROLL_BOTTOM == 0 )) && display_ensure_newline ;;
         CONTEXT_UPDATE)
             display_ensure_newline; printf '\033[36mContext compacted (%s).\033[0m\n' "${REPLY_MESSAGE[2]}"; DISPLAY_LAST_CHAR=$'\n'
             ;;
@@ -659,6 +658,25 @@ resolve_continue_session_id() {
     fi
 }
 
+# --- FIFO / Main Loop ---
+main_loop() {
+    until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
+    while read_message <&3; do
+        case "${REPLY_MESSAGE[0]}" in
+            USER_INPUT)
+                (( SCROLL_BOTTOM > 0 )) && {
+                    printf '\033[%d;1H\n' "$SCROLL_BOTTOM"
+                    printf '\033[32m> %s\033[0m\n' "${REPLY_MESSAGE[1]}"
+                }
+                stty echo 2>/dev/null || true
+                agent_loop "${REPLY_MESSAGE[1]}"
+                (( SCROLL_BOTTOM > 0 )) && printf '\033[%d;3H' "$((SCROLL_BOTTOM + 1))"
+                ;;
+        esac
+    done
+    exec 3<&-
+}
+
 # --- Conversation Management (temp file, one JSON message per line) ---
 
 conv_init() {
@@ -685,6 +703,8 @@ conv_init() {
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
+    INPUT_FIFO="${session_dir}/input.fifo"
+    [[ -p "$INPUT_FIFO" ]] || { rm -f "$INPUT_FIFO"; mkfifo "$INPUT_FIFO"; }
 }
 
 conv_add_user() {
@@ -1393,14 +1413,17 @@ validate_config() {
 }
 
 interactive_mode() {
-    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line
-
+    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line line _ml_pid term_lines scroll_bottom
+    local _input_interrupted=false
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
     touch "$history_file" 2>/dev/null || true
-
     history -r "$history_file" 2>/dev/null || true
 
-    printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
+    term_lines=$(tput lines 2>/dev/null || echo 24)
+    scroll_bottom=$((term_lines - 3))
+    (( scroll_bottom < 5 )) && scroll_bottom=$((term_lines - 1))
+    SCROLL_BOTTOM=$scroll_bottom
+    printf '\033[1;%dr\033[1;1H\033[J\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n' "$scroll_bottom"
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
     if [[ -s "${SESSION_EVENT_FILE:-}" ]]; then
         LOG_EVENTS=false
@@ -1413,21 +1436,39 @@ interactive_mode() {
                 display_event
             done
         LOG_EVENTS="$_saved_log_events"
-        [[ -n "$_match" ]] && printf "\n"
     fi
     stats_show_osc
+
+    # 子进程运行 main_loop，stdout 在滚动区域，stdin → /dev/null
+    main_loop </dev/null &
+    _ml_pid=$!
+
+    # 前台：底部输入区，read -e → 写 FIFO（不阻塞）
+    exec 4> "$INPUT_FIFO"
+    trap '_input_interrupted=true; kill -INT "$_ml_pid" 2>/dev/null || true; printf "\n"' INT TERM
     while true; do
-        trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
+        printf '\033[%d;1H\033[2K' "$((scroll_bottom + 1))"
         stty echo 2>/dev/null || true
-        IFS= read -e -r -p $'\001\033[32m\002> \001\033[0m\002' user_input || break
-        [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
-        [[ -z "$user_input" ]] && continue
-        history -s -- "$user_input" 2>/dev/null || true
+        if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line; then
+            if [[ "$_input_interrupted" == true ]]; then
+                _input_interrupted=false
+                continue
+            fi
+            break
+        fi
+        [[ "$line" == "exit" || "$line" == "quit" ]] && break
+        [[ -z "$line" ]] && continue
+        history -s -- "$line" 2>/dev/null || true
         history -a "$history_file" 2>/dev/null || true
-        agent_loop "$user_input"
+        write_message "USER_INPUT" "$line" >&4
     done
+    trap - INT TERM
+    exec 4>&-
+    kill "$_ml_pid" 2>/dev/null
+    wait "$_ml_pid" 2>/dev/null
+
+    printf '\033[r\033[%d;1H\033[J\033[36mGoodbye!\033[0m\n' "$scroll_bottom"
     history -w "$history_file" 2>/dev/null || true
-    printf '\033[36mGoodbye!\033[0m\n'
     if [[ -n "${SESSION_ID:-}" ]]; then
         printf '\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
     fi
@@ -1444,12 +1485,11 @@ main() {
 
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode
-    elif [[ -n "$USER_INPUT" ]]; then
-        agent_loop "$USER_INPUT"
-    elif [[ ! -t 0 ]]; then
-        local input
-        input=$(cat)
-        agent_loop "$input"
+    elif [[ -n "$USER_INPUT" || ! -t 0 ]]; then
+        local input="$USER_INPUT"
+        [[ -z "$input" ]] && input=$(cat)
+        ( exec 3> "$INPUT_FIFO"; write_message "USER_INPUT" "$input" >&3 ) &
+        main_loop
     else
         INTERACTIVE=true
         interactive_mode
