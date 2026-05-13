@@ -15,7 +15,7 @@ build-go:
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go build -ldflags="-s -w" -trimpath -o ../dist/goagent ./cmd/goagent
 
 build-rust:
-	cd rust && cargo build --release
+	cd rust && cargo build --release -j 10
 	cp rust/target/release/rustagent dist/rustagent
 	strip -x dist/rustagent
 

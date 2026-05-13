@@ -142,6 +142,17 @@ class H(http.server.BaseHTTPRequestHandler):
         cl = int(self.headers.get('Content-Length',0))
         body = self.rfile.read(cl)
         path = self.path
+        # --- Early error returns (must be before send_response(200)) ---
+        # SubAgent failure mock: child agent request -> 422 error
+        # Only match child requests (no SUB_FAIL_MARKER in body)
+        if b'SUB_FAIL_CHILD' in body and b'SUB_FAIL_MARKER' not in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(422)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error':{'type':'invalid_request','message':'simulated child failure'}},sort_keys=True).encode())
+            return
+        # --- Normal flow ---
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.end_headers()
@@ -1055,13 +1066,6 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":10}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
-            return
-        # Stage 2: child agent request -> 422 error
-        if b'SUB_FAIL_CHILD' in body:
-            if path.startswith('/v1/messages'):
-                self.send_response(422)
-                self.end_headers()
-                w.write(json.dumps({'error':{'type':'invalid_request','message':'simulated child failure'}}).encode())
             return
         # Stage 3: main agent after failed SubAgent -> acknowledge
         if b'SUB_FAIL_MARKER' in body and b'"tool_result"' in body:
@@ -2099,7 +2103,7 @@ test_agent_sub_agent() {
     #   Stage 3: main agent gets tool_result "Sub-agent started" -> end_turn
     #   Stage 4: main agent gets AGENT_RESULT context -> final "Sub-agent reports: 1545 lines."
     local output
-    output=$(timeout 20 bash "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-001 "SUB_AGENT_MARKER count lines" 2>&1) || true
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-001 "SUB_AGENT_MARKER count lines" 2>&1) || true
 
     # Verify child agent produced a result mentioning "1545 lines"
     if echo "$output" | grep -q "1545"; then
@@ -2165,7 +2169,7 @@ test_agent_sub_agent_failure() {
     # SUB_FAIL_MARKER triggers a mock that returns a tool_call with prompt SUB_FAIL_CHILD,
     # which the mock responds with an HTTP error (422), causing the child to fail.
     local output
-    output=$(timeout 20 bash "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-fail-001 "SUB_FAIL_MARKER trigger failure" 2>&1) || true
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-fail-001 "SUB_FAIL_MARKER trigger failure" 2>&1) || true
 
     # Verify the main agent observed the failure
     if echo "$output" | grep -qi "fail\|error\|sub-agent"; then
@@ -2205,7 +2209,7 @@ test_agent_sub_agent_child_session() {
     export MAX_TURNS=20
 
     local output
-    output=$(timeout 20 bash "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-iso-001 "SUB_AGENT_MARKER count lines" 2>&1) || true
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-iso-001 "SUB_AGENT_MARKER count lines" 2>&1) || true
 
     # Verify child has its own session directory (sub_*) with conversation.jsonl
     local child_session_dir
