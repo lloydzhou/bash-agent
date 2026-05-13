@@ -72,8 +72,10 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 result,
                 in_tokens,
                 out_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
             }) => {
-                rt.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens)?;
+                rt.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens)?;
             }
             _ => break,
         }
@@ -93,6 +95,8 @@ enum MainLoopMessage {
         result: String,
         in_tokens: usize,
         out_tokens: usize,
+        cache_read_tokens: usize,
+        cache_creation_tokens: usize,
     },
 }
 
@@ -217,7 +221,6 @@ impl Runtime {
             &paths.conversation,
             &paths.events,
             &paths.summary,
-            &paths.todo,
             &paths.plan,
             &paths.plan_draft,
         ] {
@@ -286,12 +289,14 @@ impl Runtime {
         let sub_session_id = format!("sub_{}", chrono_like_now());
 
         // 记录 sub_agent_start 事件
+        let fork = fields.get("fork").map(|s| s == "true" || s == "1").unwrap_or(false);
         let _ = self.append_event(json!({
             "type": "sub_agent_start",
             "session_id": sub_session_id,
             "timestamp": chrono_like_now(),
             "prompt": prompt,
             "description": description,
+            "fork": fork,
         }));
 
         // 增加活跃子 agent 计数
@@ -320,6 +325,8 @@ impl Runtime {
                         result: format!("Failed to create sub-agent session dir: {}", e),
                         in_tokens: 0,
                         out_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                     });
                 }
                 return;
@@ -336,6 +343,8 @@ impl Runtime {
                         result: format!("Failed to create sub-agent conversation: {}", e),
                         in_tokens: 0,
                         out_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                     });
                 }
                 return;
@@ -344,10 +353,9 @@ impl Runtime {
             // 2. fork 模式：复制父会话上下文
             if fork {
                     // 复制父会话的关键文件到子会话目录
-                    let files_to_copy: [(_, std::path::PathBuf); 5] = [
+                    let files_to_copy: [(_, std::path::PathBuf); 4] = [
                         ("conversation.jsonl", parent_paths.conversation.clone()),
                         ("summary.txt", parent_paths.summary.clone()),
-                        ("todo.md", parent_paths.todo.clone()),
                         ("plan.md", parent_paths.plan.clone()),
                         ("plan.draft", parent_paths.plan_draft.clone()),
                     ];
@@ -411,6 +419,8 @@ impl Runtime {
                             result: format!("Sub-agent failed: {}", e),
                             in_tokens: 0,
                             out_tokens: 0,
+                            cache_read_tokens: 0,
+                            cache_creation_tokens: 0,
                         });
                     }
                     return;
@@ -437,6 +447,8 @@ impl Runtime {
             let stats = sub_rt.read_stats();
             let in_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
             let out_tokens = stats_get_f64(&stats, "total_output_tokens") as usize;
+            let cache_read_tokens = stats_get_f64(&stats, "total_cache_read_tokens") as usize;
+            let cache_creation_tokens = stats_get_f64(&stats, "total_cache_creation_tokens") as usize;
 
             // 6. 通过消息队列发送结果
             let tx_guard = msg_tx_arc.lock().unwrap();
@@ -447,6 +459,8 @@ impl Runtime {
                     result: result_text,
                     in_tokens,
                     out_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
                 });
             }
         });
@@ -597,8 +611,10 @@ impl Runtime {
                     result,
                     in_tokens,
                     out_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
                 } => {
-                    self.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens)?;
+                    self.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens)?;
                 }
             }
 
@@ -618,12 +634,16 @@ impl Runtime {
         result: &str,
         in_tokens: usize,
         out_tokens: usize,
+        cache_read_tokens: usize,
+        cache_creation_tokens: usize,
     ) -> Result<()> {
         // 1. 记录 usage 事件
         let _ = self.append_event(json!({
             "type": "usage",
             "input_tokens": in_tokens,
             "output_tokens": out_tokens,
+            "cache_read_input_tokens": cache_read_tokens,
+            "cache_creation_input_tokens": cache_creation_tokens,
             "kind": "sub_agent",
             "sub_session_id": session_id,
         }));
@@ -644,6 +664,16 @@ impl Runtime {
         stats.insert(
             "total_output_tokens".to_string(),
             Value::Number(total_out.into()),
+        );
+        let total_cache_read = stats_get_f64(&stats, "total_cache_read_tokens") as usize + cache_read_tokens;
+        stats.insert(
+            "total_cache_read_tokens".to_string(),
+            Value::Number(total_cache_read.into()),
+        );
+        let total_cache_creation = stats_get_f64(&stats, "total_cache_creation_tokens") as usize + cache_creation_tokens;
+        stats.insert(
+            "total_cache_creation_tokens".to_string(),
+            Value::Number(total_cache_creation.into()),
         );
         self.write_stats(&stats);
 

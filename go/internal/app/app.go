@@ -32,14 +32,16 @@ import (
 
 // MainLoopMessage 主循环消息类型
 type MainLoopMessage struct {
-	Type      string // "USER_INPUT" or "AGENT_RESULT"
-	Input     string // USER_INPUT 的内容
-	SessionID string // AGENT_RESULT 的子 session ID
-	Status    string // "ok" or "failed"
-	Result    string // 子 agent 执行结果
-	InTokens  int    // 输入 token 数
-	OutTokens int    // 输出 token 数
-	Done      chan<- struct{} // 非 nil 时，mainLoop 处理完后发送信号
+	Type              string // "USER_INPUT" or "AGENT_RESULT"
+	Input             string // USER_INPUT 的内容
+	SessionID         string // AGENT_RESULT 的子 session ID
+	Status            string // "ok" or "failed"
+	Result            string // 子 agent 执行结果
+	InTokens          int    // 输入 token 数
+	OutTokens         int    // 输出 token 数
+	CacheReadTokens   int    // cache read token 数
+	CacheCreationTokens int  // cache creation token 数
+	Done              chan<- struct{} // 非 nil 时，mainLoop 处理完后发送信号
 }
 
 type runtime struct {
@@ -205,7 +207,7 @@ func (rt *runtime) initState() error {
 		return err
 	}
 	newSession := !fileExists(rt.paths.Events)
-	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan, rt.paths.PlanDraft} {
+	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Plan, rt.paths.PlanDraft} {
 		if err := touch(path); err != nil {
 			return err
 		}
@@ -1682,7 +1684,6 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			filesToCopy := []string{
 				rt.paths.Conversation,
 				rt.paths.Summary,
-				rt.paths.Todo,
 				rt.paths.Plan,
 				rt.paths.PlanDraft,
 			}
@@ -1771,6 +1772,8 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		stats := subRT.readStats()
 		inTokens := int(statsFloat64(stats, "total_input_tokens"))
 		outTokens := int(statsFloat64(stats, "total_output_tokens"))
+		cacheReadTokens := int(statsFloat64(stats, "total_cache_read_tokens"))
+		cacheCreationTokens := int(statsFloat64(stats, "total_cache_creation_tokens"))
 
 		// 6. 通过消息队列发送结果
 		rt.msgChanMu.Lock()
@@ -1780,12 +1783,14 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			return
 		}
 		ch <- MainLoopMessage{
-			Type:      "AGENT_RESULT",
-			SessionID: subSessionID,
-			Status:    status,
-			Result:    resultText,
-			InTokens:  inTokens,
-			OutTokens: outTokens,
+			Type:                "AGENT_RESULT",
+			SessionID:           subSessionID,
+			Status:              status,
+			Result:              resultText,
+			InTokens:            inTokens,
+			OutTokens:           outTokens,
+			CacheReadTokens:     cacheReadTokens,
+			CacheCreationTokens: cacheCreationTokens,
 		}
 	}()
 
@@ -1822,11 +1827,13 @@ func (rt *runtime) mainLoop() error {
 func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	// 1. 记录 usage 事件
 	usageEvt := map[string]any{
-		"type":             "usage",
-		"input_tokens":     msg.InTokens,
-		"output_tokens":    msg.OutTokens,
-		"kind":             "sub_agent",
-		"sub_session_id":   msg.SessionID,
+		"type":                    "usage",
+		"input_tokens":            msg.InTokens,
+		"output_tokens":           msg.OutTokens,
+		"cache_read_input_tokens": msg.CacheReadTokens,
+		"cache_creation_input_tokens": msg.CacheCreationTokens,
+		"kind":                    "sub_agent",
+		"sub_session_id":          msg.SessionID,
 	}
 	_ = rt.appendEvent(usageEvt)
 
@@ -1835,6 +1842,8 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	stats["sub_agent_request_count"] = statsFloat64(stats, "sub_agent_request_count") + 1
 	stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(msg.InTokens)
 	stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(msg.OutTokens)
+	stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(msg.CacheReadTokens)
+	stats["total_cache_creation_tokens"] = statsFloat64(stats, "total_cache_creation_tokens") + float64(msg.CacheCreationTokens)
 	rt.writeStats(stats)
 
 	// 3. 记录 sub_agent_end 事件

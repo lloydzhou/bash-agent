@@ -404,3 +404,116 @@ func TestTruncateRunes(t *testing.T) {
 		t.Fatalf("truncation broke UTF-8: %q", got)
 	}
 }
+
+func TestRunSubAgentFork(t *testing.T) {
+	project := t.TempDir()
+	home := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+	_ = os.Setenv("HOME", home)
+	oldWD, _ := os.Getwd()
+	defer os.Chdir(oldWD)
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write a file that the child agent should be able to see after fork
+	if err := os.WriteFile(filepath.Join(project, "context.txt"), []byte("shared context"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch calls.Add(1) {
+		case 1:
+			// Stage 1: main agent -> SubAgent tool_call with fork=true
+			return sseResponse(strings.Join([]string{
+				"event: content_block_start",
+				`data: {"content_block":{"type":"tool_use","id":"toolu_sub_fork","name":"SubAgent","input":{}}}`,
+				"",
+				"event: content_block_delta",
+				`data: {"delta":{"partial_json":"{\"prompt\":\"SUB_FORK_CHILD\",\"description\":\"fork test\",\"fork\":true}"}}`,
+				"",
+				"event: content_block_stop",
+				`data: {}`,
+				"",
+				"event: message_delta",
+				`data: {"delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":7}}`,
+				"",
+				"event: message_stop",
+				`data: {}`,
+				"",
+			}, "\n")), nil
+		case 2:
+			// Stage 2: child agent -> text response
+			return sseResponse(strings.Join([]string{
+				"event: content_block_start",
+				`data: {"content_block":{"type":"text"}}`,
+				"",
+				"event: content_block_delta",
+				`data: {"delta":{"text":"Fork child done."}}`,
+				"",
+				"event: message_delta",
+				`data: {"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":5,"output_tokens":3}}`,
+				"",
+				"event: message_stop",
+				`data: {}`,
+				"",
+			}, "\n")), nil
+		default:
+			// Stage 3: main agent after AGENT_RESULT -> final answer
+			return sseResponse(strings.Join([]string{
+				"event: content_block_start",
+				`data: {"content_block":{"type":"text"}}`,
+				"",
+				"event: content_block_delta",
+				`data: {"delta":{"text":"Fork result received."}}`,
+				"",
+				"event: message_delta",
+				`data: {"delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":5,"output_tokens":3}}`,
+				"",
+				"event: message_stop",
+				`data: {}`,
+				"",
+			}, "\n")), nil
+		}
+	})}
+
+	var out, errOut strings.Builder
+	withTestHTTPClient(client, func() {
+		if err := Run([]string{"--base-url", "http://example.invalid", "--session", "fork-test", "SUB_FORK_MARKER fork test"}, strings.NewReader(""), &out, &errOut); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	// Verify child result was received
+	if !strings.Contains(out.String(), "Fork child done") {
+		t.Fatalf("expected child result in output, got: %q", out.String())
+	}
+
+	// Verify events contain fork=true
+	eventsPath := filepath.Join(home, ".bash-agent", "projects", "*", "fork-test", "events.jsonl")
+	matches, err := filepath.Glob(eventsPath)
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("events file not found: %v %v", err, matches)
+	}
+	eventsData, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(eventsData), `"fork":true`) {
+		t.Fatalf("expected fork=true in events, got: %s", string(eventsData))
+	}
+
+	// Verify child session directory was created
+	subDirs, err := filepath.Glob(filepath.Join(home, ".bash-agent", "projects", "*", "sub_*"))
+	if err != nil || len(subDirs) == 0 {
+		t.Fatalf("child session dir not found: %v %v", err, subDirs)
+	}
+
+	// Verify fork copied conversation to child session
+	childConv := filepath.Join(subDirs[0], "conversation.jsonl")
+	if _, err := os.Stat(childConv); os.IsNotExist(err) {
+		t.Fatalf("child conversation.jsonl not found (fork should copy parent context)")
+	}
+}
