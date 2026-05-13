@@ -21,6 +21,7 @@
 
 - **构建脚本 `send_sub_result.awk` 内联替换失败**：`build.sh` 替换模式要求 `awk_run -f` 紧邻，但源码中 `-v` 参数将它们隔开，导致 `dist/agent.sh` 中仍使用 `-f "$AWK_DIR/..."` 而 `AWK_DIR` 已被清空，awk 无法读取文件静默失败；修复为只替换 `-f` 参数部分（`60ea8dd`）
 - **统一 SubAgent 结果注入首行格式**：注入 agent_loop 的 content 首行统一为 `[sub-agent <id>] <status> (in=<n>, out=<n>)`，三端(bash/Go/Rust)同步，包括 prompt 中 sub-agent-guidance 的 Result handling 描述（`8794896`）
+- **SubAgent-fork 测试 Stage 4 匹配条件**：适配新的 AGENT_RESULT content 格式，匹配 `[sub-agent sub_` 前缀而非旧版 `Sub-agent result`（`HEAD`）
 
 ---
 

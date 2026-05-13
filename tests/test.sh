@@ -1119,7 +1119,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 ]: w.write(c.encode()); w.flush()
             return
         # Stage 4: main agent after AGENT_RESULT -> final answer
-        if b'SUB_FORK_MARKER' in body and b'Sub-agent result' in body:
+        if b'SUB_FORK_MARKER' in body and b'[sub-agent sub_' in body:
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fork4\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
