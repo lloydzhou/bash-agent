@@ -70,7 +70,7 @@ awk_files = {
     "event_replay": ("event_replay.awk", "_AWK_EVENT_REPLAY"),
     "stats": ("stats.awk", "_AWK_STATS"),
     "compact_dp": ("compact_dp.awk", "_AWK_COMPACT_DP"),
-    "extract_sub_result": ("extract_sub_result.awk", "_AWK_EXTRACT_SUB_RESULT"),
+    "send_sub_result": ("send_sub_result.awk", "_AWK_SEND_SUB_RESULT"),
 }
 
 awk_bodies = {}
@@ -174,10 +174,8 @@ content = content.replace('awk_run -v action=dump -f "$AWK_DIR/stats.awk"', 'awk
 content = content.replace('awk_run -v action=sync -f "$AWK_DIR/stats.awk"', 'awk_run -v action=sync "${_AWK_STATS}"')
 # --- Inline compact_dp.awk reference ---
 content = content.replace('-f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"', '"${_AWK_COMPACT_DP}" "$CONV_FILE"')
-# --- Inline extract_sub_result.awk reference ---
-content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/extract_sub_result.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_EXTRACT_SUB_RESULT}"')
-# --- Inline json.awk+json_cli.awk in _extract_sub_agent_result ---
-content = content.replace('            -f "$AWK_DIR/json.awk" -f "$AWK_DIR/json_cli.awk" <<< "$_line" 2>/dev/null) || continue', '            "${_AWK_JSON}\n${_AWK_JSON_CLI}" <<< "$_line" 2>/dev/null) || continue')
+# --- Inline send_sub_result.awk reference ---
+content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/send_sub_result.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_SEND_SUB_RESULT}"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)
