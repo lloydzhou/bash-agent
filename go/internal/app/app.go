@@ -1909,7 +1909,7 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	}
 
 	// 7. 注入结果到 conversation 并触发 agent loop
-	context := fmt.Sprintf("[Sub-agent result | session_id=%s | status=%s tokens_in=%d tokens_out=%d]\nThinking: %s\nText: %s",
+	context := fmt.Sprintf("[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
 		msg.SessionID, msg.Status, msg.InTokens, msg.OutTokens, msg.Thinking, msg.Text)
 	_ = rt.agentLoop(context)
 

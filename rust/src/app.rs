@@ -762,7 +762,7 @@ impl Runtime {
 
         // 7. 注入结果到 conversation 并触发 agent loop（忽略错误，与 bash/Go 对齐）
         let context = format!(
-            "[Sub-agent result | session_id={} | status={} tokens_in={} tokens_out={}]\nThinking: {}\nText: {}",
+            "[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}",
             session_id, status, in_tokens, out_tokens, thinking, text
         );
         let _ = self.agent_loop(context);
