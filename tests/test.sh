@@ -1079,6 +1079,57 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        # --- SubAgent fork mock ---
+        # Stage 1: main agent first request -> SubAgent tool_call with fork=true
+        # 只有当请求体包含 SUB_FORK_MARKER 且不包含 SUB_FORK_CHILD 且不包含 tool_result 时
+        if b'SUB_FORK_MARKER' in body and b'SUB_FORK_CHILD' not in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fork1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_sub_fork\",\"name\":\"SubAgent\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_FORK_CHILD','description':'fork test child','fork':True})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":10}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 2: sub-agent request (body has SUB_FORK_CHILD, no tool_result)
+        # 子 agent 的请求体包含 SUB_FORK_CHILD，且没有 tool_result
+        if b'SUB_FORK_CHILD' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fork2\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Fork child result: hello from fork.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 3: main agent after SubAgent fork tool_result -> acknowledge
+        if b'SUB_FORK_MARKER' in body and b'"tool_result"' in body and b'Sub-agent started' in body and b'Sub-agent result' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fork3\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Waiting for fork child.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 4: main agent after AGENT_RESULT -> final answer
+        if b'SUB_FORK_MARKER' in body and b'Sub-agent result' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fork4\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Fork result: hello from fork.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         # --- End SubAgent mock ---
         if b'MULTI_TOOL_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -2251,6 +2302,76 @@ test_agent_sub_agent_child_session() {
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
 
+# Test: SubAgent fork mode — child runs in background, parent continues, result flows back via AGENT_RESULT
+test_agent_sub_agent_fork() {
+    info "Test: SubAgent fork mode"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    # Run agent with a prompt that triggers SubAgent with fork=true via mock server
+    # The mock server has 4 stages:
+    #   Stage 1: main agent -> SubAgent tool_call with fork=true (prompt SUB_FORK_CHILD)
+    #   Stage 2: child agent -> text "Fork child result: hello from fork."
+    #   Stage 3: main agent gets tool_result "Sub-agent started" -> "Waiting for fork child."
+    #   Stage 4: main agent gets AGENT_RESULT context -> final "Fork result: hello from fork."
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-fork-001 "SUB_FORK_MARKER fork test" 2>&1) || true
+
+    # Verify child agent produced a result
+    if echo "$output" | grep -q "hello from fork"; then
+        green "SubAgent-fork: child result text found in output"; ((PASS++)) || true
+    else
+        red "SubAgent-fork: child result text not found in output"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    # Verify main agent acknowledged and reported final answer
+    if echo "$output" | grep -q "Fork result: hello from fork"; then
+        green "SubAgent-fork: main agent final answer found"; ((PASS++)) || true
+    else
+        red "SubAgent-fork: main agent final answer not found"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    # Check session events: sub_agent_start, sub_agent_end should exist
+    local session_dir
+    session_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "test-sub-fork-001" 2>/dev/null | head -1)
+    if [[ -n "$session_dir" && -f "$session_dir/events.jsonl" ]]; then
+        if grep -q "sub_agent_start" "$session_dir/events.jsonl" && grep -q "sub_agent_end" "$session_dir/events.jsonl"; then
+            green "SubAgent-fork: session events recorded"; ((PASS++)) || true
+        else
+            red "SubAgent-fork: missing sub_agent_start or sub_agent_end in events.jsonl"; ((FAIL++)) || true
+        fi
+        # Verify fork=true is recorded in events
+        if grep -q '"fork":true' "$session_dir/events.jsonl"; then
+            green "SubAgent-fork: fork=true recorded in events"; ((PASS++)) || true
+        else
+            red "SubAgent-fork: fork=true not found in events.jsonl"; ((FAIL++)) || true
+        fi
+    else
+        red "SubAgent-fork: events.jsonl not found under $tmpdir"; ((FAIL++)) || true
+    fi
+
+    # Verify fork child has its own session directory with conversation
+    local child_session_dir
+    child_session_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "sub_*" 2>/dev/null | head -1)
+    if [[ -n "$child_session_dir" && -f "$child_session_dir/conversation.jsonl" ]]; then
+        green "SubAgent-fork: fork child session dir created"; ((PASS++)) || true
+    else
+        red "SubAgent-fork: fork child session dir not found"; ((FAIL++)) || true
+    fi
+
+    # Cleanup
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
 # Test 37: compact_dp.awk — DP compact decision algorithm
 test_compact_dp_awk() {
     info "Test 37: compact_dp.awk DP compact decision"
@@ -2444,6 +2565,7 @@ test_compact_dp_awk
 test_agent_sub_agent
 test_agent_sub_agent_failure
 test_agent_sub_agent_child_session
+test_agent_sub_agent_fork
 
 echo ""
 echo "=============================="

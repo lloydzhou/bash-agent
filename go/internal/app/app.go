@@ -32,14 +32,16 @@ import (
 
 // MainLoopMessage 主循环消息类型
 type MainLoopMessage struct {
-	Type      string // "USER_INPUT" or "AGENT_RESULT"
-	Input     string // USER_INPUT 的内容
-	SessionID string // AGENT_RESULT 的子 session ID
-	Status    string // "ok" or "failed"
-	Result    string // 子 agent 执行结果
-	InTokens  int    // 输入 token 数
-	OutTokens int    // 输出 token 数
-	Done      chan<- struct{} // 非 nil 时，mainLoop 处理完后发送信号
+	Type              string // "USER_INPUT" or "AGENT_RESULT"
+	Input             string // USER_INPUT 的内容
+	SessionID         string // AGENT_RESULT 的子 session ID
+	Status            string // "ok" or "failed"
+	Result            string // 子 agent 执行结果
+	InTokens          int    // 输入 token 数
+	OutTokens         int    // 输出 token 数
+	CacheReadTokens   int    // cache read token 数
+	CacheCreationTokens int  // cache creation token 数
+	Done              chan<- struct{} // 非 nil 时，mainLoop 处理完后发送信号
 }
 
 type runtime struct {
@@ -205,7 +207,7 @@ func (rt *runtime) initState() error {
 		return err
 	}
 	newSession := !fileExists(rt.paths.Events)
-	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Todo, rt.paths.Plan, rt.paths.PlanDraft} {
+	for _, path := range []string{rt.paths.Conversation, rt.paths.Events, rt.paths.Summary, rt.paths.Plan, rt.paths.PlanDraft} {
 		if err := touch(path); err != nil {
 			return err
 		}
@@ -1533,6 +1535,14 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
+}
+
 func listSessions(home, cwd string, w io.Writer) error {
 	dir := filepath.Join(home, ".bash-agent", "projects", session.ProjectKey(cwd))
 	entries, err := os.ReadDir(dir)
@@ -1594,6 +1604,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 	var args struct {
 		Prompt      string `json:"prompt"`
 		Description string `json:"description"`
+		Fork        bool   `json:"fork"`
 	}
 	if err := json.Unmarshal(inputJSON, &args); err != nil {
 		return "Error: invalid SubAgent arguments: " + err.Error()
@@ -1613,6 +1624,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
 		"prompt":     args.Prompt,
 		"description": args.Description,
+		"fork":       args.Fork,
 	})
 
 	// 增加活跃子 agent 计数
@@ -1666,7 +1678,26 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			return
 		}
 
-		// 2. 创建子 agent 的 runtime
+		// 2. fork 模式：复制父会话上下文
+		if args.Fork {
+			// 复制父会话的关键文件到子会话目录
+			filesToCopy := []string{
+				rt.paths.Conversation,
+				rt.paths.Summary,
+				rt.paths.Plan,
+				rt.paths.PlanDraft,
+			}
+			for _, src := range filesToCopy {
+				if fileExists(src) {
+					dst := filepath.Join(subPaths.SessionDir, filepath.Base(src))
+					if err := copyFile(src, dst); err != nil {
+						rt.error("Failed to copy %s for fork: %v", filepath.Base(src), err)
+					}
+				}
+			}
+		}
+
+		// 3. 创建子 agent 的 runtime
 		subCfg := rt.cfg
 		subCfg.SessionID = subSessionID
 		subCfg.Prompt = args.Prompt
@@ -1689,14 +1720,14 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			msgChanMu: &sync.Mutex{},
 		}
 
-		// 3. 执行 agentLoop
+		// 4. 执行 agentLoop
 		status := "ok"
 		if err := subRT.agentLoop(args.Prompt); err != nil {
 			rt.error("Sub-agent %s failed: %v", subSessionID, err)
 			status = "failed"
 		}
 
-		// 4. 提取结果
+		// 5. 提取结果
 		lines, err := subConv.Lines()
 		if err != nil {
 			rt.error("Failed to load sub-agent conversation: %v", err)
@@ -1741,6 +1772,8 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		stats := subRT.readStats()
 		inTokens := int(statsFloat64(stats, "total_input_tokens"))
 		outTokens := int(statsFloat64(stats, "total_output_tokens"))
+		cacheReadTokens := int(statsFloat64(stats, "total_cache_read_tokens"))
+		cacheCreationTokens := int(statsFloat64(stats, "total_cache_creation_tokens"))
 
 		// 6. 通过消息队列发送结果
 		rt.msgChanMu.Lock()
@@ -1750,12 +1783,14 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			return
 		}
 		ch <- MainLoopMessage{
-			Type:      "AGENT_RESULT",
-			SessionID: subSessionID,
-			Status:    status,
-			Result:    resultText,
-			InTokens:  inTokens,
-			OutTokens: outTokens,
+			Type:                "AGENT_RESULT",
+			SessionID:           subSessionID,
+			Status:              status,
+			Result:              resultText,
+			InTokens:            inTokens,
+			OutTokens:           outTokens,
+			CacheReadTokens:     cacheReadTokens,
+			CacheCreationTokens: cacheCreationTokens,
 		}
 	}()
 
@@ -1792,11 +1827,13 @@ func (rt *runtime) mainLoop() error {
 func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	// 1. 记录 usage 事件
 	usageEvt := map[string]any{
-		"type":             "usage",
-		"input_tokens":     msg.InTokens,
-		"output_tokens":    msg.OutTokens,
-		"kind":             "sub_agent",
-		"sub_session_id":   msg.SessionID,
+		"type":                    "usage",
+		"input_tokens":            msg.InTokens,
+		"output_tokens":           msg.OutTokens,
+		"cache_read_input_tokens": msg.CacheReadTokens,
+		"cache_creation_input_tokens": msg.CacheCreationTokens,
+		"kind":                    "sub_agent",
+		"sub_session_id":          msg.SessionID,
 	}
 	_ = rt.appendEvent(usageEvt)
 
@@ -1805,6 +1842,8 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	stats["sub_agent_request_count"] = statsFloat64(stats, "sub_agent_request_count") + 1
 	stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(msg.InTokens)
 	stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(msg.OutTokens)
+	stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(msg.CacheReadTokens)
+	stats["total_cache_creation_tokens"] = statsFloat64(stats, "total_cache_creation_tokens") + float64(msg.CacheCreationTokens)
 	rt.writeStats(stats)
 
 	// 3. 记录 sub_agent_end 事件

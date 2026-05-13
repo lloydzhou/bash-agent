@@ -115,22 +115,28 @@
 
 ## `SubAgent`
 
-启动独立的子 agent 会话。
+启动子代理执行任务。
 
 | 参数 | 类型 | 说明 |
 |---|---|---|
-| `prompt` | string | 子 agent 的任务描述 |
-| `description` | string | 简短任务摘要（用于状态显示） |
+| `prompt` | string | 子代理执行的任务描述（必需） |
+| `description` | string | 简短任务描述，用于日志记录（可选） |
+| `fork` | boolean | 设为 `true` 启用 fork 模式，继承父会话上下文（可选） |
 
-- 子 agent 拥有独立的 conversation context，**无法**看到父会话的对话历史
-- prompt 必须是自包含的：包含所有文件路径、函数名、错误信息、约束条件
+**两种模式**：
+
+| 模式 | 触发方式 | 上下文 | 适用场景 |
+|------|---------|--------|---------|
+| 独立模式（默认） | 不设置 `fork` | 全新会话，无法看到父会话对话历史 | 独立文件调查、聚焦搜索、隔离假设验证等不需要父会话上下文的任务 |
+| Fork 模式 | `fork=true` | 继承父会话的对话历史、计划、技能 | 需要父会话上下文的子任务（如延续当前对话中已建立的推理链） |
+
+- 独立模式下 prompt 必须自包含：包含所有文件路径、函数名、错误信息、约束条件
+- Fork 模式下 prompt 可引用父会话上下文，无需重复提供已有信息
 - **返回启动确认**：立即返回 `Sub-agent started: session_id=...`，表示子 agent 已启动
 - **实际结果注入**：子 agent 完成后，结果以 user message 注入父会话，格式为 `[Sub-agent result | session_id=... | status=ok|failed | tokens_in=... tokens_out=...]`
 - 同一轮中的多个 `SubAgent` 调用**并发**执行
 - 失败时（`status=failed`）结果可能部分或为空，不要自动重试
 - 子 agent 的 token 用量会累加到父会话的 `total_input_tokens` / `total_output_tokens`
-
-适用场景：独立的文件调查、聚焦搜索、隔离假设验证等**不需要父会话上下文**的子任务。
 
 ## `Skill`
 
