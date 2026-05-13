@@ -6,10 +6,21 @@
 
 ## [2.5.2] - 2026-05-13
 
+### Changed
+
+- **SubAgent 结果显示重构**：用 `send_sub_result.awk` 替代 `extract_sub_result.awk`，子 agent 完成后在后台直接通过 AWK 提取 thinking/text 并格式化为消息发回 FIFO，简化 bash 端 `handle_sub_agent_result` 逻辑（`364787c`, `0838da7`）
+- **SubAgent 恢复使用 `agent_loop`**：回退为 agent_loop 驱动子 agent，不支持嵌套 SubAgent，简化执行路径（`8f7107b`）
+- **Rust SubAgent 输出隔离**：子 agent 后台线程 stdout/stderr 重定向，避免与主 agent 输出混淆（`814b2fe`）
+- **Go SubAgent goroutine 错误泄漏**：后台 goroutine 内 `rt.error()` 输出不再泄漏到前端（`e5f14fd`）
+- **SubAgent thinking/text 分离**：Go/Rust 端同步 bash 端的子 agent 结果 thinking/text 拆分逻辑（`cb7d8b5`, `2ba52c4`）
+- **SubAgent 空文本块过滤**：提取子 agent 结果时过滤空 text block（`a58ea7a`）
+- **SubAgent 结果预览行去掉多余前导空格**：thinking/text 预览行 `printf` 格式统一，三端(bash/Go/Rust)对齐（`e1045b7`）
+- **SubAgent completed/failed 行去掉 ANSI 颜色**：终端 stderr 显示的完成/失败行不再带颜色，与 content 预览行格式保持一致（`fef9747`）
+
 ### Fixed
 
 - **构建脚本 `send_sub_result.awk` 内联替换失败**：`build.sh` 替换模式要求 `awk_run -f` 紧邻，但源码中 `-v` 参数将它们隔开，导致 `dist/agent.sh` 中仍使用 `-f "$AWK_DIR/..."` 而 `AWK_DIR` 已被清空，awk 无法读取文件静默失败；修复为只替换 `-f` 参数部分（`60ea8dd`）
-- **SubAgent 结果预览多余前导空格**：thinking/text 预览行 `printf` 格式中 `'  %.120s'` 的两个前导空格去掉，三端(bash/Go/Rust)统一（`e1045b7`）
+- **统一 SubAgent 结果注入首行格式**：注入 agent_loop 的 content 首行统一为 `[sub-agent <id>] <status> (in=<n>, out=<n>)`，三端(bash/Go/Rust)同步，包括 prompt 中 sub-agent-guidance 的 Result handling 描述（`8794896`）
 
 ---
 
