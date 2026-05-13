@@ -1641,8 +1641,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		// 1. 创建子 agent 的 conversation store
 		subPaths := session.PathsFor(rt.home, rt.cwd, subSessionID)
 		if err := session.EnsureDir(subPaths.SessionDir); err != nil {
-			rt.error("Failed to create sub-agent session dir: %v", err)
-			// 通过消息队列发送失败结果，让主进程减少计数
+			// 早期失败时发送失败结果，让主进程减少 activeSubCount（静默处理，与 Rust/Bash 对齐）
 			rt.msgChanMu.Lock()
 			ch := rt.msgChan
 			rt.msgChanMu.Unlock()
@@ -1660,8 +1659,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		}
 		subConv := conversation.Store{Path: subPaths.Conversation}
 		if err := subConv.Ensure(); err != nil {
-			rt.error("Failed to create sub-agent conversation: %v", err)
-			// 通过消息队列发送失败结果，让主进程减少计数
+			// 早期失败时发送失败结果，让主进程减少 activeSubCount（静默处理）
 			rt.msgChanMu.Lock()
 			ch := rt.msgChan
 			rt.msgChanMu.Unlock()
@@ -1690,7 +1688,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 				if fileExists(src) {
 					dst := filepath.Join(subPaths.SessionDir, filepath.Base(src))
 					if err := copyFile(src, dst); err != nil {
-						rt.error("Failed to copy %s for fork: %v", filepath.Base(src), err)
+						// fork 文件复制失败不致命，静默忽略（与 Bash 版本 `2>/dev/null || true` 一致）
 					}
 				}
 			}
@@ -1722,15 +1720,14 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		// 4. 执行 agentLoop
 		status := "ok"
 		if err := subRT.agentLoop(args.Prompt); err != nil {
-			rt.error("Sub-agent %s failed: %v", subSessionID, err)
+			// 子 agent 执行失败，状态标记为 failed，结果通过 AGENT_RESULT 消息传递
 			status = "failed"
 		}
 
 		// 5. 提取结果
 		lines, err := subConv.Lines()
 		if err != nil {
-			rt.error("Failed to load sub-agent conversation: %v", err)
-			// 通过消息队列发送失败结果，让主进程减少计数
+			// 通过消息队列发送失败结果，让主进程减少计数（静默处理）
 			rt.msgChanMu.Lock()
 			ch := rt.msgChan
 			rt.msgChanMu.Unlock()
