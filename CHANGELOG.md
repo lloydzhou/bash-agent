@@ -4,6 +4,20 @@
 
 ---
 
+## [2.5.1] - 2026-05-12
+
+### Added
+
+- **SubAgent fork 模式**：子 agent 启动时 fork 当前会话的完整会话历史，使子 agent 继承上下文；统一 bash/Go/Rust 三端的 SubAgent schema（`description` 字段改为必填）和系统提示词中的 sub-agent-guidance section（`a883af4`）
+- **SubAgent Go 测试**：`app_test.go` 新增 `TestRunSubAgentFork` 等测试用例，覆盖 fork 会话复制、异步执行、结果回传全流程（`a883af4`）
+- **SubAgent bash e2e 测试**：`tests/test.sh` 新增 `test_sub_agent_fork` 测试函数（`a883af4`）
+
+### Changed
+
+- **移除 todo.md 持久化**：Go/Rust 端不再在 session 目录创建 `todo.md` 文件，`Paths` 结构体移除 `TodoFile` 字段；bash 端移除 fork 时的 todo 文件复制和 touch 列表逻辑（`5417d13`）
+
+---
+
 ## [2.5.0] - 2026-05-12
 
 ### Added
