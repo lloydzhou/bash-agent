@@ -1895,12 +1895,12 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	// thinking 用灰色显示
 	if msg.Thinking != "" {
 		preview := truncateRunes(msg.Thinking, 120)
-		fmt.Fprintf(rt.stderr, "\033[90m  %s\033[0m\n", preview)
+		fmt.Fprintf(rt.stderr, "\033[90m%s\033[0m\n", preview)
 	}
 	// text 用默认色显示
 	if msg.Text != "" {
 		preview := truncateRunes(msg.Text, 120)
-		fmt.Fprintf(rt.stderr, "  %s\n", preview)
+		fmt.Fprintf(rt.stderr, "%s\n", preview)
 	}
 
 	// 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）

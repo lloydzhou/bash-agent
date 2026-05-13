@@ -747,12 +747,12 @@ impl Runtime {
         // thinking 用灰色显示
         if !thinking.is_empty() {
             let preview = truncate_str(thinking, 120);
-            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[90m  {}\x1b[0m", preview);
+            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[90m{}\x1b[0m", preview);
         }
         // text 用默认色显示
         if !text.is_empty() {
             let preview = truncate_str(text, 120);
-            let _ = writeln!(self.stderr.borrow_mut(), "  {}", preview);
+            let _ = writeln!(self.stderr.borrow_mut(), "{}", preview);
         }
 
         // 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）

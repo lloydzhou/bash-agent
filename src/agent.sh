@@ -674,8 +674,8 @@ handle_sub_agent_result() {
         else
             printf '\033[31m[sub-agent %s] failed\033[0m\n' "$session_id"
         fi
-        [[ -n "$_thinking" ]] && printf '\033[90m  %.120s%s\033[0m\n' "$_thinking" "$([[ ${#_thinking} -gt 120 ]] && printf '%s' "…")"
-        [[ -n "$_text" ]] && printf '  %.120s%s\n' "$_text" "$([[ ${#_text} -gt 120 ]] && printf '%s' "…")"
+        [[ -n "$_thinking" ]] && printf '\033[90m%.120s%s\033[0m\n' "$_thinking" "$([[ ${#_thinking} -gt 120 ]] && printf '%s' "…")"
+        [[ -n "$_text" ]] && printf '%.120s%s\n' "$_text" "$([[ ${#_text} -gt 120 ]] && printf '%s' "…")"
         DISPLAY_LAST_CHAR=$'\n'
     fi
     _run_agent_loop "[Sub-agent result | session_id=$session_id | status=$status tokens_in=$_in tokens_out=$_out]"$'\n'"Thinking: $_thinking"$'\n'"Text: $_text"
