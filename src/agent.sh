@@ -1093,8 +1093,7 @@ tool_sub_agent() {
         trap '[[ "$_done" == true ]] || _send_result "$(_extract_sub_agent_result "$CONV_FILE")" "failed"; rm -f "$INPUT_FIFO"' EXIT
         # 输出全部重定向到 /dev/null，不污染主 agent 终端
         local _status="ok"
-        ( exec 6> "$INPUT_FIFO"; write_message "USER_INPUT" "0" "$prompt" >&6 ) &
-        main_loop >/dev/null || _status="failed"
+        agent_loop "$prompt" >/dev/null || _status="failed"
         # 从 CONV_FILE 用 json.awk 提取所有 assistant 轮次的 text 内容
         local _result=""
         _result=$(_extract_sub_agent_result "$CONV_FILE")
