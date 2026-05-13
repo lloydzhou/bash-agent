@@ -4,6 +4,15 @@
 
 ---
 
+## [2.5.2] - 2026-05-13
+
+### Fixed
+
+- **构建脚本 `send_sub_result.awk` 内联替换失败**：`build.sh` 替换模式要求 `awk_run -f` 紧邻，但源码中 `-v` 参数将它们隔开，导致 `dist/agent.sh` 中仍使用 `-f "$AWK_DIR/..."` 而 `AWK_DIR` 已被清空，awk 无法读取文件静默失败；修复为只替换 `-f` 参数部分（`60ea8dd`）
+- **SubAgent 结果预览多余前导空格**：thinking/text 预览行 `printf` 格式中 `'  %.120s'` 的两个前导空格去掉，三端(bash/Go/Rust)统一（`e1045b7`）
+
+---
+
 ## [2.5.1] - 2026-05-12
 
 ### Added
@@ -405,7 +414,9 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...HEAD
+[2.5.2]: https://github.com/lloydzhou/bash-agent/compare/v2.5.1...v2.5.2
+[2.5.1]: https://github.com/lloydzhou/bash-agent/compare/v2.5.0...v2.5.1
 [2.4.0]: https://github.com/lloydzhou/bash-agent/compare/v2.3.2...v2.4.0
 [2.3.2]: https://github.com/lloydzhou/bash-agent/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/lloydzhou/bash-agent/compare/v2.3.0...v2.3.1
