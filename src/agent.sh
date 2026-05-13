@@ -42,6 +42,7 @@ CONTEXT_SUMMARY_FILE=""
 PLAN_FILE=""
 PLAN_DRAFT_FILE=""
 STATS_FILE=""
+INPUT_FIFO=""
 LOG_EVENTS=true
 
 # --- Internal Runtime State ---
@@ -53,8 +54,7 @@ declare -a HEADER_ARGS=()
 INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
-
-
+ACTIVE_SUB_COUNT=0
 
 # --- Environment Defaults ---
 : "${ANTHROPIC_API_KEY:=}"
@@ -63,20 +63,21 @@ PREV_WAS_THINKING=false
 : "${OPENAI_BASE_URL:=}"
 
 # --- Utility Functions ---
-awk_run() {
-    LC_ALL=C LANG=C awk "$@"
-}
+awk_run() { LC_ALL=C LANG=C awk "$@"; }
 
 write_message() {
     # Args: field0 field1 field2 ...
     # Wire format (RESP-like, CRLF): *N\r\n$len0\r\ndata0\r\n$len1\r\ndata1\r\n...
-    local nfields=$# field byte_len
-    printf '*%s\r\n' "$nfields"
+    # 所有内容拼到 _out，最后一次 printf 输出，避免多段 printf 与并发 writer 交叉
+    local nfields=$# field byte_len _out="" _seg=""
+    printf -v _out '*%s\r\n' "$nfields"
     for field in "$@"; do
         byte_len=$(LC_ALL=C printf '%s' "$field" | wc -c)
         byte_len=${byte_len//[[:space:]]/}
-        printf '$%s\r\n%s\r\n' "$byte_len" "$field"
+        printf -v _seg '$%s\r\n%s\r\n' "$byte_len" "$field"
+        _out+="$_seg"
     done
+    printf '%s' "$_out"
 }
 
 read_message() {
@@ -114,14 +115,12 @@ deny_bash_command_reason() {
     local cmd="$1" device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
 
     [[ -z "$cmd" ]] && return 1
-
     case "$cmd" in
         sudo\ *|shutdown*|reboot*|halt*|poweroff*|mkfs*|fdisk*)
             printf 'blocked dangerous command prefix'
             return 0
             ;;
     esac
-
     [[ "$cmd" == *'rm -rf /'* || "$cmd" == *'rm -fr /'* ]] && {
         printf 'blocked destructive root deletion pattern'
         return 0
@@ -154,6 +153,7 @@ tool_param_keys() {
         Skill) printf 'name' ;;
         WebSearch) printf 'query' ;;
         WebFetch) printf 'url' ;;
+        SubAgent) printf 'prompt description' ;;
         *) printf '' ;;
     esac
 }
@@ -190,6 +190,7 @@ tool_call_summary() {
         Skill) key="name" ;;
         WebSearch) key="query" ;;
         WebFetch) key="url" ;;
+        SubAgent) key="prompt" ;;
     esac
     if [[ -n "$key" && $# -gt 0 ]]; then
         for (( i = 1; i + 1 <= $#; i += 2 )); do
@@ -257,7 +258,6 @@ format_tool_result() {
         printf '%s' "$output"
         return 0
     fi
-
     size=${#output}
     marker=$'\n\n[... truncated: showing first/last portions of %d bytes ...]\n\n'
     marker_len=$(( ${#marker} + 20 ))
@@ -265,10 +265,7 @@ format_tool_result() {
     tail_len=${#tail_text}
     head_len=$(( TOOL_RESULT_MAX_BYTES - marker_len - tail_len ))
     (( head_len > 0 )) || head_len=$(( TOOL_RESULT_MAX_BYTES / 2 ))
-
-    printf '%s' "${output:0:$head_len}"
-    printf "$marker" "$size"
-    printf '%s' "$tail_text"
+    printf '%s'"$marker"'%s' "${output:0:$head_len}" "$size" "$tail_text"
 }
 
 tool_file_summary() {
@@ -325,8 +322,7 @@ display_human_text() {
     fi
 }
 
-# Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output).
-# Prints JSON to stdout; returns 1 if type has no event representation.
+# Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output). Prints JSON to stdout; returns 1 if type has no event representation.
 msg_to_stream_event() {
     local _type="${REPLY_MESSAGE[0]}"
     case "$_type" in
@@ -435,7 +431,8 @@ build_system_prompt() {
     output_language_reaffirm="MUST use \"${locale}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
     [[ "$locale" == zh* ]] && output_language_reaffirm='再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！'
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
-    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.'
+    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n- SubAgent launches an independent background agent session. The child has its own conversation context and cannot see the parent'\''s history — write a self-contained prompt. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks.'
+    sub_agent_guidance=$'- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result text is injected as a user message prefixed with `[Sub-agent result | session_id=... | status=ok|failed | tokens_in=... tokens_out=...]`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
     plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Files**: PLAN_DRAFT_FILE: '"${PLAN_DRAFT_FILE:-<not set>}"$' | PLAN_FILE: '"${PLAN_FILE:-<not set>}"$'\n- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n  Every user reply MUST be classified as exactly ONE of:\n  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.'
 
@@ -449,6 +446,7 @@ build_system_prompt() {
     append_section output "environment" "$environment"
     append_section output "rules" "$core_rules"
     append_section output "using-your-tools" "$tool_guidance"
+    append_section output "sub-agent-guidance" "$sub_agent_guidance"
     append_section output "todo-guidance" "$todo_guidance"
     append_section output "plan-lifecycle-guidance" "$plan_lifecycle_guidance"
     append_section output "instruction-files" "$instruction_files"
@@ -461,12 +459,7 @@ build_system_prompt() {
     printf '%s' "${output%$'\n'}"
 }
 
-read_optional_file() {
-    local path="$1"
-    if [[ -n "$path" && -s "$path" ]]; then
-        printf '%s' "$(<"$path")"
-    fi
-}
+read_optional_file() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 
 find_skill_base_dirs() {
     local cwd home
@@ -521,12 +514,10 @@ build_skill_index_section() {
 
 build_selected_skills_section() {
     local output="" skill_name skill_content
-
     if [[ ${#SKILL_NAMES[@]} -eq 0 ]]; then
         printf ''
         return 0
     fi
-
     for skill_name in "${SKILL_NAMES[@]}"; do
         skill_content=$(load_skill_content "$skill_name") || die "Skill not found: $skill_name (expected .claude/skills/$skill_name/SKILL.md or ~/.claude/skills/$skill_name/SKILL.md)"
         append_section output "skill" "$skill_content" "$skill_name"
@@ -560,12 +551,10 @@ build_instruction_files_section() {
         global_content=$(<"$global_file") || return 1
         append_section output "instruction-file" "$global_content" "global"
     fi
-
     if [[ -n "$project_file" ]]; then
         project_content=$(<"$project_file") || return 1
         append_section output "instruction-file" "$project_content" "project"
     fi
-
     printf '%s' "${output%$'\n'}"
 }
 
@@ -659,7 +648,74 @@ resolve_continue_session_id() {
     fi
 }
 
-# --- Conversation Management (temp file, one JSON message per line) ---
+# --- FIFO / Main Loop ---
+# 处理子 agent 通过 FIFO 发回的 AGENT_RESULT 将 result_text 注入主 agent conversation，触发 agent_loop 让主 agent 处理
+handle_sub_agent_result() {
+    # REPLY_MESSAGE: AGENT_RESULT <session_id> <status> <result_text> <in> <out> <cr> <cc> <reqs>
+    local session_id="${REPLY_MESSAGE[1]}" status="${REPLY_MESSAGE[2]}" result_text="${REPLY_MESSAGE[3]}"
+    local _in="${REPLY_MESSAGE[4]:-0}" _out="${REPLY_MESSAGE[5]:-0}"
+    local _cr="${REPLY_MESSAGE[6]:-0}" _cc="${REPLY_MESSAGE[7]:-0}" _reqs="${REPLY_MESSAGE[8]:-0}"
+    # 记录 usage（带 kind=sub_agent, sub_session_id）
+    session_append_line "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"request_count\":$_reqs,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(json_escape "$session_id")\"}"
+    stats_inc total_input_tokens=$_in total_output_tokens=$_out total_cache_read_tokens=$_cr total_cache_creation_tokens=$_cc sub_agent_request_count=1
+    # 记录 sub_agent_end 事件
+    session_append_line "{\"type\":\"sub_agent_end\",\"session_id\":\"$(json_escape "$session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$status\"}"
+    ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT - 1 ))
+    # 展示结果摘要
+    if is_stream_json_mode; then
+        printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s}\n' \
+            "$(json_escape "$session_id")" "$status" "$_in" "$_out"
+    else
+        display_ensure_newline
+        local _preview=""
+        if [[ -n "$result_text" ]]; then
+            # 取结果首行，截断到 120 字符
+            _preview=$(printf '%s' "$result_text" | head -c 120)
+            [[ ${#result_text} -gt 120 ]] && _preview+="…"
+        fi
+        if [[ "$status" == "ok" ]]; then
+            printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
+        else
+            printf '\033[31m[sub-agent %s] failed\033[0m\n' "$session_id"
+        fi
+        [[ -n "$_preview" ]] && printf '\033[90m  %s\033[0m\n' "$_preview"
+        DISPLAY_LAST_CHAR=$'\n'
+    fi
+    local _context="[Sub-agent result | session_id=$session_id | status=$status"
+    _context+=" | tokens_in=$_in tokens_out=$_out]"
+    [[ -n "$result_text" ]] && _context+=$'\n'"$result_text"
+    _run_agent_loop "$_context"
+}
+
+# 调用 agent_loop 并处理交互式终端提示符
+_run_agent_loop() {
+    [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
+    agent_loop "$1"
+    if [[ "$INTERACTIVE" == true ]]; then
+        [[ "$DISPLAY_LAST_CHAR" != $'\n' ]] && printf '\n'
+        printf '\033[32m>\033[0m '
+    fi
+}
+
+main_loop() {
+    until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
+    exec 4> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
+    while read_message <&3; do
+        case "${REPLY_MESSAGE[0]}" in
+            USER_INPUT)
+                local _input="${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
+                _run_agent_loop "$_input"
+                ;;
+            AGENT_RESULT) handle_sub_agent_result ;;
+        esac
+        [[ "$INTERACTIVE" != true ]] && (( ACTIVE_SUB_COUNT == 0 )) && break
+    done
+    exec 4>&-
+    exec 3<&-
+    rm -f "$INPUT_FIFO"
+}
+
+
 
 conv_init() {
     if [[ -z "$SESSION_ID" ]]; then
@@ -685,6 +741,8 @@ conv_init() {
     if [[ "$new_session" == true ]]; then
         session_append_line "{\"type\":\"session_start\",\"session_id\":\"$(json_escape "$SESSION_ID")\"}"
     fi
+    INPUT_FIFO="${session_dir}/input.fifo"
+    [[ -p "$INPUT_FIFO" ]] || { rm -f "$INPUT_FIFO"; mkfifo "$INPUT_FIFO"; }
 }
 
 conv_add_user() {
@@ -760,8 +818,7 @@ stats_get() {
 
 record_usage() {
     # Args: kind counter_key [write_event=true]
-    # Reads REPLY_MESSAGE[1..4], updates stats, optionally logs event.
-    # Returns context token count (input+output+cache_read+cache_creation).
+    # Reads REPLY_MESSAGE[1..4], updates stats, optionally logs event. Returns context token count (input+output+cache_read+cache_creation).
     local kind="$1" counter_key="$2" write_event="${3:-true}" _event \
           _in="${REPLY_MESSAGE[1]:-0}" _out="${REPLY_MESSAGE[2]:-0}" _cr="${REPLY_MESSAGE[3]:-0}" _cc="${REPLY_MESSAGE[4]:-0}"
     if [[ "$write_event" == "true" ]]; then
@@ -787,12 +844,7 @@ stats_show_osc() {
     BEGIN{printf "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007",m,f(t),f(r),f(i+cr),pct(cr,cr+i),f(o),f(c) > "/dev/stderr"}'
 }
 
-# --- Dynamic Planning Compact Decision ---
-# DP compact decision: find optimal k via cache-aware economics.
-# Cache-Aligned Summarization: the summary call reuses the main agent's
-# prefix (system prompt + tools + cache-control markers) for cache hits.
-# Formula: NetBenefit(k) = ①savings - ②cache_miss - ③compact_cost - ④info_loss
-# Returns: number of lines to keep (turn-aligned), or "0" if no compact beneficial.
+# DP compact decision: find optimal k via cache-aware economics. Returns lines to keep or "0".
 compact_dp_decision() {
     awk_run -v t="$(stats_get current_turn_count)" -v total_requests="$(stats_get agent_request_count)" \
             -v total_compact="$(stats_get compact_request_count)" -v total_input="$(stats_get total_input_tokens)" \
@@ -825,9 +877,7 @@ compact_context_window() {
     # 始终先算 DP 决策（经济最优）
     keep_lines=$(compact_dp_decision) || true
     [[ -n "$keep_lines" ]] || keep_lines=0
-
     total_lines=$(wc -l < "$CONV_FILE" 2>/dev/null || echo 0)
-
     # DP 返回 0（不值得）或 ≥ total_lines（全保留）→ 都算"不压缩"，进入 fallback
     if (( keep_lines == 0 )) || (( keep_lines >= total_lines && total_lines > 0 )); then
         local ct=$(stats_get current_context_tokens)
@@ -841,20 +891,17 @@ compact_context_window() {
     # 统一 guard：keep >= total 或 keep==0 时只有 plan_clear/plan_confirm 继续
     (( keep_lines > 0 && keep_lines < total_lines )) || [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || return 1
     drop=$(( total_lines - keep_lines ))
-
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     head -n "$drop" "$CONV_FILE" > "$tmp_dropped"
     dropped_messages=$(<"$tmp_dropped")
 
     summary_response=$(run_summary_call "$dropped_messages")
     context_append_summary "$summary_response"
-
     if (( keep_lines < total_lines )); then
         tmp=$(mktemp "${TMPDIR:-/tmp}/conv_trim.XXXXXX")
         tail -n "$keep_lines" "$CONV_FILE" > "$tmp"
         mv "$tmp" "$CONV_FILE"
     fi
-
     rm -f "$tmp_dropped"
     local remaining_turns
     remaining_turns=$(awk '/"role":"user"/ && ! /"content":\[/{n++} END{print n+0}' "$CONV_FILE" 2>/dev/null)
@@ -863,7 +910,6 @@ compact_context_window() {
 }
 
 # --- Tool Definitions (auto-generated JSON) ---
-
 load_tool_defs() {
     local tools_file script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -873,14 +919,11 @@ load_tool_defs() {
 }
 
 # --- Tool Implementations ---
-
 tool_read() {
     local path="$1" offset="${2:-1}" limit="${3:-0}"
-
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
-
     if (( limit > 0 )); then
         sed -n "${offset},$((offset + limit - 1))p" "$path"
     else
@@ -890,7 +933,6 @@ tool_read() {
 
 tool_write() {
     local path="$1" content="$2" content_size
-
     [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
     content_size=$(printf '%s' "$content" | wc -c)
     content_size=${content_size//[[:space:]]/}
@@ -898,7 +940,6 @@ tool_write() {
         echo "Error: content too large for write_file (${content_size} bytes > ${FILE_WRITE_MAX_BYTES} bytes)"
         return 1
     fi
-
     mkdir -p "$(dirname "$path")" 2>/dev/null
     printf '%s' "$content" > "$path"
     echo "OK: wrote $(wc -c < "$path" 2>/dev/null || echo '?') bytes to $path"
@@ -928,16 +969,13 @@ tool_edit() {
 
 tool_bash() {
     local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" reason output tool_rc tmpout
-
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
     reason=$(deny_bash_command_reason "$cmd") || reason=""
     if [[ -n "$reason" ]]; then
         echo "Error: command blocked by bash safety policy ($reason)"
         return 1
     fi
-
     tmpout=$(mktemp)
-
     if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
         run_with_timeout "$timeout_secs" bash -lc "$cmd" > "$tmpout" 2>&1
         tool_rc=$?
@@ -955,7 +993,6 @@ tool_bash() {
 
 tool_glob() {
     local pattern="$1" path="$2"
-
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
     [[ -d "$path" ]] || { echo "Error: directory not found: $path"; return 1; }
@@ -965,16 +1002,13 @@ tool_glob() {
 
 tool_grep() {
     local pattern="$1" path="$2" glob="$3" context="$4" args=(-n --color never --heading)
-
     [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
     [[ -e "$path" ]] || { echo "Error: path not found: $path"; return 1; }
     command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for grep"; return 1; }
-
     [[ -n "$context" && "$context" =~ ^[0-9]+$ ]] && args+=(-C "$context")
     [[ -n "$glob" ]] && args+=(--glob "$glob")
     args+=("--" "$pattern" "$path")
-
     rg "${args[@]}" 2>/dev/null || true
 }
 
@@ -1009,6 +1043,77 @@ tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlenc
 
 tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlencode "url=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/" 2>&1; }
 
+# 从 CONV_FILE 提取子 agent 所有 assistant 轮次的 text 内容，拼接为结果
+_extract_sub_agent_result() {
+    local _file="$1" _line _content_raw _result="" _extracted
+    [[ -s "$_file" ]] || return 0
+    # 逐行找 role=assistant，用 json.awk 提取 content 数组中 type=text 的 text 字段
+    while IFS= read -r _line; do
+        [[ "$_line" == *'"role":"assistant"'* ]] || continue
+        # 提取 content 数组原始文本
+        _content_raw=$(awk_run -v json_mode=extract_field_raw -v json_field_key=content \
+            -f "$AWK_DIR/json.awk" -f "$AWK_DIR/json_cli.awk" <<< "$_line" 2>/dev/null) || continue
+        [[ -n "$_content_raw" ]] || continue
+        # 拆分 content 数组为独立对象
+        _extracted=$(printf '%s' "$_content_raw" | awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/extract_sub_result.awk" 2>/dev/null) || continue
+        [[ -n "$_extracted" ]] && _result="${_result:+${_result}
+}${_extracted}"
+    done < "$_file"
+    printf '%s' "$_result"
+}
+
+# 启动异步子 agent：后台执行 agent_loop，完成后通过 INPUT_FIFO 发回 AGENT_RESULT
+# 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <result_text> <in> <out> <cr> <cc> <reqs>
+tool_sub_agent() {
+    local prompt="$1" description="${2:-}" sub_session_id
+
+    [[ -z "$prompt" ]] && { echo "Error: no prompt provided for sub-agent"; return 1; }
+
+    sub_session_id="sub_$(new_session_id)"
+    session_append_line "{\"type\":\"sub_agent_start\",\"session_id\":\"$(json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(json_escape "$prompt")\",\"description\":\"$(json_escape "$description")\"}"
+
+    (
+        export SESSION_ID="$sub_session_id"
+        export INTERACTIVE=false
+        local _parent_input_fifo="$INPUT_FIFO"
+        conv_init
+        load_tool_defs
+
+        # 正常路径发送完成后 _done=true，阻止 EXIT trap 重复发送
+        local _done=false
+        _send_result() {
+            local _rt="${1:-}"   # result text
+            exec 3> "$_parent_input_fifo"
+            write_message "AGENT_RESULT" "$sub_session_id" "$2" "$_rt" "${3:-0}" "${4:-0}" "${5:-0}" "${6:-0}" "${7:-0}" >&3
+            exec 3>&-
+        }
+        trap '[[ "$_done" == true ]] || _send_result "$(_extract_sub_agent_result "$CONV_FILE")" "failed"; rm -f "$INPUT_FIFO"' EXIT
+
+        # 输出全部重定向到 /dev/null，不污染主 agent 终端
+        local _status="ok"
+        agent_loop "$prompt" >/dev/null || _status="failed"
+
+        # 从 CONV_FILE 用 json.awk 提取所有 assistant 轮次的 text 内容
+        local _result=""
+        _result=$(_extract_sub_agent_result "$CONV_FILE")
+
+        # 从 STATS_FILE 收集 token 统计（用 dump 方式，与 stats_get 一致）
+        local _in=0 _out=0 _cr=0 _cc=0 _reqs=0
+        if [[ -s "$STATS_FILE" ]]; then
+            _in=$(stats_get total_input_tokens)
+            _out=$(stats_get total_output_tokens)
+            _cr=$(stats_get total_cache_read_tokens)
+            _cc=$(stats_get total_cache_creation_tokens)
+            _reqs=$(stats_get agent_request_count)
+        fi
+
+        _send_result "$_result" "$_status" "$_in" "$_out" "$_cr" "$_cc" "$_reqs"
+        _done=true
+    ) &
+
+    printf 'Sub-agent started: session_id=%s, pid=%s' "$sub_session_id" "$!"
+}
+
 dispatch_tool() {
     local name="$1" arg1="${2:-}" arg2="${3:-}" arg3="${4:-}" arg4="${5:-}"
     case "$name" in
@@ -1024,6 +1129,7 @@ dispatch_tool() {
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
         WebFetch)  tool_web_fetch "$arg1" ;;
+        SubAgent)  tool_sub_agent "$arg1" "$arg2" ;;
         *)
             echo "Error: unknown tool: $name"
             return 1
@@ -1032,37 +1138,28 @@ dispatch_tool() {
 }
 
 # --- API Calls (curl) ---
-
 _stream_curl() {
     curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"
 }
 
 # --- LLM Call (internal) ---
-
 llm_call() {
     local messages="$1" max_tokens="${2:-$MAX_TOKENS}" thinking_budget="${3:-$THINKING_BUDGET}" body system_prompt
     system_prompt=$(build_system_prompt)
-
     body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
-
     if (( thinking_budget > 0 )); then
         body+=",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":${thinking_budget}}"
     fi
-
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(json_escape "$system_prompt")\""
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
-
     body+=",\"messages\":${messages}}"
-
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
-
     printf '%s' "$body" | body_convert | _stream_curl | sse_convert | sse_parse
 }
 
 run_summary_call() {
     local dropped_messages="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
     messages=$(conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(json_escape "$summary_instruction")\"}")
-
     while read_message; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
@@ -1072,34 +1169,30 @@ run_summary_call() {
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
     done < <(llm_call "$messages")
-
     [[ -n "$text" ]] || die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
     printf '%s' "$text"
 }
 
 # --- Agent Loop ---
-
 agent_loop_stream() {
     local user_input="$1" turn=0
     conv_add_user "$user_input"
-
+    # Trap SIGINT: close pipe FD to unblock read
+    trap 'INTERRUPT_REQUESTED=true; exec 5<&- 2>/dev/null' INT
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
-
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         compact_context_window auto && write_message "CONTEXT_UPDATE" "compact" "auto"
-
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(conv_get_messages "$(<"$CONV_FILE")")" >&2
-        while read_message; do
+        exec 5< <(llm_call "$(conv_get_messages "$(<"$CONV_FILE")")")
+        while read_message <&5; do
             if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
                 break
             fi
             [[ "$VERBOSE" == true ]] && printf '[debug] type=<%s> nfields=%d\n' "${REPLY_MESSAGE[0]}" "${#REPLY_MESSAGE[@]}" >&2
-            # Forward to display
-            write_message "${REPLY_MESSAGE[@]}"
-
+            write_message "${REPLY_MESSAGE[@]}" # Forward to display
             case "${REPLY_MESSAGE[0]}" in
                 RETRY)    text="" thinking="" tool_calls="" tool_conv_results="" _ctx_tokens="" ;;
                 TEXT)     text+="${REPLY_MESSAGE[1]}" ;;
@@ -1109,31 +1202,24 @@ agent_loop_stream() {
                     cur_tool_name="${REPLY_MESSAGE[1]}"
                     cur_tool_id="${REPLY_MESSAGE[2]}"
                     input="${REPLY_MESSAGE[3]}"
-
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
-
                     # Execute tool immediately, output result
                     tool_args_from_msg "$cur_tool_name" arg1 arg2 arg3 arg4
-
                     output=$(dispatch_tool "$cur_tool_name" "$arg1" "$arg2" "$arg3" "$arg4" 2>&1)
                     tool_rc=$?
-
                     if (( tool_rc != 0 )); then
                         output="Error: tool execution failed: $output"
                     fi
                     output=$(format_tool_result "$output")
-
                     result_for_conv="$output"
                     if [[ "$cur_tool_name" == "Edit" ]]; then
                         result_for_conv="$(printf '%s' "$output" | sed -n '1p')"
                     fi
                     tool_conv_results+="${cur_tool_id}"$'\t'"$(json_escape "$result_for_conv")"$'\n'
-
                     # Prepend file summary header for Read/Write so events.jsonl captures it
                     if [[ "$cur_tool_name" == "Read" || "$cur_tool_name" == "Write" ]]; then
                         output="$(tool_file_summary "$cur_tool_name" "$arg1")"$'\n'"$output"
                     fi
-
                     # TOOL_RESULT: [0]=type [1]=id [2]=name [3]=output [4..]=checklist/summary
                     _tr_args=("TOOL_RESULT" "$cur_tool_id" "$cur_tool_name" "$output")
                     [[ -n "$arg1" ]] && _tr_args+=("$arg1")
@@ -1147,12 +1233,11 @@ agent_loop_stream() {
                     ;;
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
-                USAGE)
-                    _ctx_tokens=$(record_usage "agent" agent_request_count false)
-                    ;;
+                USAGE) _ctx_tokens=$(record_usage "agent" agent_request_count false) ;;
             esac
-        done < <(llm_call "$(conv_get_messages "$(<"$CONV_FILE")")")
-
+        done
+        exec 5<&-
+        [[ "$INTERRUPT_REQUESTED" == true ]] && { write_message "STOP" "interrupted"; break; }
         # Fatal stop reasons exit immediately
         case "$stop" in
             error|max_tokens|length)
@@ -1160,7 +1245,6 @@ agent_loop_stream() {
                 return 1
                 ;;
         esac
-
         # Tools already executed inline; persist unless interrupted
         if [[ "$INTERRUPT_REQUESTED" != true ]]; then
             conv_add_assistant "$text" "$thinking" "$tool_calls"
@@ -1178,7 +1262,6 @@ agent_loop_stream() {
             break
         fi
     done
-
     if (( turn >= MAX_TURNS )); then
         write_message "ERROR" "Max turns ($MAX_TURNS) reached"
     fi
@@ -1189,46 +1272,39 @@ agent_loop() {
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
     INTERRUPT_REQUESTED=false
-
-    # Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
-    trap 'INTERRUPT_REQUESTED=true' INT
-
-    # Record user input event
-    [[ "$LOG_EVENTS" != "false" ]] && \
-        session_append_line "{\"type\":\"user_input\",\"content\":\"$(json_escape "$user_input")\"}"
-    # Increment turn count
+    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read
+    trap 'INTERRUPT_REQUESTED=true; exec 4<&- 2>/dev/null' INT
+    [[ "$LOG_EVENTS" != "false" ]] && session_append_line "{\"type\":\"user_input\",\"content\":\"$(json_escape "$user_input")\"}"
     stats_inc current_turn_count=1
-
-    while read_message; do
+    # Open the process substitution
+    exec 4< <(agent_loop_stream "$user_input")
+    while read_message <&4; do
         [[ "${REPLY_MESSAGE[0]}" == "ERROR" ]] && had_error=true
-
+        # SubAgent started: track active count in main shell
+        [[ "${REPLY_MESSAGE[0]}" == "TOOL_CALL" && "${REPLY_MESSAGE[1]}" == "SubAgent" ]] && ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT + 1 ))
         # Layer 1: Always convert and write to events.jsonl
         _se=$(msg_to_stream_event) && [[ -n "$_se" ]] && {
             [[ "$LOG_EVENTS" != "false" ]] && session_append_line "$_se"
         }
-
         # Layer 2: stdout — stream-json or human display
-        if [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]]; then
-            if is_stream_json_mode; then
-                [[ -n "$_se" ]] && printf '%s\n' "$_se"
-            else
-                display_event
-                printf '\033[36mInterrupted.\033[0m\n'
-            fi
-            break
-        fi
+        [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]] && break
         if is_stream_json_mode; then
             [[ -n "$_se" ]] && printf '%s\n' "$_se"
         else
             display_event
         fi
-    done < <(agent_loop_stream "$user_input")
-
+    done
+    exec 4<&-
+    if [[ "$INTERRUPT_REQUESTED" == true ]]; then
+        if is_stream_json_mode; then
+            printf '{"type":"stop","reason":"interrupted"}\n'
+        else
+            printf '\033[36mInterrupted.\033[0m\n'
+        fi
+    fi
     $had_error && return 1
     return 0
 }
-
-# --- CLI ---
 
 usage() {
     cat <<'EOF'
@@ -1318,9 +1394,7 @@ parse_args() {
 
     case "$OUTPUT_FORMAT" in
         human|stream-json) ;;
-        *)
-            die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json)"
-            ;;
+        *) die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json)" ;;
     esac
 }
 
@@ -1393,13 +1467,10 @@ validate_config() {
 }
 
 interactive_mode() {
-    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line
-
+    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line line
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
     touch "$history_file" 2>/dev/null || true
-
     history -r "$history_file" 2>/dev/null || true
-
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
     if [[ -s "${SESSION_EVENT_FILE:-}" ]]; then
@@ -1412,44 +1483,49 @@ interactive_mode() {
             | while read_message; do
                 display_event
             done
+        printf '\n'
+        DISPLAY_LAST_CHAR=$'\n'
         LOG_EVENTS="$_saved_log_events"
-        [[ -n "$_match" ]] && printf "\n"
     fi
     stats_show_osc
-    while true; do
-        trap 'history -w "$history_file" 2>/dev/null || true' INT TERM
-        stty echo 2>/dev/null || true
-        IFS= read -e -r -p $'\001\033[32m\002> \001\033[0m\002' user_input || break
-        [[ "$user_input" == "exit" || "$user_input" == "quit" ]] && break
-        [[ -z "$user_input" ]] && continue
-        history -s -- "$user_input" 2>/dev/null || true
-        history -a "$history_file" 2>/dev/null || true
-        agent_loop "$user_input"
-    done
-    history -w "$history_file" 2>/dev/null || true
-    printf '\033[36mGoodbye!\033[0m\n'
-    if [[ -n "${SESSION_ID:-}" ]]; then
-        printf '\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
-    fi
-}
+    {
+        exec 4> "$INPUT_FIFO"
+        while true; do
+            stty echo 2>/dev/null || true
+            if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
+                break
+            fi
+            [[ "$line" == "exit" || "$line" == "quit" ]] && break
+            [[ -z "$line" ]] && continue
+            printf '%s\n' "$line" >> "$history_file"
+            write_message "USER_INPUT" "0" "$line" >&4
+        done
+        exec 4>&-
+    } &
+    local _stdin_pid=$!
 
+    main_loop
+    trap - INT
+    # 清理子进程（包括 stdin_reader 和所有后台任务）
+    kill -INT -- "-$_stdin_pid" 2>/dev/null || kill -INT "$_stdin_pid" 2>/dev/null || true
+    wait "$_stdin_pid" 2>/dev/null || true
+
+    printf '\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
+}
 
 main() {
     parse_args "$@"
-
     find_awk_dir
     validate_config
     conv_init
     load_tool_defs
-
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode
-    elif [[ -n "$USER_INPUT" ]]; then
-        agent_loop "$USER_INPUT"
-    elif [[ ! -t 0 ]]; then
-        local input
-        input=$(cat)
-        agent_loop "$input"
+    elif [[ -n "$USER_INPUT" || ! -t 0 ]]; then
+        local input="$USER_INPUT"
+        [[ -z "$input" ]] && input=$(cat)
+        ( exec 3> "$INPUT_FIFO"; write_message "USER_INPUT" "0" "$input" >&3 ) &
+        main_loop
     else
         INTERACTIVE=true
         interactive_mode

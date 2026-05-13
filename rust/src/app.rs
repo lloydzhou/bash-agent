@@ -17,6 +17,7 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -54,13 +55,45 @@ pub fn run(args: Vec<String>) -> Result<()> {
         return rt.interactive_mode();
     }
 
+    // 非交互模式也走 mainLoop，确保等待子 agent 完成
     if !rt.cfg.prompt.is_empty() {
-        return rt.agent_loop(rt.cfg.prompt.clone());
+        rt.agent_loop(rt.cfg.prompt.clone())?;
+    } else {
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        rt.agent_loop(input)?;
     }
+    // 等待所有子 agent 完成
+    while rt.active_sub_count > 0 {
+        match rt.msg_rx.recv() {
+            Ok(MainLoopMessage::AgentResult {
+                session_id,
+                status,
+                result,
+                in_tokens,
+                out_tokens,
+            }) => {
+                rt.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens)?;
+            }
+            _ => break,
+        }
+    }
+    Ok(())
+}
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    rt.agent_loop(input)
+// MainLoopMessage 主循环消息类型
+enum MainLoopMessage {
+    UserInput {
+        input: String,
+        done: mpsc::Sender<()>, // 通知 readline 线程处理完成
+    },
+    AgentResult {
+        session_id: String,
+        status: String,
+        result: String,
+        in_tokens: usize,
+        out_tokens: usize,
+    },
 }
 
 struct Runtime {
@@ -79,6 +112,10 @@ struct Runtime {
     last_output_tokens: usize,
     last_cache_read_tokens: usize,
     last_cache_creation_tokens: usize,
+    msg_tx: Arc<Mutex<Option<mpsc::Sender<MainLoopMessage>>>>, // 主循环消息队列发送端（Arc<Mutex<Option>> 以便 readline 线程退出时主动 drop）
+    msg_rx: mpsc::Receiver<MainLoopMessage>, // 主循环消息队列接收端
+    active_sub_count: usize,                 // 活跃子 agent 计数
+    sub_agent_request_count: usize,          // SubAgent 请求计数
 }
 
 struct DisplayState {
@@ -95,6 +132,7 @@ struct LlmStream {
     rx: mpsc::Receiver<StreamMsg>,
     finished: bool,
     cancel: Arc<AtomicBool>,
+    interrupted: Arc<AtomicBool>,
 }
 
 struct CancelReader<R> {
@@ -125,6 +163,10 @@ impl LlmStream {
     fn next_event(&mut self) -> Result<Option<Event>> {
         if self.finished {
             return Ok(None);
+        }
+        if self.interrupted.load(Ordering::SeqCst) {
+            self.finished = true;
+            return Err(anyhow!("interrupted"));
         }
         match self.rx.recv() {
             Ok(StreamMsg::Event(evt)) => Ok(Some(evt)),
@@ -200,6 +242,8 @@ impl Runtime {
         let api_url = api_url(&cfg);
         let interrupted = Arc::new(AtomicBool::new(false));
         let transport = Arc::from(crate::transport::new_transport(&cfg));
+        let (msg_tx, msg_rx) = mpsc::channel(); // 初始化消息队列
+        let msg_tx = Arc::new(Mutex::new(Some(msg_tx))); // 包装在 Arc<Mutex<Option>> 中
 
         let rt = Self {
             cfg,
@@ -217,6 +261,10 @@ impl Runtime {
             last_output_tokens: 0,
             last_cache_read_tokens: 0,
             last_cache_creation_tokens: 0,
+            msg_tx,
+            msg_rx,
+            active_sub_count: 0,
+            sub_agent_request_count: 0,
         };
 
         if new_session {
@@ -224,6 +272,164 @@ impl Runtime {
         }
 
         Ok(rt)
+    }
+
+    // handle_sub_agent 处理 SubAgent 工具调用
+    fn handle_sub_agent(&mut self, fields: &std::collections::BTreeMap<String, String>) -> String {
+        let prompt = match fields.get("prompt") {
+            Some(p) if !p.is_empty() => p.clone(),
+            _ => return "Error: no prompt provided for sub-agent".to_string(),
+        };
+        let description = fields.get("description").cloned().unwrap_or_default();
+
+        // 生成子 session ID
+        let sub_session_id = format!("sub_{}", chrono_like_now());
+
+        // 记录 sub_agent_start 事件
+        let _ = self.append_event(json!({
+            "type": "sub_agent_start",
+            "session_id": sub_session_id,
+            "timestamp": chrono_like_now(),
+            "prompt": prompt,
+            "description": description,
+        }));
+
+        // 增加活跃子 agent 计数
+        self.active_sub_count += 1;
+
+        // 启动后台线程执行子 agent
+        let cwd = self.cwd.clone();
+        let home = self.home.clone();
+        let cfg = self.cfg.clone();
+        let msg_tx_arc = self.msg_tx.clone();
+        let sub_session_id_clone = sub_session_id.clone();
+
+        std::thread::spawn(move || {
+            // 1. 创建子 agent 的 conversation store
+            let sub_paths = session::paths_for(&home, &cwd, &sub_session_id_clone);
+            if let Err(e) = session::ensure_dir(&sub_paths.session_dir) {
+                eprintln!("Failed to create sub-agent session dir: {}", e);
+                // 早期失败时发送失败结果，让主进程减少 active_sub_count
+                let tx_guard = msg_tx_arc.lock().unwrap();
+                if let Some(tx) = tx_guard.as_ref() {
+                    let _ = tx.send(MainLoopMessage::AgentResult {
+                        session_id: sub_session_id_clone.clone(),
+                        status: "failed".to_string(),
+                        result: format!("Failed to create sub-agent session dir: {}", e),
+                        in_tokens: 0,
+                        out_tokens: 0,
+                    });
+                }
+                return;
+            }
+            let sub_conv = Store { path: sub_paths.conversation.clone() };
+            if let Err(e) = sub_conv.ensure() {
+                eprintln!("Failed to create sub-agent conversation: {}", e);
+                // 早期失败时发送失败结果，让主进程减少 active_sub_count
+                let tx_guard = msg_tx_arc.lock().unwrap();
+                if let Some(tx) = tx_guard.as_ref() {
+                    let _ = tx.send(MainLoopMessage::AgentResult {
+                        session_id: sub_session_id_clone.clone(),
+                        status: "failed".to_string(),
+                        result: format!("Failed to create sub-agent conversation: {}", e),
+                        in_tokens: 0,
+                        out_tokens: 0,
+                    });
+                }
+                return;
+            }
+
+            // 2. 创建子 agent 的 runtime
+            let mut sub_cfg = cfg.clone();
+            sub_cfg.session_id = sub_session_id_clone.clone();
+            sub_cfg.prompt = prompt.clone();
+            sub_cfg.interactive = false;
+
+            let (sub_msg_tx, _sub_msg_rx) = mpsc::channel();
+            let mut sub_rt = Runtime {
+                cfg: sub_cfg,
+                cwd: cwd.clone(),
+                home: home.clone(),
+                api_url: api_url(&cfg),
+                paths: sub_paths.clone(),
+                conv: sub_conv,
+                tools_json: serde_json::from_str(TOOLS_JSON).unwrap_or_default(),
+                http: StreamClient::new().expect("Failed to create HTTP client"),
+                transport: Arc::from(crate::transport::new_transport(&cfg)),
+                interrupted: Arc::new(AtomicBool::new(false)),
+                last_context_tokens: 0,
+                last_input_tokens: 0,
+                last_output_tokens: 0,
+                last_cache_read_tokens: 0,
+                last_cache_creation_tokens: 0,
+                msg_tx: Arc::new(Mutex::new(Some(sub_msg_tx))),
+                msg_rx: _sub_msg_rx,
+                active_sub_count: 0,
+                sub_agent_request_count: 0,
+            };
+
+            // 3. 执行 agent_loop
+            let mut status = "ok";
+            if let Err(e) = sub_rt.agent_loop(prompt.clone()) {
+                eprintln!("Sub-agent {} failed: {}", sub_session_id_clone, e);
+                status = "failed";
+            }
+
+            // 4. 提取结果
+            let lines = match sub_rt.conv.lines() {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("Failed to load sub-agent conversation: {}", e);
+                    // 通过消息队列发送失败结果，让主进程减少计数
+                    let tx_guard = msg_tx_arc.lock().unwrap();
+                    if let Some(tx) = tx_guard.as_ref() {
+                        let _ = tx.send(MainLoopMessage::AgentResult {
+                            session_id: sub_session_id_clone,
+                            status: "failed".to_string(),
+                            result: format!("Sub-agent failed: {}", e),
+                            in_tokens: 0,
+                            out_tokens: 0,
+                        });
+                    }
+                    return;
+                }
+            };
+
+            let mut result_parts = Vec::new();
+            for line in &lines {
+                if let Some(role) = line.get("role").and_then(|v| v.as_str()) {
+                    if role == "assistant" {
+                        if let Some(content) = line.get("content").and_then(|v| v.as_array()) {
+                            for block in content {
+                                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                    result_parts.push(text.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let result_text = result_parts.join("\n\n");
+
+            // 5. 收集 usage 统计
+            let stats = sub_rt.read_stats();
+            let in_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
+            let out_tokens = stats_get_f64(&stats, "total_output_tokens") as usize;
+
+            // 6. 通过消息队列发送结果
+            let tx_guard = msg_tx_arc.lock().unwrap();
+            if let Some(tx) = tx_guard.as_ref() {
+                let _ = tx.send(MainLoopMessage::AgentResult {
+                    session_id: sub_session_id_clone,
+                    status: status.to_string(),
+                    result: result_text,
+                    in_tokens,
+                    out_tokens,
+                });
+            }
+        });
+
+        format!("Sub-agent started: session_id={}", sub_session_id)
     }
 
     fn interactive_mode(&mut self) -> Result<()> {
@@ -246,29 +452,81 @@ impl Runtime {
                 let _ = rl.add_history_entry(trimmed);
             }
         }
-        loop {
-            let line = match rl.readline("> ") {
-                Ok(s) => s.trim_end().to_string(),
-                Err(ReadlineError::Interrupted) => continue,
-                Err(ReadlineError::Eof) => break,
-                Err(e) => return Err(anyhow!("interactive input error: {e}")),
-            };
-            if line.is_empty() {
-                continue;
+
+        // 启动 readline 线程，将用户输入发送到消息队列
+        let msg_tx_arc = self.msg_tx.clone();
+        let history_path_clone = history_path.clone();
+        let readline_handle = std::thread::spawn(move || {
+            let mut rl = DefaultEditor::new().unwrap();
+            if let Ok(file) = fs::File::open(&history_path_clone) {
+                for line in BufReader::new(file).lines() {
+                    if let Ok(line) = line {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                            let _ = rl.add_history_entry(trimmed);
+                        }
+                    }
+                }
             }
-            if line == "exit" || line == "quit" {
-                break;
-            }
-            let _ = rl.add_history_entry(line.as_str());
-            let mut file = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&history_path)?;
-            writeln!(file, "{line}")?;
-            if let Err(e) = self.agent_loop(line) {
-                self.error(&e.to_string());
-            }
-        }
+            // 借鉴 bash 版本：线程退出时主动 drop 发送端，让 main_loop 收到 Disconnected
+            let result = (|| {
+                loop {
+                    let line = match rl.readline("> ") {
+                        Ok(s) => s.trim_end().to_string(),
+                        Err(ReadlineError::Interrupted) => {
+                            // Ctrl+C 重新输入当前行（与 Go 版本一致）
+                            continue;
+                        }
+                        Err(ReadlineError::Eof) => {
+                            // Ctrl+D 退出
+                            return;
+                        }
+                        Err(_) => {
+                            return;
+                        }
+                    };
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if line == "exit" || line == "quit" {
+                        return;
+                    }
+                    let _ = rl.add_history_entry(line.as_str());
+                    if let Ok(mut file) = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&history_path_clone)
+                    {
+                        let _ = writeln!(file, "{line}");
+                    }
+                    // 创建同步 channel
+                    let (done_tx, done_rx) = mpsc::channel();
+                    // 将用户输入发送到消息队列
+                    let tx_guard = msg_tx_arc.lock().unwrap();
+                    if let Some(tx) = tx_guard.as_ref() {
+                        if tx.send(MainLoopMessage::UserInput { input: line, done: done_tx }).is_err() {
+                            return;
+                        }
+                    } else {
+                        return;
+                    }
+                    drop(tx_guard); // 释放锁
+                    // 等待 main_loop 处理完成
+                    let _ = done_rx.recv();
+                }
+            })();
+            // readline 线程退出时，主动 drop 发送端（借鉴 bash 版本 exec 4>&-）
+            let mut tx_guard = msg_tx_arc.lock().unwrap();
+            *tx_guard = None;
+            result
+        });
+
+        // 在主线程中运行 main_loop
+        self.main_loop()?;
+
+        // 等待 readline 线程结束
+        let _ = readline_handle.join();
+
         self.info("Goodbye!");
         if !self.cfg.session_id.is_empty() {
             eprintln!(
@@ -276,6 +534,140 @@ impl Runtime {
                 self.cfg.session_id
             );
         }
+        Ok(())
+    }
+
+    // main_loop 主事件循环，从消息队列读取并分发处理
+    // 借鉴 bash 版本设计：readline 线程退出时主动 drop 发送端（类似 bash 的 exec 4>&-），
+    // 这样 recv() 收到 Disconnected 后自然退出，无需轮询 should_exit
+    fn main_loop(&mut self) -> Result<()> {
+        loop {
+            let msg = match self.msg_rx.recv() {
+                Ok(msg) => msg,
+                Err(std::sync::mpsc::RecvError) => {
+                    // 所有发送端已关闭（readline 线程退出时主动 drop），退出
+                    break;
+                }
+            };
+            match msg {
+                MainLoopMessage::UserInput { input, done } => {
+                    if self.cfg.interactive {
+                        // 清除当前行（包括提示符）
+                        eprint!("\r\x1b[2K");
+                    }
+                    if let Err(e) = self.agent_loop(input) {
+                        let msg = e.to_string();
+                        // 不打印 interrupted 错误
+                        if msg != "interrupted" {
+                            self.error(&msg);
+                        }
+                    }
+                    if self.cfg.interactive {
+                        // agent 执行完成后重新显示提示符
+                        eprint!("\x1b[32m> \x1b[0m");
+                    }
+                    // 通知 readline 线程处理完成
+                    let _ = done.send(());
+                }
+                MainLoopMessage::AgentResult {
+                    session_id,
+                    status,
+                    result,
+                    in_tokens,
+                    out_tokens,
+                } => {
+                    self.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens)?;
+                }
+            }
+
+            // 非交互模式且无活跃子 agent 时退出
+            if !self.cfg.interactive && self.active_sub_count == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    // handle_sub_agent_result 处理子 agent 完成后的结果注入
+    fn handle_sub_agent_result(
+        &mut self,
+        session_id: &str,
+        status: &str,
+        result: &str,
+        in_tokens: usize,
+        out_tokens: usize,
+    ) -> Result<()> {
+        // 1. 记录 usage 事件
+        let _ = self.append_event(json!({
+            "type": "usage",
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+            "kind": "sub_agent",
+            "sub_session_id": session_id,
+        }));
+
+        // 2. 更新 stats
+        let mut stats = self.read_stats();
+        let sub_count = stats_get_f64(&stats, "sub_agent_request_count") as usize + 1;
+        stats.insert(
+            "sub_agent_request_count".to_string(),
+            Value::Number(sub_count.into()),
+        );
+        let total_in = stats_get_f64(&stats, "total_input_tokens") as usize + in_tokens;
+        stats.insert(
+            "total_input_tokens".to_string(),
+            Value::Number(total_in.into()),
+        );
+        let total_out = stats_get_f64(&stats, "total_output_tokens") as usize + out_tokens;
+        stats.insert(
+            "total_output_tokens".to_string(),
+            Value::Number(total_out.into()),
+        );
+        self.write_stats(&stats);
+
+        // 3. 记录 sub_agent_end 事件
+        let _ = self.append_event(json!({
+            "type": "sub_agent_end",
+            "session_id": session_id,
+            "timestamp": chrono_like_now(),
+            "status": status,
+        }));
+
+        // 4. 更新活跃子 agent 计数
+        self.active_sub_count -= 1;
+        self.sub_agent_request_count += 1;
+
+        // 5. 显示结果
+        let preview = truncate_str(result, 120);
+        if status == "ok" {
+            eprintln!(
+                "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m",
+                session_id, in_tokens, out_tokens
+            );
+        } else {
+            eprintln!("\x1b[31m[sub-agent {}] failed\x1b[0m", session_id);
+        }
+        if !preview.is_empty() {
+            eprintln!("\x1b[90m  {}\x1b[0m", preview);
+        }
+
+        // 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）
+        if self.cfg.interactive {
+            eprint!("\r\x1b[2K");
+        }
+
+        // 7. 注入结果到 conversation 并触发 agent loop（忽略错误，与 bash/Go 对齐）
+        let context = format!(
+            "[Sub-agent result | session_id={} | status={} | tokens_in={} tokens_out={}]\n{}",
+            session_id, status, in_tokens, out_tokens, result
+        );
+        let _ = self.agent_loop(context);
+
+        // 8. 交互模式下恢复提示符
+        if self.cfg.interactive {
+            eprint!("\x1b[32m> \x1b[0m");
+        }
+
         Ok(())
     }
 
@@ -394,6 +786,11 @@ impl Runtime {
                                         output = "Error: no plan draft found to confirm.".to_string();
                                     }
                                 }
+                            }
+
+                            if call.name == "SubAgent" {
+                                // SubAgent 工具在 app 层处理，因为它需要访问 runtime 的完整上下文
+                                output = self.handle_sub_agent(&call.fields);
                             }
 
                             let mut conv_content = String::new();
@@ -723,6 +1120,7 @@ impl Runtime {
             rx,
             finished: false,
             cancel,
+            interrupted: self.interrupted.clone(),
         })
     }
 
@@ -1022,6 +1420,7 @@ impl Runtime {
         stats.insert("current_turn_count".to_string(), Value::Number(0.into()));
         stats.insert("agent_request_count".to_string(), Value::Number(0.into()));
         stats.insert("compact_request_count".to_string(), Value::Number(0.into()));
+        stats.insert("sub_agent_request_count".to_string(), Value::Number(0.into())); // SubAgent 请求计数
         stats.insert("total_input_tokens".to_string(), Value::Number(0.into()));
         stats.insert("total_output_tokens".to_string(), Value::Number(0.into()));
         stats.insert(
@@ -1628,6 +2027,19 @@ fn parse_input_fields(input: &Value) -> std::collections::BTreeMap<String, Strin
         }
     }
     fields
+}
+
+// truncate_str 截断字符串到指定长度
+fn truncate_str(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        return s.to_string();
+    }
+    // 确保不会在 UTF-8 字符中间截断
+    let mut end = n;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }
 
 #[cfg(test)]

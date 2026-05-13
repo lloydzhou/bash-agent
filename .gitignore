@@ -4,3 +4,4 @@
 /rust/target/
 dist/*
 go/goagent
+go/bash-agent

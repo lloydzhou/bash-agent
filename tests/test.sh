@@ -142,6 +142,17 @@ class H(http.server.BaseHTTPRequestHandler):
         cl = int(self.headers.get('Content-Length',0))
         body = self.rfile.read(cl)
         path = self.path
+        # --- Early error returns (must be before send_response(200)) ---
+        # SubAgent failure mock: child agent request -> 422 error
+        # Only match child requests (no SUB_FAIL_MARKER in body)
+        if b'SUB_FAIL_CHILD' in body and b'SUB_FAIL_MARKER' not in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(422)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error':{'type':'invalid_request','message':'simulated child failure'}},sort_keys=True).encode())
+            return
+        # --- Normal flow ---
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.end_headers()
@@ -169,6 +180,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        # --- SubAgent mock moved above Skill marker check ---
         if b'Skill marker for tests' in body and b'ANSI_TOOL_RESULT_MARKER' not in body:
             if path.startswith('/v1/messages'):
                 if b'Skill path marker: ' in body and b'/helper.sh' in body:
@@ -993,6 +1005,81 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'ansi not sanitized in tool_result')
             return
+        # --- SubAgent 4-stage mock ---
+        # Stage 1: main agent first request -> SubAgent tool_call
+        if b'SUB_AGENT_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_sub\",\"name\":\"SubAgent\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_CHILD_COUNT','description':'line count'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":10}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 2: sub-agent request (body has SUB_CHILD_COUNT, no tool_result)
+        if b'SUB_CHILD_COUNT' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub2\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"1545 lines.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 3: main agent after SubAgent tool_result -> acknowledge (not when result context arrives)
+        if b'SUB_AGENT_MARKER' in body and b'"tool_result"' in body and b'Sub-agent started' in body and b'Sub-agent result' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub3\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Waiting for sub-agent.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 4: main agent after AGENT_RESULT -> final answer
+        if b'SUB_AGENT_MARKER' in body and b'Sub-agent result' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub4\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Sub-agent reports: 1545 lines.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # --- SubAgent failure mock ---
+        # Stage 1: main agent -> SubAgent tool_call with SUB_FAIL_CHILD prompt
+        if b'SUB_FAIL_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fail1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_sub_fail\",\"name\":\"SubAgent\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_FAIL_CHILD','description':'failing child'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":10}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 3: main agent after failed SubAgent -> acknowledge
+        if b'SUB_FAIL_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fail3\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Sub-agent failed.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # --- End SubAgent mock ---
         if b'MULTI_TOOL_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -1998,6 +2085,172 @@ test_agent_max_context() {
     fi
 }
 
+# Test: SubAgent e2e — main agent dispatches SubAgent tool, child runs, result flows back
+test_agent_sub_agent() {
+    info "Test: SubAgent e2e flow"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    # Set up the test harness
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    # Run agent with a prompt that triggers SubAgent via mock server
+    # The mock server has 4 stages:
+    #   Stage 1: main agent -> SubAgent tool_call (prompt contains SUB_CHILD_COUNT)
+    #   Stage 2: child agent -> text "1545 lines."
+    #   Stage 3: main agent gets tool_result "Sub-agent started" -> end_turn
+    #   Stage 4: main agent gets AGENT_RESULT context -> final "Sub-agent reports: 1545 lines."
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-001 "SUB_AGENT_MARKER count lines" 2>&1) || true
+
+    # Verify child agent produced a result mentioning "1545 lines"
+    if echo "$output" | grep -q "1545"; then
+        green "SubAgent: child result text found in output"; ((PASS++)) || true
+    else
+        red "SubAgent: child result text not found in output"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    # Verify main agent acknowledged and reported final answer
+    if echo "$output" | grep -q "Sub-agent reports: 1545"; then
+        green "SubAgent: main agent final answer found"; ((PASS++)) || true
+    else
+        red "SubAgent: main agent final answer not found"
+        ((FAIL++)) || true
+    fi
+
+    # Verify AGENT_RESULT was handled (check session event log)
+    # Session path: $tmpdir/.bash-agent/projects/<project-key>/test-sub-001/events.jsonl
+    local session_dir
+    session_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "test-sub-001" 2>/dev/null | head -1)
+    if [[ -n "$session_dir" && -f "$session_dir/events.jsonl" ]]; then
+        if grep -q "sub_agent_start" "$session_dir/events.jsonl" && grep -q "sub_agent_end" "$session_dir/events.jsonl"; then
+            green "SubAgent: session events recorded"; ((PASS++)) || true
+        else
+            red "SubAgent: missing sub_agent_start or sub_agent_end in events.jsonl"; ((FAIL++)) || true
+        fi
+        # Verify usage event with kind=sub_agent
+        if grep -q '"kind":"sub_agent"' "$session_dir/events.jsonl"; then
+            green "SubAgent: sub_agent usage event recorded"; ((PASS++)) || true
+        else
+            red "SubAgent: missing sub_agent usage event"; ((FAIL++)) || true
+        fi
+        # Verify usage numbers are non-zero
+        local _in _out
+        _in=$(grep '"kind":"sub_agent"' "$session_dir/events.jsonl" | protocol_awk -F'[" ,:]+' '/input_tokens/{for(i=1;i<=NF;i++) if($i=="input_tokens") print $(i+1)}' | head -1)
+        _out=$(grep '"kind":"sub_agent"' "$session_dir/events.jsonl" | protocol_awk -F'[" ,:]+' '/output_tokens/{for(i=1;i<=NF;i++) if($i=="output_tokens") print $(i+1)}' | head -1)
+        if [[ "${_in:-0}" -gt 0 && "${_out:-0}" -gt 0 ]]; then
+            green "SubAgent: usage tokens non-zero (in=$_in, out=$_out)"; ((PASS++)) || true
+        else
+            red "SubAgent: usage tokens are zero (in=$_in, out=$_out)"; ((FAIL++)) || true
+        fi
+    else
+        red "SubAgent: events.jsonl not found under $tmpdir"; ((FAIL++)) || true
+    fi
+
+    # Cleanup
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
+# Test: SubAgent failure propagation — child agent fails, parent sees status=failed
+test_agent_sub_agent_failure() {
+    info "Test: SubAgent failure propagation"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    # SUB_FAIL_MARKER triggers a mock that returns a tool_call with prompt SUB_FAIL_CHILD,
+    # which the mock responds with an HTTP error (422), causing the child to fail.
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-fail-001 "SUB_FAIL_MARKER trigger failure" 2>&1) || true
+
+    # Verify the main agent observed the failure
+    if echo "$output" | grep -qi "fail\|error\|sub-agent"; then
+        green "SubAgent-fail: failure indication in output"; ((PASS++)) || true
+    else
+        red "SubAgent-fail: no failure indication in output"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    # Check session events: sub_agent_end should have status=failed
+    local session_dir
+    session_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "test-sub-fail-001" 2>/dev/null | head -1)
+    if [[ -n "$session_dir" && -f "$session_dir/events.jsonl" ]]; then
+        if grep -q '"status":"failed"' "$session_dir/events.jsonl"; then
+            green "SubAgent-fail: session event status=failed recorded"; ((PASS++)) || true
+        else
+            red "SubAgent-fail: missing status=failed in events.jsonl"
+            ((FAIL++)) || true
+        fi
+    else
+        red "SubAgent-fail: events.jsonl not found"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
+# Test: SubAgent child session directory is created independently
+test_agent_sub_agent_child_session() {
+    info "Test: SubAgent child session isolation"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-iso-001 "SUB_AGENT_MARKER count lines" 2>&1) || true
+
+    # Verify child has its own session directory (sub_*) with conversation.jsonl
+    local child_session_dir
+    child_session_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "sub_*" 2>/dev/null | head -1)
+    if [[ -n "$child_session_dir" && -f "$child_session_dir/conversation.jsonl" ]]; then
+        green "SubAgent-iso: child session dir created with conversation.jsonl"; ((PASS++)) || true
+        # Verify child conversation has assistant content
+        if grep -q '"role":"assistant"' "$child_session_dir/conversation.jsonl"; then
+            green "SubAgent-iso: child conversation has assistant turns"; ((PASS++)) || true
+        else
+            red "SubAgent-iso: child conversation missing assistant turns"; ((FAIL++)) || true
+        fi
+    else
+        red "SubAgent-iso: child session dir not found under $tmpdir"; ((FAIL++)) || true
+    fi
+
+    # Verify child session does NOT pollute parent's conversation with child's assistant turns
+    local parent_dir
+    parent_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "test-sub-iso-001" 2>/dev/null | head -1)
+    if [[ -n "$parent_dir" && -f "$parent_dir/conversation.jsonl" ]]; then
+        # The SubAgent tool_call params will contain the child prompt — that's expected.
+        # Check that the child's CONV_FILE content (assistant turns) did NOT leak into parent.
+        local child_conv
+        child_conv=$(find "$tmpdir/.bash-agent/projects" -type d -name "sub_*" -exec find {} -name "conversation.jsonl" \; 2>/dev/null | head -1)
+        if [[ -n "$child_conv" ]]; then
+            local child_text
+            child_text=$(grep '"role":"assistant"' "$child_conv" 2>/dev/null | head -1)
+            if [[ -n "$child_text" ]] && grep -qF "$child_text" "$parent_dir/conversation.jsonl" 2>/dev/null; then
+                red "SubAgent-iso: child assistant content leaked into parent conversation"; ((FAIL++)) || true
+            else
+                green "SubAgent-iso: parent conversation isolated from child"; ((PASS++)) || true
+            fi
+        else
+            green "SubAgent-iso: parent conversation isolated (no child conv found)"; ((PASS++)) || true
+        fi
+    fi
+
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
 # Test 37: compact_dp.awk — DP compact decision algorithm
 test_compact_dp_awk() {
     info "Test 37: compact_dp.awk DP compact decision"
@@ -2188,6 +2441,9 @@ test_stats_awk
 test_agent_max_context
 test_agent_stats_json
 test_compact_dp_awk
+test_agent_sub_agent
+test_agent_sub_agent_failure
+test_agent_sub_agent_child_session
 
 echo ""
 echo "=============================="

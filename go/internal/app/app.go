@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -28,6 +29,18 @@ import (
 	"github.com/lloydzhou/bash-agent/internal/tools"
 	"github.com/lloydzhou/bash-agent/internal/transport"
 )
+
+// MainLoopMessage 主循环消息类型
+type MainLoopMessage struct {
+	Type      string // "USER_INPUT" or "AGENT_RESULT"
+	Input     string // USER_INPUT 的内容
+	SessionID string // AGENT_RESULT 的子 session ID
+	Status    string // "ok" or "failed"
+	Result    string // 子 agent 执行结果
+	InTokens  int    // 输入 token 数
+	OutTokens int    // 输出 token 数
+	Done      chan<- struct{} // 非 nil 时，mainLoop 处理完后发送信号
+}
 
 type runtime struct {
 	cfg                     config.Config
@@ -48,6 +61,10 @@ type runtime struct {
 	lastOutputTokens        int
 	lastCacheReadTokens     int
 	lastCacheCreationTokens int
+	msgChan                 chan MainLoopMessage    // 主循环消息队列
+	msgChanMu              *sync.Mutex            // 保护 msgChan 的互斥锁
+	activeSubCount          int                  // 活跃子 agent 计数
+	subAgentRequestCount    int                  // SubAgent 请求计数
 }
 
 var errInterrupted = errors.New("interrupted")
@@ -101,12 +118,14 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return listSessions(home, cwd, stdout)
 	}
 	rt := &runtime{
-		cfg:    cfg,
-		cwd:    cwd,
-		home:   home,
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		cfg:      cfg,
+		cwd:      cwd,
+		home:     home,
+		stdin:    stdin,
+		stdout:   stdout,
+		stderr:   stderr,
+		msgChan:  make(chan MainLoopMessage, 16), // 初始化消息队列
+		msgChanMu: &sync.Mutex{},                // 初始化互斥锁
 		http: httpclient.StreamClient{
 			Client: newHTTPClient(),
 		},
@@ -121,14 +140,32 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		rt.cfg.Interactive = true
 		return rt.interactiveMode()
 	}
+	// 非交互模式也走 mainLoop，确保等待子 agent 完成
+	var loopErr error
 	if rt.cfg.Prompt != "" {
-		return rt.agentLoop(rt.cfg.Prompt)
+		loopErr = rt.agentLoop(rt.cfg.Prompt)
+	} else {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return err
+		}
+		loopErr = rt.agentLoop(string(data))
 	}
-	data, err := io.ReadAll(stdin)
-	if err != nil {
-		return err
+	if loopErr != nil {
+		return loopErr
 	}
-	return rt.agentLoop(string(data))
+	// 等待所有子 agent 完成
+	for rt.activeSubCount > 0 {
+		msg, ok := <-rt.msgChan
+		if !ok {
+			break
+		}
+		switch msg.Type {
+		case "AGENT_RESULT":
+			rt.handleSubAgentResult(msg)
+		}
+	}
+	return nil
 }
 
 func (rt *runtime) applyProviderDefaults() error {
@@ -216,10 +253,30 @@ func (rt *runtime) interactiveMode() error {
 			_, _ = fmt.Fprintln(f, input)
 			f.Close()
 		}
-		if err := rt.agentLoop(input); err != nil {
-			rt.error("%v", err)
+		// 创建同步 channel
+		done := make(chan struct{})
+		// 将用户输入发送到消息队列
+		rt.msgChanMu.Lock()
+		ch := rt.msgChan
+		rt.msgChanMu.Unlock()
+		if ch == nil {
+			return
 		}
+		ch <- MainLoopMessage{
+			Type:  "USER_INPUT",
+			Input: input,
+			Done:  done,
+		}
+		// 等待 mainLoop 处理完成
+		<-done
 	}
+
+	// 启动主循环 goroutine
+	go func() {
+		if err := rt.mainLoop(); err != nil {
+			rt.error("Main loop error: %v", err)
+		}
+	}()
 
 	p := goprompt.New(
 		executor,
@@ -235,6 +292,11 @@ func (rt *runtime) interactiveMode() error {
 	)
 
 	_ = p.RunNoExit()
+	// 设置 msgChan 为 nil，让 mainLoop 退出（类似 bash 的 exec 4>&-）
+	rt.msgChanMu.Lock()
+	close(rt.msgChan)
+	rt.msgChan = nil
+	rt.msgChanMu.Unlock()
 	_, _ = fmt.Fprintln(rt.stdout, "Goodbye!")
 	if rt.cfg.SessionID != "" {
 		_, _ = fmt.Fprintf(rt.stdout, "\033[90mResume with: --session %s  or  --continue\033[0m\n", rt.cfg.SessionID)
@@ -622,6 +684,11 @@ func (rt *runtime) agentLoopStream(userInput string) error {
 					} else {
 						output = "Error: no plan draft found to confirm."
 					}
+				}
+
+				if e.Name == "SubAgent" {
+					// SubAgent 工具在 app 层处理，因为它需要访问 runtime 的完整上下文
+					output = rt.handleSubAgent(e.InputJSON)
 				}
 
 				var convContent string
@@ -1260,6 +1327,7 @@ func (rt *runtime) readStats() map[string]any {
 		"current_turn_count":          float64(0),
 		"agent_request_count":         float64(0),
 		"compact_request_count":       float64(0),
+		"sub_agent_request_count":     float64(0), // SubAgent 请求计数
 		"total_input_tokens":          float64(0),
 		"total_output_tokens":         float64(0),
 		"total_cache_read_tokens":     float64(0),
@@ -1520,3 +1588,263 @@ func listSessions(home, cwd string, w io.Writer) error {
 	}
 	return nil
 }
+
+// handleSubAgent 处理 SubAgent 工具调用
+func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
+	var args struct {
+		Prompt      string `json:"prompt"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(inputJSON, &args); err != nil {
+		return "Error: invalid SubAgent arguments: " + err.Error()
+	}
+	if args.Prompt == "" {
+		return "Error: no prompt provided for sub-agent"
+	}
+
+	// 生成子 session ID
+	now := time.Now()
+	subSessionID := fmt.Sprintf("sub_%s-%04x", now.Format("20060102-150405"), now.Nanosecond()%0xffff)
+
+	// 记录 sub_agent_start 事件
+	_ = rt.appendEvent(map[string]any{
+		"type":       "sub_agent_start",
+		"session_id": subSessionID,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"prompt":     args.Prompt,
+		"description": args.Description,
+	})
+
+	// 增加活跃子 agent 计数
+	rt.activeSubCount++
+
+	// 启动后台 goroutine 执行子 agent
+	go func() {
+		// 子 agent 完成后，通过消息队列通知主进程，由主进程减少 activeSubCount
+		defer func() {
+			// 如果 goroutine 异常退出，确保减少计数
+			// 正常路径会在发送 AGENT_RESULT 消息后由主进程处理
+		}()
+
+		// 1. 创建子 agent 的 conversation store
+		subPaths := session.PathsFor(rt.home, rt.cwd, subSessionID)
+		if err := session.EnsureDir(subPaths.SessionDir); err != nil {
+			rt.error("Failed to create sub-agent session dir: %v", err)
+			// 通过消息队列发送失败结果，让主进程减少计数
+			rt.msgChanMu.Lock()
+			ch := rt.msgChan
+			rt.msgChanMu.Unlock()
+			if ch != nil {
+				ch <- MainLoopMessage{
+					Type:      "AGENT_RESULT",
+					SessionID: subSessionID,
+					Status:    "failed",
+					Result:    fmt.Sprintf("Sub-agent failed: %v", err),
+					InTokens:  0,
+					OutTokens: 0,
+				}
+			}
+			return
+		}
+		subConv := conversation.Store{Path: subPaths.Conversation}
+		if err := subConv.Ensure(); err != nil {
+			rt.error("Failed to create sub-agent conversation: %v", err)
+			// 通过消息队列发送失败结果，让主进程减少计数
+			rt.msgChanMu.Lock()
+			ch := rt.msgChan
+			rt.msgChanMu.Unlock()
+			if ch != nil {
+				ch <- MainLoopMessage{
+					Type:      "AGENT_RESULT",
+					SessionID: subSessionID,
+					Status:    "failed",
+					Result:    fmt.Sprintf("Sub-agent failed: %v", err),
+					InTokens:  0,
+					OutTokens: 0,
+				}
+			}
+			return
+		}
+
+		// 2. 创建子 agent 的 runtime
+		subCfg := rt.cfg
+		subCfg.SessionID = subSessionID
+		subCfg.Prompt = args.Prompt
+		subCfg.Interactive = false
+
+		subRT := &runtime{
+			cfg:       subCfg,
+			cwd:       rt.cwd,
+			home:      rt.home,
+			apiURL:    rt.apiURL,
+			toolsJSON: append([]byte(nil), rt.toolsJSON...),
+			stdin:     strings.NewReader(""),
+			stdout:    io.Discard,
+			stderr:    io.Discard,
+			paths:     subPaths,
+			conv:      subConv,
+			http:      rt.http,
+			transport: rt.transport,
+			msgChan:   make(chan MainLoopMessage, 16),
+			msgChanMu: &sync.Mutex{},
+		}
+
+		// 3. 执行 agentLoop
+		status := "ok"
+		if err := subRT.agentLoop(args.Prompt); err != nil {
+			rt.error("Sub-agent %s failed: %v", subSessionID, err)
+			status = "failed"
+		}
+
+		// 4. 提取结果
+		lines, err := subConv.Lines()
+		if err != nil {
+			rt.error("Failed to load sub-agent conversation: %v", err)
+			// 通过消息队列发送失败结果，让主进程减少计数
+			rt.msgChanMu.Lock()
+			ch := rt.msgChan
+			rt.msgChanMu.Unlock()
+			if ch != nil {
+				ch <- MainLoopMessage{
+					Type:      "AGENT_RESULT",
+					SessionID: subSessionID,
+					Status:    "failed",
+					Result:    fmt.Sprintf("Sub-agent failed: %v", err),
+					InTokens:  0,
+					OutTokens: 0,
+				}
+			}
+			return
+		}
+
+		var resultParts []string
+		for _, line := range lines {
+			var msg map[string]interface{}
+			if err := json.Unmarshal(line, &msg); err != nil {
+				continue
+			}
+			if msg["role"] == "assistant" {
+				if content, ok := msg["content"].([]interface{}); ok {
+					for _, block := range content {
+						if b, ok := block.(map[string]interface{}); ok {
+							if b["type"] == "text" {
+								resultParts = append(resultParts, b["text"].(string))
+							}
+						}
+					}
+				}
+			}
+		}
+		resultText := strings.Join(resultParts, "\n\n")
+
+		// 5. 收集 usage 统计
+		stats := subRT.readStats()
+		inTokens := int(statsFloat64(stats, "total_input_tokens"))
+		outTokens := int(statsFloat64(stats, "total_output_tokens"))
+
+		// 6. 通过消息队列发送结果
+		rt.msgChanMu.Lock()
+		ch := rt.msgChan
+		rt.msgChanMu.Unlock()
+		if ch == nil {
+			return
+		}
+		ch <- MainLoopMessage{
+			Type:      "AGENT_RESULT",
+			SessionID: subSessionID,
+			Status:    status,
+			Result:    resultText,
+			InTokens:  inTokens,
+			OutTokens: outTokens,
+		}
+	}()
+
+	return fmt.Sprintf("Sub-agent started: session_id=%s", subSessionID)
+}
+
+// mainLoop 主事件循环，从消息队列读取并分发处理
+func (rt *runtime) mainLoop() error {
+	for msg := range rt.msgChan {
+		switch msg.Type {
+		case "USER_INPUT":
+			if err := rt.agentLoop(msg.Input); err != nil {
+				rt.error("%v", err)
+			}
+			// 通知 executor 处理完成
+			if msg.Done != nil {
+				msg.Done <- struct{}{}
+			}
+		case "AGENT_RESULT":
+			rt.handleSubAgentResult(msg)
+		default:
+			rt.error("Unknown message type: %s", msg.Type)
+		}
+
+		// 非交互模式且无活跃子 agent 时退出
+		if !rt.cfg.Interactive && rt.activeSubCount == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+// handleSubAgentResult 处理子 agent 完成后的结果注入
+func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
+	// 1. 记录 usage 事件
+	usageEvt := map[string]any{
+		"type":             "usage",
+		"input_tokens":     msg.InTokens,
+		"output_tokens":    msg.OutTokens,
+		"kind":             "sub_agent",
+		"sub_session_id":   msg.SessionID,
+	}
+	_ = rt.appendEvent(usageEvt)
+
+	// 2. 更新 stats
+	stats := rt.readStats()
+	stats["sub_agent_request_count"] = statsFloat64(stats, "sub_agent_request_count") + 1
+	stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(msg.InTokens)
+	stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(msg.OutTokens)
+	rt.writeStats(stats)
+
+	// 3. 记录 sub_agent_end 事件
+	_ = rt.appendEvent(map[string]any{
+		"type":       "sub_agent_end",
+		"session_id": msg.SessionID,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"status":     msg.Status,
+	})
+
+	// 4. 更新活跃子 agent 计数
+	rt.activeSubCount--
+	rt.subAgentRequestCount++
+
+	// 5. 显示结果
+	preview := truncateRunes(msg.Result, 120)
+	if msg.Status == "ok" {
+		fmt.Fprintf(rt.stderr, "\033[35m[sub-agent %s] completed (in=%d, out=%d)\033[0m\n",
+			msg.SessionID, msg.InTokens, msg.OutTokens)
+	} else {
+		fmt.Fprintf(rt.stderr, "\033[31m[sub-agent %s] failed\033[0m\n", msg.SessionID)
+	}
+	if preview != "" {
+		fmt.Fprintf(rt.stderr, "\033[90m  %s\033[0m\n", preview)
+	}
+
+	// 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）
+	if rt.cfg.Interactive {
+		fmt.Fprint(rt.stderr, "\r\033[K")
+	}
+
+	// 7. 注入结果到 conversation 并触发 agent loop
+	context := fmt.Sprintf("[Sub-agent result | session_id=%s | status=%s | tokens_in=%d tokens_out=%d]\n%s",
+		msg.SessionID, msg.Status, msg.InTokens, msg.OutTokens, msg.Result)
+	_ = rt.agentLoop(context)
+
+	// 8. 交互模式下恢复提示符
+	if rt.cfg.Interactive {
+		fmt.Fprint(rt.stderr, "\033[32m> \033[0m")
+	}
+}
+
+// truncateStr 截断字符串到指定长度（用于 Rust 兼容）

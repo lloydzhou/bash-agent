@@ -111,6 +111,121 @@ Go 和 Rust 版本当前也保持和 bash 一致的两层结构：
 - OpenAI/Claude 消息格式转换
 - `Edit` / `TodoWrite` 等需要文本变换的 tool 逻辑
 
+## 消息通道架构
+
+整个运行时涉及多个通道，不同语言实现有不同选择：
+
+### bash 版本的通道
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                           主进程                                     │
+│  ┌──────────────┐    RESP-like     ┌──────────────────┐            │
+│  │   agent_loop  │ ←──── fd 4/5 ───│ agent_loop_stream│            │
+│  │   (外层)      │                  │     (内层)        │            │
+│  └──────┬───────┘                  └────────┬─────────┘            │
+│         │                                    │                      │
+│         │                                    │ RESP-like            │
+│         │                                    │ (fd)                 │
+│         │                                    ↓                      │
+│         │                           ┌─────────────────┐            │
+│         │                           │  awk SSE 解析    │            │
+│         │                           └────────┬────────┘            │
+│         │                                    │ HTTP stream          │
+│         │                                    ↓                      │
+│         │                              ┌──────────┐                │
+│         │                              │ API 服务  │                │
+│         │                              └──────────┘                │
+│         │                                                          │
+│         │ FIFO (结果回传)                                           │
+│         ↓                                                          │
+│  ┌──────────────┐                                                  │
+│  │ 子 agent      │ ←── FIFO (启动) ─── agent_loop_stream           │
+│  │ (子进程)      │                                                  │
+│  └──────────────┘                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**通道说明**：
+
+| 通道 | 方向 | 用途 | 同步机制 |
+|------|------|------|---------|
+| RESP-like fd | awk → bash | SSE 解析结果传递给 agent_loop_stream | read 阻塞 |
+| RESP-like fd 4/5 | agent_loop_stream → agent_loop | 内层消息传递给外层 | write_message / read_message |
+| FIFO | 主 → 子 | 启动子 agent | 写入后非阻塞 |
+| FIFO | 子 → 主 | 子 agent 结果回传 | read 阻塞 |
+| stdin | 用户 → 主进程 | 交互模式输入 | read 阻塞 |
+
+### Go/Rust 版本的通道
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                           主 goroutine/task                          │
+│  ┌──────────────┐        msgChan        ┌──────────────────┐       │
+│  │   agent_loop  │ ←────────────────────│ agent_loop_stream│       │
+│  │   (外层)      │                       │     (内层)        │       │
+│  └──────┬───────┘                       └────────┬─────────┘       │
+│         │                                        │                 │
+│         │                                        │ HTTP stream     │
+│         │                                        ↓                 │
+│         │                                  ┌──────────┐            │
+│         │                                  │ API 服务  │            │
+│         │                                  └──────────┘            │
+│         │                                                          │
+│         │ msgChan (AGENT_RESULT)                                   │
+│         ↓                                                          │
+│  ┌──────────────┐                                                  │
+│  │ 子 agent      │ ←── goroutine/task 启动                         │
+│  │ (异步执行)    │                                                  │
+│  └──────────────┘                                                  │
+│                                                                    │
+│  ┌──────────────┐                                                  │
+│  │ interactive   │ ←── done channel (同步等待)                      │
+│  │ mode          │                                                  │
+│  └──────────────┘                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**通道说明**：
+
+| 通道 | 类型 | 方向 | 用途 | 同步机制 |
+|------|------|------|------|---------|
+| msgChan | `chan MainLoopMessage` | stream → loop | 内层消息传递给外层 | channel 阻塞 |
+| msgChan | `chan MainLoopMessage` | 子 → 主 | 子 agent 结果回传 | channel 阻塞 |
+| done | `chan struct{}` | mainLoop → interactive | 交互模式同步 | channel 阻塞 |
+| HTTP stream | `io.Reader` | API → stream | SSE 流式读取 | read 阻塞 |
+
+### 关键差异
+
+| 方面 | bash | Go/Rust |
+|------|------|---------|
+| API 解析层 | 独立 awk 进程 | 内嵌在 agent_loop_stream |
+| stream → loop 通道 | RESP-like fd 4/5 | msgChan |
+| 子 agent 结果回传 | FIFO | msgChan |
+| 交互模式同步 | read 阻塞 | done channel |
+| 子 agent 计数回收 | FIFO 消息触发 | msgChan 消息触发 |
+
+### 消息格式
+
+**bash RESP-like 协议**：
+```
+*N\r\n$len\r\ndata\r\n...
+```
+
+**Go/Rust MainLoopMessage**：
+```go
+type MainLoopMessage struct {
+    Type      string // "USER_INPUT" or "AGENT_RESULT"
+    Input     string
+    SessionID string
+    Status    string // "ok" or "failed"
+    Result    string
+    InTokens  int
+    OutTokens int
+    Done      chan<- struct{} // 交互模式同步
+}
+```
+
 ## 当前核心能力
 
 ### 1. Session
@@ -385,6 +500,7 @@ skills 当前优先读取：
 - `Skill`
 - `WebSearch`
 - `WebFetch`
+- `SubAgent` — 启动独立子 agent 会话，支持并发执行；子 agent 无法看到父会话上下文，prompt 必须自包含
 
 设计原则：
 
@@ -409,6 +525,42 @@ skills 当前优先读取：
 `Bash` 支持通过 `timeout` 参数为单条命令设置独立超时，覆盖全局 `--tool-timeout`。
 
 `WebSearch` 和 `WebFetch` 基于 Jina AI API，需要 `JINA_API_KEY` 环境变量。
+
+#### SubAgent 架构约束
+
+SubAgent 的核心设计原则是**隔离输出**：子 agent 的执行过程不应污染主 agent 的终端。
+
+**职责分工**：
+
+| 组件 | 职责 |
+|------|------|
+| 主 agent 的 `agentLoop` | 负责写入 events.jsonl + 根据模式（human/stream-json）输出到 stdout |
+| SubAgent 的工具执行 | 只按格式传递结果，不直接输出到 stdout |
+| SubAgent 的 `agentLoopStream` | 只记录 events.jsonl，不调用 `display_event` 或 `write_human` |
+
+**启动流程**：
+
+1. SubAgent 启动时返回启动提示文案（给主 agent）
+2. SubAgent 执行过程中只记录 events.jsonl，不输出到 stdout
+3. SubAgent 结束时通过 FIFO 传递结果给主 agent
+4. 主 agent 的 `handleSubAgentResult` 负责输出结果
+
+**关键实现细节**：
+
+- **bash 版本**：SubAgent 启动时设置 `export INTERACTIVE=false`，然后 `agent_loop "$prompt" >/dev/null` 重定向输出到 /dev/null
+- **Go/Rust 版本**：SubAgent 启动时设置 `sub_cfg.interactive = false`，然后在 `display_event` 中检查 `!self.is_stream_json_mode() && self.cfg.interactive` 条件，只有在交互模式下才输出到 stdout
+
+**⚠️ 常见错误**：
+
+错误理解：在 `write_human` 中根据 `interactive` 字段跳过输出。
+
+正确理解：`write_human` 不应该根据 `interactive` 跳过输出——主 agent 是交互模式需要正常输出。SubAgent 的 `interactive=false` 是通过 `display_event` 中的条件检查来确保不输出的。
+
+**代码位置**：
+
+- bash: `src/agent.sh` 第 1094 行（`agent_loop "$prompt" >/dev/null`）
+- Go: `internal/app/app.go`（`display_event` 中的 `if !rt.isStreamJsonMode() && rt.cfg.Interactive` 检查）
+- Rust: `rust/src/app.rs`（`display_event` 中的 `if !self.is_stream_json_mode() && self.cfg.interactive` 检查）
 
 ### 后续不该做什么
 
@@ -609,7 +761,7 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
   - skill tool 化
   - 更丰富的搜索工具
   - memory
-  - worktree / subagent
+  - worktree
 
 ## 不做什么
 
