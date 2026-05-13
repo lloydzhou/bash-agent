@@ -15,6 +15,12 @@
 ### Changed
 
 - **移除 todo.md 持久化**：Go/Rust 端不再在 session 目录创建 `todo.md` 文件，`Paths` 结构体移除 `TodoFile` 字段；bash 端移除 fork 时的 todo 文件复制和 touch 列表逻辑（`5417d13`）
+- **SubAgent fork 不再复制 plan.draft**：三端统一，fork 时仅复制 `conversation.jsonl`、`summary.txt`、`plan.md`，不再复制 `plan.draft`（`8f71f81`）
+
+### Added
+
+- **AGENTS.md**：新增项目构建与测试指南文档（`8f71f81`）
+- **`make test` / `make test-bash`**：Makefile 新增统一测试目标和 bash 测试目标（`8f71f81`）
 
 ---
 
