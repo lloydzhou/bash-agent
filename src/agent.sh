@@ -190,7 +190,7 @@ tool_call_summary() {
         Skill) key="name" ;;
         WebSearch) key="query" ;;
         WebFetch) key="url" ;;
-        SubAgent) key="prompt" ;;
+        SubAgent) key="description" ;;
     esac
     if [[ -n "$key" && $# -gt 0 ]]; then
         for (( i = 1; i + 1 <= $#; i += 2 )); do
@@ -432,7 +432,7 @@ build_system_prompt() {
     [[ "$locale" == zh* ]] && output_language_reaffirm='再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！'
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
     tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.'
-    sub_agent_guidance=$'- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result text is injected as a user message prefixed with `[Sub-agent result | session_id=... | status=ok|failed | tokens_in=... tokens_out=...]`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.'
+    sub_agent_guidance=$'- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result is injected as a user message: `[Sub-agent result | session_id=... | status=ok|failed tokens_in=... tokens_out=...]\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
     plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Files**: PLAN_DRAFT_FILE: '"${PLAN_DRAFT_FILE:-<not set>}"$' | PLAN_FILE: '"${PLAN_FILE:-<not set>}"$'\n- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n  Every user reply MUST be classified as exactly ONE of:\n  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.'
 
@@ -651,13 +651,15 @@ resolve_continue_session_id() {
 # --- FIFO / Main Loop ---
 # 处理子 agent 通过 FIFO 发回的 AGENT_RESULT 将 result_text 注入主 agent conversation，触发 agent_loop 让主 agent 处理
 handle_sub_agent_result() {
-    # REPLY_MESSAGE: AGENT_RESULT <session_id> <status> <result_text> <in> <out> <cr> <cc> <reqs>
-    local session_id="${REPLY_MESSAGE[1]}" status="${REPLY_MESSAGE[2]}" result_text="${REPLY_MESSAGE[3]}"
-    local _in="${REPLY_MESSAGE[4]:-0}" _out="${REPLY_MESSAGE[5]:-0}"
-    local _cr="${REPLY_MESSAGE[6]:-0}" _cc="${REPLY_MESSAGE[7]:-0}" _reqs="${REPLY_MESSAGE[8]:-0}"
+    # REPLY_MESSAGE: AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc> <reqs>
+    local session_id="${REPLY_MESSAGE[1]}" status="${REPLY_MESSAGE[2]}"
+    local _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
+    local _in="${REPLY_MESSAGE[5]:-0}" _out="${REPLY_MESSAGE[6]:-0}"
+    local _cr="${REPLY_MESSAGE[7]:-0}" _cc="${REPLY_MESSAGE[8]:-0}"
+    local _reqs="${REPLY_MESSAGE[9]:-0}"
     # 记录 usage（带 kind=sub_agent, sub_session_id）
-    session_append_line "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"request_count\":$_reqs,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(json_escape "$session_id")\"}"
-    stats_inc total_input_tokens=$_in total_output_tokens=$_out total_cache_read_tokens=$_cr total_cache_creation_tokens=$_cc sub_agent_request_count=1
+    session_append_line "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(json_escape "$session_id")\"}"
+    stats_inc total_input_tokens=$_in total_output_tokens=$_out total_cache_read_tokens=$_cr total_cache_creation_tokens=$_cc sub_agent_request_count=1 agent_request_count=$_reqs
     # 记录 sub_agent_end 事件
     session_append_line "{\"type\":\"sub_agent_end\",\"session_id\":\"$(json_escape "$session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$status\"}"
     ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT - 1 ))
@@ -667,24 +669,16 @@ handle_sub_agent_result() {
             "$(json_escape "$session_id")" "$status" "$_in" "$_out"
     else
         display_ensure_newline
-        local _preview=""
-        if [[ -n "$result_text" ]]; then
-            # 取结果首行，截断到 120 字符
-            _preview=$(printf '%s' "$result_text" | head -c 120)
-            [[ ${#result_text} -gt 120 ]] && _preview+="…"
-        fi
         if [[ "$status" == "ok" ]]; then
             printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
         else
             printf '\033[31m[sub-agent %s] failed\033[0m\n' "$session_id"
         fi
-        [[ -n "$_preview" ]] && printf '\033[90m  %s\033[0m\n' "$_preview"
+        [[ -n "$_thinking" ]] && printf '\033[90m  %.120s%s\033[0m\n' "$_thinking" "$([[ ${#_thinking} -gt 120 ]] && printf '%s' "…")"
+        [[ -n "$_text" ]] && printf '  %.120s%s\n' "$_text" "$([[ ${#_text} -gt 120 ]] && printf '%s' "…")"
         DISPLAY_LAST_CHAR=$'\n'
     fi
-    local _context="[Sub-agent result | session_id=$session_id | status=$status"
-    _context+=" | tokens_in=$_in tokens_out=$_out]"
-    [[ -n "$result_text" ]] && _context+=$'\n'"$result_text"
-    _run_agent_loop "$_context"
+    _run_agent_loop "[Sub-agent result | session_id=$session_id | status=$status tokens_in=$_in tokens_out=$_out]"$'\n'"Thinking: $_thinking"$'\n'"Text: $_text"
 }
 
 # 调用 agent_loop 并处理交互式终端提示符
@@ -1043,25 +1037,6 @@ tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlenc
 
 tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlencode "url=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/" 2>&1; }
 
-# 从 CONV_FILE 提取子 agent 所有 assistant 轮次的 text 内容，拼接为结果
-_extract_sub_agent_result() {
-    local _file="$1" _line _content_raw _result="" _extracted
-    [[ -s "$_file" ]] || return 0
-    # 逐行找 role=assistant，用 json.awk 提取 content 数组中 type=text 的 text 字段
-    while IFS= read -r _line; do
-        [[ "$_line" == *'"role":"assistant"'* ]] || continue
-        # 提取 content 数组原始文本
-        _content_raw=$(awk_run -v json_mode=extract_field_raw -v json_field_key=content \
-            -f "$AWK_DIR/json.awk" -f "$AWK_DIR/json_cli.awk" <<< "$_line" 2>/dev/null) || continue
-        [[ -n "$_content_raw" ]] || continue
-        # 拆分 content 数组为独立对象
-        _extracted=$(printf '%s' "$_content_raw" | awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/extract_sub_result.awk" 2>/dev/null) || continue
-        [[ -n "$_extracted" ]] && _result="${_result:+${_result}
-}${_extracted}"
-    done < "$_file"
-    printf '%s' "$_result"
-}
-
 # 启动异步子 agent：后台执行 agent_loop，完成后通过 INPUT_FIFO 发回 AGENT_RESULT
 # 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <result_text> <in> <out> <cr> <cc> <reqs>
 tool_sub_agent() {
@@ -1084,29 +1059,18 @@ tool_sub_agent() {
         load_tool_defs
         # 正常路径发送完成后 _done=true，阻止 EXIT trap 重复发送
         local _done=false
-        _send_result() {
-            local _rt="${1:-}"   # result text
-            exec 3> "$_parent_input_fifo"
-            write_message "AGENT_RESULT" "$sub_session_id" "$2" "$_rt" "${3:-0}" "${4:-0}" "${5:-0}" "${6:-0}" "${7:-0}" >&3
-            exec 3>&-
+        _send_result_via_awk() {
+            local _st="${1:-failed}"
+            awk_run -v session_id="$sub_session_id" -v status="$_st" \
+                -v stats_file="$STATS_FILE" -v conv_file="$CONV_FILE" \
+                -f "$AWK_DIR/json.awk" -f "$AWK_DIR/send_sub_result.awk" \
+                > "$_parent_input_fifo"
         }
-        trap '[[ "$_done" == true ]] || _send_result "$(_extract_sub_agent_result "$CONV_FILE")" "failed"; rm -f "$INPUT_FIFO"' EXIT
+        trap '[[ "$_done" == true ]] || { _send_result_via_awk failed; }; rm -f "$INPUT_FIFO"' EXIT
         # 输出全部重定向到 /dev/null，不污染主 agent 终端
         local _status="ok"
         agent_loop "$prompt" >/dev/null || _status="failed"
-        # 从 CONV_FILE 用 json.awk 提取所有 assistant 轮次的 text 内容
-        local _result=""
-        _result=$(_extract_sub_agent_result "$CONV_FILE")
-        # 从 STATS_FILE 收集 token 统计（用 dump 方式，与 stats_get 一致）
-        local _in=0 _out=0 _cr=0 _cc=0 _reqs=0
-        if [[ -s "$STATS_FILE" ]]; then
-            _in=$(stats_get total_input_tokens)
-            _out=$(stats_get total_output_tokens)
-            _cr=$(stats_get total_cache_read_tokens)
-            _cc=$(stats_get total_cache_creation_tokens)
-            _reqs=$(stats_get agent_request_count)
-        fi
-        _send_result "$_result" "$_status" "$_in" "$_out" "$_cr" "$_cc" "$_reqs"
+        _send_result_via_awk "$_status"
         _done=true
     ) &
 
