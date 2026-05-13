@@ -245,6 +245,7 @@ pub fn build_tool_call_summary(
             }
         }
         "Skill" => label = fields.get("name").cloned().unwrap_or_default(),
+        "SubAgent" => label = fields.get("description").cloned().unwrap_or_default(),
         _ => {}
     }
     if label.is_empty() {

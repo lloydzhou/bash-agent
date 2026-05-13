@@ -70,13 +70,15 @@ pub fn run(args: Vec<String>) -> Result<()> {
             Ok(MainLoopMessage::AgentResult {
                 session_id,
                 status,
-                result,
+                thinking,
+                text,
                 in_tokens,
                 out_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,
+                request_count,
             }) => {
-                rt.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens)?;
+                rt.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
             }
             _ => break,
         }
@@ -93,11 +95,13 @@ enum MainLoopMessage {
     AgentResult {
         session_id: String,
         status: String,
-        result: String,
+        thinking: String,
+        text: String,
         in_tokens: usize,
         out_tokens: usize,
         cache_read_tokens: usize,
         cache_creation_tokens: usize,
+        request_count: usize,
     },
 }
 
@@ -326,11 +330,13 @@ impl Runtime {
                     let _ = tx.send(MainLoopMessage::AgentResult {
                         session_id: sub_session_id_clone.clone(),
                         status: "failed".to_string(),
-                        result: format!("Failed to create sub-agent session dir: {}", e),
+                        thinking: String::new(),
+                        text: format!("Failed to create sub-agent session dir: {}", e),
                         in_tokens: 0,
                         out_tokens: 0,
                         cache_read_tokens: 0,
                         cache_creation_tokens: 0,
+                        request_count: 0,
                     });
                 }
                 return;
@@ -343,11 +349,13 @@ impl Runtime {
                     let _ = tx.send(MainLoopMessage::AgentResult {
                         session_id: sub_session_id_clone.clone(),
                         status: "failed".to_string(),
-                        result: format!("Failed to create sub-agent conversation: {}", e),
+                        thinking: String::new(),
+                        text: format!("Failed to create sub-agent conversation: {}", e),
                         in_tokens: 0,
                         out_tokens: 0,
                         cache_read_tokens: 0,
                         cache_creation_tokens: 0,
+                        request_count: 0,
                     });
                 }
                 return;
@@ -419,34 +427,53 @@ impl Runtime {
                         let _ = tx.send(MainLoopMessage::AgentResult {
                             session_id: sub_session_id_clone,
                             status: "failed".to_string(),
-                            result: format!("Sub-agent failed: {}", e),
+                            thinking: String::new(),
+                            text: format!("Sub-agent failed: {}", e),
                             in_tokens: 0,
                             out_tokens: 0,
                             cache_read_tokens: 0,
                             cache_creation_tokens: 0,
+                            request_count: 0,
                         });
                     }
                     return;
                 }
             };
 
-            let mut result_parts = Vec::new();
-            for line in &lines {
+            // 只取最后一条 assistant 消息的 thinking + text（前面的都是中间过程）
+            let mut result_thinking = String::new();
+            let mut result_text = String::new();
+            for line in lines.iter().rev() {
                 if let Some(role) = line.get("role").and_then(|v| v.as_str()) {
                     if role == "assistant" {
                         if let Some(content) = line.get("content").and_then(|v| v.as_array()) {
-                            for block in content {
-                                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                    if !text.is_empty() {
-                                        result_parts.push(text.to_string());
+                            let mut found_thinking = false;
+                            let mut found_text = false;
+                            for b in content.iter() {
+                                let block_type = b.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                                match block_type {
+                                    "thinking" => {
+                                        if let Some(t) = b.get("thinking").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+                                            result_thinking = t.to_string();
+                                            found_thinking = true;
+                                        }
                                     }
+                                    "text" => {
+                                        if let Some(t) = b.get("text").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+                                            result_text = t.to_string();
+                                            found_text = true;
+                                        }
+                                    }
+                                    _ => {}
                                 }
+                            }
+                            if found_thinking || found_text {
+                                break;
                             }
                         }
                     }
                 }
             }
-            let result_text = result_parts.join("\n\n");
 
             // 5. 收集 usage 统计
             let stats = sub_rt.read_stats();
@@ -454,6 +481,7 @@ impl Runtime {
             let out_tokens = stats_get_f64(&stats, "total_output_tokens") as usize;
             let cache_read_tokens = stats_get_f64(&stats, "total_cache_read_tokens") as usize;
             let cache_creation_tokens = stats_get_f64(&stats, "total_cache_creation_tokens") as usize;
+            let request_count = stats_get_f64(&stats, "agent_request_count") as usize;
 
             // 6. 通过消息队列发送结果
             let tx_guard = msg_tx_arc.lock().unwrap();
@@ -461,11 +489,13 @@ impl Runtime {
                 let _ = tx.send(MainLoopMessage::AgentResult {
                     session_id: sub_session_id_clone,
                     status: status.to_string(),
-                    result: result_text,
+                    thinking: result_thinking,
+                    text: result_text,
                     in_tokens,
                     out_tokens,
                     cache_read_tokens,
                     cache_creation_tokens,
+                    request_count,
                 });
             }
         });
@@ -614,13 +644,15 @@ impl Runtime {
                 MainLoopMessage::AgentResult {
                     session_id,
                     status,
-                    result,
+                    thinking,
+                    text,
                     in_tokens,
                     out_tokens,
                     cache_read_tokens,
                     cache_creation_tokens,
+                    request_count,
                 } => {
-                    self.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens)?;
+                    self.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
                 }
             }
 
@@ -637,11 +669,13 @@ impl Runtime {
         &mut self,
         session_id: &str,
         status: &str,
-        result: &str,
+        thinking: &str,
+        text: &str,
         in_tokens: usize,
         out_tokens: usize,
         cache_read_tokens: usize,
         cache_creation_tokens: usize,
+        request_count: usize,
     ) -> Result<()> {
         // 1. 记录 usage 事件
         let _ = self.append_event(json!({
@@ -660,6 +694,11 @@ impl Runtime {
         stats.insert(
             "sub_agent_request_count".to_string(),
             Value::Number(sub_count.into()),
+        );
+        let total_reqs = stats_get_f64(&stats, "agent_request_count") as usize + request_count;
+        stats.insert(
+            "agent_request_count".to_string(),
+            Value::Number(total_reqs.into()),
         );
         let total_in = stats_get_f64(&stats, "total_input_tokens") as usize + in_tokens;
         stats.insert(
@@ -696,7 +735,6 @@ impl Runtime {
         self.sub_agent_request_count += 1;
 
         // 5. 显示结果（通过 self.stderr，子 agent 结果到达主 agent 时在主终端显示）
-        let preview = truncate_str(result, 120);
         if status == "ok" {
             let _ = writeln!(
                 self.stderr.borrow_mut(),
@@ -706,8 +744,15 @@ impl Runtime {
         } else {
             let _ = writeln!(self.stderr.borrow_mut(), "\x1b[31m[sub-agent {}] failed\x1b[0m", session_id);
         }
-        if !preview.is_empty() {
+        // thinking 用灰色显示
+        if !thinking.is_empty() {
+            let preview = truncate_str(thinking, 120);
             let _ = writeln!(self.stderr.borrow_mut(), "\x1b[90m  {}\x1b[0m", preview);
+        }
+        // text 用默认色显示
+        if !text.is_empty() {
+            let preview = truncate_str(text, 120);
+            let _ = writeln!(self.stderr.borrow_mut(), "  {}", preview);
         }
 
         // 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）
@@ -717,8 +762,8 @@ impl Runtime {
 
         // 7. 注入结果到 conversation 并触发 agent loop（忽略错误，与 bash/Go 对齐）
         let context = format!(
-            "[Sub-agent result | session_id={} | status={} | tokens_in={} tokens_out={}]\n{}",
-            session_id, status, in_tokens, out_tokens, result
+            "[Sub-agent result | session_id={} | status={} tokens_in={} tokens_out={}]\nThinking: {}\nText: {}",
+            session_id, status, in_tokens, out_tokens, thinking, text
         );
         let _ = self.agent_loop(context);
 
