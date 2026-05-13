@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust test-go test-rust clean
+.PHONY: build build-bash build-go build-rust test test-bash test-go test-rust clean
 
 build: build-bash build-go build-rust
 
@@ -18,6 +18,11 @@ build-rust:
 	cd rust && cargo build --release -j 10
 	cp rust/target/release/rustagent dist/rustagent
 	strip -x dist/rustagent
+
+test: test-bash test-go test-rust
+
+test-bash:
+	bash tests/test.sh
 
 test-go:
 	mkdir -p go/.gocache go/.gomodcache

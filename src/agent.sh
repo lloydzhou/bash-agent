@@ -1075,7 +1075,7 @@ tool_sub_agent() {
         # fork 模式：复制父 session 的核心文件到子 session
         if [[ "$fork" == "true" ]]; then
             local _sub_dir="$(get_session_dir "$sub_session_id")"
-            mkdir -p "$_sub_dir" && cp "$(get_session_dir "$SESSION_ID")"/{conversation.jsonl,summary.txt,plan.md,plan.draft} "$_sub_dir/" 2>/dev/null || true
+            mkdir -p "$_sub_dir" && cp "$(get_session_dir "$SESSION_ID")"/{conversation.jsonl,summary.txt,plan.md} "$_sub_dir/" 2>/dev/null || true
         fi
         export SESSION_ID="$sub_session_id"
         export INTERACTIVE=false

@@ -353,11 +353,10 @@ impl Runtime {
             // 2. fork 模式：复制父会话上下文
             if fork {
                     // 复制父会话的关键文件到子会话目录
-                    let files_to_copy: [(_, std::path::PathBuf); 4] = [
+                    let files_to_copy: [(_, std::path::PathBuf); 3] = [
                         ("conversation.jsonl", parent_paths.conversation.clone()),
                         ("summary.txt", parent_paths.summary.clone()),
                         ("plan.md", parent_paths.plan.clone()),
-                        ("plan.draft", parent_paths.plan_draft.clone()),
                     ];
                     for (name, src) in files_to_copy {
                         if src.exists() {

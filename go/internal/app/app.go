@@ -1685,7 +1685,6 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 				rt.paths.Conversation,
 				rt.paths.Summary,
 				rt.paths.Plan,
-				rt.paths.PlanDraft,
 			}
 			for _, src := range filesToCopy {
 				if fileExists(src) {
