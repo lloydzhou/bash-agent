@@ -13,6 +13,7 @@ use anyhow::{Result, anyhow, bail};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -69,13 +70,15 @@ pub fn run(args: Vec<String>) -> Result<()> {
             Ok(MainLoopMessage::AgentResult {
                 session_id,
                 status,
-                result,
+                thinking,
+                text,
                 in_tokens,
                 out_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,
+                request_count,
             }) => {
-                rt.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens)?;
+                rt.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
             }
             _ => break,
         }
@@ -92,11 +95,13 @@ enum MainLoopMessage {
     AgentResult {
         session_id: String,
         status: String,
-        result: String,
+        thinking: String,
+        text: String,
         in_tokens: usize,
         out_tokens: usize,
         cache_read_tokens: usize,
         cache_creation_tokens: usize,
+        request_count: usize,
     },
 }
 
@@ -120,6 +125,8 @@ struct Runtime {
     msg_rx: mpsc::Receiver<MainLoopMessage>, // 主循环消息队列接收端
     active_sub_count: usize,                 // 活跃子 agent 计数
     sub_agent_request_count: usize,          // SubAgent 请求计数
+    stdout: RefCell<Box<dyn Write + Send>>,  // 可替换的输出目标（子 agent 时为 sink）
+    stderr: RefCell<Box<dyn Write + Send>>,  // 可替换的错误输出目标（子 agent 时为 sink）
 }
 
 struct DisplayState {
@@ -268,6 +275,8 @@ impl Runtime {
             msg_rx,
             active_sub_count: 0,
             sub_agent_request_count: 0,
+            stdout: RefCell::new(Box::new(io::stdout())),
+            stderr: RefCell::new(Box::new(io::stderr())),
         };
 
         if new_session {
@@ -315,36 +324,38 @@ impl Runtime {
             // 1. 创建子 agent 的 conversation store
             let sub_paths = session::paths_for(&home, &cwd, &sub_session_id_clone);
             if let Err(e) = session::ensure_dir(&sub_paths.session_dir) {
-                eprintln!("Failed to create sub-agent session dir: {}", e);
                 // 早期失败时发送失败结果，让主进程减少 active_sub_count
                 let tx_guard = msg_tx_arc.lock().unwrap();
                 if let Some(tx) = tx_guard.as_ref() {
                     let _ = tx.send(MainLoopMessage::AgentResult {
                         session_id: sub_session_id_clone.clone(),
                         status: "failed".to_string(),
-                        result: format!("Failed to create sub-agent session dir: {}", e),
+                        thinking: String::new(),
+                        text: format!("Failed to create sub-agent session dir: {}", e),
                         in_tokens: 0,
                         out_tokens: 0,
                         cache_read_tokens: 0,
                         cache_creation_tokens: 0,
+                        request_count: 0,
                     });
                 }
                 return;
             }
             let sub_conv = Store { path: sub_paths.conversation.clone() };
             if let Err(e) = sub_conv.ensure() {
-                eprintln!("Failed to create sub-agent conversation: {}", e);
                 // 早期失败时发送失败结果，让主进程减少 active_sub_count
                 let tx_guard = msg_tx_arc.lock().unwrap();
                 if let Some(tx) = tx_guard.as_ref() {
                     let _ = tx.send(MainLoopMessage::AgentResult {
                         session_id: sub_session_id_clone.clone(),
                         status: "failed".to_string(),
-                        result: format!("Failed to create sub-agent conversation: {}", e),
+                        thinking: String::new(),
+                        text: format!("Failed to create sub-agent conversation: {}", e),
                         in_tokens: 0,
                         out_tokens: 0,
                         cache_read_tokens: 0,
                         cache_creation_tokens: 0,
+                        request_count: 0,
                     });
                 }
                 return;
@@ -361,8 +372,8 @@ impl Runtime {
                     for (name, src) in files_to_copy {
                         if src.exists() {
                             let dst = sub_paths.session_dir.join(name);
-                            if let Err(e) = std::fs::copy(&src, &dst) {
-                                eprintln!("Failed to copy {} for fork: {}", name, e);
+                            if let Err(_e) = std::fs::copy(&src, &dst) {
+                                // fork 文件复制失败不致命，静默忽略（与 Bash 版本 `2>/dev/null || true` 一致）
                             }
                         }
                     }
@@ -395,12 +406,14 @@ impl Runtime {
                 msg_rx: _sub_msg_rx,
                 active_sub_count: 0,
                 sub_agent_request_count: 0,
+                stdout: RefCell::new(Box::new(io::empty())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
+                stderr: RefCell::new(Box::new(io::empty())),  // 子 agent 错误输出全部丢弃
             };
 
             // 4. 执行 agent_loop
             let mut status = "ok";
-            if let Err(e) = sub_rt.agent_loop(prompt.clone()) {
-                eprintln!("Sub-agent {} failed: {}", sub_session_id_clone, e);
+            if let Err(_e) = sub_rt.agent_loop(prompt.clone()) {
+                // 子 agent 执行失败，状态标记为 failed，结果通过 AGENT_RESULT 消息传递
                 status = "failed";
             }
 
@@ -408,39 +421,59 @@ impl Runtime {
             let lines = match sub_rt.conv.lines() {
                 Ok(l) => l,
                 Err(e) => {
-                    eprintln!("Failed to load sub-agent conversation: {}", e);
                     // 通过消息队列发送失败结果，让主进程减少计数
                     let tx_guard = msg_tx_arc.lock().unwrap();
                     if let Some(tx) = tx_guard.as_ref() {
                         let _ = tx.send(MainLoopMessage::AgentResult {
                             session_id: sub_session_id_clone,
                             status: "failed".to_string(),
-                            result: format!("Sub-agent failed: {}", e),
+                            thinking: String::new(),
+                            text: format!("Sub-agent failed: {}", e),
                             in_tokens: 0,
                             out_tokens: 0,
                             cache_read_tokens: 0,
                             cache_creation_tokens: 0,
+                            request_count: 0,
                         });
                     }
                     return;
                 }
             };
 
-            let mut result_parts = Vec::new();
-            for line in &lines {
+            // 只取最后一条 assistant 消息的 thinking + text（前面的都是中间过程）
+            let mut result_thinking = String::new();
+            let mut result_text = String::new();
+            for line in lines.iter().rev() {
                 if let Some(role) = line.get("role").and_then(|v| v.as_str()) {
                     if role == "assistant" {
                         if let Some(content) = line.get("content").and_then(|v| v.as_array()) {
-                            for block in content {
-                                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                    result_parts.push(text.to_string());
+                            let mut found_thinking = false;
+                            let mut found_text = false;
+                            for b in content.iter() {
+                                let block_type = b.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                                match block_type {
+                                    "thinking" => {
+                                        if let Some(t) = b.get("thinking").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+                                            result_thinking = t.to_string();
+                                            found_thinking = true;
+                                        }
+                                    }
+                                    "text" => {
+                                        if let Some(t) = b.get("text").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+                                            result_text = t.to_string();
+                                            found_text = true;
+                                        }
+                                    }
+                                    _ => {}
                                 }
+                            }
+                            if found_thinking || found_text {
+                                break;
                             }
                         }
                     }
                 }
             }
-            let result_text = result_parts.join("\n\n");
 
             // 5. 收集 usage 统计
             let stats = sub_rt.read_stats();
@@ -448,6 +481,7 @@ impl Runtime {
             let out_tokens = stats_get_f64(&stats, "total_output_tokens") as usize;
             let cache_read_tokens = stats_get_f64(&stats, "total_cache_read_tokens") as usize;
             let cache_creation_tokens = stats_get_f64(&stats, "total_cache_creation_tokens") as usize;
+            let request_count = stats_get_f64(&stats, "agent_request_count") as usize;
 
             // 6. 通过消息队列发送结果
             let tx_guard = msg_tx_arc.lock().unwrap();
@@ -455,11 +489,13 @@ impl Runtime {
                 let _ = tx.send(MainLoopMessage::AgentResult {
                     session_id: sub_session_id_clone,
                     status: status.to_string(),
-                    result: result_text,
+                    thinking: result_thinking,
+                    text: result_text,
                     in_tokens,
                     out_tokens,
                     cache_read_tokens,
                     cache_creation_tokens,
+                    request_count,
                 });
             }
         });
@@ -564,7 +600,8 @@ impl Runtime {
 
         self.info("Goodbye!");
         if !self.cfg.session_id.is_empty() {
-            eprintln!(
+            let _ = writeln!(
+                self.stderr.borrow_mut(),
                 "\x1b[90mResume with: --session {}  or  --continue\x1b[0m",
                 self.cfg.session_id
             );
@@ -588,7 +625,7 @@ impl Runtime {
                 MainLoopMessage::UserInput { input, done } => {
                     if self.cfg.interactive {
                         // 清除当前行（包括提示符）
-                        eprint!("\r\x1b[2K");
+                        let _ = write!(self.stderr.borrow_mut(), "\r\x1b[2K");
                     }
                     if let Err(e) = self.agent_loop(input) {
                         let msg = e.to_string();
@@ -599,7 +636,7 @@ impl Runtime {
                     }
                     if self.cfg.interactive {
                         // agent 执行完成后重新显示提示符
-                        eprint!("\x1b[32m> \x1b[0m");
+                        let _ = write!(self.stderr.borrow_mut(), "\x1b[32m> \x1b[0m");
                     }
                     // 通知 readline 线程处理完成
                     let _ = done.send(());
@@ -607,13 +644,15 @@ impl Runtime {
                 MainLoopMessage::AgentResult {
                     session_id,
                     status,
-                    result,
+                    thinking,
+                    text,
                     in_tokens,
                     out_tokens,
                     cache_read_tokens,
                     cache_creation_tokens,
+                    request_count,
                 } => {
-                    self.handle_sub_agent_result(&session_id, &status, &result, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens)?;
+                    self.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
                 }
             }
 
@@ -630,11 +669,13 @@ impl Runtime {
         &mut self,
         session_id: &str,
         status: &str,
-        result: &str,
+        thinking: &str,
+        text: &str,
         in_tokens: usize,
         out_tokens: usize,
         cache_read_tokens: usize,
         cache_creation_tokens: usize,
+        request_count: usize,
     ) -> Result<()> {
         // 1. 记录 usage 事件
         let _ = self.append_event(json!({
@@ -653,6 +694,11 @@ impl Runtime {
         stats.insert(
             "sub_agent_request_count".to_string(),
             Value::Number(sub_count.into()),
+        );
+        let total_reqs = stats_get_f64(&stats, "agent_request_count") as usize + request_count;
+        stats.insert(
+            "agent_request_count".to_string(),
+            Value::Number(total_reqs.into()),
         );
         let total_in = stats_get_f64(&stats, "total_input_tokens") as usize + in_tokens;
         stats.insert(
@@ -688,35 +734,42 @@ impl Runtime {
         self.active_sub_count -= 1;
         self.sub_agent_request_count += 1;
 
-        // 5. 显示结果
-        let preview = truncate_str(result, 120);
+        // 5. 显示结果（通过 self.stderr，子 agent 结果到达主 agent 时在主终端显示）
         if status == "ok" {
-            eprintln!(
+            let _ = writeln!(
+                self.stderr.borrow_mut(),
                 "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m",
                 session_id, in_tokens, out_tokens
             );
         } else {
-            eprintln!("\x1b[31m[sub-agent {}] failed\x1b[0m", session_id);
+            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[31m[sub-agent {}] failed\x1b[0m", session_id);
         }
-        if !preview.is_empty() {
-            eprintln!("\x1b[90m  {}\x1b[0m", preview);
+        // thinking 用灰色显示
+        if !thinking.is_empty() {
+            let preview = truncate_str(thinking, 120);
+            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[90m{}\x1b[0m", preview);
+        }
+        // text 用默认色显示
+        if !text.is_empty() {
+            let preview = truncate_str(text, 120);
+            let _ = writeln!(self.stderr.borrow_mut(), "{}", preview);
         }
 
         // 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）
         if self.cfg.interactive {
-            eprint!("\r\x1b[2K");
+            let _ = write!(self.stderr.borrow_mut(), "\r\x1b[2K");
         }
 
         // 7. 注入结果到 conversation 并触发 agent loop（忽略错误，与 bash/Go 对齐）
         let context = format!(
-            "[Sub-agent result | session_id={} | status={} | tokens_in={} tokens_out={}]\n{}",
-            session_id, status, in_tokens, out_tokens, result
+            "[Sub-agent result | session_id={} | status={} tokens_in={} tokens_out={}]\nThinking: {}\nText: {}",
+            session_id, status, in_tokens, out_tokens, thinking, text
         );
         let _ = self.agent_loop(context);
 
         // 8. 交互模式下恢复提示符
         if self.cfg.interactive {
-            eprint!("\x1b[32m> \x1b[0m");
+            let _ = write!(self.stderr.borrow_mut(), "\x1b[32m> \x1b[0m");
         }
 
         Ok(())
@@ -1536,7 +1589,8 @@ impl Runtime {
                 "—".to_string()
             }
         };
-        eprint!(
+        let _ = write!(
+            self.stderr.borrow_mut(),
             "\x1b]0;{} T:{} R:{} I:{}({}) O:{} C:{}\x07",
             self.cfg.model,
             Self::fmt_num(tc),
@@ -1546,7 +1600,7 @@ impl Runtime {
             Self::fmt_num(ao),
             Self::fmt_num(ctx)
         );
-        let _ = io::stderr().flush();
+        let _ = self.stderr.borrow_mut().flush();
     }
 
     fn is_stream_json_mode(&self) -> bool {
@@ -1566,22 +1620,22 @@ impl Runtime {
     }
 
     fn emit_stream(&self, value: Value) -> Result<()> {
-        println!("{}", serde_json::to_string(&value)?);
+        writeln!(self.stdout.borrow_mut(), "{}", serde_json::to_string(&value)?)?;
         Ok(())
     }
 
     fn write_human(&self, s: &str) -> Result<()> {
-        print!("{}", normalize_display_text(s, self.cfg.interactive));
-        io::stdout().flush()?;
+        write!(self.stdout.borrow_mut(), "{}", normalize_display_text(s, self.cfg.interactive))?;
+        self.stdout.borrow_mut().flush()?;
         Ok(())
     }
 
     fn info(&self, msg: &str) {
         if self.cfg.interactive {
-            eprint!("\x1b[36m{msg}\x1b[0m\r\n");
-            let _ = io::stderr().flush();
+            let _ = write!(self.stderr.borrow_mut(), "\x1b[36m{msg}\x1b[0m\r\n");
+            let _ = self.stderr.borrow_mut().flush();
         } else {
-            eprintln!("\x1b[36m{msg}\x1b[0m");
+            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[36m{msg}\x1b[0m");
         }
     }
 
@@ -1706,7 +1760,7 @@ impl Runtime {
                     self.write_human("\n").ok();
                 }
                 let msg = fields.get("message").copied().unwrap_or("");
-                eprintln!("\x1b[31mError: {}\x1b[0m", msg);
+                let _ = writeln!(self.stderr.borrow_mut(), "\x1b[31mError: {}\x1b[0m", msg);
             }
             _ => {}
         }
@@ -1894,16 +1948,16 @@ impl Runtime {
 
     fn error(&self, msg: &str) {
         if self.cfg.interactive {
-            eprint!("\x1b[31mError: {msg}\x1b[0m\r\n");
-            let _ = io::stderr().flush();
+            let _ = write!(self.stderr.borrow_mut(), "\x1b[31mError: {msg}\x1b[0m\r\n");
+            let _ = self.stderr.borrow_mut().flush();
         } else {
-            eprintln!("\x1b[31mError: {msg}\x1b[0m");
+            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[31mError: {msg}\x1b[0m");
         }
     }
 
     fn debug(&self, msg: &str) {
         if self.cfg.verbose {
-            eprintln!("[debug] {msg}");
+            let _ = writeln!(self.stderr.borrow_mut(), "[debug] {msg}");
         }
     }
 }
