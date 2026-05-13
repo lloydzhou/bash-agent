@@ -338,6 +338,8 @@ func BuildToolCallSummary(name string, fields map[string]string) string {
 		label = fields["summary"]
 	case "Skill":
 		label = fields["name"]
+	case "SubAgent":
+		label = fields["description"]
 	}
 	if label == "" {
 		return name

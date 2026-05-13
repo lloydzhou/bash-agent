@@ -36,11 +36,13 @@ type MainLoopMessage struct {
 	Input             string // USER_INPUT 的内容
 	SessionID         string // AGENT_RESULT 的子 session ID
 	Status            string // "ok" or "failed"
-	Result            string // 子 agent 执行结果
+	Thinking          string // 子 agent thinking 内容
+	Text              string // 子 agent text 内容
 	InTokens          int    // 输入 token 数
 	OutTokens         int    // 输出 token 数
 	CacheReadTokens   int    // cache read token 数
 	CacheCreationTokens int  // cache creation token 数
+	RequestCount       int  // 子 agent 的 agent_request_count
 	Done              chan<- struct{} // 非 nil 时，mainLoop 处理完后发送信号
 }
 
@@ -1647,12 +1649,14 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			rt.msgChanMu.Unlock()
 			if ch != nil {
 				ch <- MainLoopMessage{
-					Type:      "AGENT_RESULT",
-					SessionID: subSessionID,
-					Status:    "failed",
-					Result:    fmt.Sprintf("Sub-agent failed: %v", err),
-					InTokens:  0,
-					OutTokens: 0,
+					Type:          "AGENT_RESULT",
+					SessionID:     subSessionID,
+					Status:        "failed",
+					Thinking:      "",
+					Text:          fmt.Sprintf("Sub-agent failed: %v", err),
+					InTokens:      0,
+					OutTokens:     0,
+					RequestCount:  0,
 				}
 			}
 			return
@@ -1665,12 +1669,14 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			rt.msgChanMu.Unlock()
 			if ch != nil {
 				ch <- MainLoopMessage{
-					Type:      "AGENT_RESULT",
-					SessionID: subSessionID,
-					Status:    "failed",
-					Result:    fmt.Sprintf("Sub-agent failed: %v", err),
-					InTokens:  0,
-					OutTokens: 0,
+					Type:          "AGENT_RESULT",
+					SessionID:     subSessionID,
+					Status:        "failed",
+					Thinking:      "",
+					Text:          fmt.Sprintf("Sub-agent failed: %v", err),
+					InTokens:      0,
+					OutTokens:     0,
+					RequestCount:  0,
 				}
 			}
 			return
@@ -1733,36 +1739,57 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			rt.msgChanMu.Unlock()
 			if ch != nil {
 				ch <- MainLoopMessage{
-					Type:      "AGENT_RESULT",
-					SessionID: subSessionID,
-					Status:    "failed",
-					Result:    fmt.Sprintf("Sub-agent failed: %v", err),
-					InTokens:  0,
-					OutTokens: 0,
+					Type:         "AGENT_RESULT",
+					SessionID:    subSessionID,
+					Status:       "failed",
+					Thinking:     "",
+					Text:         fmt.Sprintf("Sub-agent failed: %v", err),
+					InTokens:     0,
+					OutTokens:    0,
+					RequestCount: 0,
 				}
 			}
 			return
 		}
 
-		var resultParts []string
-		for _, line := range lines {
+		// 只取最后一条 assistant 消息的 thinking + text（前面的都是中间过程）
+		var _thinking, _text string
+		for i := len(lines) - 1; i >= 0; i-- {
 			var msg map[string]interface{}
-			if err := json.Unmarshal(line, &msg); err != nil {
+			if err := json.Unmarshal(lines[i], &msg); err != nil {
 				continue
 			}
-			if msg["role"] == "assistant" {
-				if content, ok := msg["content"].([]interface{}); ok {
-					for _, block := range content {
-						if b, ok := block.(map[string]interface{}); ok {
-							if text, ok := b["text"].(string); ok && text != "" {
-								resultParts = append(resultParts, text)
-							}
-						}
+			if msg["role"] != "assistant" {
+				continue
+			}
+			content, ok := msg["content"].([]interface{})
+			if !ok {
+				continue
+			}
+			var resultThinking, resultBody string
+			for _, block := range content {
+				b, ok := block.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				blockType, _ := b["type"].(string)
+				switch blockType {
+				case "thinking":
+					if t, ok := b["thinking"].(string); ok && t != "" {
+						resultThinking = t
+					}
+				case "text":
+					if t, ok := b["text"].(string); ok && t != "" {
+						resultBody = t
 					}
 				}
 			}
+			if resultThinking != "" || resultBody != "" {
+				_thinking = resultThinking
+				_text = resultBody
+				break
+			}
 		}
-		resultText := strings.Join(resultParts, "\n\n")
 
 		// 5. 收集 usage 统计
 		stats := subRT.readStats()
@@ -1770,6 +1797,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		outTokens := int(statsFloat64(stats, "total_output_tokens"))
 		cacheReadTokens := int(statsFloat64(stats, "total_cache_read_tokens"))
 		cacheCreationTokens := int(statsFloat64(stats, "total_cache_creation_tokens"))
+		requestCount := int(statsFloat64(stats, "agent_request_count"))
 
 		// 6. 通过消息队列发送结果
 		rt.msgChanMu.Lock()
@@ -1782,11 +1810,13 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			Type:                "AGENT_RESULT",
 			SessionID:           subSessionID,
 			Status:              status,
-			Result:              resultText,
+			Thinking:            _thinking,
+			Text:                _text,
 			InTokens:            inTokens,
 			OutTokens:           outTokens,
 			CacheReadTokens:     cacheReadTokens,
 			CacheCreationTokens: cacheCreationTokens,
+			RequestCount:        requestCount,
 		}
 	}()
 
@@ -1836,6 +1866,7 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	// 2. 更新 stats
 	stats := rt.readStats()
 	stats["sub_agent_request_count"] = statsFloat64(stats, "sub_agent_request_count") + 1
+	stats["agent_request_count"] = statsFloat64(stats, "agent_request_count") + float64(msg.RequestCount)
 	stats["total_input_tokens"] = statsFloat64(stats, "total_input_tokens") + float64(msg.InTokens)
 	stats["total_output_tokens"] = statsFloat64(stats, "total_output_tokens") + float64(msg.OutTokens)
 	stats["total_cache_read_tokens"] = statsFloat64(stats, "total_cache_read_tokens") + float64(msg.CacheReadTokens)
@@ -1855,15 +1886,21 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	rt.subAgentRequestCount++
 
 	// 5. 显示结果
-	preview := truncateRunes(msg.Result, 120)
 	if msg.Status == "ok" {
 		fmt.Fprintf(rt.stderr, "\033[35m[sub-agent %s] completed (in=%d, out=%d)\033[0m\n",
 			msg.SessionID, msg.InTokens, msg.OutTokens)
 	} else {
 		fmt.Fprintf(rt.stderr, "\033[31m[sub-agent %s] failed\033[0m\n", msg.SessionID)
 	}
-	if preview != "" {
+	// thinking 用灰色显示
+	if msg.Thinking != "" {
+		preview := truncateRunes(msg.Thinking, 120)
 		fmt.Fprintf(rt.stderr, "\033[90m  %s\033[0m\n", preview)
+	}
+	// text 用默认色显示
+	if msg.Text != "" {
+		preview := truncateRunes(msg.Text, 120)
+		fmt.Fprintf(rt.stderr, "  %s\n", preview)
 	}
 
 	// 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）
@@ -1872,8 +1909,8 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 	}
 
 	// 7. 注入结果到 conversation 并触发 agent loop
-	context := fmt.Sprintf("[Sub-agent result | session_id=%s | status=%s | tokens_in=%d tokens_out=%d]\n%s",
-		msg.SessionID, msg.Status, msg.InTokens, msg.OutTokens, msg.Result)
+	context := fmt.Sprintf("[Sub-agent result | session_id=%s | status=%s tokens_in=%d tokens_out=%d]\nThinking: %s\nText: %s",
+		msg.SessionID, msg.Status, msg.InTokens, msg.OutTokens, msg.Thinking, msg.Text)
 	_ = rt.agentLoop(context)
 
 	// 8. 交互模式下恢复提示符
