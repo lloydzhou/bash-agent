@@ -1754,8 +1754,8 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 				if content, ok := msg["content"].([]interface{}); ok {
 					for _, block := range content {
 						if b, ok := block.(map[string]interface{}); ok {
-							if b["type"] == "text" {
-								resultParts = append(resultParts, b["text"].(string))
+							if text, ok := b["text"].(string); ok && text != "" {
+								resultParts = append(resultParts, text)
 							}
 						}
 					}

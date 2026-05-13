@@ -437,7 +437,9 @@ impl Runtime {
                         if let Some(content) = line.get("content").and_then(|v| v.as_array()) {
                             for block in content {
                                 if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
-                                    result_parts.push(text.to_string());
+                                    if !text.is_empty() {
+                                        result_parts.push(text.to_string());
+                                    }
                                 }
                             }
                         }
