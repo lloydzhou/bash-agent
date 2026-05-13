@@ -4,6 +4,35 @@
 
 ---
 
+## [2.5.0] - 2026-05-12
+
+### Added
+
+- **SubAgent 异步子 agent 工具**：新增 `SubAgent` 工具，支持将子任务委托给独立的后台 agent 会话并行执行，完成后通过消息队列将结果注入主 agent 对话。bash/Go/Rust 三端同步实现（`4347a93`, `ce66b4d`）
+- **统一 FIFO + 消息队列架构**：interactive 模式引入滚动区域方案，所有输入输出通过 FIFO 和结构化消息（`USER_INPUT` / `AGENT_RESULT`）传递，替代原有的 read/prompt 交互循环。`main_loop` 统一处理用户输入和子 agent 结果（`ce66b4d`, `bc78082`）
+- **Go/Rust 子 agent 完整实现**：包括 goroutine 异步执行、消息通道通信、结果统计累加、交互式提示符恢复等（`4347a93`）
+- **SubAgent 工具定义**：`src/tools.json`、`go/internal/assets/tools.json`、`rust/src/assets/tools.json` 新增 SubAgent 工具 schema（`48305d0`）
+- **`extract_sub_result.awk`**：新增 AWK 脚本用于从子 agent 会话中提取最终文本结果（`4347a93`）
+- **SubAgent e2e 测试**：`tests/test.sh` 新增 4 阶段 mock server 测试，覆盖 SubAgent 调用→子 agent 执行→结果回传→主 agent 继续对话全流程（`000d11e`）
+- **ARCHITECTURE.md SubAgent 章节**：补充子 agent 架构说明、FIFO 通信机制、session 目录结构等（`c3512fd`, `b4b5ccf`）
+- **ROADMAP.md**：新增路线图文档（`b4b5ccf`）
+
+### Changed
+
+- **`_run_agent_loop` 辅助函数**：提取 agent_loop 调用 + 交互式提示符管理为公共函数，消除 `main_loop` 和 `handle_sub_agent_result` 中的重复代码（`000d11e`）
+- **中断处理优化**：收紧 SIGINT trap 逻辑，避免中断信号干扰子 agent 执行（`9832a6b`）
+- **系统提示词 SubAgent 指导**：`tool_guidance` 中增加 SubAgent 使用建议（`000d11e`）
+- **FIFO 写端保持打开**：`main_loop` 中 `exec 4> "$INPUT_FIFO"` 防止所有读取者退出时 FIFO 过早关闭（`bc78082`）
+
+### Fixed
+
+- **agentLoop 错误丢失**：Go 端非交互模式 `Run` 函数未接收 `agentLoop` 返回的错误，导致 API 错误（如 rate limit SSE 事件）被静默吞掉（`d9adfa4`）
+- **history file 写入**：修复历史记录文件写入路径和时序问题（`000d11e`）
+- **`sub_agent_request_count` 统计**：修复子 agent 请求计数字段未写入 `stats.json` 的问题（`48305d0`）
+- **中断 trap 条件**：`_done` 变量判断从直接布尔求值改为 `[[ "$_done" == true ]]` 比较式，避免 `set -u` 下的未绑定变量错误（`000d11e`）
+
+---
+
 ## [2.4.1] - 2026-05-11
 
 ### Added
