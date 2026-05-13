@@ -141,14 +141,18 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return rt.interactiveMode()
 	}
 	// 非交互模式也走 mainLoop，确保等待子 agent 完成
+	var loopErr error
 	if rt.cfg.Prompt != "" {
-		rt.agentLoop(rt.cfg.Prompt)
+		loopErr = rt.agentLoop(rt.cfg.Prompt)
 	} else {
 		data, err := io.ReadAll(stdin)
 		if err != nil {
 			return err
 		}
-		rt.agentLoop(string(data))
+		loopErr = rt.agentLoop(string(data))
+	}
+	if loopErr != nil {
+		return loopErr
 	}
 	// 等待所有子 agent 完成
 	for rt.activeSubCount > 0 {
