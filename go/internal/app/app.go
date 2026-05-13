@@ -1887,10 +1887,10 @@ func (rt *runtime) handleSubAgentResult(msg MainLoopMessage) {
 
 	// 5. 显示结果
 	if msg.Status == "ok" {
-		fmt.Fprintf(rt.stderr, "\033[35m[sub-agent %s] completed (in=%d, out=%d)\033[0m\n",
+		fmt.Fprintf(rt.stderr, "[sub-agent %s] completed (in=%d, out=%d)\n",
 			msg.SessionID, msg.InTokens, msg.OutTokens)
 	} else {
-		fmt.Fprintf(rt.stderr, "\033[31m[sub-agent %s] failed\033[0m\n", msg.SessionID)
+		fmt.Fprintf(rt.stderr, "[sub-agent %s] failed\n", msg.SessionID)
 	}
 	// thinking 用灰色显示
 	if msg.Thinking != "" {

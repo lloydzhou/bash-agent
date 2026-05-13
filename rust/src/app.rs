@@ -738,11 +738,11 @@ impl Runtime {
         if status == "ok" {
             let _ = writeln!(
                 self.stderr.borrow_mut(),
-                "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m",
+                "[sub-agent {}] completed (in={}, out={})",
                 session_id, in_tokens, out_tokens
             );
         } else {
-            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[31m[sub-agent {}] failed\x1b[0m", session_id);
+            let _ = writeln!(self.stderr.borrow_mut(), "[sub-agent {}] failed", session_id);
         }
         // thinking 用灰色显示
         if !thinking.is_empty() {
