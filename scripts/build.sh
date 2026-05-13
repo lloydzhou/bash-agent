@@ -175,7 +175,7 @@ content = content.replace('awk_run -v action=sync -f "$AWK_DIR/stats.awk"', 'awk
 # --- Inline compact_dp.awk reference ---
 content = content.replace('-f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"', '"${_AWK_COMPACT_DP}" "$CONV_FILE"')
 # --- Inline send_sub_result.awk reference ---
-content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/send_sub_result.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_SEND_SUB_RESULT}"')
+content = content.replace('-f "$AWK_DIR/json.awk" -f "$AWK_DIR/send_sub_result.awk"', '"${_AWK_JSON}\n${_AWK_SEND_SUB_RESULT}"')
 # --- Write output ---
 with open(output_path, 'w') as f:
     f.write(content)
