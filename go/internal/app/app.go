@@ -1533,6 +1533,14 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
+}
+
 func listSessions(home, cwd string, w io.Writer) error {
 	dir := filepath.Join(home, ".bash-agent", "projects", session.ProjectKey(cwd))
 	entries, err := os.ReadDir(dir)
@@ -1594,6 +1602,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 	var args struct {
 		Prompt      string `json:"prompt"`
 		Description string `json:"description"`
+		Fork        bool   `json:"fork"`
 	}
 	if err := json.Unmarshal(inputJSON, &args); err != nil {
 		return "Error: invalid SubAgent arguments: " + err.Error()
@@ -1613,6 +1622,7 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 		"timestamp":  time.Now().UTC().Format(time.RFC3339),
 		"prompt":     args.Prompt,
 		"description": args.Description,
+		"fork":       args.Fork,
 	})
 
 	// 增加活跃子 agent 计数
@@ -1666,7 +1676,27 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			return
 		}
 
-		// 2. 创建子 agent 的 runtime
+		// 2. fork 模式：复制父会话上下文
+		if args.Fork {
+			// 复制父会话的关键文件到子会话目录
+			filesToCopy := []string{
+				rt.paths.Conversation,
+				rt.paths.Summary,
+				rt.paths.Todo,
+				rt.paths.Plan,
+				rt.paths.PlanDraft,
+			}
+			for _, src := range filesToCopy {
+				if fileExists(src) {
+					dst := filepath.Join(subPaths.SessionDir, filepath.Base(src))
+					if err := copyFile(src, dst); err != nil {
+						rt.error("Failed to copy %s for fork: %v", filepath.Base(src), err)
+					}
+				}
+			}
+		}
+
+		// 3. 创建子 agent 的 runtime
 		subCfg := rt.cfg
 		subCfg.SessionID = subSessionID
 		subCfg.Prompt = args.Prompt
@@ -1689,14 +1719,14 @@ func (rt *runtime) handleSubAgent(inputJSON json.RawMessage) string {
 			msgChanMu: &sync.Mutex{},
 		}
 
-		// 3. 执行 agentLoop
+		// 4. 执行 agentLoop
 		status := "ok"
 		if err := subRT.agentLoop(args.Prompt); err != nil {
 			rt.error("Sub-agent %s failed: %v", subSessionID, err)
 			status = "failed"
 		}
 
-		// 4. 提取结果
+		// 5. 提取结果
 		lines, err := subConv.Lines()
 		if err != nil {
 			rt.error("Failed to load sub-agent conversation: %v", err)

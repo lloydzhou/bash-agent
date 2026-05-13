@@ -153,7 +153,7 @@ tool_param_keys() {
         Skill) printf 'name' ;;
         WebSearch) printf 'query' ;;
         WebFetch) printf 'url' ;;
-        SubAgent) printf 'prompt description' ;;
+        SubAgent) printf 'prompt description fork' ;;
         *) printf '' ;;
     esac
 }
@@ -431,8 +431,8 @@ build_system_prompt() {
     output_language_reaffirm="MUST use \"${locale}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
     [[ "$locale" == zh* ]] && output_language_reaffirm='再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！'
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
-    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n- SubAgent launches an independent background agent session. The child has its own conversation context and cannot see the parent'\''s history — write a self-contained prompt. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks.'
-    sub_agent_guidance=$'- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result text is injected as a user message prefixed with `[Sub-agent result | session_id=... | status=ok|failed | tokens_in=... tokens_out=...]`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.'
+    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.'
+    sub_agent_guidance=$'- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result text is injected as a user message prefixed with `[Sub-agent result | session_id=... | status=ok|failed | tokens_in=... tokens_out=...]`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
     plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Files**: PLAN_DRAFT_FILE: '"${PLAN_DRAFT_FILE:-<not set>}"$' | PLAN_FILE: '"${PLAN_FILE:-<not set>}"$'\n- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n  Every user reply MUST be classified as exactly ONE of:\n  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.'
 
@@ -1065,20 +1065,24 @@ _extract_sub_agent_result() {
 # 启动异步子 agent：后台执行 agent_loop，完成后通过 INPUT_FIFO 发回 AGENT_RESULT
 # 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <result_text> <in> <out> <cr> <cc> <reqs>
 tool_sub_agent() {
-    local prompt="$1" description="${2:-}" sub_session_id
+    local prompt="$1" description="${2:-}" fork="${3:-}" sub_session_id="sub_$(new_session_id)"
 
     [[ -z "$prompt" ]] && { echo "Error: no prompt provided for sub-agent"; return 1; }
 
-    sub_session_id="sub_$(new_session_id)"
     session_append_line "{\"type\":\"sub_agent_start\",\"session_id\":\"$(json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(json_escape "$prompt")\",\"description\":\"$(json_escape "$description")\"}"
 
     (
+        # fork 模式：复制父 session 目录，删除临时文件
+        if [[ "$fork" == "true" ]]; then
+            local _sub_session_dir="$(get_session_dir "$sub_session_id")"
+            cp -r "$(get_session_dir "$SESSION_ID")" "$_sub_session_dir"
+            rm -f "$_sub_session_dir/stats.json" "$_sub_session_dir/events.jsonl" "$_sub_session_dir/input.fifo"
+        fi
         export SESSION_ID="$sub_session_id"
         export INTERACTIVE=false
         local _parent_input_fifo="$INPUT_FIFO"
         conv_init
         load_tool_defs
-
         # 正常路径发送完成后 _done=true，阻止 EXIT trap 重复发送
         local _done=false
         _send_result() {
@@ -1088,15 +1092,12 @@ tool_sub_agent() {
             exec 3>&-
         }
         trap '[[ "$_done" == true ]] || _send_result "$(_extract_sub_agent_result "$CONV_FILE")" "failed"; rm -f "$INPUT_FIFO"' EXIT
-
         # 输出全部重定向到 /dev/null，不污染主 agent 终端
         local _status="ok"
         agent_loop "$prompt" >/dev/null || _status="failed"
-
         # 从 CONV_FILE 用 json.awk 提取所有 assistant 轮次的 text 内容
         local _result=""
         _result=$(_extract_sub_agent_result "$CONV_FILE")
-
         # 从 STATS_FILE 收集 token 统计（用 dump 方式，与 stats_get 一致）
         local _in=0 _out=0 _cr=0 _cc=0 _reqs=0
         if [[ -s "$STATS_FILE" ]]; then
@@ -1106,7 +1107,6 @@ tool_sub_agent() {
             _cc=$(stats_get total_cache_creation_tokens)
             _reqs=$(stats_get agent_request_count)
         fi
-
         _send_result "$_result" "$_status" "$_in" "$_out" "$_cr" "$_cc" "$_reqs"
         _done=true
     ) &
@@ -1129,7 +1129,7 @@ dispatch_tool() {
         Skill)     tool_skill "$arg1" ;;
         WebSearch) tool_web_search "$arg1" ;;
         WebFetch)  tool_web_fetch "$arg1" ;;
-        SubAgent)  tool_sub_agent "$arg1" "$arg2" ;;
+        SubAgent)  tool_sub_agent "$arg1" "$arg2" "$arg3" ;;
         *)
             echo "Error: unknown tool: $name"
             return 1

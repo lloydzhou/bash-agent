@@ -303,6 +303,8 @@ impl Runtime {
         let cfg = self.cfg.clone();
         let msg_tx_arc = self.msg_tx.clone();
         let sub_session_id_clone = sub_session_id.clone();
+        let parent_paths = self.paths.clone();
+        let fork = fields.get("fork").map(|s| s == "true" || s == "1").unwrap_or(false);
 
         std::thread::spawn(move || {
             // 1. 创建子 agent 的 conversation store
@@ -339,7 +341,27 @@ impl Runtime {
                 return;
             }
 
-            // 2. 创建子 agent 的 runtime
+            // 2. fork 模式：复制父会话上下文
+            if fork {
+                    // 复制父会话的关键文件到子会话目录
+                    let files_to_copy: [(_, std::path::PathBuf); 5] = [
+                        ("conversation.jsonl", parent_paths.conversation.clone()),
+                        ("summary.txt", parent_paths.summary.clone()),
+                        ("todo.md", parent_paths.todo.clone()),
+                        ("plan.md", parent_paths.plan.clone()),
+                        ("plan.draft", parent_paths.plan_draft.clone()),
+                    ];
+                    for (name, src) in files_to_copy {
+                        if src.exists() {
+                            let dst = sub_paths.session_dir.join(name);
+                            if let Err(e) = std::fs::copy(&src, &dst) {
+                                eprintln!("Failed to copy {} for fork: {}", name, e);
+                            }
+                        }
+                    }
+            }
+
+            // 3. 创建子 agent 的 runtime
             let mut sub_cfg = cfg.clone();
             sub_cfg.session_id = sub_session_id_clone.clone();
             sub_cfg.prompt = prompt.clone();
@@ -368,14 +390,14 @@ impl Runtime {
                 sub_agent_request_count: 0,
             };
 
-            // 3. 执行 agent_loop
+            // 4. 执行 agent_loop
             let mut status = "ok";
             if let Err(e) = sub_rt.agent_loop(prompt.clone()) {
                 eprintln!("Sub-agent {} failed: {}", sub_session_id_clone, e);
                 status = "failed";
             }
 
-            // 4. 提取结果
+            // 5. 提取结果
             let lines = match sub_rt.conv.lines() {
                 Ok(l) => l,
                 Err(e) => {
