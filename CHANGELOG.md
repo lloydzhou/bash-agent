@@ -15,7 +15,7 @@
 - **SubAgent thinking/text 分离**：Go/Rust 端同步 bash 端的子 agent 结果 thinking/text 拆分逻辑（`cb7d8b5`, `2ba52c4`）
 - **SubAgent 空文本块过滤**：提取子 agent 结果时过滤空 text block（`a58ea7a`）
 - **SubAgent 结果预览行去掉多余前导空格**：thinking/text 预览行 `printf` 格式统一，三端(bash/Go/Rust)对齐（`e1045b7`）
-- **SubAgent completed/failed 行去掉 ANSI 颜色**：终端 stderr 显示的完成/失败行不再带颜色，与 content 预览行格式保持一致（`fef9747`）
+- **SubAgent completed/failed 行恢复 ANSI 颜色**：completed 行紫色(`\033[35m`)，failed 行红色(`\033[31m`)，三端(bash/Go/Rust)统一（`fef9747` 移除后由 `8e65e57` 恢复）
 
 ### Fixed
 
