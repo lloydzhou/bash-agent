@@ -670,9 +670,9 @@ handle_sub_agent_result() {
     else
         display_ensure_newline
         if [[ "$status" == "ok" ]]; then
-            printf '[sub-agent %s] completed (in=%s, out=%s)\n' "$session_id" "$_in" "$_out"
+            printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
         else
-            printf '[sub-agent %s] failed\n' "$session_id"
+            printf '\033[31m[sub-agent %s] failed\033[0m\n' "$session_id"
         fi
         [[ -n "$_thinking" ]] && printf '\033[90m%.120s%s\033[0m\n' "$_thinking" "$([[ ${#_thinking} -gt 120 ]] && printf '%s' "…")"
         [[ -n "$_text" ]] && printf '%.120s%s\n' "$_text" "$([[ ${#_text} -gt 120 ]] && printf '%s' "…")"
