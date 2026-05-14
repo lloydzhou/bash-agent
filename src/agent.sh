@@ -821,7 +821,7 @@ tool_skill() {
 tool_plan_confirm() {
     # 先 compact 再 mv：compact 复用旧缓存前缀，mv 后才触发缓存失效——总共一次冷启动
     if store_plan_draft_has; then
-        compact_context_window plan_confirm
+        agent_compact_context plan_confirm
         store_plan_confirm
         printf 'Plan confirmed and locked in.'
     else
@@ -830,7 +830,7 @@ tool_plan_confirm() {
 }
 
 tool_plan_clear() {
-    compact_context_window plan_clear
+    agent_compact_context plan_clear
     store_plan_clear
     printf 'Plan cleared.'
 }
@@ -966,29 +966,20 @@ display_term_title() {
     store_stats_format_title "$MODEL"
 }
 
-# DP compact decision: find optimal k via cache-aware economics. Returns lines to keep or "0".
-compact_dp_decision() {
-    store_conv_dp_decision \
-        "$(store_stats_get current_turn_count)" "$(store_stats_get agent_request_count)" \
-        "$(store_stats_get compact_request_count)" "$(store_stats_get total_input_tokens)"
-}
-
-compact_turn_keep() {
-    store_conv_turn_keep "${DP_MIN_KEEP_RATIO:-0.12}"
-}
-
-compact_context_window() {
+agent_compact_context() {
     local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
-    # 始终先算 DP 决策（经济最优）
-    keep_lines=$(compact_dp_decision) || true
+    # 始终先算 DP 决策（经济最优）— 直接调用 store 层
+    keep_lines=$(store_conv_dp_decision \
+        "$(store_stats_get current_turn_count)" "$(store_stats_get agent_request_count)" \
+        "$(store_stats_get compact_request_count)" "$(store_stats_get total_input_tokens)") || true
     [[ -n "$keep_lines" ]] || keep_lines=0
     total_lines=$(store_conv_line_count)
     # DP 返回 0（不值得）或 ≥ total_lines（全保留）→ 都算"不压缩"，进入 fallback
     if (( keep_lines == 0 )) || (( keep_lines >= total_lines && total_lines > 0 )); then
         local ct=$(store_stats_get current_context_tokens)
         if [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
-            keep_lines=$(compact_turn_keep)
+            keep_lines=$(store_conv_turn_keep "${DP_MIN_KEEP_RATIO:-0.12}")
         else
             return 1
         fi
@@ -1133,7 +1124,7 @@ agent_loop_stream() {
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
-        compact_context_window auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
+        agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(store_conv_get_messages)" >&2
         exec 5< <(llm_call "$(store_conv_get_messages)")

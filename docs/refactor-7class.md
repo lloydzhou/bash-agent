@@ -1,4 +1,4 @@
-# 架构重构计划：7 类抽象
+# 架构重构计划：6 类抽象
 
 > 临时设计文档，记录三端（bash/Go/Rust）统一抽象方案
 
@@ -9,15 +9,14 @@
 - **合而不拆**：4 个存储模块合并为 1 个 SessionStore，不按职责再拆
 - **source 即策略模式**：bash 通过 `source store_file.sh`（默认）/ `source store_memory.sh`（测试）切换实现，后加载覆盖前加载
 
-## 2. 7 个类总览
+## 2. 6 个类总览
 
 | 前缀 | 类名 | 需要接口？ | 函数数 | 职责 |
 |---|---|---|---|---|
 | `store_` | SessionStore | ✅ | 18 | 对话/事件/统计/摘要/计划/session路径 |
 | `tool_` | ToolDispatcher | ✅ | 19 | 工具分发 + 各工具实现 + 参数解析 + 结果格式化 |
-| `agent_` | Agent | ❌ | 7 | 核心循环、usage 记录、prompt 构建、sub agent |
+| `agent_` | Agent | ❌ | 8 | 核心循环、usage 记录、prompt 构建、sub agent、上下文压缩 |
 | `display_` | Display | ✅ | 4 | 终端输出（终端颜色 / stream-json / 测试 sink） |
-| `compact_` | Compactor | ❌ | 3 | 上下文压缩：dp 决策、turn 保留、执行压缩 |
 | `llm_` | Transport | ✅ | 3 | API 通信：普通调用、流式 curl、摘要调用 |
 | `util_` | util | ❌ | 19 | JSON/IO/AWK/stream/协议读写/skill/JSON 构建 |
 
@@ -31,12 +30,13 @@ Agent（编排层）
  ├── ToolDispatcher  (tool_*)        ← 可替换，依赖 SubAgentRunner 回调
  │     └── SubAgentRunner            ← Agent 实现，注入到 ToolDispatcher
  ├── Display         (display_*)     ← 可替换
- ├── Compactor       (compact_*)     ──→ 依赖 SessionStore
  ├── Transport       (llm_*)         ← 可替换
  └── util functions
+
+依赖方向：Agent → Transport → SessionStore → util（全单向向下，无循环）
 ```
 
-注意：Compactor 依赖 SessionStore 的 stats 来做压缩决策，但 Compactor 本身不需要是接口。
+Agent 的上下文压缩（`agent_compact_context`）直接调用 `store_conv_*` 做数据操作、`llm_summary_call` 做摘要请求，不存在独立 Compactor 层。
 
 ## 4. SessionStore（18 个函数）
 
@@ -147,7 +147,7 @@ bash 子进程（`( ... ) &`、`$(...)`、管道右侧）修改的变量不会�
 `tool_sub_agent` 内部需要调用 Agent 的能力（`agent_loop`、`conv_init` 等）。
 bash 端直接调用全局函数；Go/Rust 端通过注入 `SubAgentRunner` 回调实现，不反向依赖 Agent 具体类型。
 
-## 6. Agent（7 个函数）
+## 6. Agent（8 个函数）
 
 核心编排层，依赖上述接口，自身不需要是接口。
 
@@ -160,6 +160,7 @@ bash 端直接调用全局函数；Go/Rust 端通过注入 `SubAgentRunner` 回�
 | 5 | `record_usage` | `agent_record_usage` | `RecordUsage(usage)` | `record_usage(usage)` | 记录 usage（组合 store_append_event + store_stats_inc） |
 | 6 | `build_system_prompt` | `agent_build_prompt` | `BuildPrompt()` | `build_prompt()` | 构建 system prompt |
 | 7 | `handle_sub_agent_result` | `agent_handle_sub_result` | `HandleSubResult(msg)` | `handle_sub_result(msg)` | 处理子代理返回结果 |
+| 8 | `compact_context_window` | `agent_compact_context` | `CompactContext(trigger)` | `compact_context(trigger)` | 上下文压缩（DP 决策 + turn 保留 + 摘要 + 修剪） |
 
 ## 7. Display（4 个函数）
 
@@ -170,19 +171,7 @@ bash 端直接调用全局函数；Go/Rust 端通过注入 `SubAgentRunner` 回�
 | 3 | `display_event` | `display_event` | `Event(msg)` | `event(msg)` | 显示事件消息 |
 | 4 | `stats_show_osc` | `display_term_title` | `TermTitle(text)` | `term_title(text)` | 设置终端标题 |
 
-## 8. Compactor（3 个函数）
-
-已使用 `compact_` 前缀，无需重命名。
-
-| # | bash 旧名 | bash 新名 | 说明 |
-|---|---|---|---|
-| 1 | `compact_dp_decision` | `compact_dp_decision` | DP 决策：是否压缩 |
-| 2 | `compact_turn_keep` | `compact_turn_keep` | 计算保留轮数 |
-| 3 | `compact_context_window` | `compact_context_window` | 执行上下文压缩 |
-
-Compactor 依赖 SessionStore 读取 stats 和 messages，但自身不需要是接口。
-
-## 9. Transport / LLM（3 个函数）
+## 8. Transport / LLM（3 个函数）
 
 | # | bash 旧名 | bash 新名 | Go 方法 | Rust 方法 | 说明 |
 |---|---|---|---|---|---|
@@ -190,7 +179,7 @@ Compactor 依赖 SessionStore 读取 stats 和 messages，但自身不需要是�
 | 2 | `_stream_curl` | `llm_stream_curl` | `StreamCurl(req)` | `stream_curl(req)` | 流式 SSE 调用 |
 | 3 | `run_summary_call` | `llm_summary_call` | `SummaryCall(req)` | `summary_call(req)` | 摘要生成调用 |
 
-## 10. Util（19 个函数）
+## 9. Util（19 个函数）
 
 通用工具函数，不需要封装为类。bash 端为全局函数，Go 端为包级函数，Rust 端为模块级函数。
 
@@ -227,7 +216,7 @@ Compactor 依赖 SessionStore 读取 stats 和 messages，但自身不需要是�
 | — | `find_instruction_file_in_dir` | `util_find_instruction` | 查找 instruction 文件 |
 | — | `build_instruction_files_section` | `util_build_instructions` | 构建 instruction 段 |
 
-## 11. CLI 入口（5 个函数，无前缀）
+## 10. CLI 入口（5 个函数，无前缀）
 
 这些是程序的 main 入口和参数解析，不属于任何类，保持无前缀。
 
@@ -239,7 +228,7 @@ Compactor 依赖 SessionStore 读取 stats 和 messages，但自身不需要是�
 | 4 | `interactive_mode` | 交互模式主循环 |
 | 5 | `validate_config` | 校验配置 |
 
-## 12. SubAgent 的特殊处理
+## 11. SubAgent 的特殊处理
 
 ### 问题
 `tool_sub_agent` 是一个"工具"，但它内部需要调用 Agent 的能力：
@@ -291,7 +280,7 @@ struct ToolDispatcher<R: SubAgentRunner> {
 }
 ```
 
-## 13. bash 端实现：source 切换
+## 12. bash 端实现：source 切换
 
 bash 没有 interface/trait，通过 `source` 的"后加载覆盖"机制实现策略模式。
 
@@ -326,7 +315,7 @@ source store_memory.sh # 内存实现覆盖 store_* 函数
 - **display_** → 拆文件（term/stream-json 实现）
 - 其余保持在 agent.sh 中（不拆）
 
-## 14. Go 端实现：interface
+## 13. Go 端实现：interface
 
 ```go
 package agent
@@ -385,12 +374,11 @@ type Agent struct {
     Store    SessionStore
     Tools    ToolDispatcher
     Display  Display
-    Compact  *Compactor
     Transport Transport
 }
 ```
 
-## 15. Rust 端实现：trait
+## 14. Rust 端实现：trait
 
 ```rust
 // SessionStore - 可替换存储
@@ -430,12 +418,11 @@ struct Agent<S: SessionStore, T: ToolDispatcher, D: Display, L: Transport> {
     store: S,
     tools: T,
     display: D,
-    compact: Compactor<S>,
     transport: L,
 }
 ```
 
-## 16. 迁移步骤
+## 15. 迁移步骤
 
 ### Phase 1：bash 端重命名（纯重命名，不改逻辑）
 
@@ -457,7 +444,7 @@ struct Agent<S: SessionStore, T: ToolDispatcher, D: Display, L: Transport> {
 4. 逐步对齐方法名与 bash 函数名
 5. store_memory.sh 作为可选实现（不阻塞主流程）
 
-## 17. System Prompt：保持现状
+## 16. System Prompt：保持现状
 
 system prompt 保持 `agent_build_prompt` 内部按 section 变量构建的方式，不引入外部模板文件。
 

@@ -2639,9 +2639,9 @@ EOF
     rm -rf "$tmpdir"
 }
 
-# Test 39: compact_context_window integration (plan_clear trigger)
-test_agent_compact_context_window() {
-    info "Test 39: compact_context_window integration via plan_clear"
+# Test 39: agent_compact_context integration (plan_clear trigger)
+test_agent_compact_context() {
+    info "Test 39: agent_compact_context integration via plan_clear"
     local home_dir output project_dir session_dir plan_file summary_file conv_file stats_file
     home_dir=$(mktemp -d)
     project_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)"
@@ -2670,7 +2670,7 @@ test_agent_compact_context_window() {
     printf '{"type":"session_start","session_id":"compact-test"}\n' > "${session_dir}/events.jsonl"
 
     # Run agent — mock will match summary request via "The conversation context above needs to be compacted"
-    # Use --print to capture output, PlanClear trigger forces compact_context_window plan_clear
+    # Use --print to capture output, PlanClear trigger forces agent_compact_context plan_clear
     output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session compact-test --max-context 160000 'plan done COMPACT_TEST_MARKER' 2>&1) || true
 
     local post_lines
@@ -2680,16 +2680,16 @@ test_agent_compact_context_window() {
 
     # Verify: conversation was trimmed (fewer lines than original)
     if (( post_lines < original_lines )); then
-        green "compact_context_window: conv trimmed ($original_lines -> $post_lines lines)"; ((PASS++)) || true
+        green "agent_compact_context: conv trimmed ($original_lines -> $post_lines lines)"; ((PASS++)) || true
     else
-        red "compact_context_window: conv NOT trimmed ($original_lines -> $post_lines lines)"; echo "  Output: $output"; ((FAIL++)) || true
+        red "agent_compact_context: conv NOT trimmed ($original_lines -> $post_lines lines)"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 
     # Verify: summary file created with expected content
     if $summary_exists && grep -q "Task focus" "$summary_file" 2>/dev/null; then
-        green "compact_context_window: summary created with expected fields"; ((PASS++)) || true
+        green "agent_compact_context: summary created with expected fields"; ((PASS++)) || true
     else
-        red "compact_context_window: summary missing or incomplete"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || echo 'N/A')"; ((FAIL++)) || true
+        red "agent_compact_context: summary missing or incomplete"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || echo 'N/A')"; ((FAIL++)) || true
     fi
 
     # Verify: remaining conversation lines all have valid role field
@@ -2700,9 +2700,9 @@ test_agent_compact_context_window() {
         [[ "$line" == *"\"role\":"* ]] || { ((bad_lines++)); continue; }
     done < "$conv_file"
     if (( bad_lines == 0 )); then
-        green "compact_context_window: remaining conv is valid JSONL"; ((PASS++)) || true
+        green "agent_compact_context: remaining conv is valid JSONL"; ((PASS++)) || true
     else
-        red "compact_context_window: $bad_lines invalid JSONL lines after compact"; ((FAIL++)) || true
+        red "agent_compact_context: $bad_lines invalid JSONL lines after compact"; ((FAIL++)) || true
     fi
 
     rm -rf "$home_dir"
@@ -2770,7 +2770,7 @@ test_agent_max_context
 test_agent_stats_json
 test_compact_dp_awk
 test_compact_turn_keep_awk
-test_agent_compact_context_window
+test_agent_compact_context
 test_agent_sub_agent
 test_agent_sub_agent_failure
 test_agent_sub_agent_child_session
