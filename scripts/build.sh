@@ -70,6 +70,8 @@ awk_files = {
     "event_replay": ("event_replay.awk", "_AWK_EVENT_REPLAY"),
     "stats": ("stats.awk", "_AWK_STATS"),
     "compact_dp": ("compact_dp.awk", "_AWK_COMPACT_DP"),
+    "compact_turn_keep": ("compact_turn_keep.awk", "_AWK_COMPACT_TURN_KEEP"),
+    "term_title": ("term_title.awk", "_AWK_TERM_TITLE"),
     "send_sub_result": ("send_sub_result.awk", "_AWK_SEND_SUB_RESULT"),
 }
 
@@ -101,16 +103,15 @@ if idx != -1:
 
 # --- Replace each awk function to use variable concatenation ---
 functions = [
-    ("json_escape", "_AWK_JSON", "", ""),
+    ("util_json_escape", "_AWK_JSON", "_AWK_JSON_CLI", ""),
     ("load_tool_defs", "", "", ""),
 ]
 
 for func_name, json_var, specific_var, extra_args in functions:
-    if func_name == "json_escape":
+    if func_name == "util_json_escape":
         replacement = (
-            "json_escape() {\n"
-            "    local input=\"${1:-}\"\n"
-            "    printf '%s' \"$input\" | awk_run -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
+            "util_json_escape() {\n"
+            "    printf '%s' \"${1:-}\" | util_awk_run -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
             "}\n"
         )
     elif func_name == "load_tool_defs":
@@ -120,9 +121,9 @@ for func_name, json_var, specific_var, extra_args in functions:
             "}\n"
         )
     else:
-        # Build: awk_run [-v ...] "${_AWK_JSON}
+        # Build: util_awk_run [-v ...] "${_AWK_JSON}
         # ${_AWK_XXX}"
-        awk_call = '    awk_run '
+        awk_call = '    util_awk_run '
         if extra_args:
             awk_call += extra_args + ' '
         # Double-quoted string with embedded newline concatenates two variables
@@ -149,31 +150,36 @@ for func_name, json_var, specific_var, extra_args in functions:
 
     content = content[:idx] + replacement + content[end+1:]
 
-# --- Remove find_awk_dir (not needed in all-in-one) ---
-marker = "find_awk_dir() {"
+# --- Remove util_find_awk_dir (not needed in all-in-one) ---
+marker = "util_find_awk_dir() {"
 idx = content.find(marker)
 if idx != -1:
     end = find_function_end(content, idx)
     if end != -1:
         content = content[:idx] + content[end+1:]
 
-content = content.replace("    find_awk_dir\n", "")
+content = content.replace("    util_find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
-content = content.replace('awk_run -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'awk_run "${_AWK_SKILL_SUMMARY}" "$skill_file"')
-content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | awk_run -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | awk_run "${_AWK_HTTP_STREAM}"')
-content = content.replace('awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'awk_run -v max_bytes="$FILE_WRITE_MAX_BYTES" "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
+content = content.replace('util_awk_run -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'util_awk_run "${_AWK_SKILL_SUMMARY}" "$skill_file"')
+content = content.replace('curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | util_awk_run -f "$AWK_DIR/http_stream.awk"', 'curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | util_awk_run "${_AWK_HTTP_STREAM}"')
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
 # --- Inline transport awk references in validate_config ---
-content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_BODY}"')
-content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_SSE}"')
-content = content.replace('awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"', 'awk_run -v verbose="${VERBOSE:-false}" "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}"')
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_BODY}"')
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_SSE}"')
+content = content.replace('util_awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"', 'util_awk_run -v verbose="${VERBOSE:-false}" "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}"')
 # --- Inline event_replay.awk reference in interactive_mode ---
-content = content.replace('awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk"', 'awk_run "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_EVENT_REPLAY}"')
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_EVENT_REPLAY}"')
 # --- Inline stats.awk references ---
-content = content.replace('awk_run -v action=update -f "$AWK_DIR/stats.awk"', 'awk_run -v action=update "${_AWK_STATS}"')
-content = content.replace('awk_run -v action=dump -f "$AWK_DIR/stats.awk"', 'awk_run -v action=dump "${_AWK_STATS}"')
-content = content.replace('awk_run -v action=sync -f "$AWK_DIR/stats.awk"', 'awk_run -v action=sync "${_AWK_STATS}"')
+content = content.replace('util_awk_run -v action=update -f "$AWK_DIR/stats.awk"', 'util_awk_run -v action=update "${_AWK_STATS}"')
+content = content.replace('util_awk_run -v action=get -v key="$1" -f "$AWK_DIR/stats.awk"', 'util_awk_run -v action=get -v key="$1" "${_AWK_STATS}"')
+content = content.replace('util_awk_run -v action=dump -f "$AWK_DIR/stats.awk"', 'util_awk_run -v action=dump "${_AWK_STATS}"')
+content = content.replace('util_awk_run -v action=sync -f "$AWK_DIR/stats.awk"', 'util_awk_run -v action=sync "${_AWK_STATS}"')
 # --- Inline compact_dp.awk reference ---
 content = content.replace('-f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"', '"${_AWK_COMPACT_DP}" "$CONV_FILE"')
+# --- Inline compact_turn_keep.awk reference ---
+content = content.replace('-f "$AWK_DIR/compact_turn_keep.awk"', '"${_AWK_COMPACT_TURN_KEEP}"')
+# --- Inline term_title.awk reference ---
+content = content.replace('-f "$AWK_DIR/term_title.awk"', '"${_AWK_TERM_TITLE}"')
 # --- Inline send_sub_result.awk reference ---
 content = content.replace('-f "$AWK_DIR/json.awk" -f "$AWK_DIR/send_sub_result.awk"', '"${_AWK_JSON}\n${_AWK_SEND_SUB_RESULT}"')
 # --- Write output ---
