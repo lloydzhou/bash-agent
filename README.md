@@ -143,7 +143,7 @@ $$
 
 ## 内置工具
 
-`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `Skill` · `WebSearch` · `WebFetch`
+`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
 
 > 详细说明见 [`docs/tools.md`](docs/tools.md)。
 
