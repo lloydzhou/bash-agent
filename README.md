@@ -170,7 +170,7 @@ $$
 | 文档 | 说明 |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | 架构设计、分层、协议 |
-| [`docs/tools.md`](docs/tools.md) | 10 个内置工具详细说明 |
+| [`docs/tools.md`](docs/tools.md) | 11 个内置工具详细说明 |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | 压缩算法完整推导 |
 | [`docs/sessions.md`](docs/sessions.md) | Session 文件结构与恢复 |
 

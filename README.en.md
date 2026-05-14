@@ -170,7 +170,7 @@ Scopes: global (`~/.bash-agent/`) and project (current directory).
 | Document | Description |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, layering, protocols |
-| [`docs/tools.md`](docs/tools.md) | 10 built-in tool references |
+| [`docs/tools.md`](docs/tools.md) | 11 built-in tool references |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | Compaction algorithm derivation |
 | [`docs/sessions.md`](docs/sessions.md) | Session files and recovery |
 
