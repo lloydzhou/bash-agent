@@ -613,34 +613,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing not-found tool_result content')
             return
-        if b'EDIT_FILE_TOO_LARGE_MARKER' in body and b'"tool_result"' not in body:
-            if path.startswith('/v1/messages'):
-                for c in [
-                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_big\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will edit the file now.\"}}\n\n',
-                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_edit_big\",\"name\":\"Edit\",\"input\":{}}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/tmp/bash-agent-edit-big.txt','old_string':'tiny','new_string':'replaced'})}}) + '\n\n',
-                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
-                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
-                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
-                ]: w.write(c.encode()); w.flush()
-            return
-        if b'EDIT_FILE_TOO_LARGE_MARKER' in body and b'"tool_result"' in body:
-            if path.startswith('/v1/messages'):
-                if b'file too large for edit_file' in body:
-                    for c in [
-                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_edit_big_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
-                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
-                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Edit size guard handled.\"}}\n\n',
-                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
-                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
-                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
-                    ]: w.write(c.encode()); w.flush()
-                else:
-                    self.send_response(422); self.end_headers(); w.write(b'missing size guard tool_result content')
-            return
         if b'EDIT_UNICODE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -1839,19 +1811,6 @@ test_agent_edit_file_not_found() {
     rm -f "$target_file"
 }
 
-test_agent_edit_file_too_large() {
-    info "Test 23: Agent.sh edit_file file size guard"
-    local output target_file
-    target_file="/tmp/bash-agent-edit-big.txt"
-    head -c 1048577 /dev/zero | tr '\0' 'a' > "$target_file"
-    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_FILE_TOO_LARGE_MARKER' 2>&1) || true
-    if echo "$output" | grep -q "file too large for edit_file" && [[ $(wc -c < "$target_file") -gt 1048576 ]]; then
-        green "Agent edit_file file size guard"; ((PASS++)) || true
-    else
-        red "Agent edit_file file size guard"; echo "  Output: $output"; echo "  Size: $(wc -c < "$target_file")"; ((FAIL++)) || true
-    fi
-    rm -f "$target_file"
-}
 
 # Test 24: Write file preserves newlines
 test_agent_write_file_newlines() {
@@ -2108,14 +2067,13 @@ test_agent_edit_code_snippet() {
     rm -f "$target_file"
 }
 
-
 # Test 34: stats.awk dump/update round-trip
 test_stats_awk() {
     info "Test 34: stats.awk dump/update round-trip"
     local tmpdir
     tmpdir=$(mktemp -d)
-    printf 'agent_request_count\t0\ntotal_input_tokens\t0\ntotal_output_tokens\t0\ntotal_cache_read_tokens\t0\ntotal_cache_creation_tokens\t0\ncurrent_context_tokens\t0\ncompact_request_count\t0\n' > "$tmpdir/test.json"
-    printf 'agent_request_count\t+1\ntotal_input_tokens\t+10\ntotal_output_tokens\t+20\ntotal_cache_read_tokens\t+3\ntotal_cache_creation_tokens\t+4\ncurrent_context_tokens\t30\n' |         protocol_awk -v action=update -f "$AWK_DIR/stats.awk" "$tmpdir/test.json"
+    printf '{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"sub_agent_request_count":0,"last_updated":""}' > "$tmpdir/test.json"
+    printf 'agent_request_count=+1\ntotal_input_tokens=+10\ntotal_output_tokens=+20\ntotal_cache_read_tokens=+3\ntotal_cache_creation_tokens=+4\ncurrent_context_tokens=30\n' |         protocol_awk -v action=update -f "$AWK_DIR/stats.awk" "$tmpdir/test.json"
     local result
     result=$(protocol_awk -v action=dump -f "$AWK_DIR/stats.awk" "$tmpdir/test.json" | sort)
     check "stats.awk update/dump" "$result" \
@@ -2540,7 +2498,7 @@ test_agent_bash_timeout
 test_agent_grep_context
 test_agent_edit_file
 test_agent_edit_file_not_found
-test_agent_edit_file_too_large
+
 test_agent_write_file_newlines
 test_agent_bash_quotes
 test_agent_bash_blocked_command

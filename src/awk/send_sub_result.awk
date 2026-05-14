@@ -5,7 +5,7 @@
 # outputs RESP-formatted AGENT_RESULT message to stdout.
 #
 # RESP format: *N\r\n$len\r\ndata\r\n...
-# Fields: AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc>
+# Fields: AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc> <reqs>
 
 BEGIN {
     thinking = ""

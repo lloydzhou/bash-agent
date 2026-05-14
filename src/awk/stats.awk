@@ -37,8 +37,7 @@ BEGIN {
         _read_file(filepath)
         while ((getline line) > 0) {
             if (line == "") continue
-            idx = index(line, "\t")
-            if (idx == 0) idx = index(line, " ")
+            idx = index(line, "=")
             if (idx == 0) continue
             key = substr(line, 1, idx - 1)
             val = substr(line, idx + 1)
