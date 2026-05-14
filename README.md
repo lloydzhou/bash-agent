@@ -177,10 +177,9 @@ $$
 ## 开发
 
 ```bash
-bash tests/test.sh                                          # 测试
-bash scripts/build.sh                                       # 构建单文件发行版
-AGENT=./dist/agent.sh bash tests/test.sh                    # 测试构建产物
-go -C go test ./...                                         # Go 测试
+make test                            # 运行所有测试 (bash + go 单元 + rust check)
+make test-go-e2e                     # Go 版本集成测试 (build + test.sh)
+make test-rust-e2e                   # Rust 版本集成测试 (build + test.sh)
 ```
 
 ## 许可

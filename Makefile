@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust test test-bash test-go test-rust clean
+.PHONY: build build-bash build-go build-rust test test-bash test-go test-rust test-go-e2e test-rust-e2e clean
 
 build: build-bash build-go build-rust
 
@@ -30,8 +30,14 @@ test-go:
 	bash scripts/patch-go-prompt.sh go/.gomodcache
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go test ./...
 
+test-go-e2e: build-go
+	AGENT=./dist/goagent bash tests/test.sh
+
 test-rust:
 	cd rust && cargo check
+
+test-rust-e2e: build-rust
+	AGENT=./dist/rustagent bash tests/test.sh
 
 clean:
 	rm -rf go/dist

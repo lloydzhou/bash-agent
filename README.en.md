@@ -177,10 +177,9 @@ Scopes: global (`~/.bash-agent/`) and project (current directory).
 ## Development
 
 ```bash
-bash tests/test.sh                                          # tests
-bash scripts/build.sh                                       # build single-file dist
-AGENT=./dist/agent.sh bash tests/test.sh                    # test dist artifact
-go -C go test ./...                                         # Go tests
+make test                            # run all tests (bash + go unit + rust check)
+make test-go-e2e                     # Go integration tests (build + test.sh)
+make test-rust-e2e                   # Rust integration tests (build + test.sh)
 ```
 
 ## License

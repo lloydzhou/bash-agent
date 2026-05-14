@@ -133,10 +133,10 @@
 - 独立模式下 prompt 必须自包含：包含所有文件路径、函数名、错误信息、约束条件
 - Fork 模式下 prompt 可引用父会话上下文，无需重复提供已有信息
 - **返回启动确认**：立即返回 `Sub-agent started: session_id=...`，表示子 agent 已启动
-- **实际结果注入**：子 agent 完成后，结果以 user message 注入父会话，格式为 `[Sub-agent result | session_id=... | status=ok|failed | tokens_in=... tokens_out=...]`
-- 同一轮中的多个 `SubAgent` 调用**并发**执行
+- **实际结果注入**：子 agent 完成后，结果以 user message 注入父会话，格式为 `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`
+- 同一轮中的多个 `SubAgent` 调用**并发**执行，但结果**异步逐个返回**——不会同时完成。收到一个结果时其他仍在运行，只需等待，不要重复启动
 - 失败时（`status=failed`）结果可能部分或为空，不要自动重试
-- 子 agent 的 token 用量会累加到父会话的 `total_input_tokens` / `total_output_tokens`
+- 子 agent 的 token 用量和 API 请求数会累加到父会话的 `total_input_tokens` / `total_output_tokens` / `agent_request_count`
 
 ## `Skill`
 

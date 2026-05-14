@@ -17,6 +17,7 @@
 - **SubAgent 结果预览行去掉多余前导空格**：thinking/text 预览行 `printf` 格式统一，三端(bash/Go/Rust)对齐（`e1045b7`）
 - **SubAgent completed/failed 行恢复 ANSI 颜色**：completed 行紫色(`\033[35m`)，failed 行红色(`\033[31m`)，三端(bash/Go/Rust)统一（`fef9747` 移除后由 `8e65e57` 恢复）
 - **SubAgent 并行 guidance 增强**：sub-agent-guidance 中 Parallelism 条目新增强调——结果异步逐个返回不会同时完成，收到部分结果时不要重复启动，按 session_id 配对等待（`4583236`）
+- **文档同步**：`docs/tools.md` SubAgent 结果注入格式更新（`[sub-agent <id>] <status> ...`）+ 并行异步说明 + 累加 `agent_request_count` 说明；`AGENTS.md`/`README.md`/`README.en.md` 补充 Go/Rust 集成测试命令；`Makefile` 新增 `test-go-e2e` / `test-rust-e2e` target
 
 ### Fixed
 

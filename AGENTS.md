@@ -24,7 +24,9 @@ make clean
 | `make build-rust` | 编译 Rust 版本到 dist/rustagent |
 | `make test-bash` | 运行 Bash 测试 (tests/test.sh) |
 | `make test-go` | 运行 Go 单元测试 |
+| `make test-go-e2e` | 运行 Go 版本集成测试 (build + test.sh) |
 | `make test-rust` | 运行 Rust 编译检查 |
+| `make test-rust-e2e` | 运行 Rust 版本集成测试 (build + test.sh) |
 
 ### 测试覆盖
 
