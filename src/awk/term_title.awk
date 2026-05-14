@@ -29,5 +29,5 @@ NR == 1 {
 }
 END {
     printf "\033]0;%s T:%s R:%s I:%s(%s) O:%s C:%s\007", \
-        model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c)
+        model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c) > "/dev/stderr"
 }

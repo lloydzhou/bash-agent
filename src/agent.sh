@@ -479,7 +479,7 @@ store_conv_turn_keep() {
 
 # — store_stats: stats 格式化 API —
 store_stats_format_title() {
-    util_awk_run -v model="$1" -f "$AWK_DIR/term_title.awk" "$STATS_FILE" 2>/dev/null
+    util_awk_run -v model="$1" -f "$AWK_DIR/term_title.awk" "$STATS_FILE"
 }
 
 # — store_conv: sub-agent 结果发送 —
