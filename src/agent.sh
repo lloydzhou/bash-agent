@@ -343,6 +343,12 @@ store_session_init() {
     [[ -p "$INPUT_FIFO" ]] || { rm -f "$INPUT_FIFO"; mkfifo "$INPUT_FIFO"; }
 }
 
+store_session_fork() {
+    local parent_dir="$1" child_dir="$2"
+    mkdir -p "$child_dir"
+    cp "$parent_dir"/{conversation.jsonl,summary.txt,plan.md} "$child_dir/" 2>/dev/null || true
+}
+
 store_session_get_dir() {
     local cwd="${PWD:-$(pwd)}" project_key base="${BASH_AGENT_HOME:-${HOME}}"
     cwd="$(cd "$cwd" && pwd -P)"
@@ -851,8 +857,7 @@ tool_sub_agent() {
     (
         # fork mode needs to copy conversation and summary to new session dir
         if [[ "$fork" == "true" ]]; then
-            local _sub_dir="$(store_session_get_dir)/${sub_session_id}"
-            mkdir -p "$_sub_dir" && cp "$(store_session_get_dir)/${SESSION_ID}"/{conversation.jsonl,summary.txt,plan.md} "$_sub_dir/" 2>/dev/null || true
+            store_session_fork "$(store_session_get_dir)/${SESSION_ID}" "$(store_session_get_dir)/${sub_session_id}"
         fi
         export SESSION_ID="$sub_session_id"
         export INTERACTIVE=false
