@@ -320,27 +320,30 @@ impl Runtime {
         let parent_paths = self.paths.clone();
         let fork = fields.get("fork").map(|s| s == "true" || s == "1").unwrap_or(false);
 
+        // 在主线程中完成 fork 复制（与 Bash 版本一致：在子进程启动前复制，避免竞态）
+        let sub_paths = session::paths_for(&home, &cwd, &sub_session_id_clone);
+        if let Err(e) = session::ensure_dir(&sub_paths.session_dir) {
+            self.active_sub_count -= 1;
+            return format!("Failed to create sub-agent session dir: {}", e);
+        }
+        if fork {
+            let files_to_copy: [(&str, std::path::PathBuf); 3] = [
+                ("conversation.jsonl", parent_paths.conversation.clone()),
+                ("summary.txt", parent_paths.summary.clone()),
+                ("plan.md", parent_paths.plan.clone()),
+            ];
+            for (name, src) in files_to_copy {
+                if src.exists() {
+                    let dst = sub_paths.session_dir.join(name);
+                    if let Err(_e) = std::fs::copy(&src, &dst) {
+                        // fork 文件复制失败不致命，静默忽略（与 Bash 版本 `2>/dev/null || true` 一致）
+                    }
+                }
+            }
+        }
+
         std::thread::spawn(move || {
             // 1. 创建子 agent 的 conversation store
-            let sub_paths = session::paths_for(&home, &cwd, &sub_session_id_clone);
-            if let Err(e) = session::ensure_dir(&sub_paths.session_dir) {
-                // 早期失败时发送失败结果，让主进程减少 active_sub_count
-                let tx_guard = msg_tx_arc.lock().unwrap();
-                if let Some(tx) = tx_guard.as_ref() {
-                    let _ = tx.send(MainLoopMessage::AgentResult {
-                        session_id: sub_session_id_clone.clone(),
-                        status: "failed".to_string(),
-                        thinking: String::new(),
-                        text: format!("Failed to create sub-agent session dir: {}", e),
-                        in_tokens: 0,
-                        out_tokens: 0,
-                        cache_read_tokens: 0,
-                        cache_creation_tokens: 0,
-                        request_count: 0,
-                    });
-                }
-                return;
-            }
             let sub_conv = Store { path: sub_paths.conversation.clone() };
             if let Err(e) = sub_conv.ensure() {
                 // 早期失败时发送失败结果，让主进程减少 active_sub_count
@@ -361,23 +364,7 @@ impl Runtime {
                 return;
             }
 
-            // 2. fork 模式：复制父会话上下文
-            if fork {
-                    // 复制父会话的关键文件到子会话目录
-                    let files_to_copy: [(_, std::path::PathBuf); 3] = [
-                        ("conversation.jsonl", parent_paths.conversation.clone()),
-                        ("summary.txt", parent_paths.summary.clone()),
-                        ("plan.md", parent_paths.plan.clone()),
-                    ];
-                    for (name, src) in files_to_copy {
-                        if src.exists() {
-                            let dst = sub_paths.session_dir.join(name);
-                            if let Err(_e) = std::fs::copy(&src, &dst) {
-                                // fork 文件复制失败不致命，静默忽略（与 Bash 版本 `2>/dev/null || true` 一致）
-                            }
-                        }
-                    }
-            }
+            // 2. fork 复制已在主线程完成（避免竞态）
 
             // 3. 创建子 agent 的 runtime
             let mut sub_cfg = cfg.clone();
