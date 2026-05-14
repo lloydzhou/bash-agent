@@ -152,12 +152,22 @@ class H(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'error':{'type':'invalid_request','message':'simulated child failure'}},sort_keys=True).encode())
             return
+        # SubAgent fork-failure mock: fork child request -> 422 error
+        # Fork child inherits parent conversation (which has SUB_FORK_FAIL_MARKER), so
+        # we only exclude requests that contain tool_result (those are from main agent).
+        if b'SUB_FORK_FAIL_CHILD' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(422)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error':{'type':'invalid_request','message':'simulated fork child failure'}},sort_keys=True).encode())
+            return
         # --- Normal flow ---
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.end_headers()
         w = self.wfile
-        if b'You are compressing conversation context' in body:
+        if b'The conversation context above needs to be compacted' in body:
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_summary\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -1046,6 +1056,32 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fail3\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Sub-agent failed.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # --- SubAgent fork-failure mock ---
+        # Stage 1: main agent -> SubAgent tool_call with fork=true, prompt triggers child failure
+        if b'SUB_FORK_FAIL_MARKER' in body and b'SUB_FORK_FAIL_CHILD' not in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fork_fail1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_sub_fork_fail\",\"name\":\"SubAgent\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_FORK_FAIL_CHILD','description':'fork failing child','fork':True})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":10}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 2: fork child -> 422 error (handled in early error returns above)
+        # Stage 3: main agent after fork-fail AGENT_RESULT -> acknowledge
+        if b'SUB_FORK_FAIL_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub_fork_fail3\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Fork child failed, no stale content.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
@@ -2330,6 +2366,55 @@ test_agent_sub_agent_fork() {
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
 
+# Test: SubAgent fork-failure — fork child fails immediately, no stale assistant content leaked
+test_agent_sub_agent_fork_failure() {
+    info "Test: SubAgent fork-failure — no stale content on child failure"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    # SUB_FORK_FAIL_MARKER triggers:
+    #   Stage 1: main agent -> SubAgent tool_call with fork=true
+    #   Stage 2: fork child inherits parent conversation.jsonl, then hits 422 error
+    #   Stage 3: main agent gets AGENT_RESULT(status=failed, thinking="", text="")
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-fork-fail-001 "SUB_FORK_FAIL_MARKER trigger fork failure" 2>&1) || true
+
+    # Verify main agent observed the failure
+    if echo "$output" | grep -qi "fail"; then
+        green "SubAgent-fork-fail: failure indication in output"; ((PASS++)) || true
+    else
+        red "SubAgent-fork-fail: no failure indication in output"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    # Check session events: sub_agent_end should have status=failed
+    local session_dir
+    session_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "test-sub-fork-fail-001" 2>/dev/null | head -1)
+    if [[ -n "$session_dir" && -f "$session_dir/events.jsonl" ]]; then
+        if grep -q '"status":"failed"' "$session_dir/events.jsonl"; then
+            green "SubAgent-fork-fail: session event status=failed recorded"; ((PASS++)) || true
+        else
+            red "SubAgent-fork-fail: missing status=failed in events.jsonl"; ((FAIL++)) || true
+        fi
+        # Verify fork=true is recorded
+        if grep -q '"fork":true' "$session_dir/events.jsonl"; then
+            green "SubAgent-fork-fail: fork=true recorded in events"; ((PASS++)) || true
+        else
+            red "SubAgent-fork-fail: fork=true not found in events"; ((FAIL++)) || true
+        fi
+    else
+        red "SubAgent-fork-fail: events.jsonl not found"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
 # Test 37: compact_dp.awk — DP compact decision algorithm
 test_compact_dp_awk() {
     info "Test 37: compact_dp.awk DP compact decision"
@@ -2459,6 +2544,170 @@ test_agent_stats_json() {
     rm -rf "$home_dir"
 }
 
+# Test 38: compact_turn_keep.awk — turn-based keep ratio calculation
+test_compact_turn_keep_awk() {
+    info "Test 38: compact_turn_keep.awk turn-based keep ratio"
+    local tmpdir conv_file
+    tmpdir=$(mktemp -d)
+    conv_file="$tmpdir/conv.jsonl"
+
+    # Helper: run compact_turn_keep.awk with given ratio
+    tk_run() {
+        protocol_awk -v ratio="${1:-0.12}" -f "$AWK_DIR/compact_turn_keep.awk" "$conv_file"
+    }
+
+    # --- 38a: Empty file → 0 ---
+    : > "$conv_file"
+    check "turn_keep: empty -> 0" "$(tk_run 0.12)" "0"
+
+    # --- 38b: Single user turn (ratio=0.12, target=1) → keep all ---
+    cat > "$conv_file" << 'EOF'
+{"role":"user","content":"hello"}
+{"role":"assistant","content":"hi"}
+EOF
+    result=$(tk_run 0.12)
+    [[ "$result" == "2" ]] \
+        && { green "turn_keep: 1 turn ratio=0.12 -> $result"; ((PASS++)); } \
+        || { red "turn_keep: 1 turn ratio=0.12 -> $result (expected 2)"; ((FAIL++)); }
+
+    # --- 38c: 10 user turns, ratio=0.12 → target=1, keep last user turn ---
+    > "$conv_file"
+    for i in $(seq 1 10); do
+        echo "{\"role\":\"user\",\"content\":\"step $i\"}" >> "$conv_file"
+        echo "{\"role\":\"assistant\",\"content\":\"response $i\"}" >> "$conv_file"
+    done
+    result=$(tk_run 0.12)
+    # total=20 lines, target=int(10*0.12+0.5)=1, scan from tail: line 20=asst, line 19=user → keep=2
+    [[ "$result" == "2" ]] \
+        && { green "turn_keep: 10 turns ratio=0.12 -> $result"; ((PASS++)); } \
+        || { red "turn_keep: 10 turns ratio=0.12 -> $result (expected 2)"; ((FAIL++)); }
+
+    # --- 38d: 10 user turns, ratio=0.5 → target=5 ---
+    result=$(tk_run 0.5)
+    # target=int(10*0.5+0.5)=5, from tail count 5 user turns:
+    # line 20=a, 19=u(1), 18=a, 17=u(2), 16=a, 15=u(3), 14=a, 13=u(4), 12=a, 11=u(5) → keep=10
+    [[ "$result" == "10" ]] \
+        && { green "turn_keep: 10 turns ratio=0.5 -> $result"; ((PASS++)); } \
+        || { red "turn_keep: 10 turns ratio=0.5 -> $result (expected 10)"; ((FAIL++)); }
+
+    # --- 38e: 10 user turns, ratio=1.0 → keep all ---
+    result=$(tk_run 1.0)
+    [[ "$result" == "20" ]] \
+        && { green "turn_keep: 10 turns ratio=1.0 -> $result"; ((PASS++)); } \
+        || { red "turn_keep: 10 turns ratio=1.0 -> $result (expected 20)"; ((FAIL++)); }
+
+    # --- 38f: tool_result messages excluded from user count ---
+    cat > "$conv_file" << 'EOF'
+{"role":"user","content":"step 1"}
+{"role":"assistant","content":"response 1"}
+{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"result 1"}]}
+{"role":"assistant","content":"response 1b"}
+{"role":"user","content":"step 2"}
+{"role":"assistant","content":"response 2"}
+EOF
+    # 2 real user turns (lines 1, 5), line 3 has "content":[ so excluded
+    # ratio=0.5, target=int(2*0.5+0.5)=1, from tail: line 6=a, 5=u(1) → keep=2
+    result=$(tk_run 0.5)
+    [[ "$result" == "2" ]] \
+        && { green "turn_keep: 2 user turns (with tool_result) ratio=0.5 -> $result"; ((PASS++)); } \
+        || { red "turn_keep: 2 user turns (with tool_result) ratio=0.5 -> $result (expected 2)"; ((FAIL++)); }
+
+    # --- 38g: ratio below threshold → still keeps at least 1 turn ---
+    result=$(tk_run 0.01)
+    # target=int(2*0.01+0.5)=1 (min=1), keep=2
+    [[ "$result" == "2" ]] \
+        && { green "turn_keep: tiny ratio=0.01 -> $result"; ((PASS++)); } \
+        || { red "turn_keep: tiny ratio=0.01 -> $result (expected 2)"; ((FAIL++)); }
+
+    # --- 38h: mixed conversation with assistant-first start ---
+    cat > "$conv_file" << 'EOF'
+{"role":"assistant","content":"intro"}
+{"role":"user","content":"step 1"}
+{"role":"assistant","content":"r1"}
+{"role":"user","content":"step 2"}
+{"role":"assistant","content":"r2"}
+{"role":"user","content":"step 3"}
+{"role":"assistant","content":"r3"}
+EOF
+    # 3 user turns, ratio=0.33, target=int(3*0.33+0.5)=1
+    # from tail: line 7=a, 6=u(1) → keep=2
+    result=$(tk_run 0.33)
+    [[ "$result" == "2" ]] \
+        && { green "turn_keep: mixed start ratio=0.33 -> $result"; ((PASS++)); } \
+        || { red "turn_keep: mixed start ratio=0.33 -> $result (expected 2)"; ((FAIL++)); }
+
+    rm -rf "$tmpdir"
+}
+
+# Test 39: compact_context_window integration (plan_clear trigger)
+test_agent_compact_context_window() {
+    info "Test 39: compact_context_window integration via plan_clear"
+    local home_dir output project_dir session_dir plan_file summary_file conv_file stats_file
+    home_dir=$(mktemp -d)
+    project_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)"
+    session_dir="$project_dir/compact-test"
+    plan_file="$session_dir/plan.md"
+    summary_file="$session_dir/summary.txt"
+    conv_file="$session_dir/conversation.jsonl"
+    stats_file="$session_dir/stats.json"
+    mkdir -p "$session_dir"
+
+    # Seed a plan
+    printf 'Task: test compact integration\n' > "$plan_file"
+
+    # Seed conversation with 20 turns (40 lines) — enough for compact to trim
+    for i in $(seq 1 20); do
+        printf '{"role":"user","content":"step %d of compact test with some padding to make messages longer"}\n' "$i" >> "$conv_file"
+        printf '{"role":"assistant","content":"response to step %d with sufficient content for meaningful context"}\n' "$i" >> "$conv_file"
+    done
+    local original_lines
+    original_lines=$(wc -l < "$conv_file")
+
+    # Seed stats with high context tokens to trigger auto compact fallback
+    printf '{"current_turn_count":20,"agent_request_count":20,"compact_request_count":0,"total_input_tokens":80000,"total_output_tokens":5000,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":150000,"sub_agent_request_count":0,"last_updated":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$stats_file"
+
+    # Seed events.jsonl so agent treats this as an existing session (newSession=false)
+    printf '{"type":"session_start","session_id":"compact-test"}\n' > "${session_dir}/events.jsonl"
+
+    # Run agent — mock will match summary request via "The conversation context above needs to be compacted"
+    # Use --print to capture output, PlanClear trigger forces compact_context_window plan_clear
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session compact-test --max-context 160000 'plan done COMPACT_TEST_MARKER' 2>&1) || true
+
+    local post_lines
+    post_lines=$(wc -l < "$conv_file" 2>/dev/null || echo 0)
+    local summary_exists=false
+    [[ -s "$summary_file" ]] && summary_exists=true
+
+    # Verify: conversation was trimmed (fewer lines than original)
+    if (( post_lines < original_lines )); then
+        green "compact_context_window: conv trimmed ($original_lines -> $post_lines lines)"; ((PASS++)) || true
+    else
+        red "compact_context_window: conv NOT trimmed ($original_lines -> $post_lines lines)"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+
+    # Verify: summary file created with expected content
+    if $summary_exists && grep -q "Task focus" "$summary_file" 2>/dev/null; then
+        green "compact_context_window: summary created with expected fields"; ((PASS++)) || true
+    else
+        red "compact_context_window: summary missing or incomplete"; echo "  Summary: $(cat "$summary_file" 2>/dev/null || echo 'N/A')"; ((FAIL++)) || true
+    fi
+
+    # Verify: remaining conversation lines all have valid role field
+    local bad_lines=0 line_num=0
+    while IFS= read -r line; do
+        (( line_num++ )) || true
+        [[ -z "$line" ]] && continue
+        [[ "$line" == *"\"role\":"* ]] || { ((bad_lines++)); continue; }
+    done < "$conv_file"
+    if (( bad_lines == 0 )); then
+        green "compact_context_window: remaining conv is valid JSONL"; ((PASS++)) || true
+    else
+        red "compact_context_window: $bad_lines invalid JSONL lines after compact"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -2520,10 +2769,13 @@ test_stats_awk
 test_agent_max_context
 test_agent_stats_json
 test_compact_dp_awk
+test_compact_turn_keep_awk
+test_agent_compact_context_window
 test_agent_sub_agent
 test_agent_sub_agent_failure
 test_agent_sub_agent_child_session
 test_agent_sub_agent_fork
+test_agent_sub_agent_fork_failure
 
 echo ""
 echo "=============================="

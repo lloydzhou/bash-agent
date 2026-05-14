@@ -108,14 +108,15 @@ impl Store {
     }
 
     pub fn trim_keep_last(&self, keep_lines: usize) -> Result<()> {
-        let lines = self.lines()?;
-        if keep_lines >= lines.len() {
+        let data = fs::read_to_string(&self.path)?;
+        let raw_lines: Vec<&str> = data.lines().filter(|l| !l.trim().is_empty()).collect();
+        if keep_lines >= raw_lines.len() {
             return Ok(());
         }
-        let kept = &lines[lines.len() - keep_lines..];
+        let kept = &raw_lines[raw_lines.len() - keep_lines..];
         let mut out = String::new();
-        for v in kept {
-            out.push_str(&serde_json::to_string(v)?);
+        for line in kept {
+            out.push_str(line);
             out.push('\n');
         }
         fs::write(&self.path, out)?;
