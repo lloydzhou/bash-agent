@@ -1305,7 +1305,7 @@ agent_loop() {
         _reason="${REPLY_MESSAGE[1]-}"
         [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && active_sub_count=$(( active_sub_count + 1 ))
         _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
-        util_write_msg "${REPLY_MESSAGE[@]}" | cat >&7 2>/dev/null || true
+        ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&7 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true
             break
