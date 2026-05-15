@@ -377,7 +377,6 @@ use crate::config::Config;
 
         fn todo_write(&self, todos: Vec<TodoArg>) -> Result<String> {
             let mut lines = Vec::new();
-            let mut in_progress = 0;
             for t in todos {
                 let content = t.content.as_str();
                 let status = t.status.as_str();
@@ -387,15 +386,11 @@ use crate::config::Config;
                 match status {
                     "pending" => lines.push(format!("- [ ] {content}")),
                     "in_progress" => {
-                        in_progress += 1;
                         lines.push(format!("- [ ] {content}"));
                     }
                     "completed" => lines.push(format!("- [x] {content}")),
                     _ => bail!("Error: invalid todo status: {status}"),
                 }
-            }
-            if in_progress > 1 {
-                bail!("Error: todo_write allows at most one in_progress item");
             }
             Ok(lines.join("\n"))
         }

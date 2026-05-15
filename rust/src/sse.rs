@@ -51,7 +51,6 @@ pub mod toolcall {
             .ok_or_else(|| anyhow!("invalid TodoWrite input: missing todos"))?;
         let mut lines = Vec::new();
         let mut completed = 0;
-        let mut in_progress = 0;
         let total = todos.len();
         for t in todos {
             let content = t.get("content").and_then(Value::as_str).unwrap_or("");
@@ -62,7 +61,6 @@ pub mod toolcall {
             match status {
                 "pending" => lines.push(format!("- [ ] {content}")),
                 "in_progress" => {
-                    in_progress += 1;
                     lines.push(format!("- [ ] {content}"));
                 }
                 "completed" => {
@@ -71,9 +69,6 @@ pub mod toolcall {
                 }
                 _ => bail!("Error: invalid todo status: {status}"),
             }
-        }
-        if in_progress > 1 {
-            bail!("Error: todo_write allows at most one in_progress item");
         }
         Ok((lines.join("\n"), format!("{completed}/{total}")))
     }

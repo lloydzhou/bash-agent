@@ -9,7 +9,6 @@ function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, o
     item = ""
     todo_completed_count = 0
     todo_total_count = 0
-    todo_in_progress_count = 0
 
     for (i = 2; i <= length(arr) - 1; i++) {
         c = substr(arr, i, 1)
@@ -53,7 +52,6 @@ function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, o
                 }
                 todo_total_count++
                 if (status == "completed") todo_completed_count++
-                if (status == "in_progress") todo_in_progress_count++
                 out = out "- [" ((status == "completed") ? "x" : " ") "] " content "\n"
                 item = ""
             }
@@ -61,11 +59,6 @@ function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, o
         }
 
         if (depth > 0) item = item c
-    }
-
-    if (todo_in_progress_count > 1) {
-        print "Error: todo_write allows at most one in_progress item" > "/dev/stderr"
-        exit 1
     }
 
     sub(/\n$/, "", out)
