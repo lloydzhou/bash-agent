@@ -1024,9 +1024,6 @@ display_message() {
                 DISPLAY_LAST_CHAR=$'\n'
             else
                 display_ensure_newline
-                if [[ "$INTERACTIVE" == true ]]; then
-                    printf '\033[32m>\033[0m '
-                fi
             fi
             ;;
         CONTEXT_UPDATE)
@@ -1172,6 +1169,9 @@ agent_run_loop() {
     local turn_kind="${2:-user_input}"
     [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
     agent_loop "$1" "$turn_kind"
+    if [[ "$INTERACTIVE" == true ]]; then
+        printf '\033[32m>\033[0m '
+    fi
 }
 
 # 调用 agent_loop 并处理交互式终端提示符
@@ -1292,8 +1292,6 @@ agent_loop_stream() {
 
 agent_loop() {
     local user_input="$1" turn_kind="${2:-user_input}" _se="" _type="" _reason="" had_error=false
-    DISPLAY_LAST_CHAR=$'\n'
-    PREV_WAS_THINKING=false
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     store_conv_add_user "$user_input"
