@@ -48,28 +48,37 @@ util_write_msg() {
 
 util_read_msg() {
     # Reads RESP-like CRLF format: *N\r\n$len0\r\ndata0\r\n...
+    local _old_lc_all="${LC_ALL:-}"
+    LC_ALL=C
     REPLY_MESSAGE=()
-    local nfields i _hdr _len _field
+    local nfields i _hdr _len _field _want _remain _chunk
 
-    IFS= LC_ALL=C read -r _hdr || [[ -n "$_hdr" ]]
+    IFS= read -r _hdr || [[ -n "$_hdr" ]]
     _hdr="${_hdr%$'\r'}"
-    [[ -n "$_hdr" && "$_hdr" == \** ]] || return 1
+    [[ -n "$_hdr" && "$_hdr" == \** ]] || { LC_ALL="${_old_lc_all}"; return 1; }
     nfields="${_hdr:1}"
 
     for ((i = 0; i < nfields; i++)); do
-        IFS= LC_ALL=C read -r _hdr || [[ -n "$_hdr" ]]
+        IFS= read -r _hdr || [[ -n "$_hdr" ]]
         _hdr="${_hdr%$'\r'}"
-        [[ -n "$_hdr" && "$_hdr" == \$* ]] || return 1
+        [[ -n "$_hdr" && "$_hdr" == \$* ]] || { LC_ALL="${_old_lc_all}"; return 1; }
         _len="${_hdr:1}"
         _field=""
         if (( _len > 0 )); then
-            IFS= LC_ALL=C read -r -d '' -n "$((_len + 2))" _field 2>/dev/null || true
+            _want=$((_len + 2))
+            while (( ${#_field} < _want )); do
+                _remain=$((_want - ${#_field}))
+                IFS= read -r -d '' -n "$_remain" _chunk 2>/dev/null || true
+                _field+="$_chunk"
+                [[ -z "$_chunk" ]] && break
+            done
             _field="${_field%$'\r\n'}"
         else
-            IFS= LC_ALL=C read -r -d '' -n 2 2>/dev/null || true
+            IFS= read -r -n 2 _crlf 2>/dev/null || true
         fi
         REPLY_MESSAGE+=("$_field")
     done
+    LC_ALL="${_old_lc_all}"
     return 0
 }
 
