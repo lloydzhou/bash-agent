@@ -138,6 +138,11 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 	case EventStop:
 		d.prevThinking = false
 		d.EnsureNewline()
+		// 与 bash 版 display_message STOP 分支对齐：interrupted 时打印提示
+		if len(ev.Fields) > 1 && ev.Fields[1] == "interrupted" {
+			fmt.Printf("\033[36mInterrupted.\033[0m\n")
+			d.lastChar = '\n'
+		}
 
 	case EventSubAgentResult:
 		// Fields: ["SUB_AGENT_RESULT", sessionID, status, in, out, thinking, text]

@@ -584,6 +584,8 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 				}
 				stopReason = "error"
 				a.emitJSON(map[string]interface{}{"type": "error", "message": loopErr})
+				// 与 bash 版对齐：ERROR 立即 break 出事件循环
+				break
 			default:
 				a.display.ShowEvent(ev)
 			}
@@ -599,7 +601,6 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		if interrupted {
 			a.display.ShowEvent(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
 			_ = a.store.AppendEvent(`{"type":"stop","reason":"interrupted"}`)
-			fmt.Fprintf(os.Stdout, "\033[36mInterrupted.\033[0m\n")
 			return nil
 		}
 
