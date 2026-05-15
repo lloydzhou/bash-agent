@@ -886,8 +886,10 @@ tool_sub_agent() {
         util_load_tool_defs
         local _done=false _status="failed"
         trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"; rm -f "$INPUT_FIFO"' EXIT
-        # Silence the child shell completely so terminal title updates do not leak into the parent tool_result.
+        # Silence the child shell completely; close all inherited FDs
         exec </dev/null >/dev/null 2>&1
+        exec 3<&- 2>/dev/null; exec 4<&- 2>/dev/null; exec 5<&- 2>/dev/null
+        exec 6<&- 2>/dev/null; exec 7>&- 2>/dev/null; exec 8<&- 2>/dev/null; exec 9>&- 2>/dev/null
         agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"
         _done=true
@@ -917,6 +919,9 @@ display_human_text() {
 
 display_sub_agent_result() {
     local session_id="$1" status="$2" _in="$3" _out="$4" _thinking="$5" _text="$6"
+    if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+        env printf '\r\033[K'
+    fi
     display_ensure_newline
     if [[ "$status" == "ok" ]]; then
         printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
@@ -939,6 +944,10 @@ display_message() {
     fi
     case "$_type" in
         TEXT)
+            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+                env printf '\r\033[K'
+                DISPLAY_LAST_CHAR=''
+            fi
             # Insert newline when transitioning from thinking to text
             if [[ "$PREV_WAS_THINKING" == true && "$DISPLAY_LAST_CHAR" != $'\n' ]]; then
                 printf '\n'
@@ -948,6 +957,10 @@ display_message() {
             [[ -n "${REPLY_MESSAGE[1]}" ]] && display_human_text "${REPLY_MESSAGE[1]}"
             ;;
         THINKING)
+            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+                env printf '\r\033[K'
+                DISPLAY_LAST_CHAR=''
+            fi
             [[ -n "${REPLY_MESSAGE[1]}" ]] && printf '\033[90m%s\033[0m' "${REPLY_MESSAGE[1]}"
             if [[ "${REPLY_MESSAGE[1]}" == *$'\n' ]]; then
                 DISPLAY_LAST_CHAR=$'\n'
@@ -957,6 +970,10 @@ display_message() {
             PREV_WAS_THINKING=true
             ;;
         TOOL_CALL)
+            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+                env printf '\r\033[K'
+                DISPLAY_LAST_CHAR=''
+            fi
             _n=${#REPLY_MESSAGE[@]} _tc_kv=() _tc_summary=""
             for (( i = 4; i + 1 < _n; i += 2 )); do
                 _tc_kv+=("${REPLY_MESSAGE[i]}" "${REPLY_MESSAGE[i+1]}")
