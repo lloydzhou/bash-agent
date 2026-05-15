@@ -1024,6 +1024,9 @@ display_message() {
                 DISPLAY_LAST_CHAR=$'\n'
             else
                 display_ensure_newline
+                if [[ "$INTERACTIVE" == true ]]; then
+                    printf '\033[32m>\033[0m '
+                fi
             fi
             ;;
         CONTEXT_UPDATE)
@@ -1169,12 +1172,6 @@ agent_run_loop() {
     local turn_kind="${2:-user_input}"
     [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
     agent_loop "$1" "$turn_kind"
-    if [[ "$INTERACTIVE" == true ]]; then
-        # Only print newline if the last output didn't end with one
-        [[ "$DISPLAY_LAST_CHAR" != $'\n' ]] && printf '\n'
-        # Print prompt
-        printf '\033[32m>\033[0m '
-    fi
 }
 
 # 调用 agent_loop 并处理交互式终端提示符
@@ -1282,7 +1279,7 @@ agent_loop_stream() {
                 store_stats_update current_context_tokens=${_ctx_tokens}
             fi
             # tool_use/tool_calls → loop continues; anything else → break
-            [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
+            [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || { util_write_msg "STOP" "$stop"; break; }
         else
             util_write_msg "STOP" "interrupted"
             break
