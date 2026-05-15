@@ -1,8 +1,8 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-rust2 test test-bash test-go test-rust test-rust2 test-go-e2e test-rust-e2e test-rust2-e2e clean
+.PHONY: build build-bash build-go build-rust test test-bash test-go test-rust test-go-e2e test-rust-e2e clean
 
-build: build-bash build-go build-rust build-rust2
+build: build-bash build-go build-rust
 
 build-bash:
 	bash scripts/build.sh dist/agent.sh
@@ -24,7 +24,7 @@ build-rust2:
 	cp rust2/target/release/rust2agent dist/rust2agent
 	strip -x dist/rust2agent
 
-test: test-bash test-go test-rust test-rust2
+test: test-bash test-go test-rust
 
 test-bash:
 	bash tests/test.sh
@@ -41,14 +41,8 @@ test-go-e2e: build-go
 test-rust:
 	cd rust && cargo check
 
-test-rust2:
-	cd rust2 && cargo check
-
 test-rust-e2e: build-rust
 	AGENT=./dist/rustagent bash tests/test.sh
 
-test-rust2-e2e: build-rust2
-	AGENT=./dist/rust2agent bash tests/test.sh
-
 clean:
-	rm -rf go/dist rust/target rust2/target
+	rm -rf go/dist rust/target

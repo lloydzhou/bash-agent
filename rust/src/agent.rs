@@ -1075,6 +1075,7 @@ impl Agent {
                 cache_creation_tokens,
             );
         })?;
+        self.update_term_title();
 
         // 3. 记录 sub_agent_result 事件，供 replay / stream-json 复现子 agent 回显
         let _ = self.append_event(json!({
@@ -1683,6 +1684,7 @@ impl Agent {
                     Value::String(chrono_now_rfc3339()),
                 );
             })?;
+            self.update_term_title();
         }
 
         self.emit_context_update(trigger)?;
@@ -1758,6 +1760,7 @@ impl Agent {
                             usage.cache_creation_input_tokens as usize,
                         );
                     })?;
+                    self.update_term_title();
                 }
                 Event::Error(ErrorEvent { message }) => { last_error = message.clone(); },
                 Event::Stop(StopEvent { reason }) => { stop_reason = reason.clone(); },
@@ -1817,6 +1820,7 @@ impl Agent {
                 Value::String(chrono_now_rfc3339()),
             );
         });
+        self.update_term_title();
     }
 
     /// update_stats_from_usage updates stats.json with last turn's usage (matches bash stats_inc+stats_set).
@@ -1849,6 +1853,7 @@ impl Agent {
                 Value::String(chrono_now_rfc3339()),
             );
         });
+        self.update_term_title();
     }
 
     fn stat_usize(stats: &serde_json::Map<String, Value>, key: &str) -> usize {
