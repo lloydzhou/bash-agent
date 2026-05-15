@@ -28,6 +28,7 @@
 - **compact 层合并到 agent 层**：7 层架构简化为 6 层（`1365b80`）
 - **session 存储隔离**：7 类前缀重命名 + `TOOL_CALL` 分支重构（`4e11143`）
 - **build.sh AWK_DIR 替换规则更新**：适配 `llm_stream_curl` FD 6 模式，修复 `dist/agent.sh` 中 `AWK_DIR: unbound variable` 错误（`14c9e45`）
+- **文档同步**：`README.md` 移除已废弃的 `THINKING_BUDGET` 环境变量；`docs/ARCHITECTURE.md` 更新函数名和代码路径；`docs/sessions.md` 更新 replay 描述（`7354543`）
 
 ### Removed
 
