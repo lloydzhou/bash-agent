@@ -66,7 +66,7 @@ util_read_msg() {
             IFS= LC_ALL=C read -r -d '' -n "$((_len + 2))" _field 2>/dev/null || true
             _field="${_field%$'\r\n'}"
         else
-            IFS= LC_ALL=C read -r -d '' -n 2 _crlf 2>/dev/null || true
+            IFS= LC_ALL=C read -r -d '' -n 2 2>/dev/null || true
         fi
         REPLY_MESSAGE+=("$_field")
     done
