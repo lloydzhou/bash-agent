@@ -29,7 +29,6 @@ declare -a SKILL_NAMES=()
 INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
-ACTIVE_SUB_COUNT=0
 
 util_awk_run() { LC_ALL=C LANG=C awk "$@"; }
 
@@ -1039,6 +1038,13 @@ display_term_title() {
     store_stats_format_title "$MODEL"
 }
 
+# 子进程渲染：从管道读取 RESP 消息，渲染到 stdout（终端）
+display_stream() {
+    while util_read_msg; do
+        display_message
+    done
+}
+
 agent_compact_context() {
     local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped dropped_messages summary_response
 
@@ -1144,7 +1150,7 @@ agent_handle_sub_result() {
     store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$session_id")\",\"status\":\"$status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
     # 记录 sub_agent_end 事件
     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$status\"}"
-    ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT - 1 ))
+    active_sub_count=$(( active_sub_count - 1 ))
     [[ "$silent" == true ]] && return 0
     # 展示结果摘要
     if util_is_stream_json; then
@@ -1175,6 +1181,7 @@ agent_run_loop() {
 
 # 统一清理所有管道 FD（按源→宿的级联顺序关闭）
 cleanup_all_pipes() {
+    exec 7>&- 2>/dev/null   # display_stream 管道
     exec 6<&- 2>/dev/null   # curl 源 (llm_stream_curl)
     exec 5<&- 2>/dev/null   # llm_call 管道 (agent_loop_stream)
     exec 4<&- 2>/dev/null   # agent_loop_stream 管道 (agent_loop)
@@ -1185,6 +1192,8 @@ cleanup_all_pipes() {
 agent_main_loop() {
     until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
     exec 9> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
+    exec 7> >(display_stream)
+    local display_pid=$! active_sub_count=0
     while util_read_msg <&3; do
         case "${REPLY_MESSAGE[0]}" in
             SESSION_END)
@@ -1202,8 +1211,10 @@ agent_main_loop() {
                 fi
                 ;;
         esac
-        [[ "$INTERACTIVE" != true ]] && (( ACTIVE_SUB_COUNT == 0 )) && break
+        [[ "$INTERACTIVE" != true ]] && (( active_sub_count == 0 )) && break
     done
+    exec 7>&-
+    wait "$display_pid" 2>/dev/null || true
     cleanup_all_pipes
     rm -f "$INPUT_FIFO"
 }
@@ -1297,9 +1308,9 @@ agent_loop() {
     while util_read_msg <&4; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
-        [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT + 1 ))
+        [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && active_sub_count=$(( active_sub_count + 1 ))
         _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
-        display_message
+        util_write_msg "${REPLY_MESSAGE[@]}" | cat >&7 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true
             break
