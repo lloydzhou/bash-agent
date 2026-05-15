@@ -63,10 +63,10 @@ util_read_msg() {
         _len="${_hdr:1}"
         _field=""
         if (( _len > 0 )); then
-            _field=$(dd bs=1 count="$((_len + 2))" 2>/dev/null)
-            _field="${_field%$'\r'}"
+            IFS= LC_ALL=C read -r -d '' -n "$((_len + 2))" _field 2>/dev/null || true
+            _field="${_field%$'\r\n'}"
         else
-            IFS= LC_ALL=C read -r -n 2 _crlf 2>/dev/null || true
+            IFS= LC_ALL=C read -r -d '' -n 2 _crlf 2>/dev/null || true
         fi
         REPLY_MESSAGE+=("$_field")
     done
@@ -908,12 +908,6 @@ display_sub_agent_result() {
     # Clear the prompt at the start of line in interactive mode
     [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
     display_ensure_newline
-    # Decode RESP wire format escapes (from event_replay.awk)
-    # IMPORTANT: decode \\ before \n to avoid double-decoding
-    _thinking="${_thinking//\\\\/\\}"
-    _thinking="${_thinking//\\n/$'\n'}"
-    _text="${_text//\\\\/\\}"
-    _text="${_text//\\n/$'\n'}"
     if [[ "$status" == "ok" ]]; then
         printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
     else
