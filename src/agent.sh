@@ -396,8 +396,7 @@ store_event_append() {
 }
 
 store_conv_add_user() {
-    local content
-    content=$(util_json_escape "$1")
+    local content; content=$(util_json_escape "$1")
     printf '{"role":"user","content":"%s"}\n' "$content" >> "$CONV_FILE"
 }
 
@@ -1034,16 +1033,10 @@ display_message() {
     esac
 }
 
-display_term_title() {
-    store_stats_format_title "$MODEL"
-}
+display_term_title() { store_stats_format_title "$MODEL"; }
 
 # 子进程渲染：从管道读取 RESP 消息，渲染到 stdout（终端）
-display_stream() {
-    while util_read_msg; do
-        display_message
-    done
-}
+display_stream() { while util_read_msg; do display_message; done; }
 
 agent_compact_context() {
     local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped dropped_messages summary_response
@@ -1483,10 +1476,10 @@ interactive_mode() {
     touch "$history_file" 2>/dev/null || true
     history -r "$history_file" 2>/dev/null || true
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
-    # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
+    # Replay recent 10 turns for resumed sessions (turn-aware replay)
     if store_event_recent_turn_lines 10 \
         | util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk" \
-        | while util_read_msg; do display_message; done
+        | ( display_stream )
     then
         printf '\n'
         DISPLAY_LAST_CHAR=$'\n'
