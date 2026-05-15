@@ -450,14 +450,9 @@ store_stats_get() {
 
 # — store_conv: conversation 数据操作 API —
 
-store_conv_line_count() {
-    wc -l < "$CONV_FILE" 2>/dev/null || echo 0
-}
+store_conv_line_count() { wc -l < "$CONV_FILE" 2>/dev/null || echo 0; }
 
-store_conv_head_to() {
-    # $1=lines, $2=outfile
-    head -n "$1" "$CONV_FILE" > "$2"
-}
+store_conv_head_to() { head -n "$1" "$CONV_FILE" > "$2"; } # $1=lines, $2=outfile
 
 store_conv_trim_tail() {
     # $1=lines to keep from tail
@@ -485,9 +480,7 @@ store_conv_turn_keep() {
 }
 
 # — store_stats: stats 格式化 API —
-store_stats_format_title() {
-    util_awk_run -v model="$1" -f "$AWK_DIR/term_title.awk" "$STATS_FILE"
-}
+store_stats_format_title() { util_awk_run -v model="$1" -f "$AWK_DIR/term_title.awk" "$STATS_FILE"; }
 
 # — store_conv: sub-agent 结果发送 —
 store_sub_send_result() {
@@ -499,31 +492,15 @@ store_sub_send_result() {
 }
 
 # — store_plan: plan 文件操作 —
-store_plan_confirm() {
-    if [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; then
-        mv "$PLAN_DRAFT_FILE" "$PLAN_FILE"
-        : > "$PLAN_DRAFT_FILE"
-        return 0
-    else
-        return 1
-    fi
-}
+store_plan_confirm() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && { mv "$PLAN_DRAFT_FILE" "$PLAN_FILE"; : > "$PLAN_DRAFT_FILE"; return 0; }; return 1; }
 
-store_plan_clear() {
-    [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"
-}
+store_plan_clear() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"; }
 
-store_plan_read() {
-    [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '%s' "$(<"$PLAN_FILE")"
-}
+store_plan_read() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '%s' "$(<"$PLAN_FILE")"; }
 
-store_plan_draft_read() {
-    [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && printf '%s' "$(<"$PLAN_DRAFT_FILE")"
-}
+store_plan_draft_read() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && printf '%s' "$(<"$PLAN_DRAFT_FILE")"; }
 
-store_plan_draft_has() {
-    [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]
-}
+store_plan_draft_has() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; }
 
 store_summary_get() {
     [[ -n "$CONTEXT_SUMMARY_FILE" && -s "$CONTEXT_SUMMARY_FILE" ]] && printf '%s' "$(<"$CONTEXT_SUMMARY_FILE")"
