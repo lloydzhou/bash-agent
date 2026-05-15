@@ -5,31 +5,35 @@
 # outputs RESP-formatted AGENT_RESULT message to stdout.
 #
 # RESP format: *N\r\n$len\r\ndata\r\n...
-# Fields: AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc>
+# Fields: AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc> <reqs>
 
 BEGIN {
     thinking = ""
     text = ""
 
-    # 1. Read conversation.jsonl — find last assistant line
-    while ((getline line < conv_file) > 0) {
-        if (line ~ /"role":"assistant"/) last_assistant = line
-    }
-    close(conv_file)
+    # 1. Read conversation.jsonl — only for successful runs
+    #    When status != "ok" (e.g. fork child failed before producing output),
+    #    skip reading to avoid leaking stale assistant content inherited from parent.
+    if (status == "ok") {
+        while ((getline line < conv_file) > 0) {
+            if (line ~ /"role":"assistant"/) last_assistant = line
+        }
+        close(conv_file)
 
-    if (last_assistant != "") {
-        content_raw = extract_value(last_assistant, "content")
-        if (content_raw != "") {
-            content_raw = json_trim(content_raw)
-            n = split_top_level_objects(content_raw, blocks)
-            for (i = 1; i <= n; i++) {
-                t = extract_str(blocks[i], "type")
-                if (t == "thinking") {
-                    txt = extract_str(blocks[i], "thinking")
-                    if (txt != "") thinking = txt
-                } else if (t == "text") {
-                    txt = extract_str(blocks[i], "text")
-                    if (txt != "") text = txt
+        if (last_assistant != "") {
+            content_raw = extract_value(last_assistant, "content")
+            if (content_raw != "") {
+                content_raw = json_trim(content_raw)
+                n = split_top_level_objects(content_raw, blocks)
+                for (i = 1; i <= n; i++) {
+                    t = extract_str(blocks[i], "type")
+                    if (t == "thinking") {
+                        txt = extract_str(blocks[i], "thinking")
+                        if (txt != "") thinking = txt
+                    } else if (t == "text") {
+                        txt = extract_str(blocks[i], "text")
+                        if (txt != "") text = txt
+                    }
                 }
             }
         }

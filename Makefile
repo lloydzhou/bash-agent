@@ -19,6 +19,11 @@ build-rust:
 	cp rust/target/release/rustagent dist/rustagent
 	strip -x dist/rustagent
 
+build-rust2:
+	cd rust2 && cargo build --release -j 10
+	cp rust2/target/release/rust2agent dist/rust2agent
+	strip -x dist/rust2agent
+
 test: test-bash test-go test-rust
 
 test-bash:
@@ -40,4 +45,4 @@ test-rust-e2e: build-rust
 	AGENT=./dist/rustagent bash tests/test.sh
 
 clean:
-	rm -rf go/dist
+	rm -rf go/dist rust/target

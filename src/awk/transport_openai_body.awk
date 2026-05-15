@@ -11,6 +11,7 @@ END {
     max_tokens = extract_num(line, "max_tokens")
     system_val = extract_value(line, "system")
     thinking_val = extract_value(line, "thinking")
+    output_config_val = extract_value(line, "output_config")
     messages_raw = extract_value(line, "messages")
     tools_raw  = extract_value(line, "tools")
 
@@ -36,9 +37,22 @@ END {
     # 4. Build output JSON
     result = "{\"model\":\"" model "\",\"max_tokens\":" max_tokens ",\"stream\":true"
 
-    # thinking -> reasoning_effort
+    # thinking adaptive/enabled -> OpenAI enabled + reasoning_effort
+    thinking_type = ""
     if (thinking_val != "" && thinking_val != "null" && thinking_val != "{}") {
-        result = result ",\"reasoning_effort\":\"high\""
+        thinking_type = extract_str(thinking_val, "type")
+    }
+    if (thinking_type == "adaptive" || thinking_type == "enabled") {
+        result = result ",\"thinking\":{\"type\":\"enabled\"}"
+        effort_val = ""
+        if (output_config_val != "" && output_config_val != "null" && output_config_val != "{}") {
+            effort_val = extract_str(output_config_val, "effort")
+        }
+        if (effort_val != "" && effort_val != "null") {
+            result = result ",\"reasoning_effort\":\"" effort_val "\""
+        } else {
+            result = result ",\"reasoning_effort\":\"high\""
+        }
     }
 
     if (openai_tools != "" && openai_tools != "[]") {

@@ -79,6 +79,27 @@ BEGIN {
         next
     }
 
+    # sub_agent_result
+    if (_type == "sub_agent_result") {
+        _flush_accumulated()
+        _sid = extract_str($0, "session_id")
+        _status = extract_str($0, "status")
+        _in = extract_value($0, "input_tokens")
+        _out = extract_value($0, "output_tokens")
+        _thinking = extract_str($0, "thinking")
+        _text = extract_str($0, "text")
+        # Escape backslashes and newlines for RESP wire format
+        emit1("SUB_AGENT_RESULT")
+        emit(_sid)
+        emit(_status)
+        emit(_in)
+        emit(_out)
+        emit(_thinking)
+        emit(_text)
+        emit_flush()
+        next
+    }
+
     # stop
     if (_type == "stop") {
         _flush_accumulated()

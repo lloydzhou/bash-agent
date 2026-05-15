@@ -1,5 +1,4 @@
 BEGIN {
-    if (max_bytes == "") max_bytes = 1048576
     if (json_input == "") {
         if ((getline json_input) < 0) json_input = ""
     }
@@ -24,11 +23,6 @@ BEGIN {
     close(path)
     if (rc < 0) {
         print "Error: file not found: " path > "/dev/stderr"
-        exit 2
-    }
-
-    if (length(data) > max_bytes) {
-        print "Error: file too large for edit_file (" length(data) " bytes > " max_bytes " bytes)" > "/dev/stderr"
         exit 2
     }
 
