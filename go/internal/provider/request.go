@@ -8,17 +8,19 @@ import (
 
 // BuildClaudeRequest builds a Claude Messages API request body.
 // Always produces Claude-format JSON; the transport layer handles provider conversion.
-func BuildClaudeRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int, thinkingBudget int) ([]byte, error) {
+func BuildClaudeRequest(cfg config.Config, messages []json.RawMessage, tools []byte, systemPrompt string, maxTokens int, thinking string, effort string) ([]byte, error) {
 	body := map[string]any{
 		"model":      cfg.Model,
 		"max_tokens": maxTokens,
 		"stream":     true,
 		"messages":   rawArray(messages),
 	}
-	if thinkingBudget > 0 {
+	if thinking != "disabled" {
 		body["thinking"] = map[string]any{
-			"type":          "enabled",
-			"budget_tokens": thinkingBudget,
+			"type": thinking,
+		}
+		body["output_config"] = map[string]any{
+			"effort": effort,
 		}
 	}
 	if systemPrompt != "" {

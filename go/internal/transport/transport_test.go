@@ -22,7 +22,7 @@ func TestOpenAITransportConvertsBody(t *testing.T) {
 	tools := []byte(`[{"name":"Read","description":"Read a file.","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]`)
 
 	// Step 1: Build Claude-format body
-	claudeBody, err := provider.BuildClaudeRequest(cfg, messages, tools, "sys", 123, 0)
+	claudeBody, err := provider.BuildClaudeRequest(cfg, messages, tools, "sys", 123, "disabled", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1180,7 +1180,8 @@ impl Runtime {
             &self.tools_json,
             &system_prompt,
             self.cfg.max_tokens,
-            self.cfg.thinking_budget,
+            &self.cfg.thinking,
+            &self.cfg.effort,
         )?;
         let body = self.transport.convert_body(&claude_body)?;
         if self.cfg.verbose {
@@ -1334,7 +1335,8 @@ impl Runtime {
             &self.tools_json,
             &system_prompt,
             self.cfg.max_tokens,
-            self.cfg.thinking_budget,
+            "disabled",
+            "",
         )?;
         let body = self.transport.convert_body(&claude_body)?;
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
@@ -2112,6 +2114,8 @@ fn print_usage() {
     println!("  --session [NAME]        Use named session");
     println!("  --continue              Continue most recent session");
     println!("  --list-sessions         List saved sessions");
+    println!("  --thinking MODE         Thinking mode: adaptive | enabled | disabled (default: adaptive)");
+    println!("  --effort LEVEL          Reasoning effort: low | medium | high | xhigh | max (default: high)");
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
     println!("  -h, --help              Show this help");

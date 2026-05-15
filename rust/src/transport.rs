@@ -93,8 +93,17 @@ impl Transport for OpenAITransport {
 
         // thinking → reasoning_effort
         if let Some(thinking) = &thinking_val {
-            if !thinking.is_null() && thinking.as_object().map_or(false, |o| !o.is_empty()) {
-                body["reasoning_effort"] = Value::String("high".to_string());
+            if !thinking.is_null() {
+                let thinking_type = thinking.get("type").and_then(Value::as_str).unwrap_or("");
+                if thinking_type == "adaptive" || thinking_type == "enabled" {
+                    body["thinking"] = json!({"type": "enabled"});
+                    let effort_val = raw
+                        .get("output_config")
+                        .and_then(|oc| oc.get("effort"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("high");
+                    body["reasoning_effort"] = Value::String(effort_val.to_string());
+                }
             }
         }
 

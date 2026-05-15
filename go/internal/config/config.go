@@ -46,7 +46,8 @@ type Config struct {
 	DPBeta         float64
 	DPMinKeepRatio float64
 	Skills             []string
-	ThinkingBudget     int
+	Thinking string
+	Effort   string
 
 	Interactive     bool
 	SessionMode     bool
@@ -78,7 +79,8 @@ func Default() Config {
 		DPR:            0.8,
 		DPBeta:         0.03,
 		DPMinKeepRatio: 0.12,
-		ThinkingBudget:     2048,
+		Thinking: "adaptive",
+		Effort:   "high",
 	}
 }
 
@@ -191,6 +193,20 @@ func ParseArgs(args []string) (Config, error) {
 		case "--list-sessions":
 			cfg.ListSessions = true
 			i++
+		case "--thinking":
+			val, next, err := requireValue(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			cfg.Thinking = val
+			i = next
+		case "--effort":
+			val, next, err := requireValue(args, i)
+			if err != nil {
+				return cfg, err
+			}
+			cfg.Effort = val
+			i = next
 		case "-v", "--verbose":
 			cfg.Verbose = true
 			i++
@@ -225,10 +241,11 @@ func ParseArgs(args []string) (Config, error) {
 			cfg.FileWriteMaxBytes = n
 		}
 	}
-	if v := os.Getenv("THINKING_BUDGET"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			cfg.ThinkingBudget = n
-		}
+	if v := os.Getenv("THINKING"); v != "" {
+		cfg.Thinking = v
+	}
+	if v := os.Getenv("EFFORT"); v != "" {
+		cfg.Effort = v
 	}
 	if v := os.Getenv("MAX_TURNS_BEFORE_COMPACT"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {

@@ -36,7 +36,8 @@ pub struct Config {
     pub dp_beta: f64,
     pub dp_min_keep_ratio: f64,
     pub skills: Vec<String>,
-    pub thinking_budget: i32,
+    pub thinking: String,
+    pub effort: String,
     pub interactive: bool,
     pub session_mode: bool,
     pub session_id: String,
@@ -74,7 +75,8 @@ impl Default for Config {
             dp_beta: 0.5,
             dp_min_keep_ratio: 0.12,
             skills: Vec::new(),
-            thinking_budget: 2048,
+            thinking: "adaptive".to_string(),
+            effort: "high".to_string(),
             interactive: false,
             session_mode: false,
             session_id: String::new(),
@@ -142,6 +144,14 @@ pub fn parse_args(args: Vec<String>) -> Result<Config> {
                 cfg.output_format = OutputFormat::StreamJson;
                 i += 1;
             }
+            "--thinking" => {
+                cfg.thinking = require_value(&args, i)?;
+                i += 2;
+            }
+            "--effort" => {
+                cfg.effort = require_value(&args, i)?;
+                i += 2;
+            }
             "--session" => {
                 cfg.session_mode = true;
                 if i + 1 < args.len() && !args[i + 1].starts_with('-') {
@@ -203,9 +213,14 @@ pub fn apply_provider_defaults(cfg: &mut Config) -> Result<()> {
             cfg.file_write_max_bytes = n;
         }
     }
-    if let Ok(v) = std::env::var("THINKING_BUDGET") {
-        if let Ok(n) = v.parse::<i32>() {
-            cfg.thinking_budget = n;
+    if let Ok(v) = std::env::var("THINKING") {
+        if !v.is_empty() {
+            cfg.thinking = v;
+        }
+    }
+    if let Ok(v) = std::env::var("EFFORT") {
+        if !v.is_empty() {
+            cfg.effort = v;
         }
     }
     if let Ok(v) = std::env::var("MAX_TURNS_BEFORE_COMPACT") {
