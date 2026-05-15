@@ -1,14 +1,24 @@
-use crate::assets::TOOLS_JSON;
-use crate::config::{Config, OutputFormat, api_url, apply_provider_defaults, parse_args};
+use crate::TOOLS_JSON;
+use crate::config::{Config, OutputFormat, api_url};
 use crate::conversation::{Store, ToolResult, build_tool_call_summary, first_line};
-use crate::httpclient::{HTTPError, StreamClient};
 use crate::prompt;
 use crate::protocol::{
     ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent,
 };
-use crate::provider;
 use crate::session::{self, Paths};
+use crate::store;
 use crate::tools;
+use crate::util::{
+    build_claude_request,
+    chrono_like_now,
+    chrono_now_rfc3339,
+    normalize_display_text,
+    parse_input_fields,
+    stats_get_f64,
+    touch,
+    truncate_for_replay,
+    truncate_str,
+};
 use anyhow::{Result, anyhow, bail};
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
@@ -16,40 +26,425 @@ use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 type TransportRef = Arc<dyn crate::transport::Transport>;
 
-pub fn run(args: Vec<String>) -> Result<()> {
-    let mut cfg = match parse_args(args) {
-        Ok(v) => v,
-        Err(e) if e.to_string() == "__HELP__" => {
-            print_usage();
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
+mod httpclient {
+    use anyhow::{Result, anyhow};
+    use reqwest::blocking::{Client, Response};
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    use std::collections::VecDeque;
+    use std::fmt;
+    use std::io::{Read, Result as IoResult};
+    use std::sync::mpsc;
+    use std::sync::mpsc::{Receiver, RecvTimeoutError};
+    use std::thread;
+    use std::thread::sleep;
+    use std::time::{Duration, Instant};
 
-    let cwd = std::env::current_dir()?;
-    let home = PathBuf::from(
-        std::env::var("BASH_AGENT_HOME")
-            .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_else(|_| String::from(".")),
-    );
-
-    if cfg.list_sessions {
-        list_sessions(&home, &cwd)?;
-        return Ok(());
+    #[derive(Debug)]
+    pub struct HTTPError {
+        pub status_code: u16,
+        pub body: String,
     }
 
-    apply_provider_defaults(&mut cfg)?;
+    impl fmt::Display for HTTPError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if self.status_code > 0 {
+                write!(f, "HTTP {}: {}", self.status_code, self.body)
+            } else {
+                write!(f, "{}", self.body)
+            }
+        }
+    }
 
-    let mut rt = Runtime::new(cfg, cwd, home)?;
+    impl std::error::Error for HTTPError {}
+
+    impl HTTPError {
+        pub fn format_detailed(&self) -> String {
+            if self.status_code > 0 {
+                format!(
+                    "ERROR:{}\tHTTP {}: {}",
+                    self.status_code, self.status_code, self.body
+                )
+            } else {
+                format!("ERROR:0\t{}", self.body)
+            }
+        }
+    }
+
+    pub struct StreamClient {
+        pub client: Client,
+    }
+
+    const DEFAULT_RETRY_COUNT: u32 = 2;
+    const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(1);
+    const DEFAULT_RETRY_MAX_TIME: Duration = Duration::from_secs(20);
+    const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    const DEFAULT_STREAM_LOW_SPEED_LIMIT: usize = 1;
+    const DEFAULT_STREAM_LOW_SPEED_TIME: Duration = Duration::from_secs(60);
+    const DEFAULT_STREAM_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+    impl StreamClient {
+        pub fn new() -> Result<Self> {
+            Ok(Self {
+                client: Client::builder()
+                    .timeout(None)
+                    .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+                    .build()?,
+            })
+        }
+
+        pub fn post(&self, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<StreamBody> {
+            let mut h = HeaderMap::new();
+            for (k, v) in headers {
+                h.insert(
+                    HeaderName::from_bytes(k.as_bytes())?,
+                    HeaderValue::from_str(v).map_err(|e| anyhow!(e.to_string()))?,
+                );
+            }
+
+            let start = Instant::now();
+            let mut attempt: u32 = 0;
+            loop {
+                let resp = self
+                    .client
+                    .post(url)
+                    .headers(h.clone())
+                    .body(body.to_vec())
+                    .send();
+
+                match resp {
+                    Ok(resp) => {
+                        let code = resp.status().as_u16();
+                        if code >= 400 {
+                            let text = resp.text().unwrap_or_default();
+                            let retryable =
+                                should_retry_status(code) && should_retry_attempt(attempt, start);
+                            if retryable {
+                                sleep(DEFAULT_RETRY_DELAY);
+                                attempt += 1;
+                                continue;
+                            }
+                            return Err(HTTPError {
+                                status_code: code,
+                                body: text.trim().to_string(),
+                            }
+                            .into());
+                        }
+                        return StreamBody::new(
+                            self.client.clone(),
+                            url.to_string(),
+                            h.clone(),
+                            body.to_vec(),
+                            resp,
+                            DEFAULT_STREAM_LOW_SPEED_LIMIT,
+                            DEFAULT_STREAM_LOW_SPEED_TIME,
+                            DEFAULT_STREAM_CHECK_INTERVAL,
+                            DEFAULT_RETRY_COUNT,
+                            DEFAULT_RETRY_DELAY,
+                            start,
+                        );
+                    }
+                    Err(err) => {
+                        if should_retry_attempt(attempt, start) {
+                            sleep(DEFAULT_RETRY_DELAY);
+                            attempt += 1;
+                            continue;
+                        }
+                        return Err(HTTPError {
+                            status_code: 0,
+                            body: err.to_string(),
+                        }
+                        .into());
+                    }
+                }
+            }
+        }
+    }
+
+    pub struct StreamBody {
+        client: Client,
+        url: String,
+        headers: HeaderMap,
+        request_body: Vec<u8>,
+        max_retries: u32,
+        retry_delay: Duration,
+        start: Instant,
+        attempt: u32,
+        rx: Receiver<StreamChunk>,
+        buf: std::io::Cursor<Vec<u8>>,
+        done: bool,
+        low_speed_limit: usize,
+        low_speed_time: Duration,
+        check_interval: Duration,
+        samples: VecDeque<StreamSample>,
+        window_bytes: usize,
+    }
+
+    #[derive(Clone)]
+    struct StreamChunk {
+        at: Instant,
+        data: Vec<u8>,
+    }
+
+    #[derive(Clone)]
+    struct StreamSample {
+        at: Instant,
+        bytes: usize,
+    }
+
+    impl StreamBody {
+        fn new(
+            client: Client,
+            url: String,
+            headers: HeaderMap,
+            request_body: Vec<u8>,
+            resp: Response,
+            low_speed_limit: usize,
+            low_speed_time: Duration,
+            check_interval: Duration,
+            max_retries: u32,
+            retry_delay: Duration,
+            start: Instant,
+        ) -> Result<Self> {
+            let rx = spawn_reader(resp);
+            Ok(Self {
+                client,
+                url,
+                headers,
+                request_body,
+                max_retries,
+                retry_delay,
+                start,
+                attempt: 0,
+                rx,
+                buf: std::io::Cursor::new(Vec::new()),
+                done: false,
+                low_speed_limit,
+                low_speed_time,
+                check_interval,
+                samples: VecDeque::new(),
+                window_bytes: 0,
+            })
+        }
+
+        fn try_retry(&mut self) -> std::io::Result<()> {
+            sleep(self.retry_delay);
+            let resp = self
+                .client
+                .post(&self.url)
+                .headers(self.headers.clone())
+                .body(self.request_body.clone())
+                .send()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let code = resp.status().as_u16();
+            if code >= 400 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("HTTP {} on retry", code),
+                ));
+            }
+            self.rx = spawn_reader(resp);
+            self.done = false;
+            Ok(())
+        }
+    }
+
+    fn spawn_reader(mut resp: Response) -> Receiver<StreamChunk> {
+        let (tx, rx) = mpsc::channel();
+        let _ = thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            loop {
+                match resp.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if tx
+                            .send(StreamChunk {
+                                at: Instant::now(),
+                                data: buf[..n].to_vec(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        rx
+    }
+
+    impl Read for StreamBody {
+        fn read(&mut self, out: &mut [u8]) -> IoResult<usize> {
+            if self.done {
+                return Ok(0);
+            }
+            loop {
+                if (self.buf.position() as usize) < self.buf.get_ref().len() {
+                    return self.buf.read(out);
+                }
+                match self.rx.recv_timeout(self.check_interval) {
+                    Ok(chunk) => {
+                        self.record_chunk(chunk.at, chunk.data.len());
+                        self.buf = std::io::Cursor::new(chunk.data);
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        if self.low_speed_exceeded(Instant::now()) {
+                            if self.attempt < self.max_retries
+                                && should_retry_attempt(self.attempt, self.start)
+                            {
+                                self.attempt += 1;
+                                match self.try_retry() {
+                                    Ok(()) => {
+                                        self.buf = std::io::Cursor::new(b"RETRY:\n".to_vec());
+                                        continue;
+                                    }
+                                    Err(_) => {
+                                        self.done = true;
+                                        return Err(std::io::Error::new(
+                                            std::io::ErrorKind::TimedOut,
+                                            "stream low speed timeout",
+                                        ));
+                                    }
+                                }
+                            }
+                            self.done = true;
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "stream low speed timeout",
+                            ));
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        self.done = true;
+                        return Ok(0);
+                    }
+                }
+            }
+        }
+    }
+
+    impl Drop for StreamBody {
+        fn drop(&mut self) {
+            self.done = true;
+        }
+    }
+
+    impl StreamBody {
+        fn record_chunk(&mut self, at: Instant, bytes: usize) {
+            self.samples.push_back(StreamSample { at, bytes });
+            self.window_bytes = self.window_bytes.saturating_add(bytes);
+            self.prune_window(at);
+        }
+
+        fn prune_window(&mut self, now: Instant) {
+            while let Some(sample) = self.samples.front() {
+                if now.saturating_duration_since(sample.at) <= self.low_speed_time {
+                    break;
+                }
+                self.window_bytes = self.window_bytes.saturating_sub(sample.bytes);
+                self.samples.pop_front();
+            }
+        }
+
+        fn low_speed_exceeded(&mut self, now: Instant) -> bool {
+            self.prune_window(now);
+            if now.duration_since(self.start) < self.low_speed_time {
+                return false;
+            }
+            self.window_bytes
+                < self
+                    .low_speed_limit
+                    .saturating_mul(self.low_speed_time.as_secs() as usize)
+        }
+    }
+
+    fn should_retry_attempt(attempt: u32, start: Instant) -> bool {
+        if attempt >= DEFAULT_RETRY_COUNT {
+            return false;
+        }
+        start.elapsed() + DEFAULT_RETRY_DELAY <= DEFAULT_RETRY_MAX_TIME
+    }
+
+    fn should_retry_status(code: u16) -> bool {
+        matches!(code, 408 | 409 | 425 | 429 | 500 | 502 | 503 | 504)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{StreamBody, StreamChunk};
+        use reqwest::blocking::Client;
+        use reqwest::header::HeaderMap;
+        use std::collections::VecDeque;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        #[test]
+        fn low_speed_window_expires_without_bytes() {
+            let start = Instant::now();
+            let mut body = StreamBody {
+                client: Client::new(),
+                url: String::new(),
+                headers: HeaderMap::new(),
+                request_body: Vec::new(),
+                max_retries: 0,
+                retry_delay: Duration::from_secs(1),
+                start,
+                attempt: 0,
+                rx: mpsc::channel::<StreamChunk>().1,
+                buf: std::io::Cursor::new(Vec::new()),
+                done: false,
+                low_speed_limit: 1,
+                low_speed_time: Duration::from_secs(60),
+                check_interval: Duration::from_secs(1),
+                samples: VecDeque::new(),
+                window_bytes: 0,
+            };
+
+            assert!(!body.low_speed_exceeded(start + Duration::from_secs(59)));
+            assert!(body.low_speed_exceeded(start + Duration::from_secs(60)));
+        }
+
+        #[test]
+        fn low_speed_window_uses_recent_bytes_only() {
+            let start = Instant::now();
+            let mut body = StreamBody {
+                client: Client::new(),
+                url: String::new(),
+                headers: HeaderMap::new(),
+                request_body: Vec::new(),
+                max_retries: 0,
+                retry_delay: Duration::from_secs(1),
+                start,
+                attempt: 0,
+                rx: mpsc::channel::<StreamChunk>().1,
+                buf: std::io::Cursor::new(Vec::new()),
+                done: false,
+                low_speed_limit: 1,
+                low_speed_time: Duration::from_secs(60),
+                check_interval: Duration::from_secs(1),
+                samples: VecDeque::new(),
+                window_bytes: 0,
+            };
+
+            body.record_chunk(start + Duration::from_secs(30), 100);
+            assert!(!body.low_speed_exceeded(start + Duration::from_secs(60)));
+            assert!(body.low_speed_exceeded(start + Duration::from_secs(91)));
+        }
+    }
+}
+
+use httpclient::{HTTPError, StreamClient};
+
+pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
+    let mut rt = Agent::new(cfg, cwd, home)?;
 
     if rt.cfg.interactive || (rt.cfg.prompt.is_empty() && io::stdin().is_terminal()) {
         rt.cfg.interactive = true;
@@ -105,7 +500,7 @@ enum MainLoopMessage {
     },
 }
 
-struct Runtime {
+pub(crate) struct Agent {
     cfg: Config,
     cwd: PathBuf,
     home: PathBuf,
@@ -210,8 +605,8 @@ enum DisplayEvent {
     ToolResult(ToolResult),
 }
 
-impl Runtime {
-    fn new(mut cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<Self> {
+impl Agent {
+    pub(crate) fn new(mut cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<Self> {
         let mut sid = cfg.session_id.clone();
         if sid.is_empty() && cfg.continue_session {
             sid = session::continue_session(&home, &cwd).unwrap_or_default();
@@ -322,24 +717,12 @@ impl Runtime {
 
         // 在主线程中完成 fork 复制（与 Bash 版本一致：在子进程启动前复制，避免竞态）
         let sub_paths = session::paths_for(&home, &cwd, &sub_session_id_clone);
-        if let Err(e) = session::ensure_dir(&sub_paths.session_dir) {
+        if let Err(e) = store::store_session_init(&sub_paths, false) {
             self.active_sub_count -= 1;
             return format!("Failed to create sub-agent session dir: {}", e);
         }
         if fork {
-            let files_to_copy: [(&str, std::path::PathBuf); 3] = [
-                ("conversation.jsonl", parent_paths.conversation.clone()),
-                ("summary.txt", parent_paths.summary.clone()),
-                ("plan.md", parent_paths.plan.clone()),
-            ];
-            for (name, src) in files_to_copy {
-                if src.exists() {
-                    let dst = sub_paths.session_dir.join(name);
-                    if let Err(_e) = std::fs::copy(&src, &dst) {
-                        // fork 文件复制失败不致命，静默忽略（与 Bash 版本 `2>/dev/null || true` 一致）
-                    }
-                }
-            }
+            let _ = store::store_session_fork(&parent_paths, &sub_paths);
         }
 
         std::thread::spawn(move || {
@@ -373,7 +756,7 @@ impl Runtime {
             sub_cfg.interactive = false;
 
             let (sub_msg_tx, _sub_msg_rx) = mpsc::channel();
-            let mut sub_rt = Runtime {
+            let mut sub_rt = Agent {
                 cfg: sub_cfg,
                 cwd: cwd.clone(),
                 home: home.clone(),
@@ -463,7 +846,7 @@ impl Runtime {
             }
 
             // 5. 收集 usage 统计
-            let stats = sub_rt.read_stats();
+            let stats = store::store_stats_read(&sub_rt.paths.stats).unwrap_or_default();
             let in_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
             let out_tokens = stats_get_f64(&stats, "total_output_tokens") as usize;
             let cache_read_tokens = stats_get_f64(&stats, "total_cache_read_tokens") as usize;
@@ -599,7 +982,7 @@ impl Runtime {
     // main_loop 主事件循环，从消息队列读取并分发处理
     // 借鉴 bash 版本设计：readline 线程退出时主动 drop 发送端（类似 bash 的 exec 4>&-），
     // 这样 recv() 收到 Disconnected 后自然退出，无需轮询 should_exit
-    fn main_loop(&mut self) -> Result<()> {
+    pub(crate) fn main_loop(&mut self) -> Result<()> {
         loop {
             let msg = match self.msg_rx.recv() {
                 Ok(msg) => msg,
@@ -639,6 +1022,10 @@ impl Runtime {
                     cache_creation_tokens,
                     request_count,
                 } => {
+                    if self.cfg.interactive {
+                        // Clear the prompt line before rendering sub-agent output.
+                        let _ = write!(self.stderr.borrow_mut(), "\r\x1b[K");
+                    }
                     self.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
                 }
             }
@@ -652,7 +1039,7 @@ impl Runtime {
     }
 
     // handle_sub_agent_result 处理子 agent 完成后的结果注入
-    fn handle_sub_agent_result(
+    pub(crate) fn handle_sub_agent_result(
         &mut self,
         session_id: &str,
         status: &str,
@@ -676,40 +1063,34 @@ impl Runtime {
         }));
 
         // 2. 更新 stats
-        let mut stats = self.read_stats();
-        let sub_count = stats_get_f64(&stats, "sub_agent_request_count") as usize + 1;
-        stats.insert(
-            "sub_agent_request_count".to_string(),
-            Value::Number(sub_count.into()),
-        );
-        let total_reqs = stats_get_f64(&stats, "agent_request_count") as usize + request_count;
-        stats.insert(
-            "agent_request_count".to_string(),
-            Value::Number(total_reqs.into()),
-        );
-        let total_in = stats_get_f64(&stats, "total_input_tokens") as usize + in_tokens;
-        stats.insert(
-            "total_input_tokens".to_string(),
-            Value::Number(total_in.into()),
-        );
-        let total_out = stats_get_f64(&stats, "total_output_tokens") as usize + out_tokens;
-        stats.insert(
-            "total_output_tokens".to_string(),
-            Value::Number(total_out.into()),
-        );
-        let total_cache_read = stats_get_f64(&stats, "total_cache_read_tokens") as usize + cache_read_tokens;
-        stats.insert(
-            "total_cache_read_tokens".to_string(),
-            Value::Number(total_cache_read.into()),
-        );
-        let total_cache_creation = stats_get_f64(&stats, "total_cache_creation_tokens") as usize + cache_creation_tokens;
-        stats.insert(
-            "total_cache_creation_tokens".to_string(),
-            Value::Number(total_cache_creation.into()),
-        );
-        self.write_stats(&stats);
+        store::store_stats_update(&self.paths.stats, |stats| {
+            Self::add_stat_usize(stats, "sub_agent_request_count", 1);
+            Self::add_stat_usize(stats, "agent_request_count", request_count);
+            Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
+            Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
+            Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
+            Self::add_stat_usize(
+                stats,
+                "total_cache_creation_tokens",
+                cache_creation_tokens,
+            );
+        })?;
 
-        // 3. 记录 sub_agent_end 事件
+        // 3. 记录 sub_agent_result 事件，供 replay / stream-json 复现子 agent 回显
+        let _ = self.append_event(json!({
+            "type": "sub_agent_result",
+            "session_id": session_id,
+            "status": status,
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+            "cache_read_input_tokens": cache_read_tokens,
+            "cache_creation_input_tokens": cache_creation_tokens,
+            "request_count": request_count,
+            "thinking": thinking,
+            "text": text,
+        }));
+
+        // 4. 记录 sub_agent_end 事件
         let _ = self.append_event(json!({
             "type": "sub_agent_end",
             "session_id": session_id,
@@ -717,11 +1098,14 @@ impl Runtime {
             "status": status,
         }));
 
-        // 4. 更新活跃子 agent 计数
+        // 5. 更新活跃子 agent 计数
         self.active_sub_count -= 1;
         self.sub_agent_request_count += 1;
 
-        // 5. 显示结果（通过 self.stderr，子 agent 结果到达主 agent 时在主终端显示）
+        // 6. 显示结果（通过 self.stderr，子 agent 结果到达主 agent 时在主终端显示）
+        if self.cfg.interactive {
+            let _ = write!(self.stderr.borrow_mut(), "\r\x1b[K");
+        }
         if status == "ok" {
             let _ = writeln!(
                 self.stderr.borrow_mut(),
@@ -742,17 +1126,17 @@ impl Runtime {
             let _ = writeln!(self.stderr.borrow_mut(), "{}", preview);
         }
 
-        // 6. 交互模式下清除当前行（移除提示符，对齐 bash 版本 _run_agent_loop 行为）
-        if self.cfg.interactive {
-            let _ = write!(self.stderr.borrow_mut(), "\r\x1b[2K");
-        }
-
         // 7. 注入结果到 conversation 并触发 agent loop（忽略错误，与 bash/Go 对齐）
         let context = format!(
             "[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}",
-            session_id, status, in_tokens, out_tokens, thinking, text
+            session_id,
+            status,
+            in_tokens,
+            out_tokens,
+            thinking,
+            text
         );
-        let _ = self.agent_loop(context);
+        let _ = self.agent_loop_with_kind(context, "sub_agent_result");
 
         // 8. 交互模式下恢复提示符
         if self.cfg.interactive {
@@ -762,12 +1146,16 @@ impl Runtime {
         Ok(())
     }
 
-    fn agent_loop(&mut self, user_input: String) -> Result<()> {
-        let result = self.agent_loop_stream(user_input);
+    pub(crate) fn agent_loop(&mut self, user_input: String) -> Result<()> {
+        self.agent_loop_with_kind(user_input, "user_input")
+    }
+
+    pub(crate) fn agent_loop_with_kind(&mut self, user_input: String, turn_kind: &str) -> Result<()> {
+        let result = self.agent_loop_stream(user_input, turn_kind);
         result
     }
 
-    fn agent_loop_stream(&mut self, user_input: String) -> Result<()> {
+    pub(crate) fn agent_loop_stream(&mut self, user_input: String, turn_kind: &str) -> Result<()> {
         self.interrupted.store(false, Ordering::SeqCst);
 
         // Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
@@ -778,7 +1166,9 @@ impl Runtime {
 
         let result = (|| -> Result<()> {
             self.conv.add_user(&user_input)?;
-            self.append_event(json!({"type":"user_input","content":user_input}))?;
+            if turn_kind == "user_input" {
+                self.append_event(json!({"type":"user_input","content":user_input}))?;
+            }
             // Increment turn count
             self.increment_turn_count();
 
@@ -860,17 +1250,17 @@ impl Runtime {
 
                             if call.name == "PlanClear" {
                                 let _ = self.compact_context_window("plan_clear");
-                                let _ = fs::write(&self.paths.plan, "");
+                                let _ = store::store_plan_clear(&self.paths);
                                 output = "Plan cleared.".to_string();
                             }
 
                             if call.name == "PlanConfirm" {
                                 // 先 compact 再写 plan：compact 复用旧缓存前缀，写 plan 后才触发缓存失效——总共一次冷启动
-                                match fs::read(&self.paths.plan_draft) {
+                                match store::store_plan_draft_get(&self.paths) {
                                     Ok(data) if !data.is_empty() => {
                                         let _ = self.compact_context_window("plan_confirm");
-                                        let _ = fs::write(&self.paths.plan, &data);
-                                        let _ = fs::write(&self.paths.plan_draft, "");
+                                        let _ = store::store_plan_set(&self.paths, &data);
+                                        let _ = store::store_plan_draft_clear(&self.paths);
                                         output = "Plan confirmed and locked in.".to_string();
                                     }
                                     _ => {
@@ -992,6 +1382,18 @@ impl Runtime {
             Ok(())
         })();
         result
+    }
+
+    pub(crate) fn build_system_prompt(&self) -> Result<String> {
+        prompt::Builder {
+            cwd: self.cwd.clone(),
+            home: self.home.clone(),
+            skills: self.cfg.skills.clone(),
+            summary_file: self.paths.summary.clone(),
+            plan_file: self.paths.plan.clone(),
+            plan_draft_file: self.paths.plan_draft.clone(),
+        }
+        .build_system_prompt()
     }
 
     /// emit_and_append_event writes an event to events.jsonl (always) and to
@@ -1151,23 +1553,16 @@ impl Runtime {
 
     fn llm_stream(&self) -> Result<LlmStream> {
         let lines = self.conv.lines()?;
-        let system_prompt = prompt::Builder {
-            cwd: self.cwd.clone(),
-            home: self.home.clone(),
-            skills: self.cfg.skills.clone(),
-            summary_file: self.paths.summary.clone(),
-            plan_file: self.paths.plan.clone(),
-            plan_draft_file: self.paths.plan_draft.clone(),
-        }
-        .build_system_prompt()?;
+        let system_prompt = self.build_system_prompt()?;
 
-        let claude_body = provider::build_claude_request(
+        let claude_body = build_claude_request(
             &self.cfg,
             &lines,
             &self.tools_json,
             &system_prompt,
             self.cfg.max_tokens,
-            self.cfg.thinking_budget,
+            &self.cfg.thinking,
+            &self.cfg.effort,
         )?;
         let body = self.transport.convert_body(&claude_body)?;
         if self.cfg.verbose {
@@ -1215,8 +1610,8 @@ impl Runtime {
         })
     }
 
-    fn compact_context_window(&mut self, trigger: &str) -> Result<bool> {
-        let stats = self.read_stats();
+    pub(crate) fn compact_context_window(&mut self, trigger: &str) -> Result<bool> {
+        let stats = store::store_stats_read(&self.paths.stats)?;
         let context_tokens = stats_get_f64(&stats, "current_context_tokens") as usize;
         let current_turn = stats_get_f64(&stats, "current_turn_count") as usize;
         let prev_compactions = stats_get_f64(&stats, "compact_request_count") as usize;
@@ -1276,21 +1671,18 @@ impl Runtime {
         let dropped_lines = &all[..drop];
 
         let summary = self.run_summary_call(dropped_lines)?;
-        fs::write(&self.paths.summary, format!("{summary}\n"))?;
+        store::store_summary_set(&self.paths, &summary)?;
         self.conv.trim_keep_last(k)?;
 
         // Recalculate turn count based on remaining conversation history
         if let Ok(remaining_turns) = self.conv.count_user_inputs() {
-            let mut stats = self.read_stats();
-            stats.insert(
-                "current_turn_count".to_string(),
-                Value::Number((remaining_turns as i64).into()),
-            );
-            stats.insert(
-                "last_updated".to_string(),
-                Value::String(chrono_now_rfc3339()),
-            );
-            self.write_stats(&stats);
+            store::store_stats_update(&self.paths.stats, |stats| {
+                Self::set_stat_usize(stats, "current_turn_count", remaining_turns as usize);
+                stats.insert(
+                    "last_updated".to_string(),
+                    Value::String(chrono_now_rfc3339()),
+                );
+            })?;
         }
 
         self.emit_context_update(trigger)?;
@@ -1305,23 +1697,16 @@ impl Runtime {
         let mut messages: Vec<Value> = dropped_lines.to_vec();
         messages.push(json!({"role":"user","content":summary_instruction}));
 
-        let system_prompt = prompt::Builder {
-            cwd: self.cwd.clone(),
-            home: self.home.clone(),
-            skills: self.cfg.skills.clone(),
-            summary_file: self.paths.summary.clone(),
-            plan_file: self.paths.plan.clone(),
-            plan_draft_file: self.paths.plan_draft.clone(),
-        }
-        .build_system_prompt()?;
+        let system_prompt = self.build_system_prompt()?;
 
-        let claude_body = provider::build_claude_request(
+        let claude_body = build_claude_request(
             &self.cfg,
             &messages,
             &self.tools_json,
             &system_prompt,
             self.cfg.max_tokens,
-            self.cfg.thinking_budget,
+            "disabled",
+            &self.cfg.effort,
         )?;
         let body = self.transport.convert_body(&claude_body)?;
         let resp = match self.http.post(&self.api_url, &self.headers(), &body) {
@@ -1350,41 +1735,29 @@ impl Runtime {
                         "kind":"compact"
                     });
                     let _ = self.append_event(compact_evt);
-                    let mut stats = self.read_stats();
-                    *stats
-                        .entry("compact_request_count".to_string())
-                        .or_insert(Value::Number(0.into())) = Value::Number(
-                        (stats_get_f64(&stats, "compact_request_count") as usize + 1).into(),
-                    );
-                    *stats
-                        .entry("total_input_tokens".to_string())
-                        .or_insert(Value::Number(0.into())) = Value::Number(
-                        (stats_get_f64(&stats, "total_input_tokens") as usize
-                            + usage.input_tokens as usize)
-                            .into(),
-                    );
-                    *stats
-                        .entry("total_output_tokens".to_string())
-                        .or_insert(Value::Number(0.into())) = Value::Number(
-                        (stats_get_f64(&stats, "total_output_tokens") as usize
-                            + usage.output_tokens as usize)
-                            .into(),
-                    );
-                    *stats
-                        .entry("total_cache_read_tokens".to_string())
-                        .or_insert(Value::Number(0.into())) = Value::Number(
-                        (stats_get_f64(&stats, "total_cache_read_tokens") as usize
-                            + usage.cache_read_input_tokens as usize)
-                            .into(),
-                    );
-                    *stats
-                        .entry("total_cache_creation_tokens".to_string())
-                        .or_insert(Value::Number(0.into())) = Value::Number(
-                        (stats_get_f64(&stats, "total_cache_creation_tokens") as usize
-                            + usage.cache_creation_input_tokens as usize)
-                            .into(),
-                    );
-                    self.write_stats(&stats);
+                    store::store_stats_update(&self.paths.stats, |stats| {
+                        Self::add_stat_usize(stats, "compact_request_count", 1);
+                        Self::add_stat_usize(
+                            stats,
+                            "total_input_tokens",
+                            usage.input_tokens as usize,
+                        );
+                        Self::add_stat_usize(
+                            stats,
+                            "total_output_tokens",
+                            usage.output_tokens as usize,
+                        );
+                        Self::add_stat_usize(
+                            stats,
+                            "total_cache_read_tokens",
+                            usage.cache_read_input_tokens as usize,
+                        );
+                        Self::add_stat_usize(
+                            stats,
+                            "total_cache_creation_tokens",
+                            usage.cache_creation_input_tokens as usize,
+                        );
+                    })?;
                 }
                 Event::Error(ErrorEvent { message }) => { last_error = message.clone(); },
                 Event::Stop(StopEvent { reason }) => { stop_reason = reason.clone(); },
@@ -1432,117 +1805,63 @@ impl Runtime {
         if self.paths.events.as_os_str().is_empty() {
             return Ok(());
         }
-        let line = serde_json::to_string(&value)?;
-        use std::io::Write;
-        let mut f = fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&self.paths.events)?;
-        writeln!(f, "{line}")?;
-        Ok(())
+        store::store_event_append_json(&self.paths, &value)
     }
 
     /// increment_turn_count increments the current_turn_count in stats.json.
     fn increment_turn_count(&self) {
-        let mut stats = self.read_stats();
-        *stats
-            .entry("current_turn_count".to_string())
-            .or_insert(Value::Number(0.into())) =
-            Value::Number((stats_get_f64(&stats, "current_turn_count") as usize + 1).into());
-        stats.insert(
-            "last_updated".to_string(),
-            Value::String(chrono_now_rfc3339()),
-        );
-        self.write_stats(&stats);
+        let _ = store::store_stats_update(&self.paths.stats, |stats| {
+            Self::add_stat_usize(stats, "current_turn_count", 1);
+            stats.insert(
+                "last_updated".to_string(),
+                Value::String(chrono_now_rfc3339()),
+            );
+        });
     }
 
     /// update_stats_from_usage updates stats.json with last turn's usage (matches bash stats_inc+stats_set).
     fn update_stats_from_usage(&self) {
-        let mut stats = self.read_stats();
-        *stats
-            .entry("agent_request_count".to_string())
-            .or_insert(Value::Number(0.into())) =
-            Value::Number((stats_get_f64(&stats, "agent_request_count") as usize + 1).into());
-        *stats
-            .entry("total_input_tokens".to_string())
-            .or_insert(Value::Number(0.into())) = Value::Number(
-            (stats_get_f64(&stats, "total_input_tokens") as usize + self.last_input_tokens).into(),
-        );
-        *stats
-            .entry("total_output_tokens".to_string())
-            .or_insert(Value::Number(0.into())) = Value::Number(
-            (stats_get_f64(&stats, "total_output_tokens") as usize + self.last_output_tokens)
-                .into(),
-        );
-        *stats
-            .entry("total_cache_read_tokens".to_string())
-            .or_insert(Value::Number(0.into())) = Value::Number(
-            (stats_get_f64(&stats, "total_cache_read_tokens") as usize
-                + self.last_cache_read_tokens)
-                .into(),
-        );
-        *stats
-            .entry("total_cache_creation_tokens".to_string())
-            .or_insert(Value::Number(0.into())) = Value::Number(
-            (stats_get_f64(&stats, "total_cache_creation_tokens") as usize
-                + self.last_cache_creation_tokens)
-                .into(),
-        );
-        // context = input + output + cache_read + cache_creation
-        *stats
-            .entry("current_context_tokens".to_string())
-            .or_insert(Value::Number(0.into())) = Value::Number(
-            (self.last_input_tokens
-                + self.last_output_tokens
-                + self.last_cache_read_tokens
-                + self.last_cache_creation_tokens)
-                .into(),
-        );
-        stats.insert(
-            "last_updated".to_string(),
-            Value::String(chrono_now_rfc3339()),
-        );
-        self.write_stats(&stats);
+        let _ = store::store_stats_update(&self.paths.stats, |stats| {
+            Self::add_stat_usize(stats, "agent_request_count", 1);
+            Self::add_stat_usize(stats, "total_input_tokens", self.last_input_tokens);
+            Self::add_stat_usize(stats, "total_output_tokens", self.last_output_tokens);
+            Self::add_stat_usize(
+                stats,
+                "total_cache_read_tokens",
+                self.last_cache_read_tokens,
+            );
+            Self::add_stat_usize(
+                stats,
+                "total_cache_creation_tokens",
+                self.last_cache_creation_tokens,
+            );
+            // context = input + output + cache_read + cache_creation
+            Self::set_stat_usize(
+                stats,
+                "current_context_tokens",
+                self.last_input_tokens
+                    + self.last_output_tokens
+                    + self.last_cache_read_tokens
+                    + self.last_cache_creation_tokens,
+            );
+            stats.insert(
+                "last_updated".to_string(),
+                Value::String(chrono_now_rfc3339()),
+            );
+        });
     }
 
-    /// read_stats reads and parses stats.json, returning default zero values if missing.
-    fn read_stats(&self) -> serde_json::Map<String, Value> {
-        let mut stats = serde_json::Map::new();
-        stats.insert("current_turn_count".to_string(), Value::Number(0.into()));
-        stats.insert("agent_request_count".to_string(), Value::Number(0.into()));
-        stats.insert("compact_request_count".to_string(), Value::Number(0.into()));
-        stats.insert("sub_agent_request_count".to_string(), Value::Number(0.into())); // SubAgent 请求计数
-        stats.insert("total_input_tokens".to_string(), Value::Number(0.into()));
-        stats.insert("total_output_tokens".to_string(), Value::Number(0.into()));
-        stats.insert(
-            "total_cache_read_tokens".to_string(),
-            Value::Number(0.into()),
-        );
-        stats.insert(
-            "total_cache_creation_tokens".to_string(),
-            Value::Number(0.into()),
-        );
-        stats.insert(
-            "current_context_tokens".to_string(),
-            Value::Number(0.into()),
-        );
-        stats.insert("last_updated".to_string(), Value::String(String::new()));
-        if let Ok(data) = fs::read_to_string(&self.paths.stats) {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Map<String, Value>>(&data) {
-                for (k, v) in parsed {
-                    stats.insert(k, v);
-                }
-            }
-        }
-        stats
+    fn stat_usize(stats: &serde_json::Map<String, Value>, key: &str) -> usize {
+        stats_get_f64(stats, key) as usize
     }
 
-    /// write_stats serializes and writes stats.json, then updates terminal title.
-    fn write_stats(&self, stats: &serde_json::Map<String, Value>) {
-        if let Ok(data) = serde_json::to_string(stats) {
-            let _ = fs::write(&self.paths.stats, data + "\n");
-        }
-        self.update_term_title();
+    fn set_stat_usize(stats: &mut serde_json::Map<String, Value>, key: &str, value: usize) {
+        stats.insert(key.to_string(), Value::Number(value.into()));
+    }
+
+    fn add_stat_usize(stats: &mut serde_json::Map<String, Value>, key: &str, delta: usize) {
+        let next = Self::stat_usize(stats, key) + delta;
+        Self::set_stat_usize(stats, key, next);
     }
 
     /// Format integer with comma separators: 28126139 → "28,126,139"
@@ -1561,7 +1880,7 @@ impl Runtime {
 
     /// update_term_title updates the terminal title with current stats (matches bash stats_show_osc).
     fn update_term_title(&self) {
-        let stats = self.read_stats();
+        let stats = store::store_stats_read(&self.paths.stats).unwrap_or_default();
         let tc = stats_get_f64(&stats, "current_turn_count") as usize;
         let ar = stats_get_f64(&stats, "agent_request_count") as usize;
         let ai = stats_get_f64(&stats, "total_input_tokens") as usize;
@@ -1726,13 +2045,51 @@ impl Runtime {
                 if ds.last_char != "\n" {
                     self.write_human("\n").ok();
                 }
-                let content = truncate_for_replay(
-                    first_line(fields.get("content").copied().unwrap_or("")),
-                    77,
-                );
+                let content = truncate_for_replay(fields.get("content").copied().unwrap_or(""), 77);
                 let display = content;
                 self.write_human(&format!("\x1b[32m> {}\x1b[0m\n", display))
                     .ok();
+                ds.last_char = "\n".to_string();
+                ds.prev_was_thinking = false;
+            }
+            "SUB_AGENT_RESULT" => {
+                let session_id = fields.get("session_id").copied().unwrap_or("");
+                let status = fields.get("status").copied().unwrap_or("");
+                let in_tokens = fields.get("input_tokens").copied().unwrap_or("0");
+                let out_tokens = fields.get("output_tokens").copied().unwrap_or("0");
+                let thinking = fields.get("thinking").copied().unwrap_or("");
+                let text = fields.get("text").copied().unwrap_or("");
+
+                if ds.last_char != "\n" {
+                    self.write_human("\n").ok();
+                    ds.last_char = "\n".to_string();
+                }
+
+                if status == "ok" {
+                    self.write_human(&format!(
+                        "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m\n",
+                        session_id, in_tokens, out_tokens
+                    ))
+                    .ok();
+                } else {
+                    self.write_human(&format!(
+                        "\x1b[31m[sub-agent {}] failed\x1b[0m\n",
+                        session_id
+                    ))
+                    .ok();
+                }
+
+                if !thinking.is_empty() {
+                    self.write_human(&format!(
+                        "\x1b[90m{}\x1b[0m\n",
+                        truncate_for_replay(thinking, 120)
+                    ))
+                    .ok();
+                }
+                if !text.is_empty() {
+                    self.write_human(&format!("{}\n", truncate_for_replay(text, 120)))
+                        .ok();
+                }
                 ds.last_char = "\n".to_string();
                 ds.prev_was_thinking = false;
             }
@@ -1754,19 +2111,10 @@ impl Runtime {
     }
 
     fn replay_last_turns(&self) {
-        let events_path = &self.paths.events;
-        if !events_path.exists() {
-            return;
-        }
-        let data = match fs::read_to_string(events_path) {
-            Ok(d) => d,
+        let events = match store::store_event_lines(&self.paths) {
+            Ok(events) => events,
             Err(_) => return,
         };
-        let events: Vec<Value> = data
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect();
         if events.is_empty() {
             return;
         }
@@ -1813,6 +2161,27 @@ impl Runtime {
                         &mut ds,
                         "USER_MESSAGE",
                         &std::collections::HashMap::from([("content", content)]),
+                    );
+                }
+                "sub_agent_result" => {
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+                    let session_id = evt.get("session_id").and_then(Value::as_str).unwrap_or("");
+                    let status = evt.get("status").and_then(Value::as_str).unwrap_or("");
+                    let input_tokens = evt.get("input_tokens").map(|v| v.to_string()).unwrap_or_default();
+                    let output_tokens = evt.get("output_tokens").map(|v| v.to_string()).unwrap_or_default();
+                    let thinking = evt.get("thinking").and_then(Value::as_str).unwrap_or("");
+                    let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
+                    self.display_replay_event(
+                        &mut ds,
+                        "SUB_AGENT_RESULT",
+                        &std::collections::HashMap::from([
+                            ("session_id", session_id),
+                            ("status", status),
+                            ("input_tokens", input_tokens.as_str()),
+                            ("output_tokens", output_tokens.as_str()),
+                            ("thinking", thinking),
+                            ("text", text),
+                        ]),
                     );
                 }
                 "thinking" => {
@@ -1947,191 +2316,6 @@ impl Runtime {
             let _ = writeln!(self.stderr.borrow_mut(), "[debug] {msg}");
         }
     }
-}
-
-fn normalize_display_text(s: &str, interactive: bool) -> String {
-    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
-    if interactive {
-        normalized.replace('\n', "\r\n")
-    } else {
-        normalized
-    }
-}
-
-fn truncate_for_replay(s: &str, limit: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= limit {
-        return s.to_string();
-    }
-    let mut out: String = chars.into_iter().take(limit).collect();
-    out.push_str("...");
-    out
-}
-
-fn touch(path: &Path) -> Result<()> {
-    if !path.exists() {
-        fs::File::create(path)?;
-    }
-    Ok(())
-}
-
-fn format_system_time(st: &SystemTime) -> String {
-    use time::macros::format_description;
-    let dt: time::OffsetDateTime = match (*st).try_into() {
-        Ok(dt) => dt,
-        Err(_) => return format!("{:?}", st),
-    };
-    static FMT: &[time::format_description::FormatItem<'_>] =
-        format_description!("[year]-[month]-[day] [hour]:[minute]");
-    dt.format(FMT).unwrap_or_else(|_| format!("{:?}", st))
-}
-
-fn chrono_like_now() -> String {
-    // Format: YYYYMMDD-HHmmss-XXXX (random 4-hex suffix to avoid collisions in fast tests)
-    use time::format_description::FormatItem;
-    use time::macros::format_description;
-    static FMT: &[FormatItem<'_>] =
-        format_description!("[year][month][day]-[hour][minute][second]");
-    let base = time::OffsetDateTime::now_utc()
-        .format(FMT)
-        .unwrap_or_else(|_| {
-            format!(
-                "{}",
-                std::time::SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0)
-            )
-        });
-    let rand_suffix = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as u16)
-        .unwrap_or(0);
-    format!("{}-{:04x}", base, rand_suffix)
-}
-
-/// stats_get_f64 safely extracts a f64 from a JSON object by key.
-fn stats_get_f64(m: &serde_json::Map<String, Value>, key: &str) -> f64 {
-    m.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0)
-}
-
-/// chrono_now_rfc3339 returns current UTC time in RFC 3339 format.
-fn chrono_now_rfc3339() -> String {
-    let now = time::OffsetDateTime::now_utc();
-    let fmt = time::format_description::well_known::Rfc3339;
-    now.format(&fmt).unwrap_or_else(|_| String::new())
-}
-
-fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {
-    let dir = home
-        .join(".bash-agent/projects")
-        .join(session::project_key(cwd));
-    let entries = fs::read_dir(&dir);
-    if entries.is_err() {
-        println!("No sessions found.");
-        return Ok(());
-    }
-    struct Row {
-        name: String,
-        ts: SystemTime,
-        summary: String,
-    }
-    let mut rows: Vec<Row> = Vec::new();
-    for e in entries? {
-        let e = e?;
-        let path = e.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let session_name = e.file_name().to_string_lossy().to_string();
-        let summary_path = path.join("summary.txt");
-        let mut summary = String::new();
-        if let Ok(data) = fs::read_to_string(&summary_path) {
-            for line in data.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    summary = trimmed.to_string();
-                    break;
-                }
-            }
-        }
-        rows.push(Row {
-            name: session_name,
-            ts: e.metadata()?.modified().unwrap_or(UNIX_EPOCH),
-            summary,
-        });
-    }
-    if rows.is_empty() {
-        println!("No sessions found.");
-        return Ok(());
-    }
-    rows.sort_by(|a, b| b.ts.cmp(&a.ts));
-    println!("{:<40} {:<16} PREVIEW", "NAME", "MODIFIED");
-    for row in rows {
-        let mut preview = row.summary;
-        if preview.len() > 60 {
-            preview.truncate(57);
-            preview.push_str("...");
-        }
-        let formatted = format_system_time(&row.ts);
-        println!("{:<40} {:<16} {}", row.name, formatted, preview);
-    }
-    Ok(())
-}
-
-fn print_usage() {
-    println!("Usage: rustagent [options] [prompt]");
-    println!();
-    println!("Options:");
-    println!("  -p, --provider PROV     LLM provider: claude | openai (default: claude)");
-    println!("  -m, --model MODEL       Model name");
-    println!("  --max-tokens N          Max output tokens (default: 4096)");
-    println!("  --tool-timeout N        Tool execution timeout in seconds (default: 600)");
-    println!(
-        "  --skill NAME            Load skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)"
-    );
-    println!("  --max-turns N           Max agent turns (default: 40)");
-    println!("  --max-context N         Max stored context bytes before compact (default: 200000)");
-    println!("  --api-key KEY           API key (default from env)");
-    println!("  --base-url URL          Override API base URL");
-    println!("  --output-format FMT     Output format: human | stream-json");
-    println!("  --print                 Alias for --output-format stream-json");
-    println!("  --session [NAME]        Use named session");
-    println!("  --continue              Continue most recent session");
-    println!("  --list-sessions         List saved sessions");
-    println!("  -v, --verbose           Verbose mode");
-    println!("  -i, --interactive       Interactive mode (REPL)");
-    println!("  -h, --help              Show this help");
-}
-
-fn parse_input_fields(input: &Value) -> std::collections::BTreeMap<String, String> {
-    let mut fields = std::collections::BTreeMap::new();
-    if let Some(obj) = input.as_object() {
-        for (k, v) in obj {
-            match v {
-                Value::String(s) => {
-                    fields.insert(k.clone(), s.clone());
-                }
-                _ => {
-                    fields.insert(k.clone(), v.to_string());
-                }
-            }
-        }
-    }
-    fields
-}
-
-// truncate_str 截断字符串到指定长度
-fn truncate_str(s: &str, n: usize) -> String {
-    if s.len() <= n {
-        return s.to_string();
-    }
-    // 确保不会在 UTF-8 字符中间截断
-    let mut end = n;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &s[..end])
 }
 
 #[cfg(test)]

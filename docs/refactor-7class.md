@@ -38,6 +38,96 @@ Agent（编排层）
 
 Agent 的上下文压缩（`agent_compact_context`）直接调用 `store_conv_*` 做数据操作、`llm_summary_call` 做摘要请求，不存在独立 Compactor 层。
 
+### 3.1 数据流图
+
+这张图描述的是运行时“控制面”和“数据面”的分工。它适合先放在这里，等重构完成后再迁到 `ARCHITECTURE.md`。
+
+```text
+控制面: FIFO
+========================
+
+[stdin / prompt / sub-agent result]
+                │
+                ▼
+         agent_main_loop
+         ├─ USER_INPUT  ───────────────► agent_turn_begin
+         │                               ├─ store_event_append(user_input)
+         │                               └─ store_stats_update(current_turn_count++)
+         │
+         └─ AGENT_RESULT ───────────────► agent_handle_sub_result
+                                         ├─ store_event_append(usage)
+                                         ├─ store_stats_update(...)
+                                         ├─ store_event_append(sub_agent_end)
+                                         └─ agent_run_loop(...)
+```
+
+```text
+数据面: LLM 事件流
+========================
+
+agent_run_loop
+   │
+   ▼
+agent_loop
+   │
+   ▼
+agent_loop_stream
+   ├─ llm_call
+   │   └─ provider SSE
+   │       └─ parsed events
+   │
+   ├─ TEXT / THINKING / TOOL_CALL / USAGE / STOP / ERROR / RETRY
+   │
+   ├─ tool_use -> tool_dispatch
+   ├─ decide continue vs stop
+   │
+   └─ 交给 agent_event
+        ├─ store_event_append(event json)
+        ├─ store_stats_update(...)
+        └─ 透传给 agent_loop
+             ├─ display_event
+             └─ 或 stream-json stdout
+```
+
+```text
+回放面: replay
+========================
+
+events.jsonl
+   │
+   ▼
+store_event_lines / store_recent_event
+   │
+   ▼
+display_event
+```
+
+```text
+事件类型对应
+========================
+
+控制面 FIFO:
+- USER_INPUT
+- AGENT_RESULT
+
+数据面 LLM:
+- TEXT
+- THINKING
+- TOOL_CALL
+- USAGE
+- STOP
+- ERROR
+- RETRY
+
+持久化副作用:
+- events.jsonl
+- stats.json
+- summary.txt
+- plan.md
+- plan.draft
+- conversation.jsonl
+```
+
 ## 4. SessionStore（18 个函数）
 
 bash 通过 `source` 切换实现；Go 用 interface；Rust 用 trait。
