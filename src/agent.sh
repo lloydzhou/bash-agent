@@ -18,7 +18,8 @@ TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
 VERBOSE=false
 : "${TOOL_RESULT_MAX_BYTES:=100000}"
-: "${THINKING_BUDGET:=2048}"
+: "${EFFORT:=high}"           # thinking effort: low|medium|high|xhigh|max
+: "${THINKING:=adaptive}"     # thinking mode: adaptive|enabled|disabled
 
 # Internal Runtime State
 INTERACTIVE=false
@@ -534,11 +535,12 @@ llm_stream_curl() {
 }
 
 llm_call() {
-    local messages="$1" max_tokens="${2:-$MAX_TOKENS}" thinking_budget="${3:-$THINKING_BUDGET}" body system_prompt
+    local messages="$1" max_tokens="${2:-$MAX_TOKENS}" use_thinking="${3:-$THINKING}" body system_prompt
     system_prompt=$(agent_build_prompt)
     body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
-    if (( thinking_budget > 0 )); then
-        body+=",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":${thinking_budget}}"
+    if [[ "$use_thinking" != "disabled" ]]; then
+        body+=",\"thinking\":{\"type\":\"${use_thinking}\"}"
+        body+=",\"output_config\":{\"effort\":\"${EFFORT}\"}"
     fi
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(util_json_escape "$system_prompt")\""
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
@@ -558,7 +560,7 @@ llm_summary_call() {
             ERROR) last_error="${REPLY_MESSAGE[1]}" ;;
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
-    done < <(llm_call "$messages")
+    done < <(llm_call "$messages" "" disabled)
     [[ -n "$text" ]] || util_die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
     printf '%s' "$text"
 }
@@ -1250,6 +1252,8 @@ Options:
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
+  --effort LEVEL          Thinking effort: low|medium|high|xhigh|max (default: high)
+  --thinking MODE         Thinking mode: adaptive|enabled|disabled (default: adaptive)
   --output-format FMT     Output format: human | stream-json
   --print                 Alias for --output-format stream-json
   --session [NAME]        Use named session (persist conversation)
@@ -1265,6 +1269,8 @@ Environment:
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
+  EFFORT                  Default thinking effort (default: high)
+  THINKING                Default thinking mode (default: adaptive)
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
@@ -1294,6 +1300,8 @@ parse_args() {
                 ;;
             --api-key)       API_KEY="$2"; shift 2 ;;
             --base-url)      BASE_URL="$2"; shift 2 ;;
+            --effort)        EFFORT="$2"; shift 2 ;;
+            --thinking)      THINKING="$2"; shift 2 ;;
             --output-format)  OUTPUT_FORMAT="$2"; shift 2 ;;
             --print)         OUTPUT_FORMAT="stream-json"; shift ;;
             --session)
