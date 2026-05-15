@@ -558,7 +558,11 @@ store_session_list_rows() {
 
 # llm
 llm_stream_curl() {
-    curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1 | util_awk_run -f "$AWK_DIR/http_stream.awk"
+    trap 'exec 6<&- 2>/dev/null; exit 1' INT
+    exec 6< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
+    util_awk_run -f "$AWK_DIR/http_stream.awk" <&6
+    exec 6<&-
+    trap - INT
 }
 
 llm_call() {
@@ -946,11 +950,14 @@ display_sub_agent_result() {
 }
 
 # Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output). Prints JSON to stdout; returns 1 if type has no event representation.
-display_event() {
-    # REPLY_MESSAGE[0]=type, rest varies by type
-    # Pure human-text rendering only. JSON event construction is in util_msg_to_stream().
+# Render a single RESP message from REPLY_MESSAGE (human-readable or stream-json).
+# JSON event construction is still handled by util_msg_to_stream().
+display_message() {
     local _type="${REPLY_MESSAGE[0]}" _tc_kv=() i _n _tc_summary="" _tr_name _tr_text="" _um_text
-
+    if util_is_stream_json; then
+        printf '%s\n' "$(util_msg_to_stream)"
+        return
+    fi
     case "$_type" in
         TEXT)
             # Insert newline when transitioning from thinking to text
@@ -989,7 +996,6 @@ display_event() {
             if [[ "$_tr_name" == "Edit" ]]; then
                 _tr_text="${REPLY_MESSAGE[3]}"$'\n'
             elif [[ "$_tr_name" == "Read" || "$_tr_name" == "Write" ]]; then
-                # Summary is already prepended to content (by agent_loop_stream)
                 _tr_text="${REPLY_MESSAGE[3]%%$'\n'*}"$'\n'
             else
                 _tr_text="${REPLY_MESSAGE[3]}"$'\n'
@@ -1012,7 +1018,15 @@ display_event() {
             printf '\033[32m> %s\033[0m\n' "$_um_text"
             DISPLAY_LAST_CHAR=$'\n'
             ;;
-        STOP)  display_ensure_newline ;;
+        STOP)
+            if [[ "${REPLY_MESSAGE[1]-}" == "interrupted" ]]; then
+                display_ensure_newline
+                printf '\033[36mInterrupted.\033[0m\n'
+                DISPLAY_LAST_CHAR=$'\n'
+            else
+                display_ensure_newline
+            fi
+            ;;
         CONTEXT_UPDATE)
             display_ensure_newline; printf '\033[36mContext compacted (%s).\033[0m\n' "${REPLY_MESSAGE[2]}"; DISPLAY_LAST_CHAR=$'\n'
             ;;
@@ -1157,6 +1171,17 @@ agent_run_loop() {
     fi
 }
 
+# 调用 agent_loop 并处理交互式终端提示符
+
+# 统一清理所有管道 FD（按源→宿的级联顺序关闭）
+cleanup_all_pipes() {
+    exec 6<&- 2>/dev/null   # curl 源 (llm_stream_curl)
+    exec 5<&- 2>/dev/null   # llm_call 管道 (agent_loop_stream)
+    exec 4<&- 2>/dev/null   # agent_loop_stream 管道 (agent_loop)
+    exec 9>&- 2>/dev/null   # INPUT_FIFO 写入端 (agent_main_loop)
+    exec 3<&- 2>/dev/null   # INPUT_FIFO 读取端 (agent_main_loop)
+}
+
 agent_main_loop() {
     until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
     exec 9> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
@@ -1179,15 +1204,14 @@ agent_main_loop() {
         esac
         [[ "$INTERACTIVE" != true ]] && (( ACTIVE_SUB_COUNT == 0 )) && break
     done
-    exec 9>&-
-    exec 3<&-
+    cleanup_all_pipes
     rm -f "$INPUT_FIFO"
 }
 
 agent_loop_stream() {
     local user_input="$1" turn=0
     # Trap SIGINT: close pipe FD to unblock read
-    trap 'INTERRUPT_REQUESTED=true; exec 5<&- 2>/dev/null' INT
+    trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
@@ -1258,23 +1282,12 @@ agent_loop_stream() {
     fi
 }
 
-agent_event() {
-    local _se=""
-    # SubAgent launches happen in the parent shell via the tool-call event stream.
-    # Keep the active count here so the main loop can see it.
-    [[ "${REPLY_MESSAGE[0]}" == "TOOL_CALL" && "${REPLY_MESSAGE[1]}" == "SubAgent" ]] && ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT + 1 ))
-    # Layer 1: Always convert and write to events.jsonl
-    _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && {
-        [[ "$LOG_EVENTS" != "false" ]] && store_event_append "$_se"
-    }
-}
-
 agent_loop() {
-    local user_input="$1" turn_kind="${2:-user_input}" had_error=false
+    local user_input="$1" turn_kind="${2:-user_input}" _se="" _type="" _reason="" had_error=false
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
     INTERRUPT_REQUESTED=false
-    [[ "$turn_kind" == user_input && "$LOG_EVENTS" != "false" ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
+    [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
     # Trap SIGINT (Ctrl+C): close pipe FD to unblock read
@@ -1282,24 +1295,18 @@ agent_loop() {
     # Open the process substitution
     exec 4< <(agent_loop_stream "$user_input")
     while util_read_msg <&4; do
-        [[ "${REPLY_MESSAGE[0]}" == "ERROR" ]] && had_error=true
-        agent_event
-        # Layer 1: stdout — stream-json or human display
-        [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]] && break
-        if util_is_stream_json; then
-            _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && printf '%s\n' "$_se"
-        else
-            display_event
+        _type="${REPLY_MESSAGE[0]-}"
+        _reason="${REPLY_MESSAGE[1]-}"
+        [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT + 1 ))
+        _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
+        display_message
+        if [[ "$_type" == "ERROR" ]]; then
+            had_error=true
+            break
         fi
+        [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
     exec 4<&-
-    if [[ "$INTERRUPT_REQUESTED" == true ]]; then
-        if util_is_stream_json; then
-            printf '{"type":"stop","reason":"interrupted"}\n'
-        else
-            printf '\033[36mInterrupted.\033[0m\n'
-        fi
-    fi
     $had_error && return 1
     return 0
 }
@@ -1465,22 +1472,18 @@ validate_config() {
 }
 
 interactive_mode() {
-    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" line
+    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" line
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
     touch "$history_file" 2>/dev/null || true
     history -r "$history_file" 2>/dev/null || true
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
-    if [[ -s "${SESSION_EVENT_FILE:-}" ]]; then
-        LOG_EVENTS=false
-        store_event_recent_turn_lines 10 \
-            | util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk" \
-            | while util_read_msg; do
-                display_event
-            done
+    if store_event_recent_turn_lines 10 \
+        | util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk" \
+        | while util_read_msg; do display_message; done
+    then
         printf '\n'
         DISPLAY_LAST_CHAR=$'\n'
-        LOG_EVENTS="$_saved_log_events"
     fi
     display_term_title
     {
