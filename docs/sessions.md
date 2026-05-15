@@ -93,6 +93,6 @@ session 统计数据，JSON 格式，包含以下字段：
 恢复 session 时（`--continue` 或 `--session`），交互模式会回放最近 10 轮对话：
 
 - 读取 `events.jsonl`，按 `user_input`/`user_message` 事件标记 turn 边界
-- 使用 `event_replay.awk`（bash）或 `display_replay_event()`（Go/Rust）转为 REPL 输出
+- 使用 `event_replay.awk`（bash）或内联的 `while util_read_msg; do display_message; done`（Go/Rust）转为 REPL 输出
 - `session_start`/`usage`/`retry` 事件不回放
 - 回放完成后输出空行分隔，再接交互提示符

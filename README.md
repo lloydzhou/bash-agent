@@ -90,7 +90,6 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 | `OPENAI_BASE_URL` | OpenAI API base URL |
 | `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
 | `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
-| `THINKING_BUDGET` | thinking token 预算（默认 `2048`） |
 
 DP 算法相关环境变量：
 

@@ -376,7 +376,7 @@ summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summar
 
 - 读取 `events.jsonl`，按 `user_input` / `user_message` 事件标记 turn 边界
 - 取最后 10 个 turn 的事件序列
-- 使用 `display_replay_event()`（Go/Rust）或 `event_replay.awk`（bash）将事件转为 REPL 兼容的 RESP 协议输出
+- 使用 `display_message()`（bash/Go/Rust）或 `event_replay.awk`（bash）将事件转为 REPL 兼容的 RESP 协议输出
 - 回放文本/思考内容时累计延迟 flush，保证 thinking→text 边界处正确插入换行
 - bash 版使用独立的 `src/awk/event_replay.awk` 文件，build 时内联到单文件发布版
 - event_replay 依赖 TOOL_RESULT 事件中已附带的 file_summary 前缀（Read/Write 工具结果），因此回放时不需访问原始文件
@@ -546,7 +546,7 @@ SubAgent 的核心设计原则是**隔离输出**：子 agent 的执行过程不
 |------|------|
 | 主 agent 的 `agentLoop` | 负责写入 events.jsonl + 根据模式（human/stream-json）输出到 stdout |
 | SubAgent 的工具执行 | 只按格式传递结果，不直接输出到 stdout |
-| SubAgent 的 `agentLoopStream` | 只记录 events.jsonl，不调用 `display_event` 或 `write_human` |
+| SubAgent 的 `agent_loop_stream` | 只记录 events.jsonl，不调用 `display_message` 或 `write_human` |
 
 **启动流程**：
 
@@ -558,19 +558,19 @@ SubAgent 的核心设计原则是**隔离输出**：子 agent 的执行过程不
 **关键实现细节**：
 
 - **bash 版本**：SubAgent 启动时设置 `export INTERACTIVE=false`，然后 `agent_loop "$prompt" >/dev/null` 重定向输出到 /dev/null
-- **Go/Rust 版本**：SubAgent 启动时设置 `sub_cfg.interactive = false`，然后在 `display_event` 中检查 `!self.is_stream_json_mode() && self.cfg.interactive` 条件，只有在交互模式下才输出到 stdout
+- **Go/Rust 版本**：SubAgent 启动时设置 `sub_cfg.interactive = false`，然后在 `display_message` 中检查 `!self.is_stream_json_mode() && self.cfg.interactive` 条件，只有在交互模式下才输出到 stdout
 
 **⚠️ 常见错误**：
 
 错误理解：在 `write_human` 中根据 `interactive` 字段跳过输出。
 
-正确理解：`write_human` 不应该根据 `interactive` 跳过输出——主 agent 是交互模式需要正常输出。SubAgent 的 `interactive=false` 是通过 `display_event` 中的条件检查来确保不输出的。
+正确理解：`write_human` 不应该根据 `interactive` 跳过输出——主 agent 是交互模式需要正常输出。SubAgent 的 `interactive=false` 是通过 `display_message` 中的条件检查来确保不输出的。
 
 **代码位置**：
 
-- bash: `src/agent.sh` 第 1094 行（`agent_loop "$prompt" >/dev/null`）
-- Go: `internal/app/app.go`（`display_event` 中的 `if !rt.isStreamJsonMode() && rt.cfg.Interactive` 检查）
-- Rust: `rust/src/app.rs`（`display_event` 中的 `if !self.is_stream_json_mode() && self.cfg.interactive` 检查）
+- bash: `src/agent.sh`（`tool_sub_agent` 函数内 `agent_loop "$prompt" >/dev/null`）
+- Go: `go/agent.go`（`display_message` 中的 `if !rt.isStreamJsonMode() && rt.cfg.Interactive` 检查）
+- Rust: `rust/src/agent.rs`（`display_message` 中的 `if !self.is_stream_json_mode() && self.cfg.interactive` 检查）
 
 ### 后续不该做什么
 
@@ -604,11 +604,11 @@ SubAgent 的核心设计原则是**隔离输出**：子 agent 的执行过程不
 
 ### Thinking / Reasoning
 
-通过环境变量 `THINKING_BUDGET` 控制（默认 `2048`）：
+通过 `--thinking`/`--effort` 控制：
 
-- `claude`：发送 `thinking.type=enabled, budget_tokens=N`
-- `openai`：发送 `reasoning_effort=high`（统一值，不按模型名分支）
-- summary 调用复用 `THINKING_BUDGET` 以保持前缀缓存一致性（Cache-Aligned Summarization）
+- `claude`：`thinking.type=adaptive`（自适应）/ `enabled` / `disabled`，`thinking.budget_tokens` 由 `--effort` 映射
+- `openai`：固定 `reasoning_effort` 由 `--effort` 映射（high/low/medium）
+- summary 调用复用相同的 thinking/effort 配置以保持前缀缓存一致性（Cache-Aligned Summarization）
 
 消息转换时，assistant 的 `thinking` content block 会被跳过（OpenAI 格式不支持 thinking block）。
 
