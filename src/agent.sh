@@ -110,8 +110,9 @@ util_parse_size() {
 }
 
 util_json_escape() {
-    printf '%s' "${1:-}" | util_awk_run -v json_mode="escape_string" \
-        -f "$AWK_DIR/json.awk" -f "$AWK_DIR/json_cli.awk"
+    local _s="${1:-}"
+    _s="${_s//\\/\\\\}" _s="${_s//\"/\\\"}" _s="${_s//$'\n'/\\n}" _s="${_s//$'\r'/\\r}" _s="${_s//$'\t'/\\t}" _s="${_s//$'\b'/\\b}" _s="${_s//$'\f'/\\f}"
+    printf '%s' "$_s"
 }
 
 util_is_stream_json() { [[ "$OUTPUT_FORMAT" == "stream-json" ]]; }
@@ -337,6 +338,7 @@ store_session_init() {
     touch "$CONTEXT_SUMMARY_FILE"
     touch "$PLAN_FILE"
     touch "$PLAN_DRAFT_FILE"
+    touch "$STATS_FILE"
     if [[ "$new_session" == true ]]; then
         store_event_append "{\"type\":\"session_start\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\"}"
     fi
@@ -527,6 +529,31 @@ store_plan_draft_has() {
 
 store_summary_get() {
     [[ -n "$CONTEXT_SUMMARY_FILE" && -s "$CONTEXT_SUMMARY_FILE" ]] && printf '%s' "$(<"$CONTEXT_SUMMARY_FILE")"
+}
+
+store_event_recent_turn_lines() {
+    local turns="${1:-10}" _match _from_line
+    [[ -s "${SESSION_EVENT_FILE:-}" ]] || return 0
+    _match=$(grep -n '"type":"user_input"' "$SESSION_EVENT_FILE" 2>/dev/null | tail -n "$turns" | head -n 1) || true
+    _from_line="${_match%%:*}"
+    [[ -n "$_from_line" && "$_from_line" -ge 1 ]] || _from_line=1
+    tail -n +"$_from_line" "$SESSION_EVENT_FILE"
+}
+
+store_session_list_rows() {
+    local dir session_dir name mod preview summary_file
+    dir="$(store_session_get_dir)"
+    [[ -d "$dir" ]] || return 0
+    for session_dir in "$dir"/*/; do
+        [[ -d "$session_dir" ]] || continue
+        name=$(basename "$session_dir")
+        mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$session_dir" 2>/dev/null || stat -c "%y" "$session_dir" 2>/dev/null | cut -d. -f1)
+        summary_file="${session_dir}/summary.txt"
+        preview=""
+        [[ -s "$summary_file" ]] && preview=$(grep -m1 -v '^[[:space:]]*$' "$summary_file" 2>/dev/null || true)
+        [[ ${#preview} -gt 60 ]] && preview="${preview:0:57}..."
+        printf '%s\t%s\t%s\n' "$name" "$mod" "$preview"
+    done
 }
 
 # llm
@@ -868,8 +895,9 @@ tool_sub_agent() {
         util_load_tool_defs
         local _done=false _status="failed"
         trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"; rm -f "$INPUT_FIFO"' EXIT
-        # 输出全部重定向到 /dev/null，不污染主 agent 终端
-        agent_loop "$prompt" >/dev/null && _status="ok"
+        # Silence the child shell completely so terminal title updates do not leak into the parent tool_result.
+        exec </dev/null >/dev/null 2>&1
+        agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"
         _done=true
     ) &
@@ -894,6 +922,27 @@ display_human_text() {
     else
         DISPLAY_LAST_CHAR="${s: -1}"
     fi
+}
+
+display_sub_agent_result() {
+    local session_id="$1" status="$2" _in="$3" _out="$4" _thinking="$5" _text="$6"
+    # Clear the prompt at the start of line in interactive mode
+    [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
+    display_ensure_newline
+    # Decode RESP wire format escapes (from event_replay.awk)
+    # IMPORTANT: decode \\ before \n to avoid double-decoding
+    _thinking="${_thinking//\\\\/\\}"
+    _thinking="${_thinking//\\n/$'\n'}"
+    _text="${_text//\\\\/\\}"
+    _text="${_text//\\n/$'\n'}"
+    if [[ "$status" == "ok" ]]; then
+        printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
+    else
+        printf '\033[31m[sub-agent %s] failed\033[0m\n' "$session_id"
+    fi
+    [[ -n "$_thinking" ]] && printf '\033[90m%s%s\033[0m\n' "${_thinking:0:120}" "$([[ ${#_thinking} -gt 120 ]] && printf '…')"
+    [[ -n "$_text" ]] && printf '%s%s\n' "${_text:0:120}" "$([[ ${#_text} -gt 120 ]] && printf '…')"
+    DISPLAY_LAST_CHAR=$'\n'
 }
 
 # Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output). Prints JSON to stdout; returns 1 if type has no event representation.
@@ -952,6 +1001,9 @@ display_event() {
             fi
             PREV_WAS_THINKING=false
             [[ -n "$_tr_text" ]] && display_human_text "$_tr_text"
+            ;;
+        SUB_AGENT_RESULT)
+            display_sub_agent_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" "${REPLY_MESSAGE[5]}" "${REPLY_MESSAGE[6]}"
             ;;
         USER_MESSAGE)
             display_ensure_newline
@@ -1064,6 +1116,7 @@ agent_record_usage() {
 }
 
 agent_handle_sub_result() {
+    local silent="${1:-false}"
     # REPLY_MESSAGE: AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc> <reqs>
     local session_id="${REPLY_MESSAGE[1]}" status="${REPLY_MESSAGE[2]}"
     local _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
@@ -1073,59 +1126,66 @@ agent_handle_sub_result() {
     # 记录 usage（带 kind=sub_agent, sub_session_id）
     store_event_append "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(util_json_escape "$session_id")\"}"
     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
+    # 记录 sub_agent_result 事件，供 replay 和 stream-json 复现子 agent 回显
+    store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$session_id")\",\"status\":\"$status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
     # 记录 sub_agent_end 事件
     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$status\"}"
     ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT - 1 ))
+    [[ "$silent" == true ]] && return 0
     # 展示结果摘要
     if util_is_stream_json; then
-        printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s}\n' \
-            "$(util_json_escape "$session_id")" "$status" "$_in" "$_out"
+        printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}\n' \
+            "$(util_json_escape "$session_id")" "$status" "$_in" "$_out" \
+            "$(util_json_escape "$_thinking")" "$(util_json_escape "$_text")"
     else
-        display_ensure_newline
-        if [[ "$status" == "ok" ]]; then
-            printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
-        else
-            printf '\033[31m[sub-agent %s] failed\033[0m\n' "$session_id"
-        fi
-        [[ -n "$_thinking" ]] && printf '\033[90m%.120s%s\033[0m\n' "$_thinking" "$([[ ${#_thinking} -gt 120 ]] && printf '%s' "…")"
-        [[ -n "$_text" ]] && printf '%.120s%s\n' "$_text" "$([[ ${#_text} -gt 120 ]] && printf '%s' "…")"
-        DISPLAY_LAST_CHAR=$'\n'
+        display_sub_agent_result "$session_id" "$status" "$_in" "$_out" "$_thinking" "$_text"
     fi
-    agent_run_loop "[sub-agent $session_id] $status (in=$_in, out=$_out)"$'\n'"Thinking: $_thinking"$'\n'"Text: $_text"
+    agent_run_loop "[sub-agent $session_id] $status (in=$_in, out=$_out)"$'\n'"Thinking: $_thinking"$'\n'"Text: $_text" sub_agent_result
 }
 
 # 调用 agent_loop 并处理交互式终端提示符
 
 agent_run_loop() {
+    local turn_kind="${2:-user_input}"
     [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
-    agent_loop "$1"
+    agent_loop "$1" "$turn_kind"
     if [[ "$INTERACTIVE" == true ]]; then
+        # Only print newline if the last output didn't end with one
         [[ "$DISPLAY_LAST_CHAR" != $'\n' ]] && printf '\n'
+        # Print prompt
         printf '\033[32m>\033[0m '
     fi
 }
 
 agent_main_loop() {
     until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
-    exec 4> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
+    exec 9> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
     while util_read_msg <&3; do
         case "${REPLY_MESSAGE[0]}" in
+            SESSION_END)
+                break
+                ;;
             USER_INPUT)
                 local _input="${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
                 agent_run_loop "$_input"
                 ;;
-            AGENT_RESULT) agent_handle_sub_result ;;
+            AGENT_RESULT)
+                if [[ "$INTERRUPT_REQUESTED" == true ]]; then
+                    agent_handle_sub_result true
+                else
+                    agent_handle_sub_result
+                fi
+                ;;
         esac
         [[ "$INTERACTIVE" != true ]] && (( ACTIVE_SUB_COUNT == 0 )) && break
     done
-    exec 4>&-
+    exec 9>&-
     exec 3<&-
     rm -f "$INPUT_FIFO"
 }
 
 agent_loop_stream() {
     local user_input="$1" turn=0
-    store_conv_add_user "$user_input"
     # Trap SIGINT: close pipe FD to unblock read
     trap 'INTERRUPT_REQUESTED=true; exec 5<&- 2>/dev/null' INT
     while (( turn < MAX_TURNS )); do
@@ -1198,29 +1258,36 @@ agent_loop_stream() {
     fi
 }
 
+agent_event() {
+    local _se=""
+    # SubAgent launches happen in the parent shell via the tool-call event stream.
+    # Keep the active count here so the main loop can see it.
+    [[ "${REPLY_MESSAGE[0]}" == "TOOL_CALL" && "${REPLY_MESSAGE[1]}" == "SubAgent" ]] && ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT + 1 ))
+    # Layer 1: Always convert and write to events.jsonl
+    _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && {
+        [[ "$LOG_EVENTS" != "false" ]] && store_event_append "$_se"
+    }
+}
+
 agent_loop() {
-    local user_input="$1" had_error=false _se=""
+    local user_input="$1" turn_kind="${2:-user_input}" had_error=false
     DISPLAY_LAST_CHAR=$'\n'
     PREV_WAS_THINKING=false
     INTERRUPT_REQUESTED=false
+    [[ "$turn_kind" == user_input && "$LOG_EVENTS" != "false" ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
+    store_conv_add_user "$user_input"
+    store_stats_update current_turn_count=+1
     # Trap SIGINT (Ctrl+C): close pipe FD to unblock read
     trap 'INTERRUPT_REQUESTED=true; exec 4<&- 2>/dev/null' INT
-    [[ "$LOG_EVENTS" != "false" ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
-    store_stats_update current_turn_count=+1
     # Open the process substitution
     exec 4< <(agent_loop_stream "$user_input")
     while util_read_msg <&4; do
         [[ "${REPLY_MESSAGE[0]}" == "ERROR" ]] && had_error=true
-        # SubAgent started: track active count in main shell
-        [[ "${REPLY_MESSAGE[0]}" == "TOOL_CALL" && "${REPLY_MESSAGE[1]}" == "SubAgent" ]] && ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT + 1 ))
-        # Layer 1: Always convert and write to events.jsonl
-        _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && {
-            [[ "$LOG_EVENTS" != "false" ]] && store_event_append "$_se"
-        }
-        # Layer 2: stdout — stream-json or human display
+        agent_event
+        # Layer 1: stdout — stream-json or human display
         [[ "${REPLY_MESSAGE[0]}" == "STOP" && "${REPLY_MESSAGE[1]}" == "interrupted" ]] && break
         if util_is_stream_json; then
-            [[ -n "$_se" ]] && printf '%s\n' "$_se"
+            _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && printf '%s\n' "$_se"
         else
             display_event
         fi
@@ -1337,25 +1404,18 @@ parse_args() {
 }
 
 list_sessions() {
-    local dir session_dir name mod preview summary_file
-    dir="$(store_session_get_dir)"
-    if [[ ! -d "$dir" ]]; then
+    local found=false name mod preview
+    if [[ ! -d "$(store_session_get_dir)" ]]; then
         echo "No sessions found."
         return
     fi
     printf "%-40s %-16s %s\n" "NAME" "MODIFIED" "PREVIEW"
-    for session_dir in "$dir"/*/; do
-        [[ -d "$session_dir" ]] || continue
-        name=$(basename "$session_dir")
-        mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$session_dir" 2>/dev/null || stat -c "%y" "$session_dir" 2>/dev/null | cut -d. -f1)
-        summary_file="${session_dir}/summary.txt"
-        preview=""
-        if [[ -s "$summary_file" ]]; then
-            preview=$(grep -m1 -v '^[[:space:]]*$' "$summary_file" 2>/dev/null || true)
-        fi
-        [[ ${#preview} -gt 60 ]] && preview="${preview:0:57}..."
+    while IFS=$'\t' read -r name mod preview; do
+        [[ -n "$name" ]] || continue
+        found=true
         printf "%-40s %-16s %s\n" "$name" "$mod" "$preview"
-    done
+    done < <(store_session_list_rows)
+    $found || echo "No sessions found."
 }
 
 validate_config() {
@@ -1405,7 +1465,7 @@ validate_config() {
 }
 
 interactive_mode() {
-    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" _efile="${SESSION_EVENT_FILE:-}" _match _from_line line
+    local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" _saved_log_events="${LOG_EVENTS:-true}" line
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
     touch "$history_file" 2>/dev/null || true
     history -r "$history_file" 2>/dev/null || true
@@ -1413,10 +1473,7 @@ interactive_mode() {
     # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
     if [[ -s "${SESSION_EVENT_FILE:-}" ]]; then
         LOG_EVENTS=false
-        _match=$(grep -n '"type":"user_input"' "$_efile" 2>/dev/null | tail -n 10 | head -n 1) || true
-        _from_line="${_match%%:*}"
-        [[ -n "$_from_line" && "$_from_line" -ge 1 ]] || _from_line=1
-        tail -n +"$_from_line" "$_efile" \
+        store_event_recent_turn_lines 10 \
             | util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk" \
             | while util_read_msg; do
                 display_event
@@ -1427,18 +1484,22 @@ interactive_mode() {
     fi
     display_term_title
     {
-        exec 4> "$INPUT_FIFO"
+        exec 9> "$INPUT_FIFO"
         while true; do
             stty echo 2>/dev/null || true
             if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
+                util_write_msg "SESSION_END" "0" >&9
                 break
             fi
-            [[ "$line" == "exit" || "$line" == "quit" ]] && break
+            [[ "$line" == "exit" || "$line" == "quit" ]] && {
+                util_write_msg "SESSION_END" "0" >&9
+                break
+            }
             [[ -z "$line" ]] && continue
             printf '%s\n' "$line" >> "$history_file"
-            util_write_msg "USER_INPUT" "0" "$line" >&4
+            util_write_msg "USER_INPUT" "0" "$line" >&9
         done
-        exec 4>&-
+        exec 9>&-
     } &
     local _stdin_pid=$!
 
