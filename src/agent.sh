@@ -914,8 +914,6 @@ display_human_text() {
 
 display_sub_agent_result() {
     local session_id="$1" status="$2" _in="$3" _out="$4" _thinking="$5" _text="$6"
-    # Clear the prompt at the start of line in interactive mode
-    [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
     display_ensure_newline
     if [[ "$status" == "ok" ]]; then
         printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
@@ -1140,7 +1138,6 @@ agent_handle_sub_result() {
 
 agent_run_loop() {
     local turn_kind="${2:-user_input}"
-    [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
     agent_loop "$1" "$turn_kind"
     if [[ "$INTERACTIVE" == true ]]; then
         printf '\033[32m>\033[0m '
