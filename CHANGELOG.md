@@ -4,6 +4,44 @@
 
 ---
 
+## [3.0.0] - 2026-05-15
+
+### Added
+
+- **Pipeline 架构重写 (bash)**：`agent_loop_stream` 统一 RESP 协议管道，解耦 LLM 调用、工具执行、事件记录和显示渲染；`display_message` 单消息渲染代替跨进程管道，消除 bash stdio 全缓冲导致的多轮 LLM 输出丢失（`5202d12`）
+- **Go 扁平包结构**：删除 `go/internal/` 下 15 个散包子包，合并为 8 个顶层文件 `agent.go` / `store.go` / `tools.go` / `transport.go` / `types.go` / `util.go` / `display.go` / `agent_test.go`（`252150c`）
+- **Rust 替换为 rust2**：用 flatter 架构替换旧多文件拆分，`agent.rs` 作为主模块，新增 `display.rs` / `sse.rs` / `store.rs` / `util.rs`（`5dce3e8`）
+- **`--thinking` / `--effort` 自适应思考模式**：替代 `THINKING_BUDGET`，支持 low/medium/high/xhigh/max 五级 effort（`f04e2bc`）
+- **终端标题实时更新**：`term_title.awk` 在每次 LLM 调用后同步显示模型名、请求数和 token 统计（`b3064f4`）
+- **对话压缩策略 (`compact_turn_keep.awk`)**：基于 turn 比例的行保留策略，配合 DP 算法做二次压缩（`1365b80`）
+- **交互模式事件回放**：`event_replay.awk` 支持重入会话的历史对话回显（`a6d9cd0`）
+- **SubAgent fork 会话隔离**：`store_session_fork()` 提取为独立函数，fork 时只复制 conversation/summary/plan（`a032bda`）
+- **`cleanup_all_pipes` 统一清理**：按 FD 级联顺序关闭 curl/llm/agent_loop/INPUT_FIFO 管道（`5202d12`）
+- **`llm_stream_curl` FD 6 管道替代 pipefail**：避免 `set -o pipefail` + SIGPIPE 导致脚本退出（`5202d12`）
+- **测试扩展到 91+ 用例**：新增 SubAgent 故障传播 / fork / 隔离等测试（`tests/test.sh`）
+- **`store_conv_get_messages` 空文件安全**：增加 `[[ -f "$CONV_FILE" ]]` 检查，避免 awk 报错（`778afdb`）
+
+### Changed
+
+- **`display_event` → `display_message` + `display_stream`**：拆分流式渲染和单消息渲染，`display_stream` 最终内联到 `agent_main_loop`（`5202d12`, `14c9e45`）
+- **`agent_event` 内联到 `agent_loop`**：消除 `> >(display_event)` 跨进程管道及其 stdio 缓冲问题，`ACTIVE_SUB_COUNT` 改为 `agent_main_loop` 的 `local active_sub_count`，通过 bash 动态作用域在 `agent_loop` 中自增（`5202d12`）
+- **compact 层合并到 agent 层**：7 层架构简化为 6 层（`1365b80`）
+- **session 存储隔离**：7 类前缀重命名 + `TOOL_CALL` 分支重构（`4e11143`）
+- **build.sh AWK_DIR 替换规则更新**：适配 `llm_stream_curl` FD 6 模式，修复 `dist/agent.sh` 中 `AWK_DIR: unbound variable` 错误（`14c9e45`）
+
+### Removed
+
+- 旧 `rust/src/` 多文件包结构（config.rs/conversation.rs/httpclient.rs/...）
+- 旧 `go/internal/` 多包结构（app/config/httpclient/sse/transport/tools/...）
+- `rust2_backup/` 目录
+- 全局 `ACTIVE_SUB_COUNT` 变量
+
+### Security
+
+- `scripts/build.sh` 内联 awk 文件时使用变量拼接替代 `-f "$AWK_DIR/"` 路径引用，避免 dist 构建后路径暴露
+
+---
+
 ## [2.5.2] - 2026-05-13
 
 ### Changed
@@ -428,7 +466,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...v3.0.0
 [2.5.2]: https://github.com/lloydzhou/bash-agent/compare/v2.5.1...v2.5.2
 [2.5.1]: https://github.com/lloydzhou/bash-agent/compare/v2.5.0...v2.5.1
 [2.4.0]: https://github.com/lloydzhou/bash-agent/compare/v2.3.2...v2.4.0
