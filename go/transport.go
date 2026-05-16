@@ -126,7 +126,16 @@ func NewHTTPTransport(cfg Config) *HTTPTransport {
 
 // parseSSEStream 从 HTTP response body 读取 SSE 流，解析为 Event
 func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
+	var stopEmitted bool
 	defer resp.Body.Close()
+	defer func() {
+		if !stopEmitted {
+			// No message_stop received — stream was interrupted (connection reset,
+			// timeout, early EOF). 对标 awk 的 END 块兜底逻辑。
+			ch <- Event{Type: EventError, Fields: []string{"ERROR", "Stream interrupted (no message_stop received)"}}
+			ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
+		}
+	}()
 	defer close(ch)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -161,6 +170,9 @@ func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 					&openaiTextStarted,
 					&stopReason,
 					&inputTokens, &outputTokens, &cacheRead, &cacheCreate)
+				if data == "[DONE]" {
+					stopEmitted = true
+				}
 				continue
 			}
 
@@ -204,6 +216,7 @@ func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 				t.extractUsageFromStart(data, &inputTokens, &cacheRead, &cacheCreate)
 
 			case "message_stop":
+				stopEmitted = true
 				// 发送 USAGE + STOP
 				ch <- Event{Type: EventUsage, Payload: Usage{
 					InputTokens:  inputTokens,
