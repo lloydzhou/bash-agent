@@ -545,11 +545,11 @@ store_session_list_rows() {
 
 # llm
 llm_stream_curl() {
-    exec 6< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
+    exec 9< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
     curl_pid=$!
     echo "$curl_pid" > "/tmp/agent_curl_pid.$$" 2>/dev/null || true
-    util_awk_run -f "$AWK_DIR/http_stream.awk" <&6
-    exec 6<&-
+    util_awk_run -f "$AWK_DIR/http_stream.awk" <&9
+    exec 9<&-
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
 }
 
@@ -889,8 +889,8 @@ tool_sub_agent() {
         trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"; rm -f "$INPUT_FIFO"' EXIT
         # Silence the child shell completely; close all inherited FDs
         exec </dev/null >/dev/null 2>&1
-        exec 3<&- 2>/dev/null; exec 5<&- 2>/dev/null
-        exec 7>&- 2>/dev/null; exec 9>&- 2>/dev/null
+        exec 3<&- 2>/dev/null; exec 4<&- 2>/dev/null
+        exec 8<&- 2>/dev/null; exec 5<&- 2>/dev/null
         agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"
         _done=true
@@ -1145,7 +1145,7 @@ agent_handle_sub_result() {
     active_sub_count=$(( active_sub_count - 1 ))
     [[ "$silent" == true ]] && return 0
     # 展示结果摘要——通过 fd 7 交给 display_stream，不直接写 stdout（避免和子进程争终端）
-    ( util_write_msg "SUB_AGENT_RESULT" "$session_id" "$status" "$_in" "$_out" "$_thinking" "$_text" ) >&7 2>/dev/null || true
+    ( util_write_msg "SUB_AGENT_RESULT" "$session_id" "$status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
     agent_run_loop "[sub-agent $session_id] $status (in=$_in, out=$_out)"$'\n'"Thinking: $_thinking"$'\n'"Text: $_text" sub_agent_result
 }
 
@@ -1163,16 +1163,17 @@ agent_run_loop() {
 
 # 统一清理所有管道 FD（按源→宿的级联顺序关闭）
 cleanup_all_pipes() {
-    exec 7>&- 2>/dev/null   # display_stream 管道
-    exec 4<&- 2>/dev/null   # agent_loop_stream 管道 (agent_loop)
-    exec 9>&- 2>/dev/null   # INPUT_FIFO 写入端 (agent_main_loop)
-    exec 3<&- 2>/dev/null   # INPUT_FIFO 读取端 (agent_main_loop)
+    exec 4>&- 2>/dev/null   # display_stream 管道
+    exec 5>&- 2>/dev/null   # INPUT_FIFO 写入端
+    exec 3<&- 2>/dev/null   # INPUT_FIFO 读取端
+    exec 7<&- 2>/dev/null   # agent_loop_stream 管道 (agent_loop)
+    exec 8<&- 2>/dev/null   # llm_call 管道 (agent_loop_stream)
 }
 
 agent_main_loop() {
     until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
-    exec 9> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
-    exec 7> >(display_stream)
+    exec 5> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
+    exec 4> >(display_stream)
     local display_pid=$! active_sub_count=0
     while util_read_msg <&3; do
         case "${REPLY_MESSAGE[0]}" in
@@ -1193,7 +1194,7 @@ agent_main_loop() {
         esac
         [[ "$INTERACTIVE" != true ]] && (( active_sub_count == 0 )) && break
     done
-    exec 7>&-
+    exec 4>&-
     wait "$display_pid" 2>/dev/null || true
     cleanup_all_pipes
     rm -f "$INPUT_FIFO"
@@ -1209,8 +1210,8 @@ agent_loop_stream() {
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(store_conv_get_messages)" >&2
-        exec 5< <(llm_call "$(store_conv_get_messages)")
-        while util_read_msg <&5; do
+        exec 8< <(llm_call "$(store_conv_get_messages)")
+        while util_read_msg <&8; do
             if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
                 break
@@ -1242,7 +1243,7 @@ agent_loop_stream() {
                 USAGE) _ctx_tokens=$(agent_record_usage "agent" agent_request_count false) ;;
             esac
         done
-        exec 5<&-
+        exec 8<&-
         [[ "$INTERRUPT_REQUESTED" == true ]] && { util_write_msg "STOP" "interrupted"; break; }
         # Fatal stop reasons exit immediately
         case "$stop" in
@@ -1280,22 +1281,22 @@ agent_loop() {
     store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
     # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl
-    trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$" 2>/dev/null)" 2>/dev/null; exec 4<&- 2>/dev/null' INT
+    trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT
     # Open the process substitution
-    exec 4< <(agent_loop_stream "$user_input")
-    while util_read_msg <&4; do
+    exec 7< <(agent_loop_stream "$user_input")
+    while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
         [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && active_sub_count=$(( active_sub_count + 1 ))
         _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
-        ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&7 2>/dev/null || true
+        ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true
             break
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
-    exec 4<&-
+    exec 7<&-
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     $had_error && return 1
     return 0
@@ -1477,22 +1478,22 @@ interactive_mode() {
     fi
     display_term_title
     {
-        exec 9> "$INPUT_FIFO"
+        exec 5> "$INPUT_FIFO"
         while true; do
             stty echo 2>/dev/null || true
             if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
-                util_write_msg "SESSION_END" "0" >&9
+                util_write_msg "SESSION_END" "0" >&5
                 break
             fi
             [[ "$line" == "exit" || "$line" == "quit" ]] && {
-                util_write_msg "SESSION_END" "0" >&9
+                util_write_msg "SESSION_END" "0" >&5
                 break
             }
             [[ -z "$line" ]] && continue
             printf '%s\n' "$line" >> "$history_file"
-            util_write_msg "USER_INPUT" "0" "$line" >&9
+            util_write_msg "USER_INPUT" "0" "$line" >&5
         done
-        exec 9>&-
+        exec 5>&-
     } &
     local _stdin_pid=$!
 
@@ -1516,7 +1517,7 @@ main() {
     elif [[ -n "$USER_INPUT" || ! -t 0 ]]; then
         local input="$USER_INPUT"
         [[ -z "$input" ]] && input=$(cat)
-        ( exec 3> "$INPUT_FIFO"; util_write_msg "USER_INPUT" "0" "$input" >&3 ) &
+        ( exec 5> "$INPUT_FIFO"; util_write_msg "USER_INPUT" "0" "$input" >&5 ) &
         agent_main_loop
     else
         INTERACTIVE=true
