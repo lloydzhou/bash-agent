@@ -137,11 +137,25 @@ Go 和 Rust 版本当前也保持和 bash 一致的两层结构：
 │         │                              │ API 服务  │                │
 │         │                              └──────────┘                │
 │         │                                                          │
-│         │ FIFO (结果回传)                                           │
+│         │ RESP via fd 7 pipe                                       │
 │         ↓                                                          │
 │  ┌──────────────┐                                                  │
+│  │ display_stream│ ←── fd 7 ──── agent_loop                        │
+│  │ (子进程)      │     display_message → display_human_text        │
+│  └──────────────┘     display_ensure_newline / display_term_title   │
+│         │ stderr                                                    │
+│         ↓                                                          │
+│     [终端]                                                         │
+│                                                                    │
+│  ┌──────────────┐                                                  │
+│  │ stdin_reader  │ ── FIFO ──── agent_main_loop                     │
+│  │ (后台进程)    │     read -p "> " < /dev/tty                      │
+│  └──────────────┘     → USER_INPUT / SESSION_END                    │
+│                                                                    │
+│  ┌──────────────┐                                                  │
 │  │ 子 agent      │ ←── FIFO (启动) ─── agent_loop_stream           │
-│  │ (子进程)      │                                                  │
+│  │ (子进程)      │ ── FIFO (结果) ──→ agent_main_loop               │
+│  │ FD 3-9 关闭，不与主进程争管道                                     │
 │  └──────────────┘                                                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -152,9 +166,11 @@ Go 和 Rust 版本当前也保持和 bash 一致的两层结构：
 |------|------|------|---------|
 | RESP-like fd | awk → bash | SSE 解析结果传递给 agent_loop_stream | read 阻塞 |
 | RESP-like fd 4/5 | agent_loop_stream → agent_loop | 内层消息传递给外层 | write_message / read_message |
+| RESP fd 7 | agent_loop → display_stream | 渲染消息传递给子进程显示 | write_message / read_message |
+| FIFO | stdin_reader → agent_main_loop | 用户输入传递 | write 后非阻塞，read 阻塞 |
 | FIFO | 主 → 子 | 启动子 agent | 写入后非阻塞 |
 | FIFO | 子 → 主 | 子 agent 结果回传 | read 阻塞 |
-| stdin | 用户 → 主进程 | 交互模式输入 | read 阻塞 |
+| stdin | 用户 → stdin_reader | 交互模式输入（后台进程） | read 阻塞 |
 
 ### Go/Rust 版本的通道
 
@@ -382,7 +398,7 @@ summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summar
 - event_replay 依赖 TOOL_RESULT 事件中已附带的 file_summary 前缀（Read/Write 工具结果），因此回放时不需访问原始文件
 - `session_start` / `usage` / `retry` 事件不回放
 
-回放完成后输出一个空行分隔，再接交互提示符。
+回放完成后输出一个空行分隔，再进入交互模式。
 
 ### 3. Prompt 组装
 
@@ -546,7 +562,8 @@ SubAgent 的核心设计原则是**隔离输出**：子 agent 的执行过程不
 |------|------|
 | 主 agent 的 `agentLoop` | 负责写入 events.jsonl + 根据模式（human/stream-json）输出到 stdout |
 | SubAgent 的工具执行 | 只按格式传递结果，不直接输出到 stdout |
-| SubAgent 的 `agent_loop_stream` | 只记录 events.jsonl，不调用 `display_message` 或 `write_human` |
+| SubAgent 的 `agent_loop_stream` | 只记录 events.jsonl |
+|- **bash 版本**：SubAgent 关闭继承的 fd 7，`util_write_msg >&7` 静默失败，LLM 流不显示。子 Agent 结果通过 FIFO 回传。|
 
 **启动流程**：
 
@@ -557,14 +574,13 @@ SubAgent 的核心设计原则是**隔离输出**：子 agent 的执行过程不
 
 **关键实现细节**：
 
-- **bash 版本**：SubAgent 启动时设置 `export INTERACTIVE=false`，然后 `agent_loop "$prompt" >/dev/null` 重定向输出到 /dev/null
+- **bash 版本**：SubAgent 启动时设置 `export INTERACTIVE=false`，然后 `exec </dev/null >/dev/null 2>&1` 静默 stdout/stderr，最后关闭继承的 FD 3-9 防止意外写入父进程的 display pipe 或 FIFO。子 Agent 的 `agent_loop` 中 `( util_write_msg ... ) >&7 2>/dev/null` 因 fd 7 已关闭而静默失败，子 Agent 运行过程中的 LLM 流不显示在终端。子 Agent 的结果通过 `store_sub_send_result` 写入父 FIFO 回传。
 - **Go/Rust 版本**：SubAgent 启动时设置 `sub_cfg.interactive = false`，然后在 `display_message` 中检查 `!self.is_stream_json_mode() && self.cfg.interactive` 条件，只有在交互模式下才输出到 stdout
 
-**⚠️ 常见错误**：
+**⚠️ 常见错误**（已通过架构修复）：
 
-错误理解：在 `write_human` 中根据 `interactive` 字段跳过输出。
-
-正确理解：`write_human` 不应该根据 `interactive` 跳过输出——主 agent 是交互模式需要正常输出。SubAgent 的 `interactive=false` 是通过 `display_message` 中的条件检查来确保不输出的。
+- **bash 不通过条件判断隔离 SubAgent 输出**：SubAgent 启动时关闭 fd 7，`util_write_msg >&7` 静默失败，LLM 事件不会抵达 `display_stream`。不存在通过 `display_message` 条件判断跳过的风险。
+- **继承的 FD 导致输出串道**：SubAgent 若未关闭 fd 7，其 `agent_loop` 的 `util_write_msg >&7` 会写入父进程的 display pipe，与父进程 RESP 交错。现已在 `tool_sub_agent` 中 `exec 3<&- ... exec 7>&- ... exec 9>&-` 关闭所有继承 FD。
 
 **代码位置**：
 

@@ -19,7 +19,6 @@
   conversation.jsonl   当前对话窗口（发给模型的消息）
   events.jsonl         内部事件日志
   summary.txt          compact 后的历史摘要
-  todo.md              当前 session 的 todo 状态
   plan.md              当前 session 的计划文档
   stats.json           session 统计数据
 ```
@@ -48,10 +47,6 @@ compact 后的历史摘要。由 LLM 生成，替代被丢弃的旧消息。
 设计约束：
 - 新旧摘要长度固定为 S = 500 token
 - 摘要位于 system prompt 固定前缀中，每次请求都发送
-
-### todo.md
-
-由 `TodoWrite` 工具维护的 session 级待办清单。
 
 ### plan.md
 

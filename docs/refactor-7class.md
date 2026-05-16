@@ -16,7 +16,7 @@
 | `store_` | SessionStore | ✅ | 18 | 对话/事件/统计/摘要/计划/session路径 |
 | `tool_` | ToolDispatcher | ✅ | 19 | 工具分发 + 各工具实现 + 参数解析 + 结果格式化 |
 | `agent_` | Agent | ❌ | 8 | 核心循环、usage 记录、prompt 构建、sub agent、上下文压缩 |
-| `display_` | Display | ✅ | 4 | 终端输出（终端颜色 / stream-json / 测试 sink） |
+| `display_` | Display | ✅ | 5 | 终端输出（终端颜色 / stream-json / 测试 sink）+ display_stream 子进程 |
 | `llm_` | Transport | ✅ | 3 | API 通信：普通调用、流式 curl、摘要调用 |
 | `util_` | util | ❌ | 19 | JSON/IO/AWK/stream/协议读写/skill/JSON 构建 |
 
@@ -74,19 +74,22 @@ agent_loop
 agent_loop_stream
    ├─ llm_call
    │   └─ provider SSE
-   │       └─ parsed events
+   │       └─ parsed events (RESP-like protocol via fd 5)
    │
    ├─ TEXT / THINKING / TOOL_CALL / USAGE / STOP / ERROR / RETRY
    │
    ├─ tool_use -> tool_dispatch
    ├─ decide continue vs stop
    │
-   └─ 交给 agent_event
+   └─ RESP via fd 4 → agent_loop
         ├─ store_event_append(event json)
         ├─ store_stats_update(...)
-        └─ 透传给 agent_loop
-             ├─ display_event
-             └─ 或 stream-json stdout
+        └─ RESP via fd 7 → display_stream (子进程)
+             ├─ display_message (human-readable)
+             │   ├─ display_human_text
+             │   ├─ display_ensure_newline
+             │   └─ display_sub_agent_result
+             └─ 或 stream-json (util_msg_to_stream → stdout)
 ```
 
 ```text
@@ -252,14 +255,28 @@ bash 端直接调用全局函数；Go/Rust 端通过注入 `SubAgentRunner` 回�
 | 7 | `handle_sub_agent_result` | `agent_handle_sub_result` | `HandleSubResult(msg)` | `handle_sub_result(msg)` | 处理子代理返回结果 |
 | 8 | `compact_context_window` | `agent_compact_context` | `CompactContext(trigger)` | `compact_context(trigger)` | 上下文压缩（DP 决策 + turn 保留 + 摘要 + 修剪） |
 
-## 7. Display（4 个函数）
+## 7. Display（5 个函数 + display_stream 子进程）
 
-| # | bash 旧名 | bash 新名 | Go 方法 | Rust 方法 | 说明 |
-|---|---|---|---|---|---|
-| 1 | `display_ensure_newline` | `display_ensure_newline` | `EnsureNewline()` | `ensure_newline()` | 确保换行 |
-| 2 | `display_human_text` | `display_human_text` | `HumanText(text)` | `human_text(text)` | 显示用户文本 |
-| 3 | `display_event` | `display_event` | `Event(msg)` | `event(msg)` | 显示事件消息 |
-| 4 | `stats_show_osc` | `display_term_title` | `TermTitle(text)` | `term_title(text)` | 设置终端标题 |
+| # | bash 函数名 | Go 方法 | Rust 方法 | 说明 |
+|---|---|---|---|---|
+| 1 | `display_ensure_newline` | `EnsureNewline()` | `ensure_newline()` | 确保换行 |
+| 2 | `display_human_text` | `HumanText(text)` | `human_text(text)` | 显示用户文本 |
+| 3 | `display_message` | `Event(msg)` | `event(msg)` | 渲染单条 RESP 消息（原 `display_event`） |
+| 4 | `display_sub_agent_result` | — | — | 子 Agent 结果摘要渲染 |
+| 5 | `display_term_title` | `TermTitle(text)` | `term_title(text)` | 设置终端标题 |
+
+### display_stream：bash 特有的子进程管道
+
+bash 版本中，`display_message` 运行在 `display_stream` 子进程中：
+
+```
+agent_loop → fd 7 pipe → display_stream (subprocess)
+                            └─ display_message → display_human_text / display_ensure_newline / ...
+```
+
+所有 RESP 消息（TEXT/THINKING/TOOL_CALL/STOP 等）统一通过 fd 7 管道从父进程发往 `display_stream` 子进程渲染。这样父进程（`agent_loop`）不直接写终端，消除父子进程竞争 stdout 导致的文字交叠。
+
+Go/Rust 端为单进程模型，无此问题，直接调用 `Display.Event()` 即可。
 
 ## 8. Transport / LLM（3 个函数）
 
@@ -512,29 +529,26 @@ struct Agent<S: SessionStore, T: ToolDispatcher, D: Display, L: Transport> {
 }
 ```
 
-## 15. 迁移步骤
+## 15. 迁移进度
 
-### Phase 1：bash 端重命名（纯重命名，不改逻辑）
+### Phase 1：bash 端重命名（✅ 已完成）
 
-1. `store_*` 函数重命名（18 个）
-2. `tool_*` 函数重命名（新增 3 个：dispatch/format_result/deny_bash）
-3. `agent_*` 函数重命名（7 个）
-4. `display_*` 函数重命名（stats_show_osc → display_term_title）
-5. `llm_*` 函数重命名（3 个）
-6. `util_*` 函数重命名（19 个 + 6 个 skill）
-7. 全局搜索替换旧名 → 新名
-8. 预留 STORE_OVERRIDE 口子（在 store_* 定义末尾加一行 source 判断）
-9. 运行 `bash -n src/agent.sh` + `make test` 验证
+1. `store_*` 函数重命名（18 个）—— ✅
+2. `tool_*` 函数重命名（新增 3 个：dispatch/format_result/deny_bash）—— ✅
+3. `agent_*` 函数重命名（8 个）—— ✅
+4. `display_*` 函数重命名（stats_show_osc → display_term_title、display_event → display_message）—— ✅
+5. `llm_*` 函数重命名（3 个）—— ✅
+6. `util_*` 函数重命名（19 个 + 6 个 skill）—— ✅
+7. 预留 STORE_OVERRIDE 口子—— ✅
+8. `bash -n` + `make test` 全通过—— ✅
 
-### Phase 2：Go/Rust 端同步
+### Phase 2：架构深化（bash 先行，已完成）
 
-1. Go 端定义 interface（SessionStore / ToolDispatcher / Display / Transport / SubAgentRunner）
-2. Rust 端定义 trait（同上）
-3. Go/Rust 各自内联 prompt section 文本（与 bash 保持一致），三端 prompt 内容相同但各自维护在代码中
-4. 逐步对齐方法名与 bash 函数名
-5. store_memory.sh 作为可选实现（不阻塞主流程）
+1. **display_stream 子进程管道**—— RESP 消息从 `agent_loop` 通过 fd 7 管道发往 `display_stream` 子进程渲染，消除父子进程竞争终端
+2. **子 Agent FD 隔离**—— 子 Agent 关闭继承的 FD 3-9，防止意外写入父进程管道
+3. **stdin_reader 后台进程**—— 交互模式下独立子进程通过 FIFO 传递输入，不阻塞主循环
 
-## 16. System Prompt：保持现状
+### Phase 3：Go/Rust 端同步（⬚ 待开始）
 
 system prompt 保持 `agent_build_prompt` 内部按 section 变量构建的方式，不引入外部模板文件。
 
