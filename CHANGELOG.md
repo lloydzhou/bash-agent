@@ -9,6 +9,7 @@
 ### Added
 
 - **Pipeline 架构重写 (bash)**：`agent_loop_stream` 统一 RESP 协议管道，解耦 LLM 调用、工具执行、事件记录和显示渲染；`display_message` 单消息渲染代替跨进程管道，消除 bash stdio 全缓冲导致的多轮 LLM 输出丢失（`5202d12`）
+- **display_stream 子进程管道 (bash)**：RESP 消息通过 fd 7 管道从父进程发往子进程 `display_stream` 渲染，消除父子进程竞争终端 stdout 导致的文字交叠错位。子 Agent 关闭继承的 FD 3-9，防止意外写入父进程 display pipe（`f52b58e`）
 - **Go 扁平包结构**：删除 `go/internal/` 下 15 个散包子包，合并为 8 个顶层文件 `agent.go` / `store.go` / `tools.go` / `transport.go` / `types.go` / `util.go` / `display.go` / `agent_test.go`（`252150c`）
 - **Rust 替换为 rust2**：用 flatter 架构替换旧多文件拆分，`agent.rs` 作为主模块，新增 `display.rs` / `sse.rs` / `store.rs` / `util.rs`（`5dce3e8`）
 - **`--thinking` / `--effort` 自适应思考模式**：替代 `THINKING_BUDGET`，支持 low/medium/high/xhigh/max 五级 effort（`f04e2bc`）

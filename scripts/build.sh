@@ -161,7 +161,7 @@ if idx != -1:
 content = content.replace("    util_find_awk_dir\n", "")
 content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('util_awk_run -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'util_awk_run "${_AWK_SKILL_SUMMARY}" "$skill_file"')
-content = content.replace('util_awk_run -f "$AWK_DIR/http_stream.awk" <&6', 'util_awk_run "${_AWK_HTTP_STREAM}" <&6')
+content = content.replace('util_awk_run -f "$AWK_DIR/http_stream.awk" <&9', 'util_awk_run "${_AWK_HTTP_STREAM}" <&9')
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
 # --- Inline transport awk references in validate_config ---
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_BODY}"')

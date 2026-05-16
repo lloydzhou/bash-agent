@@ -451,8 +451,10 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	// 用户输入时递增 turn（与 bash 版一致：store_stats_update current_turn_count=+1）
 	_ = a.store.IncrementTurn()
 
-	// 中断处理
+	// 中断处理：用 context.WithCancel 包装，Ctrl+C 同时取消 context（取消 HTTP 请求）
 	interrupted := false
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 	defer signal.Stop(sigCh)
@@ -460,6 +462,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	go func() {
 		<-sigCh
 		interrupted = true
+		cancel()
 	}()
 
 	for turn := 0; turn < a.cfg.MaxTurns; turn++ {

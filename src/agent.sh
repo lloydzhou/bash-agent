@@ -29,7 +29,6 @@ declare -a SKILL_NAMES=()
 INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
-ACTIVE_SUB_COUNT=0
 
 util_awk_run() { LC_ALL=C LANG=C awk "$@"; }
 
@@ -49,28 +48,37 @@ util_write_msg() {
 
 util_read_msg() {
     # Reads RESP-like CRLF format: *N\r\n$len0\r\ndata0\r\n...
+    local _old_lc_all="${LC_ALL:-}"
+    LC_ALL=C
     REPLY_MESSAGE=()
-    local nfields i _hdr _len _field
+    local nfields i _hdr _len _field _want _remain _chunk
 
-    IFS= LC_ALL=C read -r _hdr || [[ -n "$_hdr" ]]
+    IFS= read -r _hdr || [[ -n "$_hdr" ]]
     _hdr="${_hdr%$'\r'}"
-    [[ -n "$_hdr" && "$_hdr" == \** ]] || return 1
+    [[ -n "$_hdr" && "$_hdr" == \** ]] || { LC_ALL="${_old_lc_all}"; return 1; }
     nfields="${_hdr:1}"
 
     for ((i = 0; i < nfields; i++)); do
-        IFS= LC_ALL=C read -r _hdr || [[ -n "$_hdr" ]]
+        IFS= read -r _hdr || [[ -n "$_hdr" ]]
         _hdr="${_hdr%$'\r'}"
-        [[ -n "$_hdr" && "$_hdr" == \$* ]] || return 1
+        [[ -n "$_hdr" && "$_hdr" == \$* ]] || { LC_ALL="${_old_lc_all}"; return 1; }
         _len="${_hdr:1}"
         _field=""
         if (( _len > 0 )); then
-            _field=$(dd bs=1 count="$((_len + 2))" 2>/dev/null)
-            _field="${_field%$'\r'}"
+            _want=$((_len + 2))
+            while (( ${#_field} < _want )); do
+                _remain=$((_want - ${#_field}))
+                IFS= read -r -d '' -n "$_remain" _chunk 2>/dev/null || true
+                _field+="$_chunk"
+                [[ -z "$_chunk" ]] && break
+            done
+            _field="${_field%$'\r\n'}"
         else
-            IFS= LC_ALL=C read -r -n 2 _crlf 2>/dev/null || true
+            IFS= read -r -n 2 _crlf 2>/dev/null || true
         fi
         REPLY_MESSAGE+=("$_field")
     done
+    LC_ALL="${_old_lc_all}"
     return 0
 }
 
@@ -147,6 +155,9 @@ util_msg_to_stream() {
                 "$(util_json_escape "${REPLY_MESSAGE[3]}")"
             ;;
         USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"agent"}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
+        SUB_AGENT_RESULT) printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}' \
+            "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" \
+            "$(util_json_escape "${REPLY_MESSAGE[5]}")" "$(util_json_escape "${REPLY_MESSAGE[6]}")" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
         CONTEXT_UPDATE) printf '{"type":"context_update","kind":"%s","trigger":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" "$(util_json_escape "${REPLY_MESSAGE[2]}")" ;;
         ERROR)       printf '{"type":"error","message":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
@@ -397,8 +408,7 @@ store_event_append() {
 }
 
 store_conv_add_user() {
-    local content
-    content=$(util_json_escape "$1")
+    local content; content=$(util_json_escape "$1")
     printf '{"role":"user","content":"%s"}\n' "$content" >> "$CONV_FILE"
 }
 
@@ -452,14 +462,9 @@ store_stats_get() {
 
 # — store_conv: conversation 数据操作 API —
 
-store_conv_line_count() {
-    wc -l < "$CONV_FILE" 2>/dev/null || echo 0
-}
+store_conv_line_count() { wc -l < "$CONV_FILE" 2>/dev/null || echo 0; }
 
-store_conv_head_to() {
-    # $1=lines, $2=outfile
-    head -n "$1" "$CONV_FILE" > "$2"
-}
+store_conv_head_to() { head -n "$1" "$CONV_FILE" > "$2"; } # $1=lines, $2=outfile
 
 store_conv_trim_tail() {
     # $1=lines to keep from tail
@@ -487,9 +492,7 @@ store_conv_turn_keep() {
 }
 
 # — store_stats: stats 格式化 API —
-store_stats_format_title() {
-    util_awk_run -v model="$1" -f "$AWK_DIR/term_title.awk" "$STATS_FILE"
-}
+store_stats_format_title() { util_awk_run -v model="$1" -f "$AWK_DIR/term_title.awk" "$STATS_FILE"; }
 
 # — store_conv: sub-agent 结果发送 —
 store_sub_send_result() {
@@ -501,31 +504,15 @@ store_sub_send_result() {
 }
 
 # — store_plan: plan 文件操作 —
-store_plan_confirm() {
-    if [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; then
-        mv "$PLAN_DRAFT_FILE" "$PLAN_FILE"
-        : > "$PLAN_DRAFT_FILE"
-        return 0
-    else
-        return 1
-    fi
-}
+store_plan_confirm() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && { mv "$PLAN_DRAFT_FILE" "$PLAN_FILE"; : > "$PLAN_DRAFT_FILE"; return 0; }; return 1; }
 
-store_plan_clear() {
-    [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"
-}
+store_plan_clear() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"; }
 
-store_plan_read() {
-    [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '%s' "$(<"$PLAN_FILE")"
-}
+store_plan_read() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '%s' "$(<"$PLAN_FILE")"; }
 
-store_plan_draft_read() {
-    [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && printf '%s' "$(<"$PLAN_DRAFT_FILE")"
-}
+store_plan_draft_read() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && printf '%s' "$(<"$PLAN_DRAFT_FILE")"; }
 
-store_plan_draft_has() {
-    [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]
-}
+store_plan_draft_has() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; }
 
 store_summary_get() {
     [[ -n "$CONTEXT_SUMMARY_FILE" && -s "$CONTEXT_SUMMARY_FILE" ]] && printf '%s' "$(<"$CONTEXT_SUMMARY_FILE")"
@@ -558,11 +545,12 @@ store_session_list_rows() {
 
 # llm
 llm_stream_curl() {
-    trap 'exec 6<&- 2>/dev/null; exit 1' INT
-    exec 6< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
-    util_awk_run -f "$AWK_DIR/http_stream.awk" <&6
-    exec 6<&-
-    trap - INT
+    exec 9< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
+    curl_pid=$!
+    echo "$curl_pid" > "/tmp/agent_curl_pid.$$" 2>/dev/null || true
+    util_awk_run -f "$AWK_DIR/http_stream.awk" <&9
+    exec 9<&-
+    rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
 }
 
 llm_call() {
@@ -899,8 +887,10 @@ tool_sub_agent() {
         util_load_tool_defs
         local _done=false _status="failed"
         trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"; rm -f "$INPUT_FIFO"' EXIT
-        # Silence the child shell completely so terminal title updates do not leak into the parent tool_result.
+        # Silence the child shell completely; close all inherited FDs
         exec </dev/null >/dev/null 2>&1
+        exec 3<&- 2>/dev/null; exec 4<&- 2>/dev/null
+        exec 8<&- 2>/dev/null; exec 5<&- 2>/dev/null
         agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"
         _done=true
@@ -930,15 +920,10 @@ display_human_text() {
 
 display_sub_agent_result() {
     local session_id="$1" status="$2" _in="$3" _out="$4" _thinking="$5" _text="$6"
-    # Clear the prompt at the start of line in interactive mode
-    [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
+    if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+        env printf '\r\033[K'
+    fi
     display_ensure_newline
-    # Decode RESP wire format escapes (from event_replay.awk)
-    # IMPORTANT: decode \\ before \n to avoid double-decoding
-    _thinking="${_thinking//\\\\/\\}"
-    _thinking="${_thinking//\\n/$'\n'}"
-    _text="${_text//\\\\/\\}"
-    _text="${_text//\\n/$'\n'}"
     if [[ "$status" == "ok" ]]; then
         printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$session_id" "$_in" "$_out"
     else
@@ -960,6 +945,10 @@ display_message() {
     fi
     case "$_type" in
         TEXT)
+            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+                env printf '\r\033[K'
+                DISPLAY_LAST_CHAR=''
+            fi
             # Insert newline when transitioning from thinking to text
             if [[ "$PREV_WAS_THINKING" == true && "$DISPLAY_LAST_CHAR" != $'\n' ]]; then
                 printf '\n'
@@ -969,6 +958,10 @@ display_message() {
             [[ -n "${REPLY_MESSAGE[1]}" ]] && display_human_text "${REPLY_MESSAGE[1]}"
             ;;
         THINKING)
+            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+                env printf '\r\033[K'
+                DISPLAY_LAST_CHAR=''
+            fi
             [[ -n "${REPLY_MESSAGE[1]}" ]] && printf '\033[90m%s\033[0m' "${REPLY_MESSAGE[1]}"
             if [[ "${REPLY_MESSAGE[1]}" == *$'\n' ]]; then
                 DISPLAY_LAST_CHAR=$'\n'
@@ -978,6 +971,10 @@ display_message() {
             PREV_WAS_THINKING=true
             ;;
         TOOL_CALL)
+            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+                env printf '\r\033[K'
+                DISPLAY_LAST_CHAR=''
+            fi
             _n=${#REPLY_MESSAGE[@]} _tc_kv=() _tc_summary=""
             for (( i = 4; i + 1 < _n; i += 2 )); do
                 _tc_kv+=("${REPLY_MESSAGE[i]}" "${REPLY_MESSAGE[i+1]}")
@@ -1035,9 +1032,10 @@ display_message() {
     esac
 }
 
-display_term_title() {
-    store_stats_format_title "$MODEL"
-}
+display_term_title() { store_stats_format_title "$MODEL"; }
+
+# 子进程渲染：从管道读取 RESP 消息，渲染到 stdout（终端）
+display_stream() { while util_read_msg; do display_message; done; }
 
 agent_compact_context() {
     local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped dropped_messages summary_response
@@ -1144,16 +1142,10 @@ agent_handle_sub_result() {
     store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$session_id")\",\"status\":\"$status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
     # 记录 sub_agent_end 事件
     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$status\"}"
-    ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT - 1 ))
+    active_sub_count=$(( active_sub_count - 1 ))
     [[ "$silent" == true ]] && return 0
-    # 展示结果摘要
-    if util_is_stream_json; then
-        printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}\n' \
-            "$(util_json_escape "$session_id")" "$status" "$_in" "$_out" \
-            "$(util_json_escape "$_thinking")" "$(util_json_escape "$_text")"
-    else
-        display_sub_agent_result "$session_id" "$status" "$_in" "$_out" "$_thinking" "$_text"
-    fi
+    # 展示结果摘要——通过 fd 7 交给 display_stream，不直接写 stdout（避免和子进程争终端）
+    ( util_write_msg "SUB_AGENT_RESULT" "$session_id" "$status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
     agent_run_loop "[sub-agent $session_id] $status (in=$_in, out=$_out)"$'\n'"Thinking: $_thinking"$'\n'"Text: $_text" sub_agent_result
 }
 
@@ -1161,12 +1153,8 @@ agent_handle_sub_result() {
 
 agent_run_loop() {
     local turn_kind="${2:-user_input}"
-    [[ "$INTERACTIVE" == true ]] && printf '\r\033[K'
     agent_loop "$1" "$turn_kind"
     if [[ "$INTERACTIVE" == true ]]; then
-        # Only print newline if the last output didn't end with one
-        [[ "$DISPLAY_LAST_CHAR" != $'\n' ]] && printf '\n'
-        # Print prompt
         printf '\033[32m>\033[0m '
     fi
 }
@@ -1175,16 +1163,18 @@ agent_run_loop() {
 
 # 统一清理所有管道 FD（按源→宿的级联顺序关闭）
 cleanup_all_pipes() {
-    exec 6<&- 2>/dev/null   # curl 源 (llm_stream_curl)
-    exec 5<&- 2>/dev/null   # llm_call 管道 (agent_loop_stream)
-    exec 4<&- 2>/dev/null   # agent_loop_stream 管道 (agent_loop)
-    exec 9>&- 2>/dev/null   # INPUT_FIFO 写入端 (agent_main_loop)
-    exec 3<&- 2>/dev/null   # INPUT_FIFO 读取端 (agent_main_loop)
+    exec 4>&- 2>/dev/null   # display_stream 管道
+    exec 5>&- 2>/dev/null   # INPUT_FIFO 写入端
+    exec 3<&- 2>/dev/null   # INPUT_FIFO 读取端
+    exec 7<&- 2>/dev/null   # agent_loop_stream 管道 (agent_loop)
+    exec 8<&- 2>/dev/null   # llm_call 管道 (agent_loop_stream)
 }
 
 agent_main_loop() {
     until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
-    exec 9> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
+    exec 5> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
+    exec 4> >(display_stream)
+    local display_pid=$! active_sub_count=0
     while util_read_msg <&3; do
         case "${REPLY_MESSAGE[0]}" in
             SESSION_END)
@@ -1202,8 +1192,10 @@ agent_main_loop() {
                 fi
                 ;;
         esac
-        [[ "$INTERACTIVE" != true ]] && (( ACTIVE_SUB_COUNT == 0 )) && break
+        [[ "$INTERACTIVE" != true ]] && (( active_sub_count == 0 )) && break
     done
+    exec 4>&-
+    wait "$display_pid" 2>/dev/null || true
     cleanup_all_pipes
     rm -f "$INPUT_FIFO"
 }
@@ -1218,8 +1210,8 @@ agent_loop_stream() {
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(store_conv_get_messages)" >&2
-        exec 5< <(llm_call "$(store_conv_get_messages)")
-        while util_read_msg <&5; do
+        exec 8< <(llm_call "$(store_conv_get_messages)")
+        while util_read_msg <&8; do
             if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
                 break
@@ -1251,7 +1243,7 @@ agent_loop_stream() {
                 USAGE) _ctx_tokens=$(agent_record_usage "agent" agent_request_count false) ;;
             esac
         done
-        exec 5<&-
+        exec 8<&-
         [[ "$INTERRUPT_REQUESTED" == true ]] && { util_write_msg "STOP" "interrupted"; break; }
         # Fatal stop reasons exit immediately
         case "$stop" in
@@ -1271,7 +1263,7 @@ agent_loop_stream() {
                 store_stats_update current_context_tokens=${_ctx_tokens}
             fi
             # tool_use/tool_calls → loop continues; anything else → break
-            [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || break
+            [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || { util_write_msg "STOP" "$stop"; break; }
         else
             util_write_msg "STOP" "interrupted"
             break
@@ -1284,29 +1276,28 @@ agent_loop_stream() {
 
 agent_loop() {
     local user_input="$1" turn_kind="${2:-user_input}" _se="" _type="" _reason="" had_error=false
-    DISPLAY_LAST_CHAR=$'\n'
-    PREV_WAS_THINKING=false
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
-    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read
-    trap 'INTERRUPT_REQUESTED=true; exec 4<&- 2>/dev/null' INT
+    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl
+    trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT
     # Open the process substitution
-    exec 4< <(agent_loop_stream "$user_input")
-    while util_read_msg <&4; do
+    exec 7< <(agent_loop_stream "$user_input")
+    while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
-        [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && ACTIVE_SUB_COUNT=$(( ACTIVE_SUB_COUNT + 1 ))
+        [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && active_sub_count=$(( active_sub_count + 1 ))
         _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
-        display_message
+        ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true
             break
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
-    exec 4<&-
+    exec 7<&-
+    rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     $had_error && return 1
     return 0
 }
@@ -1477,32 +1468,32 @@ interactive_mode() {
     touch "$history_file" 2>/dev/null || true
     history -r "$history_file" 2>/dev/null || true
     printf '\033[36mbash-agent interactive mode (type '\''exit'\'' or Ctrl+D to quit)\033[0m\n'
-    # Replay recent 10 turns for resumed sessions (inlined turn-aware replay)
+    # Replay recent 10 turns for resumed sessions (turn-aware replay)
     if store_event_recent_turn_lines 10 \
         | util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk" \
-        | while util_read_msg; do display_message; done
+        | ( display_stream )
     then
         printf '\n'
         DISPLAY_LAST_CHAR=$'\n'
     fi
     display_term_title
     {
-        exec 9> "$INPUT_FIFO"
+        exec 5> "$INPUT_FIFO"
         while true; do
             stty echo 2>/dev/null || true
             if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
-                util_write_msg "SESSION_END" "0" >&9
+                util_write_msg "SESSION_END" "0" >&5
                 break
             fi
             [[ "$line" == "exit" || "$line" == "quit" ]] && {
-                util_write_msg "SESSION_END" "0" >&9
+                util_write_msg "SESSION_END" "0" >&5
                 break
             }
             [[ -z "$line" ]] && continue
             printf '%s\n' "$line" >> "$history_file"
-            util_write_msg "USER_INPUT" "0" "$line" >&9
+            util_write_msg "USER_INPUT" "0" "$line" >&5
         done
-        exec 9>&-
+        exec 5>&-
     } &
     local _stdin_pid=$!
 
@@ -1526,7 +1517,7 @@ main() {
     elif [[ -n "$USER_INPUT" || ! -t 0 ]]; then
         local input="$USER_INPUT"
         [[ -z "$input" ]] && input=$(cat)
-        ( exec 3> "$INPUT_FIFO"; util_write_msg "USER_INPUT" "0" "$input" >&3 ) &
+        ( exec 5> "$INPUT_FIFO"; util_write_msg "USER_INPUT" "0" "$input" >&5 ) &
         agent_main_loop
     else
         INTERACTIVE=true

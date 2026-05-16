@@ -299,6 +299,13 @@ pub mod claude {
         }
         if let Some(reason) = pending_stop {
             emit(Event::Stop(StopEvent { reason }))?;
+        } else {
+            emit(Event::Error(ErrorEvent {
+                message: "Stream interrupted (no message_stop received)".to_string(),
+            }))?;
+            emit(Event::Stop(StopEvent {
+                reason: "error".to_string(),
+            }))?;
         }
 
         Ok(())
@@ -473,6 +480,13 @@ pub mod openai {
         }
         if let Some(reason) = pending_stop {
             emit(Event::Stop(StopEvent { reason }))?;
+        } else {
+            emit(Event::Error(ErrorEvent {
+                message: "Stream interrupted (no message_stop received)".to_string(),
+            }))?;
+            emit(Event::Stop(StopEvent {
+                reason: "error".to_string(),
+            }))?;
         }
 
         Ok(())
