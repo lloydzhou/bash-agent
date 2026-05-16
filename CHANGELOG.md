@@ -4,7 +4,98 @@
 
 ---
 
+## [3.0.1] - 2026-07-15
+
+> **注意**: v3.0.x 与 v2.5.x 为并行维护线。v3.0.0 基于 v2.5.2 做了大规模 Pipeline 架构重写和代码重组，
+> v2.5.3 则在 v2.5.2 的原有架构上做增量修复和特性增强。两条线在可预见的未来将同时存在。
+
+### Fixed
+
+- **display_stream 子进程渲染管道 (bash)**: RESP 消息通过 FD 7 管道发往独立子进程渲染，消除父子进程竞争终端 stdout 导致的文字交叠错位。子 Agent 关闭继承的 FD 7/8/9，防止意外写入父进程 display pipe（`5a90910`, `8827cc1`, `f52b58e`）
+- **Ctrl+C 中断机制 (bash/Go/Rust)**: 
+  - bash: `trap` 信号处理器中确保 `kill "$(cat /tmp/agent_curl_pid.$$)"` 生效（`bb15d6f`）
+  - Go: `RunLoop` 中用 `context.WithCancel` 包装 ctx，Ctrl+C 立即取消 HTTP 请求（`b4a4d3e`）
+  - Rust: `static CTRLC_FLAG` 全局标志 + handler 设在 `agent_run` 一次初始化，防止各 agent 相互覆盖 handler；`is_interrupted()` 同时检查 per-agent flag + 全局 flag；HTTP Client `.timeout(300s)` 防止 `spawn_reader` 线程无限阻塞（`448bec1`）
+- **SSE 解析兜底 (Go/Rust)**: 流异常中断（无 `message_stop`）时发射 `ERROR` + `STOP` 事件，对标 awk `END` 块。Go `parseSSEStream` 新增 `stopEmitted` 标志 + `defer` 兜底；Rust `claude::parse` / `openai::parse` 读流结束后 `pending_stop` 为空时发射 `ErrorEvent` + `StopEvent{reason:"error"}`（`ddce0c8`）
+- **summary 调用 Ctrl+C 无保护 (Rust)**: `run_summary_call` 的 HTTP 响应包装 `CancelReader`，对标 bash trap 保护所有 LLM 调用（`448bec1`）
+- **构建脚本 FD 搜索模式未同步 (bash)**: `build.sh` 中 `http_stream.awk` 搜索模式写死 `<&6`，源码已改为 `<&9` 导致 `AWK_DIR` 未被替换为内联变量，`dist/agent.sh` 出现 `AWK_DIR: unbound variable` 错误（`193e0e3`）
+- **交互模式双提示符**: display_stream 子进程统一提示符控制，消除子 Agent 和主进程同时输出的重复提示符（`8827cc1`）
+- **stdout 输出竞态**: `agent_handle_sub_result` 直写 stdout 改为经 fd 7 通过 display_stream 渲染（`67c9768`）
+- **终端清行冲突**: 移除和 display_stream 子进程争终端的 `\r\033[K`（`098a698`）
+- **子 Agent FD 隔离**: `cleanup_all_pipes` 和子 Agent 中移除无效的 FD 关闭（`fb915ed`）
+
+### Changed
+
+- **全局 FD 规约**: 父进程使用 FD 3/4/5/6，子进程使用 FD 7/8/9，明确每层职责（`1f127ae`）
+- **util_read_msg 性能优化**: `dd` → `read -d "" -n N`，消除两次 fork（`cbe3d3c`, `3337944`）
+- **store_ 系列函数一行化**: 精简代码行数（`652be78`）
+- **display_stream 子进程渲染重构**: display_stream/display_term_title 一行 + replay 复用 display_stream + store_conv_add_user 一行（`4a12cc6`）
+- **subshell >&7 替代 pipe + cat**: 减少一次 fork（`2ecdd3d`）
+
+### Removed
+
+- **废弃 display.rs (Rust)**: 清理已废弃的 `Display` trait 实现（`448bec1`）
+
+### Docs
+
+- ARCHITECTURE.md: display_stream 子进程管道模型、FD 分配规约更新（`15a20ee`）
+- refactor-7class.md: 设计文档更新
+- sessions.md: 移除过时内容
+
+---
+
 ## [3.0.0] - 2026-05-15
+
+### Added
+
+- **Pipeline 架构重写 (bash)**：`agent_loop_stream` 统一 RESP 协议管道，解耦 LLM 调用、工具执行、事件记录和显示渲染；`display_message` 单消息渲染代替跨进程管道，消除 bash stdio 全缓冲导致的多轮 LLM 输出丢失（`5202d12`）
+- **display_stream 子进程管道 (bash)**：RESP 消息通过 fd 7 管道从父进程发往子进程 `display_stream` 渲染，消除父子进程竞争终端 stdout 导致的文字交叠错位。子 Agent 关闭继承的 FD 3-9，防止意外写入父进程 display pipe（`f52b58e`）
+- **Go 扁平包结构**：删除 `go/internal/` 下 15 个散包子包，合并为 8 个顶层文件 `agent.go` / `store.go` / `tools.go` / `transport.go` / `types.go` / `util.go` / `display.go` / `agent_test.go`（`252150c`）
+- **Rust 替换为 rust2**：用 flatter 架构替换旧多文件拆分，`agent.rs` 作为主模块，新增 `display.rs` / `sse.rs` / `store.rs` / `util.rs`（`5dce3e8`）
+- **`--thinking` / `--effort` 自适应思考模式**：替代 `THINKING_BUDGET`，支持 low/medium/high/xhigh/max 五级 effort（`f04e2bc`）
+- **终端标题实时更新**：`term_title.awk` 在每次 LLM 调用后同步显示模型名、请求数和 token 统计（`b3064f4`）
+- **对话压缩策略 (`compact_turn_keep.awk`)**：基于 turn 比例的行保留策略，配合 DP 算法做二次压缩（`1365b80`）
+- **交互模式事件回放**：`event_replay.awk` 支持重入会话的历史对话回显（`a6d9cd0`）
+- **SubAgent fork 会话隔离**：`store_session_fork()` 提取为独立函数，fork 时只复制 conversation/summary/plan（`a032bda`）
+- **`cleanup_all_pipes` 统一清理**：按 FD 级联顺序关闭 curl/llm/agent_loop/INPUT_FIFO 管道（`5202d12`）
+- **`llm_stream_curl` FD 6 管道替代 pipefail**：避免 `set -o pipefail` + SIGPIPE 导致脚本退出（`5202d12`）
+- **测试扩展到 91+ 用例**：新增 SubAgent 故障传播 / fork / 隔离等测试（`tests/test.sh`）
+- **`store_conv_get_messages` 空文件安全**：增加 `[[ -f "$CONV_FILE" ]]` 检查，避免 awk 报错（`778afdb`）
+
+### Changed
+
+- **`display_event` → `display_message` + `display_stream`**：拆分流式渲染和单消息渲染，`display_stream` 最终内联到 `agent_main_loop`（`5202d12`, `14c9e45`）
+- **`agent_event` 内联到 `agent_loop`**：消除 `> >(display_event)` 跨进程管道及其 stdio 缓冲问题，`ACTIVE_SUB_COUNT` 改为 `agent_main_loop` 的 `local active_sub_count`，通过 bash 动态作用域在 `agent_loop` 中自增（`5202d12`）
+- **compact 层合并到 agent 层**：7 层架构简化为 6 层（`1365b80`）
+- **session 存储隔离**：7 类前缀重命名 + `TOOL_CALL` 分支重构（`4e11143`）
+- **build.sh AWK_DIR 替换规则更新**：适配 `llm_stream_curl` FD 6 模式，修复 `dist/agent.sh` 中 `AWK_DIR: unbound variable` 错误（`14c9e45`）
+- **文档同步**：`README.md` 移除已废弃的 `THINKING_BUDGET` 环境变量；`docs/ARCHITECTURE.md` 更新函数名和代码路径；`docs/sessions.md` 更新 replay 描述（`7354543`）
+
+### Removed
+
+- 旧 `rust/src/` 多文件包结构（config.rs/conversation.rs/httpclient.rs/...）
+- 旧 `go/internal/` 多包结构（app/config/httpclient/sse/transport/tools/...）
+- `rust2_backup/` 目录
+- 全局 `ACTIVE_SUB_COUNT` 变量
+
+### Security
+
+- `scripts/build.sh` 内联 awk 文件时使用变量拼接替代 `-f "$AWK_DIR/"` 路径引用，避免 dist 构建后路径暴露
+
+---
+
+## [2.5.3] - 2026-06-01
+
+> **注意**: v2.5.x 与 v3.0.x 为并行维护线。v2.5.3 在 v2.5.2 原有架构上做增量修复，
+> 不包含 v3.0.0 的 Pipeline 架构重写。
+
+### Changed
+
+- **`THINKING_BUDGET` → `--thinking` / `--effort`**: 替代固定 budget 参数，改为自适应思考模式。
+  支持 low/medium/high/xhigh/max 五级 effort，自动映射为适合各模型的 budget 值。
+  新增 `THINKING` 和 `EFFORT` 环境变量，兼容变长思考预算（`be4a26e`）
+
+---
 
 ### Added
 
@@ -451,7 +542,7 @@
 
 ---
 
-<!-- v1.0.0 之前的初始开发阶段，未打 tag -->
+
 
 ## [0.x] - 2026-04-07 ~ 2026-04-14
 
@@ -468,8 +559,10 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/lloydzhou/bash-agent/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...v3.0.0
+[2.5.3]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...v2.5.3
 [2.5.2]: https://github.com/lloydzhou/bash-agent/compare/v2.5.1...v2.5.2
 [2.5.1]: https://github.com/lloydzhou/bash-agent/compare/v2.5.0...v2.5.1
 [2.4.0]: https://github.com/lloydzhou/bash-agent/compare/v2.3.2...v2.4.0
