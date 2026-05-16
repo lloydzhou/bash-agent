@@ -889,8 +889,8 @@ tool_sub_agent() {
         trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"; rm -f "$INPUT_FIFO"' EXIT
         # Silence the child shell completely; close all inherited FDs
         exec </dev/null >/dev/null 2>&1
-        exec 3<&- 2>/dev/null; exec 4<&- 2>/dev/null; exec 5<&- 2>/dev/null
-        exec 6<&- 2>/dev/null; exec 7>&- 2>/dev/null; exec 8<&- 2>/dev/null; exec 9>&- 2>/dev/null
+        exec 3<&- 2>/dev/null; exec 5<&- 2>/dev/null
+        exec 7>&- 2>/dev/null; exec 9>&- 2>/dev/null
         agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"
         _done=true

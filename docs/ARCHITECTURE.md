@@ -574,7 +574,7 @@ SubAgent 的核心设计原则是**隔离输出**：子 agent 的执行过程不
 
 **关键实现细节**：
 
-- **bash 版本**：SubAgent 启动时设置 `export INTERACTIVE=false`，然后 `exec </dev/null >/dev/null 2>&1` 静默 stdout/stderr，最后关闭继承的 FD 3-9 防止意外写入父进程的 display pipe 或 FIFO。子 Agent 的 `agent_loop` 中 `( util_write_msg ... ) >&7 2>/dev/null` 因 fd 7 已关闭而静默失败，子 Agent 运行过程中的 LLM 流不显示在终端。子 Agent 的结果通过 `store_sub_send_result` 写入父 FIFO 回传。
+- **bash 版本**：SubAgent 启动时设置 `export INTERACTIVE=false`，然后 `exec </dev/null >/dev/null 2>&1` 静默 stdout/stderr，最后关闭继承的 FD 3、5、7、9（INPUT_FIFO 读取/FD llm_call管道/display pipe/INPUT_FIFO 写入）防止意外写入父进程管道。子 Agent 的 `agent_loop` 中 `( util_write_msg ... ) >&7 2>/dev/null` 因 fd 7 已关闭而静默失败，子 Agent 运行过程中的 LLM 流不显示在终端。子 Agent 的结果通过 `store_sub_send_result` 写入父 FIFO 回传。
 - **Go/Rust 版本**：SubAgent 启动时设置 `sub_cfg.interactive = false`，然后在 `display_message` 中检查 `!self.is_stream_json_mode() && self.cfg.interactive` 条件，只有在交互模式下才输出到 stdout
 
 **⚠️ 常见错误**（已通过架构修复）：
