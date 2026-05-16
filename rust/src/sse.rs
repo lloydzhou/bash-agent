@@ -230,20 +230,26 @@ pub mod claude {
                         }
                     }
                     let usage = body.get("usage").cloned().unwrap_or(Value::Null);
-                    if let Some(v) = usage.get("input_tokens").and_then(Value::as_i64) {
-                        input_tokens = v;
-                    }
+                    // message_delta.usage.output_tokens: 总是取
+                    // message_delta.usage.input_tokens/cache_*: 仅在 message_start 未提供时取
+                    // （OpenAI 路径无 message_start，通过 transport 合成 message_delta）
                     if let Some(v) = usage.get("output_tokens").and_then(Value::as_i64) {
                         output_tokens = v;
                     }
-                    if let Some(v) = usage.get("cache_read_input_tokens").and_then(Value::as_i64) {
-                        cache_read_input_tokens = v;
+                    if input_tokens == 0 {
+                        if let Some(v) = usage.get("input_tokens").and_then(Value::as_i64) {
+                            input_tokens = v;
+                        }
                     }
-                    if let Some(v) = usage
-                        .get("cache_creation_input_tokens")
-                        .and_then(Value::as_i64)
-                    {
-                        cache_creation_input_tokens = v;
+                    if cache_read_input_tokens == 0 {
+                        if let Some(v) = usage.get("cache_read_input_tokens").and_then(Value::as_i64) {
+                            cache_read_input_tokens = v;
+                        }
+                    }
+                    if cache_creation_input_tokens == 0 {
+                        if let Some(v) = usage.get("cache_creation_input_tokens").and_then(Value::as_i64) {
+                            cache_creation_input_tokens = v;
+                        }
                     }
                 }
                 "message_start" => {

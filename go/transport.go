@@ -428,6 +428,8 @@ func (t *HTTPTransport) extractJSONValue(data, key string) string {
 }
 
 // extractUsageFromDelta 从 message_delta 提取 usage
+// output_tokens: 总是取。input_tokens/cache_*: 仅在 message_start 未提供时取
+// （OpenAI 路径无 message_start，通过 transport 合成 message_delta）
 func (t *HTTPTransport) extractUsageFromDelta(data string, inputTokens, outputTokens, cacheRead, cacheCreate *int) {
 	var d struct {
 		Usage struct {
@@ -444,13 +446,13 @@ func (t *HTTPTransport) extractUsageFromDelta(data string, inputTokens, outputTo
 		if d.Usage.OutputTokens > 0 {
 			*outputTokens = d.Usage.OutputTokens
 		}
-		if d.Usage.InputTokens > 0 {
+		if *inputTokens == 0 && d.Usage.InputTokens > 0 {
 			*inputTokens = d.Usage.InputTokens
 		}
-		if d.Usage.CacheReadInputTokens > 0 {
+		if *cacheRead == 0 && d.Usage.CacheReadInputTokens > 0 {
 			*cacheRead = d.Usage.CacheReadInputTokens
 		}
-		if d.Usage.CacheCreationInputTokens > 0 {
+		if *cacheCreate == 0 && d.Usage.CacheCreationInputTokens > 0 {
 			*cacheCreate = d.Usage.CacheCreationInputTokens
 		}
 	}
