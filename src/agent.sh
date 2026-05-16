@@ -32,7 +32,8 @@ MAX_CONTEXT_TOKENS=200000
 : "${DP_BETA:=0.03}"           # 信息损失惩罚系数（典型值 0.03）
 : "${DP_MIN_KEEP_RATIO:=0.12}" # 最少保留消息比例（防止过度压缩）
 declare -a SKILL_NAMES=()
-: "${THINKING_BUDGET:=2048}"
+: "${EFFORT:=high}"
+: "${THINKING:=adaptive}"
 
 # --- Runtime Mode & Session State ---
 INTERACTIVE=false
@@ -1107,11 +1108,12 @@ _stream_curl() {
 
 # --- LLM Call (internal) ---
 llm_call() {
-    local messages="$1" max_tokens="${2:-$MAX_TOKENS}" thinking_budget="${3:-$THINKING_BUDGET}" body system_prompt
+    local messages="$1" max_tokens="${2:-$MAX_TOKENS}" use_thinking="${3:-$THINKING}" body system_prompt
     system_prompt=$(build_system_prompt)
     body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
-    if (( thinking_budget > 0 )); then
-        body+=",\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":${thinking_budget}}"
+    if [[ "$use_thinking" != "disabled" ]]; then
+        body+=",\"thinking\":{\"type\":\"${use_thinking}\"}"
+        body+=",\"output_config\":{\"effort\":\"${EFFORT}\"}"
     fi
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(json_escape "$system_prompt")\""
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
@@ -1131,7 +1133,7 @@ run_summary_call() {
             ERROR) last_error="${REPLY_MESSAGE[1]}" ;;
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
-    done < <(llm_call "$messages")
+    done < <(llm_call "$messages" "$MAX_TOKENS" "disabled")
     [[ -n "$text" ]] || die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
     printf '%s' "$text"
 }
@@ -1281,6 +1283,8 @@ Options:
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
   --max-turns N           Max agent turns (default: 40)
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
+  --thinking MODE         Thinking mode: adaptive | enabled | disabled (default: adaptive)
+  --effort LEVEL          Reasoning effort: low | medium | high (default: high)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
   --output-format FMT     Output format: human | stream-json
@@ -1325,6 +1329,8 @@ parse_args() {
                 MAX_CONTEXT_TOKENS=$(parse_size_bytes "$2") || die "Invalid --max-context: $2"
                 shift 2
                 ;;
+            --thinking)       THINKING="$2"; shift 2 ;;
+            --effort)         EFFORT="$2"; shift 2 ;;
             --api-key)       API_KEY="$2"; shift 2 ;;
             --base-url)      BASE_URL="$2"; shift 2 ;;
             --output-format)  OUTPUT_FORMAT="$2"; shift 2 ;;

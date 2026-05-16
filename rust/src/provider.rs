@@ -10,7 +10,8 @@ pub fn build_claude_request(
     tools: &[Value],
     system_prompt: &str,
     max_tokens: i32,
-    thinking_budget: i32,
+    thinking: &str,
+    effort: &str,
 ) -> Result<Vec<u8>> {
     let mut body = json!({
         "model": cfg.model,
@@ -18,10 +19,12 @@ pub fn build_claude_request(
         "stream": true,
         "messages": messages,
     });
-    if thinking_budget > 0 {
+    if thinking != "disabled" {
         body["thinking"] = json!({
-            "type": "enabled",
-            "budget_tokens": thinking_budget,
+            "type": thinking,
+        });
+        body["output_config"] = json!({
+            "effort": effort,
         });
     }
     if !system_prompt.is_empty() {

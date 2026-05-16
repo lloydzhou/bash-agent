@@ -47,12 +47,13 @@ type openaiTransport struct{}
 
 func (t *openaiTransport) ConvertBody(claudeBody []byte) ([]byte, error) {
 	var raw struct {
-		Model         string          `json:"model"`
-		MaxTokens     int             `json:"max_tokens"`
-		System        json.RawMessage `json:"system"`
-		Thinking      json.RawMessage `json:"thinking"`
-		Messages      json.RawMessage `json:"messages"`
-		Tools         json.RawMessage `json:"tools"`
+		Model        string          `json:"model"`
+		MaxTokens    int             `json:"max_tokens"`
+		System       json.RawMessage `json:"system"`
+		Thinking     json.RawMessage `json:"thinking"`
+		OutputConfig json.RawMessage `json:"output_config"`
+		Messages     json.RawMessage `json:"messages"`
+		Tools        json.RawMessage `json:"tools"`
 	}
 	if err := json.Unmarshal(claudeBody, &raw); err != nil {
 		return nil, fmt.Errorf("transport_openai_body: %w", err)
@@ -81,9 +82,25 @@ func (t *openaiTransport) ConvertBody(claudeBody []byte) ([]byte, error) {
 		"messages":   converted,
 	}
 
-	// thinking → reasoning_effort
+	// thinking.type (adaptive|enabled) → reasoning_effort from output_config.effort
 	if raw.Thinking != nil && string(raw.Thinking) != "" && string(raw.Thinking) != "{}" && string(raw.Thinking) != "null" {
-		body["reasoning_effort"] = "high"
+		var thinkingObj struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw.Thinking, &thinkingObj); err == nil {
+			if thinkingObj.Type == "adaptive" || thinkingObj.Type == "enabled" {
+				effort := "high" // default
+				if raw.OutputConfig != nil && string(raw.OutputConfig) != "" && string(raw.OutputConfig) != "null" {
+					var oc struct {
+						Effort string `json:"effort"`
+					}
+					if err := json.Unmarshal(raw.OutputConfig, &oc); err == nil && oc.Effort != "" {
+						effort = oc.Effort
+					}
+				}
+				body["reasoning_effort"] = effort
+			}
+		}
 	}
 
 	// Convert tools
