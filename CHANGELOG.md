@@ -17,6 +17,7 @@
   - Go: `RunLoop` 中用 `context.WithCancel` 包装 ctx，Ctrl+C 立即取消 HTTP 请求（`b4a4d3e`）
   - Rust: `static CTRLC_FLAG` 全局标志 + handler 设在 `agent_run` 一次初始化，防止各 agent 相互覆盖 handler；`is_interrupted()` 同时检查 per-agent flag + 全局 flag；HTTP Client `.timeout(300s)` 防止 `spawn_reader` 线程无限阻塞（`448bec1`）
 - **SSE 解析兜底 (Go/Rust)**: 流异常中断（无 `message_stop`）时发射 `ERROR` + `STOP` 事件，对标 awk `END` 块。Go `parseSSEStream` 新增 `stopEmitted` 标志 + `defer` 兜底；Rust `claude::parse` / `openai::parse` 读流结束后 `pending_stop` 为空时发射 `ErrorEvent` + `StopEvent{reason:"error"}`（`ddce0c8`）
+- **usage `input_tokens` 被 `message_delta` 错误覆盖 (bash/Go/Rust)**: `message_start.usage.input_tokens` 为总 prompt token 数，但 `message_delta.usage.input_tokens` 为结算后计费值（远小于总数）。SSE 解析器中 `message_delta` 覆盖了 `message_start` 的值，导致 usage 事件记录的 `input_tokens` 异常偏小且波动（23~4204）。修复后 `input_tokens` 以 `message_start` 优先，`message_delta` 仅在未设置时补充（兼容 OpenAI 路径）（`ff72d76`）
 - **summary 调用 Ctrl+C 无保护 (Rust)**: `run_summary_call` 的 HTTP 响应包装 `CancelReader`，对标 bash trap 保护所有 LLM 调用（`448bec1`）
 - **构建脚本 FD 搜索模式未同步 (bash)**: `build.sh` 中 `http_stream.awk` 搜索模式写死 `<&6`，源码已改为 `<&9` 导致 `AWK_DIR` 未被替换为内联变量，`dist/agent.sh` 出现 `AWK_DIR: unbound variable` 错误（`193e0e3`）
 - **交互模式双提示符**: display_stream 子进程统一提示符控制，消除子 Agent 和主进程同时输出的重复提示符（`8827cc1`）
