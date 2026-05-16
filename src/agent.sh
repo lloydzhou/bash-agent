@@ -545,11 +545,12 @@ store_session_list_rows() {
 
 # llm
 llm_stream_curl() {
-    trap 'exec 6<&- 2>/dev/null; exit 1' INT
     exec 6< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
+    curl_pid=$!
+    echo "$curl_pid" > "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     util_awk_run -f "$AWK_DIR/http_stream.awk" <&6
     exec 6<&-
-    trap - INT
+    rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
 }
 
 llm_call() {
@@ -1163,8 +1164,6 @@ agent_run_loop() {
 # 统一清理所有管道 FD（按源→宿的级联顺序关闭）
 cleanup_all_pipes() {
     exec 7>&- 2>/dev/null   # display_stream 管道
-    exec 6<&- 2>/dev/null   # curl 源 (llm_stream_curl)
-    exec 5<&- 2>/dev/null   # llm_call 管道 (agent_loop_stream)
     exec 4<&- 2>/dev/null   # agent_loop_stream 管道 (agent_loop)
     exec 9>&- 2>/dev/null   # INPUT_FIFO 写入端 (agent_main_loop)
     exec 3<&- 2>/dev/null   # INPUT_FIFO 读取端 (agent_main_loop)
@@ -1280,8 +1279,8 @@ agent_loop() {
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
-    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read
-    trap 'INTERRUPT_REQUESTED=true; exec 4<&- 2>/dev/null' INT
+    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl
+    trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$" 2>/dev/null)" 2>/dev/null; exec 4<&- 2>/dev/null' INT
     # Open the process substitution
     exec 4< <(agent_loop_stream "$user_input")
     while util_read_msg <&4; do
@@ -1297,6 +1296,7 @@ agent_loop() {
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
     exec 4<&-
+    rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     $had_error && return 1
     return 0
 }
