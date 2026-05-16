@@ -1138,6 +1138,55 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        # --- SubAgent fork context inheritance mock ---
+        # Stage 1: parent -> SubAgent tool_call with fork=true
+        if b'FORK_CTX_MARKER' in body and b'FORK_CTX_CHILD' not in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_ctx_fork1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_ctx_fork\",\"name\":\"SubAgent\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'FORK_CTX_CHILD','description':'fork context test child','fork':True})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":10}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 2: fork child -> text response
+        if b'FORK_CTX_CHILD' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_ctx_fork2\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Fork child with context.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 3: parent after tool_result -> acknowledge
+        if b'FORK_CTX_MARKER' in body and b'"tool_result"' in body and b'Sub-agent started' in body and b'[sub-agent sub_' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_ctx_fork3\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Waiting for fork child context.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 4: parent after AGENT_RESULT -> final answer
+        if b'FORK_CTX_MARKER' in body and b'[sub-agent sub_' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_ctx_fork4\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Fork context verified.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         # --- End SubAgent mock ---
         if b'MULTI_TOOL_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -2415,6 +2464,66 @@ test_agent_sub_agent_fork_failure() {
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
 
+# Test: SubAgent fork context inheritance — child conversation inherits parent content
+test_agent_sub_agent_fork_context() {
+    info "Test: SubAgent fork context inheritance"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    # Flow:
+    #   Stage 1: parent -> SubAgent tool_call with fork=true (prompt FORK_CTX_CHILD)
+    #            parent conversation has "parent_context_msg" from user prompt
+    #   Stage 2: fork child inherits parent conversation -> child conv has "parent_context_msg"
+    #   Stage 3: parent gets tool_result "Sub-agent started" -> "Waiting for fork child context."
+    #   Stage 4: parent gets AGENT_RESULT -> final "Fork context verified."
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-fork-ctx-001 "FORK_CTX_MARKER parent_context_msg fork context test" 2>&1) || true
+
+    # Verify main agent completed
+    if echo "$output" | grep -q "Fork context verified"; then
+        green "SubAgent-fork-ctx: main agent final answer found"; ((PASS++)) || true
+    else
+        red "SubAgent-fork-ctx: main agent final answer not found"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    # Find child session
+    local child_session_dir
+    child_session_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "sub_*" 2>/dev/null | head -1)
+    if [[ -n "$child_session_dir" && -f "$child_session_dir/conversation.jsonl" ]]; then
+        green "SubAgent-fork-ctx: child session dir created with conversation.jsonl"; ((PASS++)) || true
+        # === 核心验证：子 conversation 继承了父内容 ===
+        if grep -q "parent_context_msg" "$child_session_dir/conversation.jsonl"; then
+            green "SubAgent-fork-ctx: child conversation inherited parent content"; ((PASS++)) || true
+        else
+            red "SubAgent-fork-ctx: child conversation MISSING parent content — fork did NOT inherit context"
+            echo "  Child conv: $(cat "$child_session_dir/conversation.jsonl")" >&2
+            ((FAIL++)) || true
+        fi
+    else
+        red "SubAgent-fork-ctx: child session dir not found under $tmpdir"; ((FAIL++)) || true
+    fi
+
+    # Verify fork=true recorded in events
+    local parent_dir
+    parent_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name "test-fork-ctx-001" 2>/dev/null | head -1)
+    if [[ -n "$parent_dir" && -f "$parent_dir/events.jsonl" ]]; then
+        if grep -q '"fork":true' "$parent_dir/events.jsonl"; then
+            green "SubAgent-fork-ctx: fork=true recorded in events"; ((PASS++)) || true
+        else
+            red "SubAgent-fork-ctx: fork=true not found in events"; ((FAIL++)) || true
+        fi
+    fi
+
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
 # Test 37: compact_dp.awk — DP compact decision algorithm
 test_compact_dp_awk() {
     info "Test 37: compact_dp.awk DP compact decision"
@@ -2776,6 +2885,7 @@ test_agent_sub_agent_failure
 test_agent_sub_agent_child_session
 test_agent_sub_agent_fork
 test_agent_sub_agent_fork_failure
+test_agent_sub_agent_fork_context
 
 echo ""
 echo "=============================="

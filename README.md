@@ -10,6 +10,7 @@
 
 - **零依赖** — 只需要 bash、awk、curl、rg
 - **三 port 对齐** — bash/go/rust 保持相同的 agent loop、tool、session 语义
+- **异步子 Agent** — 内建 `SubAgent` 工具，委托子任务给独立会话并行执行，结果自动回注主对话。支持 `fork` 模式继承上下文、会话隔离、故障传播
 - **缓存感知压缩** — 基于经济学的 DP 算法自动决策是否压缩、保留多少
 - **Session 持久化** — 按项目隔离，支持恢复、续接、compact
 - **机器友好** — `stream-json` 输出结构化事件，可被上层客户端消费

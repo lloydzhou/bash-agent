@@ -10,6 +10,7 @@ Go (`goagent`) and Rust (`rustagent`) ports maintain the same semantics.
 
 - **Zero dependencies** — only bash, awk, curl, rg
 - **Three aligned ports** — bash/go/rust share the same agent loop, tool, and session semantics
+- **Async SubAgent** — built-in `SubAgent` tool delegates subtasks to independent sessions running in parallel, results auto-injected back. Supports `fork` mode for context inheritance, session isolation, and failure propagation
 - **Cache-aware compaction** — DP economics algorithm decides whether and how much to compact
 - **Session persistence** — project-scoped, resumable, compactable
 - **Machine-friendly** — `stream-json` outputs structured events for client consumption
