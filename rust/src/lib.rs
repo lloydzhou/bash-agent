@@ -1,7 +1,6 @@
 pub mod agent;
 pub mod sse;
 pub mod util;
-pub mod display;
 pub mod store;
 pub mod transport;
 pub mod tools;
@@ -1281,12 +1280,6 @@ pub mod traits {
         fn append_event(&self, event: &str) -> Result<()>;
     }
 
-    pub trait Display: Send + Sync {
-        fn ensure_newline(&self);
-        fn human_text(&self, text: &str);
-        fn event(&self, event: &Event);
-        fn term_title(&self, title: &str);
-    }
 
     pub trait Transport: Send + Sync {
         fn convert_body(&self, claude_body: &[u8]) -> Result<Vec<u8>>;

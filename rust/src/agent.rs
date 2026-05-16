@@ -94,7 +94,7 @@ mod httpclient {
         pub fn new() -> Result<Self> {
             Ok(Self {
                 client: Client::builder()
-                    .timeout(None)
+                    .timeout(Duration::from_secs(300)) // 总请求超时 5 分钟，防止 spawn_reader 线程无限阻塞
                     .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
                     .build()?,
             })
@@ -443,7 +443,16 @@ mod httpclient {
 
 use httpclient::{HTTPError, StreamClient};
 
+/// 全局 SIGINT 标志，防止多个 agent 相互覆盖 ctrlc handler。
+/// 只在 agent_run / interactive_mode 中设一次。
+static CTRLC_FLAG: AtomicBool = AtomicBool::new(false);
+
 pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
+    // 全局 ctrlc handler：只在第一次调用时注册
+    ctrlc::set_handler(move || {
+        CTRLC_FLAG.store(true, Ordering::SeqCst);
+    }).ok();
+
     let mut rt = Agent::new(cfg, cwd, home)?;
 
     if rt.cfg.interactive || (rt.cfg.prompt.is_empty() && io::stdin().is_terminal()) {
@@ -459,7 +468,7 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
         io::stdin().read_line(&mut input)?;
         rt.agent_loop(input)?;
     }
-    // 等待所有子 agent 完成
+    // 等待所有子 agent 完成（bash 版没有超时，Ctrl+C 可杀）
     while rt.active_sub_count > 0 {
         match rt.msg_rx.recv() {
             Ok(MainLoopMessage::AgentResult {
@@ -544,18 +553,19 @@ struct LlmStream {
 struct CancelReader<R> {
     inner: R,
     cancel: Arc<AtomicBool>,
+    interrupted: Arc<AtomicBool>,
 }
 
 impl<R: Read> Read for CancelReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.cancel.load(Ordering::SeqCst) {
+        if self.cancel.load(Ordering::SeqCst) || self.interrupted.load(Ordering::SeqCst) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "cancelled",
             ));
         }
         let n = self.inner.read(buf)?;
-        if self.cancel.load(Ordering::SeqCst) {
+        if self.cancel.load(Ordering::SeqCst) || self.interrupted.load(Ordering::SeqCst) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "cancelled",
@@ -1078,7 +1088,7 @@ impl Agent {
         self.update_term_title();
 
         // 3. 记录 sub_agent_result 事件，供 replay / stream-json 复现子 agent 回显
-        let _ = self.append_event(json!({
+        let _ = self.emit_and_append_event(json!({
             "type": "sub_agent_result",
             "session_id": session_id,
             "status": status,
@@ -1147,6 +1157,11 @@ impl Agent {
         Ok(())
     }
 
+    /// 检查是否被中断（per-agent 标志 + 全局 SIGINT 标志）
+    fn is_interrupted(&self) -> bool {
+        self.interrupted.load(Ordering::SeqCst) || CTRLC_FLAG.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn agent_loop(&mut self, user_input: String) -> Result<()> {
         self.agent_loop_with_kind(user_input, "user_input")
     }
@@ -1157,13 +1172,11 @@ impl Agent {
     }
 
     pub(crate) fn agent_loop_stream(&mut self, user_input: String, turn_kind: &str) -> Result<()> {
+        // 重置 per-agent 中断标志；如果全局 SIGINT 已触发，转存到 per-agent 标志
         self.interrupted.store(false, Ordering::SeqCst);
-
-        // Trap SIGINT (Ctrl+C) to set interrupt flag during streaming
-        let interrupted = self.interrupted.clone();
-        ctrlc::set_handler(move || {
-            interrupted.store(true, Ordering::SeqCst);
-        }).ok(); // Ignore error if handler already set
+        if CTRLC_FLAG.swap(false, Ordering::SeqCst) {
+            self.interrupted.store(true, Ordering::SeqCst);
+        }
 
         let result = (|| -> Result<()> {
             self.conv.add_user(&user_input)?;
@@ -1213,7 +1226,7 @@ impl Agent {
                     }
                 };
                 while let Some(evt) = stream.next_event()? {
-                    if self.interrupted.load(Ordering::SeqCst) {
+                    if self.is_interrupted() {
                         stop = "interrupted".to_string();
                         break;
                     }
@@ -1233,12 +1246,12 @@ impl Agent {
                             self.display_event(&mut ds, DisplayEvent::ToolCall(call.clone()))?;
                             calls.push(call.clone());
 
-                            if self.interrupted.load(Ordering::SeqCst) {
+                            if self.is_interrupted() {
                                 stop = "interrupted".to_string();
                                 break;
                             }
                             let dispatch_result = runner.dispatch(&call.name, &call.input_json);
-                            if self.interrupted.load(Ordering::SeqCst) {
+                            if self.is_interrupted() {
                                 stop = "interrupted".to_string();
                                 break;
                             }
@@ -1349,7 +1362,7 @@ impl Agent {
                 }
 
                 // Tools already executed inline; persist unless interrupted
-                if !self.interrupted.load(Ordering::SeqCst) {
+                if !self.is_interrupted() {
                     self.conv.add_assistant(&text, &thinking, &calls)?;
                     if !tool_results.is_empty() {
                         self.conv.add_tool_results(&tool_results)?;
@@ -1587,11 +1600,13 @@ impl Agent {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_thread = cancel.clone();
+        let interrupted_thread = self.interrupted.clone();
         let transport = self.transport.clone();
         let _reader_thread = std::thread::spawn(move || {
             let reader = CancelReader {
                 inner: resp,
-                cancel: cancel_thread.clone(),
+                cancel: cancel_thread,
+                interrupted: interrupted_thread,
             };
             let mut send = |evt: Event| -> Result<()> {
                 tx.send(StreamMsg::Event(evt))
@@ -1768,7 +1783,12 @@ impl Agent {
             }
             Ok(())
         };
-        self.transport.parse_sse(Box::new(resp), &mut parse_emit)?;
+        let cancel_reader = CancelReader {
+            inner: resp,
+            cancel: self.interrupted.clone(),
+            interrupted: self.interrupted.clone(),
+        };
+        self.transport.parse_sse(Box::new(cancel_reader), &mut parse_emit)?;
         if out.is_empty() {
             bail!(
                 "failed to generate context summary: empty text response (stop_reason={}, error={})",
