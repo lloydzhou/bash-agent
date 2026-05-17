@@ -5,13 +5,15 @@ use crate::config::Config;
     use regex::Regex;
     use serde::Deserialize;
     use serde_json::Value;
+    use nix::unistd::pipe;
     use std::fs;
-    use std::io::{BufRead, BufReader, Read as IoRead};
+    use std::os::unix::io::{FromRawFd, IntoRawFd, OwnedFd};
     use std::path::Path;
     use std::process::{Command, Stdio};
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     static RE_FIND_DELETE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r"(?i)(^|[;&|])\s*find\b.*\bdelete\b").expect("regex"));
@@ -26,6 +28,8 @@ use crate::config::Config;
         pub config: Config,
         pub cwd: std::path::PathBuf,
         pub home: std::path::PathBuf,
+        pub interrupted: Arc<AtomicBool>,
+        pub cancel_fd: i32, // cancel pipe 读端 FD，-1 表示不可用
     }
 
     #[derive(Debug, Clone, Deserialize)]
@@ -265,46 +269,90 @@ use crate::config::Config;
                 }),
             };
 
+            // 创建手动 pipe：写端给子进程，读端由 reader 线程读取
+            // 通过关闭读端 FD 来传播中断信号（chain 模式）
+            let (stdout_r, stdout_w): (OwnedFd, OwnedFd) = pipe()?;
+            let (stderr_r, stderr_w): (OwnedFd, OwnedFd) = pipe()?;
+
+            let stdout_fd = stdout_r.into_raw_fd(); // 消费 OwnedFd，由我们手动管理 FD 生命周期
+            let stderr_fd = stderr_r.into_raw_fd();
+
             let mut child = Command::new("bash")
                 .arg("-lc")
                 .arg(command)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stdout(unsafe { Stdio::from_raw_fd(stdout_w.into_raw_fd()) })
+                .stderr(unsafe { Stdio::from_raw_fd(stderr_w.into_raw_fd()) })
                 .spawn()?;
 
             let stdout_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
             let stderr_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
-            if let Some(stdout) = child.stdout.take() {
-                let buf = stdout_buf.clone();
-                thread::spawn(move || stream_reader(stdout, buf));
-            }
-            if let Some(stderr) = child.stderr.take() {
-                let buf = stderr_buf.clone();
-                thread::spawn(move || stream_reader(stderr, buf));
-            }
+            // Reader 线程：读取 stdout FD，FD 被外部关闭时 read 返回 EBADF 自动退出
+            let sbuf = stdout_buf.clone();
+            let stdout_fd_reader = stdout_fd;
+            thread::spawn(move || {
+                let mut tmp = Vec::new();
+                let mut buf = [0u8; 8192];
+                loop {
+                    match unsafe { libc::read(stdout_fd_reader, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) } {
+                        0 => break,
+                        n if n > 0 => tmp.extend_from_slice(&buf[..n as usize]),
+                        _ => break, // EBADF（FD 被关）/ 其他错误
+                    }
+                }
+                if let Ok(s) = String::from_utf8(tmp) {
+                    *sbuf.lock().unwrap() = s;
+                }
+            });
 
-            let start = Instant::now();
+            let ebuf = stderr_buf.clone();
+            let stderr_fd_reader = stderr_fd;
+            thread::spawn(move || {
+                let mut tmp = Vec::new();
+                let mut buf = [0u8; 8192];
+                loop {
+                    match unsafe { libc::read(stderr_fd_reader, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) } {
+                        0 => break,
+                        n if n > 0 => tmp.extend_from_slice(&buf[..n as usize]),
+                        _ => break,
+                    }
+                }
+                if let Ok(s) = String::from_utf8(tmp) {
+                    *ebuf.lock().unwrap() = s;
+                }
+            });
+
+            // 使用 kqueue 事件驱动等待子进程退出 / cancel 信号 / 超时 — 零轮询
             let mut timed_out = false;
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_status)) => break,
-                    Ok(None) => {
-                        if start.elapsed() >= timeout {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            timed_out = true;
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(50));
-                    }
-                    Err(e) => {
-                        bail!("Error: failed to wait on child process: {e}");
-                    }
+            match wait_child_or_cancel(child.id(), self.cancel_fd, timeout) {
+                Ok(WaitResult::Exited) => {
+                    let _ = child.try_wait(); // reap
+                }
+                Ok(WaitResult::Cancel) => {
+                    timed_out = true; // 标记为截断
+                    // drain cancel pipe 防止后续 tool 调用立即收到 Cancel
+                    drain_fd(self.cancel_fd);
+                }
+                Ok(WaitResult::Timeout) => {
+                    timed_out = true;
+                    // SIGTERM 子进程
+                    let _ = Command::new("kill")
+                        .arg("--")
+                        .arg(format!("-{}", child.id()))
+                        .output();
+                    let _ = child.try_wait();
+                }
+                Err(e) => {
+                    // 先关闭 FD 再返回错误
+                    unsafe { libc::close(stdout_fd); }
+                    unsafe { libc::close(stderr_fd); }
+                    bail!("Error: wait failed: {e}");
                 }
             }
 
-            thread::sleep(Duration::from_millis(30));
+            // 给 reader 线程 1ms 处理剩余数据。FD 链机制下 reader 在子进程退出 / FD 关闭后
+            // 立即得到 EOF / EBADF，1ms 足够处理常规输出。大输出场景靠多轮 8KB read 完成。
+            thread::sleep(Duration::from_millis(1));
 
             let mut out = stdout_buf.lock().unwrap().clone();
             let stderr = stderr_buf.lock().unwrap().clone();
@@ -416,40 +464,244 @@ use crate::config::Config;
             if query.is_empty() {
                 bail!("Error: no query provided");
             }
-            let client = reqwest::blocking::Client::new();
-            let mut req = client
-                .get("https://s.jina.ai/")
-                .query(&[("q", query)])
-                .header("X-Respond-With", "no-content")
-                .timeout(std::time::Duration::from_secs(30));
-            if let Ok(key) = std::env::var("JINA_API_KEY") {
-                if !key.is_empty() {
-                    req = req.header("Authorization", format!("Bearer {key}"));
+            let rt = crate::agent::tokio_runtime();
+            let client = reqwest::Client::new();
+            let query = query.to_string();
+            let result: Result<String> = rt.block_on(async move {
+                let mut req = client
+                    .get("https://s.jina.ai/")
+                    .query(&[("q", &query)])
+                    .header("X-Respond-With", "no-content")
+                    .timeout(std::time::Duration::from_secs(30));
+                if let Ok(key) = std::env::var("JINA_API_KEY") {
+                    if !key.is_empty() {
+                        req = req.header("Authorization", format!("Bearer {key}"));
+                    }
                 }
-            }
-            let resp = req.send()?;
-            let body = resp.text()?;
-            Ok(body)
+                let resp = req.send().await.map_err(|e| anyhow!(e.to_string()))?;
+                let body = resp.text().await.map_err(|e| anyhow!(e.to_string()))?;
+                Ok(body)
+            });
+            result
         }
 
         fn web_fetch(&self, url: &str) -> Result<String> {
             if url.is_empty() {
                 bail!("Error: no url provided");
             }
-            let client = reqwest::blocking::Client::new();
-            let mut req = client
-                .get("https://r.jina.ai/")
-                .query(&[("url", url)])
-                .timeout(std::time::Duration::from_secs(60));
-            if let Ok(key) = std::env::var("JINA_API_KEY") {
-                if !key.is_empty() {
-                    req = req.header("Authorization", format!("Bearer {key}"));
+            let rt = crate::agent::tokio_runtime();
+            let client = reqwest::Client::new();
+            let url = url.to_string();
+            let result: Result<String> = rt.block_on(async move {
+                let mut req = client
+                    .get("https://r.jina.ai/")
+                    .query(&[("url", &url)])
+                    .timeout(std::time::Duration::from_secs(60));
+                if let Ok(key) = std::env::var("JINA_API_KEY") {
+                    if !key.is_empty() {
+                        req = req.header("Authorization", format!("Bearer {key}"));
+                    }
+                }
+                let resp = req.send().await.map_err(|e| anyhow!(e.to_string()))?;
+                let body = resp.text().await.map_err(|e| anyhow!(e.to_string()))?;
+                Ok(body)
+            });
+            result
+        }
+    }
+
+    /// 等待结果：子进程退出 / cancel 信号 / 超时
+    enum WaitResult {
+        Exited,
+        Cancel,
+        Timeout,
+    }
+
+    /// 使用 kqueue (macOS) 事件驱动等待，零轮询。
+    /// 同时监视子进程退出 (EVFILT_PROC + NOTE_EXIT) 和 cancel pipe (EVFILT_READ)。
+    #[cfg(target_os = "macos")]
+    fn wait_child_or_cancel(child_pid: u32, cancel_fd: i32, timeout: Duration) -> Result<WaitResult> {
+        let kq = unsafe { libc::kqueue() };
+        if kq < 0 {
+            bail!("kqueue() failed: {}", std::io::Error::last_os_error());
+        }
+
+        let mut events = Vec::with_capacity(2);
+        events.push(libc::kevent {
+            ident: child_pid as usize,
+            filter: libc::EVFILT_PROC as i16,
+            flags: libc::EV_ADD as u16,
+            fflags: libc::NOTE_EXIT as u32,
+            data: 0,
+            udata: std::ptr::null_mut(),
+        });
+        if cancel_fd >= 0 {
+            events.push(libc::kevent {
+                ident: cancel_fd as usize,
+                filter: libc::EVFILT_READ as i16,
+                flags: libc::EV_ADD as u16,
+                fflags: 0,
+                data: 0,
+                udata: std::ptr::null_mut(),
+            });
+        }
+
+        let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+        let timeout_nanos = timeout.as_secs().saturating_mul(1_000_000_000) as i64
+            + timeout.subsec_nanos() as i64;
+        let ts = libc::timespec {
+            tv_sec: (timeout_nanos / 1_000_000_000) as libc::time_t,
+            tv_nsec: (timeout_nanos % 1_000_000_000) as _,
+        };
+
+        let ret = unsafe {
+            libc::kevent(
+                kq,
+                events.as_ptr(),
+                events.len() as i32,
+                &mut event,
+                1,
+                &ts as *const libc::timespec,
+            )
+        };
+
+        unsafe { libc::close(kq); }
+
+        if ret < 0 {
+            bail!("kevent() failed: {}", std::io::Error::last_os_error());
+        }
+        if ret == 0 {
+            return Ok(WaitResult::Timeout);
+        }
+
+        // kevent 返回了一个事件
+        if event.filter == libc::EVFILT_READ as i16 {
+            Ok(WaitResult::Cancel)
+        } else {
+            // EVFILT_PROC — 子进程退出
+            Ok(WaitResult::Exited)
+        }
+    }
+
+    /// 使用 pidfd_open + poll (Linux 5.3+) 事件驱动等待。
+    /// 同时监视子进程退出 (pidfd) 和 cancel pipe (poll)。
+    #[cfg(target_os = "linux")]
+    fn wait_child_or_cancel(child_pid: u32, cancel_fd: i32, timeout: Duration) -> Result<WaitResult> {
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid as libc::c_int, 0) };
+        if pidfd < 0 {
+            bail!("pidfd_open({}) failed: {}", child_pid, std::io::Error::last_os_error());
+        }
+
+        let mut poll_fds = vec![
+            libc::pollfd {
+                fd: pidfd as libc::c_int,
+                events: libc::POLLIN as i16,
+                revents: 0,
+            },
+        ];
+        if cancel_fd >= 0 {
+            poll_fds.push(libc::pollfd {
+                fd: cancel_fd,
+                events: libc::POLLIN as i16,
+                revents: 0,
+            });
+        }
+
+        let timeout_ms = if timeout == Duration::MAX {
+            -1i32
+        } else {
+            let ms = timeout.as_millis();
+            if ms > i32::MAX as u128 { i32::MAX } else { ms as i32 }
+        };
+
+        let ret = unsafe {
+            libc::poll(poll_fds.as_mut_ptr(), poll_fds.len() as libc::nfds_t, timeout_ms)
+        };
+
+        unsafe { libc::close(pidfd as libc::c_int); }
+
+        if ret < 0 {
+            bail!("poll() failed: {}", std::io::Error::last_os_error());
+        }
+        if ret == 0 {
+            return Ok(WaitResult::Timeout);
+        }
+
+        let exited = (poll_fds[0].revents as i16 & libc::POLLIN as i16) != 0;
+        let cancelled = poll_fds.len() > 1
+            && (poll_fds[1].revents as i16 & libc::POLLIN as i16) != 0;
+
+        if exited {
+            Ok(WaitResult::Exited)
+        } else if cancelled {
+            Ok(WaitResult::Cancel)
+        } else {
+            bail!("unexpected poll result: revents={:?}",
+                poll_fds.iter().map(|p| p.revents).collect::<Vec<_>>());
+        }
+    }
+
+    /// 跨平台备选：waitpid(WNOHANG) + 50ms 轮询
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    fn wait_child_or_cancel(child_pid: u32, cancel_fd: i32, timeout: Duration) -> Result<WaitResult> {
+        let start = std::time::Instant::now();
+        loop {
+            // waitpid WNOHANG 非阻塞检查子进程状态
+            let mut status = 0;
+            let ret = unsafe { libc::waitpid(child_pid as libc::pid_t, &mut status, libc::WNOHANG) };
+            if ret == child_pid as libc::pid_t {
+                return Ok(WaitResult::Exited);
+            }
+            if ret < 0 {
+                if let Some(libc::ECHILD) = std::io::Error::last_os_error().raw_os_error() {
+                    return Ok(WaitResult::Exited);
                 }
             }
-            let resp = req.send()?;
-            let body = resp.text()?;
-            Ok(body)
+
+            // 非阻塞检查 cancel pipe
+            if cancel_fd >= 0 {
+                let mut pfd = libc::pollfd {
+                    fd: cancel_fd,
+                    events: libc::POLLIN as i16,
+                    revents: 0,
+                };
+                let pret = unsafe { libc::poll(&mut pfd, 1, 0) };
+                if pret > 0 && (pfd.revents as i16 & libc::POLLIN as i16) != 0 {
+                    return Ok(WaitResult::Cancel);
+                }
+            }
+
+            if start.elapsed() >= timeout {
+                return Ok(WaitResult::Timeout);
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    /// 非阻塞地 drain 一个 FD 的所有待读数据。
+    /// 用于 cancel pipe：Cancel 后清空管道，避免后续 tool 调用错误地立即收到 Cancel。
+    pub fn drain_fd(fd: i32) {
+        if fd < 0 {
+            return;
+        }
+        // 临时设为非阻塞
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
+        if flags < 0 {
+            return;
+        }
+        let _ = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        let mut buf = [0u8; 64];
+        loop {
+            let ret = unsafe {
+                libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+            };
+            if ret <= 0 {
+                break;
+            }
+        }
+        // 恢复阻塞模式
+        let _ = unsafe { libc::fcntl(fd, libc::F_SETFL, flags) };
     }
 
     fn deny_bash_command_reason(command: &str) -> Option<&'static str> {
@@ -535,29 +787,6 @@ use crate::config::Config;
 
     pub fn tool_format_result(s: &str, max: usize) -> String {
         format_tool_result(s, max)
-    }
-
-    fn stream_reader<R: std::io::Read>(pipe: R, buf: Arc<Mutex<String>>) {
-        let mut reader = BufReader::new(pipe);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    if let Ok(mut guard) = buf.lock() {
-                        guard.push_str(&line);
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        let mut tail = String::new();
-        if reader.read_to_string(&mut tail).is_ok() && !tail.is_empty() {
-            if let Ok(mut guard) = buf.lock() {
-                guard.push_str(&tail);
-            }
-        }
     }
 
     fn unified_diff_color(path: &str, old_content: &str, new_content: &str) -> Result<String> {
@@ -714,11 +943,16 @@ use crate::config::Config;
 
     #[cfg(test)]
     mod tests {
-        use super::Runner;
+        use super::{Runner, WaitResult, drain_fd, wait_child_or_cancel};
         use crate::config::Config;
+        use nix::unistd::pipe;
         use serde_json::json;
         use std::fs;
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::os::fd::AsRawFd;
+        use std::os::unix::io::IntoRawFd;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
         #[test]
         fn dispatch_skill_reads_content() {
@@ -739,6 +973,8 @@ use crate::config::Config;
                 config: Config::default(),
                 cwd: root.clone(),
                 home: root.join("home"),
+                interrupted: Arc::new(AtomicBool::new(false)),
+                cancel_fd: -1,
             };
             let result = runner
                 .dispatch("Skill", &json!({ "name": "test-skill" }))
@@ -748,5 +984,63 @@ use crate::config::Config;
             assert!(result.contains("/helper.sh"));
 
             let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn wait_cancel_pipe_aborts_sleep() {
+            // 验证 wait_child_or_cancel 在 cancel pipe 写入后立即返回 Cancel
+            let (r, w) = pipe().unwrap();
+            let cancel_fd = r.as_raw_fd();
+
+            let mut child = std::process::Command::new("bash")
+                .arg("-lc")
+                .arg("sleep 30")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+
+            let start = std::time::Instant::now();
+            let handle = std::thread::spawn(move || {
+                // 稍后写入 cancel pipe
+                std::thread::sleep(Duration::from_millis(200));
+                let _ = drain_fd(cancel_fd); // 先确保空
+                let data = b"x";
+                unsafe {
+                    libc::write(
+                        w.into_raw_fd(),
+                        data.as_ptr() as *const libc::c_void,
+                        data.len(),
+                    );
+                }
+            });
+
+            let result = wait_child_or_cancel(child.id(), cancel_fd, Duration::from_secs(10));
+            let elapsed = start.elapsed();
+
+            handle.join().unwrap();
+            let _ = child.try_wait();
+
+            match result {
+                Ok(WaitResult::Cancel) => {
+                    // 应在 1 秒内返回 Cancel
+                    assert!(
+                        elapsed < Duration::from_secs(2),
+                        "took too long: {elapsed:?}"
+                    );
+                }
+                Ok(WaitResult::Exited) => {
+                    // child 意外退出了
+                    drain_fd(cancel_fd);
+                    panic!("child exited instead of being cancelled");
+                }
+                Ok(WaitResult::Timeout) => {
+                    drain_fd(cancel_fd);
+                    panic!("timed out before cancel");
+                }
+                Err(e) => {
+                    panic!("wait_child_or_cancel failed: {e}");
+                }
+            }
         }
     }
