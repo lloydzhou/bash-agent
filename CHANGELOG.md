@@ -4,6 +4,36 @@
 
 ---
 
+## [3.0.2] - 2026-05-17
+
+### Fixed
+
+- **Rust Ctrl+C CPU 飙升且无法恢复**：重构 Rust HTTP 架构，`reqwest::blocking` + 独立
+  `spawn_reader` 线程 → `reqwest` async + `bytes_stream()`。旧架构下 Ctrl+C 后 spawn_reader
+  线程仍在全速读取 HTTP 响应写入无界 channel，CPU 100%。新架构使用 `tokio::select!` 协作式
+  中断，async 任务内同时检查 `cancel` / `interrupted` / `CTRLC_FLAG` 三个 AtomicBool 标志，
+  LlmStream drop 时取消当前流。`CancellationToken` 被移除（单次信号不可重置，导致后续所有
+  HTTP 请求立即中断）（`74728d5`）
+
+### Changed
+
+- **system prompt 三端统一**：以 bash `agent_build_prompt` 为基准，对齐 Go `BuildPrompt` 和
+  Rust `build_system_prompt`。Go 多个 section 补全（sub-agent/todo/plan 从截断版恢复完整内容）、
+  section 顺序改为 output-language 最后、节间分隔符 `\n\n`→`\n`、current-plan 加 name 属性。
+  Rust 补齐 using-your-tools 中的 SubAgent 段落、plan-lifecycle-guidance 对齐 Drafting phase
+  格式。platform 字符串三端统一为 `uname -s` 格式（Darwin/Linux）（`7ab6153`）
+- **tools.json 三端同步**：`rust/src/tools.json` 覆盖为 `src/tools.json` 副本，`go/tools.json`
+  新增副本，SHA256 完全一致（`04cb174`）
+- **Go tools.json 编译时嵌入**：使用 `//go:embed` 内置到二进制，运行时不再依赖外部文件；
+  `UtilLoadToolDefs` 简化去 error 返回（`53bcb0d`, `a3447fe`, `1cae904`）
+- **Go SessionStore**：新增 `PlanPath()` / `PlanDraftPath()` 方法暴露文件路径（`7ab6153`）
+
+### Docs
+
+- AGENT.md 新增「版本一致性要求」章节，包含检查清单（`98fcdf3`）
+
+---
+
 ## [3.0.1] - 2026-07-15
 
 > **注意**: v3.0.x 与 v2.5.x 为并行维护线。v3.0.0 基于 v2.5.2 做了大规模 Pipeline 架构重写和代码重组，
@@ -560,7 +590,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...HEAD
+[3.0.2]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/lloydzhou/bash-agent/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...v3.0.0
 [2.5.3]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...v2.5.3
