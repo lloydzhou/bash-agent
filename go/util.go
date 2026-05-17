@@ -352,21 +352,12 @@ func UtilBuildAssistantJSON(text, thinking string, calls []ToolCallInfo) string 
 	return buf.String()
 }
 
-// UtilLoadToolDefs 从 tools.json 加载工具定义，文件不存在时返回嵌入的默认定义。
-func UtilLoadToolDefs(scriptDir string) (string, error) {
-	toolsFile := filepath.Join(scriptDir, "tools.json")
-	if fileExists(toolsFile) {
-		data, err := os.ReadFile(toolsFile)
-		if err != nil {
-			return "", err
-		}
-		return string(data), nil
-	}
-	// 文件不存在时使用编译时嵌入的默认 tools.json
+// UtilLoadToolDefs 返回编译时嵌入的 tools.json 工具定义。
+func UtilLoadToolDefs(_ string) (string, error) {
 	if embeddedToolsJSON != "" {
 		return embeddedToolsJSON, nil
 	}
-	return "", fmt.Errorf("cannot find tools.json: %s", toolsFile)
+	return "", fmt.Errorf("embedded tools.json is empty")
 }
 
 // ─── 内部辅助函数 ───
