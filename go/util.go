@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -13,6 +14,9 @@ import (
 	"strings"
 	"time"
 )
+
+//go:embed tools.json
+var embeddedToolsJSON string
 
 // ─── util_* 工具函数（23 个） ───
 
@@ -348,17 +352,21 @@ func UtilBuildAssistantJSON(text, thinking string, calls []ToolCallInfo) string 
 	return buf.String()
 }
 
-// UtilLoadToolDefs 从 tools.json 加载工具定义
+// UtilLoadToolDefs 从 tools.json 加载工具定义，文件不存在时返回嵌入的默认定义。
 func UtilLoadToolDefs(scriptDir string) (string, error) {
 	toolsFile := filepath.Join(scriptDir, "tools.json")
-	if !fileExists(toolsFile) {
-		return "", fmt.Errorf("cannot find tools.json: %s", toolsFile)
+	if fileExists(toolsFile) {
+		data, err := os.ReadFile(toolsFile)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
 	}
-	data, err := os.ReadFile(toolsFile)
-	if err != nil {
-		return "", err
+	// 文件不存在时使用编译时嵌入的默认 tools.json
+	if embeddedToolsJSON != "" {
+		return embeddedToolsJSON, nil
 	}
-	return string(data), nil
+	return "", fmt.Errorf("cannot find tools.json: %s", toolsFile)
 }
 
 // ─── 内部辅助函数 ───

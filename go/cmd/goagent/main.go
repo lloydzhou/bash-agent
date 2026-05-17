@@ -173,17 +173,13 @@ Examples:
 	// 创建 agent
 	a := agent.NewAgent(cfg, store, llm, tools, display)
 
-	// 加载工具定义
+	// 加载工具定义：优先使用同目录下的 tools.json，否则使用编译时嵌入的默认定义
 	execPath, _ := os.Executable()
 	scriptDir := filepath.Dir(execPath)
 	toolDefs, err := agent.UtilLoadToolDefs(scriptDir)
 	if err != nil {
-		// 尝试源码目录
-		toolDefs, err = agent.UtilLoadToolDefs(".")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: load tools.json: %v\n", err)
-			os.Exit(1)
-		}
+		fmt.Fprintf(os.Stderr, "Error: load tools.json: %v\n", err)
+		os.Exit(1)
 	}
 	a.SetToolDefs(toolDefs)
 
