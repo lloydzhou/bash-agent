@@ -174,12 +174,7 @@ Examples:
 	a := agent.NewAgent(cfg, store, llm, tools, display)
 
 	// 加载工具定义（编译时嵌入的 tools.json）
-	toolDefs, err := agent.UtilLoadToolDefs("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: load tools.json: %v\n", err)
-		os.Exit(1)
-	}
-	a.SetToolDefs(toolDefs)
+	a.SetToolDefs(agent.UtilLoadToolDefs())
 
 	// Session 管理
 	sessionID := session

@@ -353,11 +353,8 @@ func UtilBuildAssistantJSON(text, thinking string, calls []ToolCallInfo) string 
 }
 
 // UtilLoadToolDefs 返回编译时嵌入的 tools.json 工具定义。
-func UtilLoadToolDefs(_ string) (string, error) {
-	if embeddedToolsJSON != "" {
-		return embeddedToolsJSON, nil
-	}
-	return "", fmt.Errorf("embedded tools.json is empty")
+func UtilLoadToolDefs() string {
+	return embeddedToolsJSON
 }
 
 // ─── 内部辅助函数 ───
