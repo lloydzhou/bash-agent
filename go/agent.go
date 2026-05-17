@@ -108,9 +108,16 @@ func (a *Agent) BuildPrompt() string {
 	}
 	appendSection("agent-identity", identity, "")
 
-	// environment
+	// environment — platform 与 bash 的 uname -s 输出一致
+	platform := runtime.GOOS
+	switch platform {
+	case "darwin":
+		platform = "Darwin"
+	case "linux":
+		platform = "Linux"
+	}
 	env := fmt.Sprintf("lang: %s\npwd: %s\nhome: %s\nplatform: %s\nshell: %s",
-		locale, mustGetwd(), os.Getenv("HOME"), runtime.GOOS, os.Getenv("SHELL"))
+		locale, mustGetwd(), os.Getenv("HOME"), platform, os.Getenv("SHELL"))
 	appendSection("environment", env, "")
 
 	// rules
@@ -125,39 +132,70 @@ func (a *Agent) BuildPrompt() string {
 		"- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n" +
 		"- Use multiple tool calls in one response when they are independent.\n" +
 		"- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n" +
-		"- For Edit: copy old_string exactly (including whitespace/indent/newlines).\n" +
+		"- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n" +
 		"- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n" +
-		"- SubAgent launches a background agent session. Results are injected back into your conversation when complete."
+		"- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules."
 	appendSection("using-your-tools", toolGuidance, "")
 
 	// sub-agent guidance
-	subAgentGuidance := "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context.\n" +
-		"- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state.\n" +
-		"- **Fork mode**: pass `fork=true` to inherit parent session context.\n" +
-		"- **Prompt design**: write a complete, self-contained prompt.\n" +
-		"- **Result handling**: results are injected as a user message.\n" +
-		"- **Parallelism**: multiple SubAgent calls run concurrently.\n" +
-		"- **Failure**: if the child fails, handle gracefully — do not retry automatically."
+	subAgentGuidance := "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n" +
+		"- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n" +
+		"- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n" +
+		"- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n" +
+		"- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n" +
+		"- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.\n" +
+		"- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically."
 	appendSection("sub-agent-guidance", subAgentGuidance, "")
 
 	// todo guidance
-	todoGuidance := "- Use TodoWrite proactively for complex multi-step tasks.\n" +
-		"- Do not use TodoWrite for trivial single-step requests.\n" +
+	todoGuidance := "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n" +
+		"- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n" +
+		"- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n" +
+		"- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n" +
 		"- Keep the checklist short, concrete, and actionable.\n" +
-		"- Prefer exactly one in_progress item when work is actively underway."
+		"- Prefer exactly one in_progress item when work is actively underway.\n" +
+		"- Mark items completed immediately after finishing them, and remove stale items that no longer matter."
 	appendSection("todo-guidance", todoGuidance, "")
 
 	// plan lifecycle
+	pdPath, pPath := a.store.PlanDraftPath(), a.store.PlanPath()
+	if pdPath == "" {
+		pdPath = "<not set>"
+	}
+	if pPath == "" {
+		pPath = "<not set>"
+	}
 	planGuidance := "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n" +
-		"- **Files**: PLAN_DRAFT_FILE and PLAN_FILE paths are session-specific.\n" +
-		"- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache.\n" +
-		"- **Drafting phase**: Every user reply MUST be classified as REVISE, CONFIRM, or CANCEL.\n" +
-		"- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done."
+		"- **Files**: PLAN_DRAFT_FILE: " + pdPath + " | PLAN_FILE: " + pPath + "\n" +
+		"- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n" +
+		"- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n" +
+		"  Every user reply MUST be classified as exactly ONE of:\n" +
+		"  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n" +
+		"  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n" +
+		"  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n" +
+		"  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n" +
+		"- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n" +
+		"- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix."
 	appendSection("plan-lifecycle-guidance", planGuidance, "")
 
-	// current plan
+	// instruction files
+	instructions := a.buildInstructionsSection()
+	appendSection("instruction-files", instructions, "")
+
+	// skill index
+	skillIndex := a.buildSkillIndex()
+	appendSection("skill-index", skillIndex, "")
+
+	// selected skills
+	for _, sn := range a.cfg.SkillNames {
+		if content, err := a.loadSkillContent(sn); err == nil {
+			appendSection("skill", content, sn)
+		}
+	}
+
+	// current plan (with plan file name as attribute)
 	if plan, err := a.store.GetPlan(); err == nil && plan != "" {
-		appendSection("current-plan", plan, "")
+		appendSection("current-plan", plan, pPath)
 	}
 
 	// context snapshot (summary)
@@ -165,29 +203,14 @@ func (a *Agent) BuildPrompt() string {
 		appendSection("context-snapshot", summary, "")
 	}
 
-	// output language
-	outputLang := fmt.Sprintf("MUST use \"%s\" for all output, including Chain of Thought/reasoning/thinking!", locale)
+	// output language — 必须放在最后
+	outputLang := "MUST use \"" + locale + "\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
 	if strings.HasPrefix(locale, "zh") {
 		outputLang = "再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！"
 	}
 	appendSection("output-language", outputLang, "")
 
-	// instruction files (AGENTS.md / AGENT.md / CLAUDE.md)
-	instructions := a.buildInstructionsSection()
-	appendSection("instruction-files", instructions, "")
-
-	// skill index (所有发现的 skill 的 name: summary 列表)
-	skillIndex := a.buildSkillIndex()
-	appendSection("skill-index", skillIndex, "")
-
-	// selected skills (--skill 指定的，完整内容)
-	for _, sn := range a.cfg.SkillNames {
-		if content, err := a.loadSkillContent(sn); err == nil {
-			appendSection("skill", content, sn)
-		}
-	}
-
-	return strings.Join(sections, "\n\n")
+	return strings.Join(sections, "\n")
 }
 
 // ─── agent_record_usage: 记录 token 用量 ───

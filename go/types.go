@@ -180,6 +180,8 @@ type SessionStore interface {
 	IncrementCompact() error
 
 	// Plan
+	PlanPath() string
+	PlanDraftPath() string
 	GetPlan() (string, error)
 	SetPlan(text string) error
 	GetPlanDraft() (string, error)

@@ -397,6 +397,12 @@ func (s *FileStore) SetSummary(text string) error {
 func (s *FileStore) GetPlan() (string, error) {
 	return UtilReadOptional(s.planFile)
 }
+func (s *FileStore) PlanPath() string {
+	return s.planFile
+}
+func (s *FileStore) PlanDraftPath() string {
+	return s.planDraftFile
+}
 
 func (s *FileStore) SetPlan(text string) error {
 	s.mu.Lock()
