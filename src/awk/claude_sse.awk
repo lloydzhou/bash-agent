@@ -88,14 +88,22 @@ BEGIN {
     else if (event == "message_delta") {
         sr = extract_str(json, "stop_reason", 1)
         if (sr != "") stop_reason = sr
-        it = extract_num(json, "input_tokens", 1)
-        if (it != "") input_tokens = it
         ot = extract_num(json, "output_tokens", 1)
         if (ot != "") output_tokens = ot
-        crt = extract_num(json, "cache_read_input_tokens", 1)
-        if (crt != "") cache_read_input_tokens = crt
-        cct = extract_num(json, "cache_creation_input_tokens", 1)
-        if (cct != "") cache_creation_input_tokens = cct
+        # input_tokens/cache_*: 优先从 message_start 获取。
+        # OpenAI 路径无 message_start，需从合成的 message_delta 读取。
+        if (input_tokens == 0) {
+            it = extract_num(json, "input_tokens", 1)
+            if (it != "") input_tokens = it
+        }
+        if (cache_read_input_tokens == 0) {
+            crt = extract_num(json, "cache_read_input_tokens", 1)
+            if (crt != "") cache_read_input_tokens = crt
+        }
+        if (cache_creation_input_tokens == 0) {
+            cct = extract_num(json, "cache_creation_input_tokens", 1)
+            if (cct != "") cache_creation_input_tokens = cct
+        }
     }
     else if (event == "message_start") {
         it = extract_num(json, "input_tokens", 1)

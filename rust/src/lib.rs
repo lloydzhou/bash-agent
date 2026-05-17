@@ -961,7 +961,11 @@ pub mod prompt {
             };
             sections.push(wrap_section("agent-identity", &identity, None));
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
-            let platform = std::env::consts::OS;
+            let platform = match std::env::consts::OS {
+                "macos" => "Darwin",
+                "linux" => "Linux",
+                other => other,
+            };
             let environment = format!(
                 "lang: {}\npwd: {}\nhome: {}\nplatform: {}\nshell: {}",
                 locale,
@@ -975,7 +979,7 @@ pub mod prompt {
             sections.push(wrap_section("rules", &rules_str, None));
             sections.push(wrap_section(
                 "using-your-tools",
-                "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.",
+                "- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.",
                 None,
             ));
             sections.push(wrap_section(
@@ -1000,24 +1004,16 @@ pub mod prompt {
             };
             let plan_lifecycle_guidance = format!(
                 "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n\
+                 - **Files**: PLAN_DRAFT_FILE: {} | PLAN_FILE: {}\n\
                  - **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n\
-                 - **Step-by-step**:\n\
-                   1. Write draft to PLAN_DRAFT_FILE using Edit (markdown: goal, analysis, steps, notes)\n\
-                   2. Ask user to confirm the plan before execution\n\
-                   3. **Draft revision loop**: while PLAN_DRAFT_FILE is non-empty and user has NOT said \"confirmed\"/\"ok\"/\"go ahead\" (or equivalent), ANY user reply (questions, suggestions, objections, or implicit change requests) MUST be treated as revision feedback. ALWAYS update PLAN_DRAFT_FILE to reflect the discussion, then ask for confirmation again. NEVER just answer without updating the draft.\n\
-                   4. If user explicitly cancels/abandons: use Bash to clear PLAN_DRAFT_FILE (e.g. `: > PLAN_DRAFT_FILE`). Do NOT use PlanClear.\n\
-                   5. When user confirms: call PlanConfirm tool — this moves draft → PLAN_FILE and triggers a context compaction (cache invalidation is already happening, so we reclaim space at the same time).\n\
-                   6. After PlanConfirm, create TodoWrite checklist based on plan\n\
-                   7. Execute tasks following todo checklist (update progress in TodoWrite)\n\
-                   8. When all tasks complete, use PlanClear tool to clear plan and compact context\n\
-                 - **Plan vs Todo separation**:\n\
-                   - PLAN_FILE: locked-in plan (only written via PlanConfirm)\n\
-                   - PLAN_DRAFT_FILE: working draft during planning (safe to edit freely)\n\
-                   - TodoWrite: execution checklist for real-time progress tracking\n\
-                   - Do NOT mix todo checkboxes into plan files\n\
-                 - **Files**:\n\
-                   - PLAN_DRAFT_FILE: {}\n\
-                   - PLAN_FILE: {}",
+                 - **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n\
+                   Every user reply MUST be classified as exactly ONE of:\n\
+                   ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n\
+                   ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n\
+                   ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n\
+                   ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n\
+                 - **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n\
+                 - **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.",
                 plan_draft_file_display, plan_file_display
             );
             sections.push(wrap_section(

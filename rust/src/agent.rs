@@ -26,25 +26,21 @@ use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::io::IntoRawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc;
 
 type TransportRef = Arc<dyn crate::transport::Transport>;
 
 mod httpclient {
     use anyhow::{Result, anyhow};
-    use reqwest::blocking::{Client, Response};
+    use reqwest::Client;
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-    use std::collections::VecDeque;
     use std::fmt;
-    use std::io::{Read, Result as IoResult};
-    use std::sync::mpsc;
-    use std::sync::mpsc::{Receiver, RecvTimeoutError};
-    use std::thread;
-    use std::thread::sleep;
     use std::time::{Duration, Instant};
 
     #[derive(Debug)]
@@ -68,10 +64,7 @@ mod httpclient {
     impl HTTPError {
         pub fn format_detailed(&self) -> String {
             if self.status_code > 0 {
-                format!(
-                    "ERROR:{}\tHTTP {}: {}",
-                    self.status_code, self.status_code, self.body
-                )
+                format!("ERROR:{}\tHTTP {}: {}", self.status_code, self.status_code, self.body)
             } else {
                 format!("ERROR:0\t{}", self.body)
             }
@@ -86,21 +79,27 @@ mod httpclient {
     const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(1);
     const DEFAULT_RETRY_MAX_TIME: Duration = Duration::from_secs(20);
     const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-    const DEFAULT_STREAM_LOW_SPEED_LIMIT: usize = 1;
-    const DEFAULT_STREAM_LOW_SPEED_TIME: Duration = Duration::from_secs(60);
-    const DEFAULT_STREAM_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
     impl StreamClient {
         pub fn new() -> Result<Self> {
             Ok(Self {
                 client: Client::builder()
-                    .timeout(Duration::from_secs(300)) // 总请求超时 5 分钟，防止 spawn_reader 线程无限阻塞
+                    .timeout(Duration::from_secs(300))
                     .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
                     .build()?,
             })
         }
 
-        pub fn post(&self, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<StreamBody> {
+        /// 同步封装：内部使用 tokio runtime 执行 async HTTP 请求。
+        pub fn post(&self, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<reqwest::Response> {
+            let client = self.client.clone();
+            let url = url.to_string();
+            let hdrs: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let body = body.to_vec();
+            super::tokio_runtime().block_on(Self::async_post(client, &url, &hdrs, &body))
+        }
+
+        async fn async_post(client: Client, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<reqwest::Response> {
             let mut h = HeaderMap::new();
             for (k, v) in headers {
                 h.insert(
@@ -108,335 +107,33 @@ mod httpclient {
                     HeaderValue::from_str(v).map_err(|e| anyhow!(e.to_string()))?,
                 );
             }
-
             let start = Instant::now();
-            let mut attempt: u32 = 0;
+            let mut attempt = 0u32;
             loop {
-                let resp = self
-                    .client
-                    .post(url)
-                    .headers(h.clone())
-                    .body(body.to_vec())
-                    .send();
-
+                attempt += 1;
+                let resp = client.post(url).headers(h.clone()).body(body.to_vec()).send().await;
                 match resp {
                     Ok(resp) => {
                         let code = resp.status().as_u16();
                         if code >= 400 {
-                            let text = resp.text().unwrap_or_default();
-                            let retryable =
-                                should_retry_status(code) && should_retry_attempt(attempt, start);
-                            if retryable {
-                                sleep(DEFAULT_RETRY_DELAY);
-                                attempt += 1;
+                            let text = resp.text().await.unwrap_or_default();
+                            if code >= 500 && attempt < DEFAULT_RETRY_COUNT && start.elapsed() < DEFAULT_RETRY_MAX_TIME {
+                                tokio::time::sleep(DEFAULT_RETRY_DELAY).await;
                                 continue;
                             }
-                            return Err(HTTPError {
-                                status_code: code,
-                                body: text.trim().to_string(),
-                            }
-                            .into());
+                            return Err(HTTPError { status_code: code, body: text.trim().to_string() }.into());
                         }
-                        return StreamBody::new(
-                            self.client.clone(),
-                            url.to_string(),
-                            h.clone(),
-                            body.to_vec(),
-                            resp,
-                            DEFAULT_STREAM_LOW_SPEED_LIMIT,
-                            DEFAULT_STREAM_LOW_SPEED_TIME,
-                            DEFAULT_STREAM_CHECK_INTERVAL,
-                            DEFAULT_RETRY_COUNT,
-                            DEFAULT_RETRY_DELAY,
-                            start,
-                        );
+                        return Ok(resp);
                     }
-                    Err(err) => {
-                        if should_retry_attempt(attempt, start) {
-                            sleep(DEFAULT_RETRY_DELAY);
-                            attempt += 1;
+                    Err(e) => {
+                        if attempt < DEFAULT_RETRY_COUNT && start.elapsed() < DEFAULT_RETRY_MAX_TIME {
+                            tokio::time::sleep(DEFAULT_RETRY_DELAY).await;
                             continue;
                         }
-                        return Err(HTTPError {
-                            status_code: 0,
-                            body: err.to_string(),
-                        }
-                        .into());
+                        return Err(HTTPError { status_code: 0, body: e.to_string() }.into());
                     }
                 }
             }
-        }
-    }
-
-    pub struct StreamBody {
-        client: Client,
-        url: String,
-        headers: HeaderMap,
-        request_body: Vec<u8>,
-        max_retries: u32,
-        retry_delay: Duration,
-        start: Instant,
-        attempt: u32,
-        rx: Receiver<StreamChunk>,
-        buf: std::io::Cursor<Vec<u8>>,
-        done: bool,
-        low_speed_limit: usize,
-        low_speed_time: Duration,
-        check_interval: Duration,
-        samples: VecDeque<StreamSample>,
-        window_bytes: usize,
-    }
-
-    #[derive(Clone)]
-    struct StreamChunk {
-        at: Instant,
-        data: Vec<u8>,
-    }
-
-    #[derive(Clone)]
-    struct StreamSample {
-        at: Instant,
-        bytes: usize,
-    }
-
-    impl StreamBody {
-        fn new(
-            client: Client,
-            url: String,
-            headers: HeaderMap,
-            request_body: Vec<u8>,
-            resp: Response,
-            low_speed_limit: usize,
-            low_speed_time: Duration,
-            check_interval: Duration,
-            max_retries: u32,
-            retry_delay: Duration,
-            start: Instant,
-        ) -> Result<Self> {
-            let rx = spawn_reader(resp);
-            Ok(Self {
-                client,
-                url,
-                headers,
-                request_body,
-                max_retries,
-                retry_delay,
-                start,
-                attempt: 0,
-                rx,
-                buf: std::io::Cursor::new(Vec::new()),
-                done: false,
-                low_speed_limit,
-                low_speed_time,
-                check_interval,
-                samples: VecDeque::new(),
-                window_bytes: 0,
-            })
-        }
-
-        fn try_retry(&mut self) -> std::io::Result<()> {
-            sleep(self.retry_delay);
-            let resp = self
-                .client
-                .post(&self.url)
-                .headers(self.headers.clone())
-                .body(self.request_body.clone())
-                .send()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            let code = resp.status().as_u16();
-            if code >= 400 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("HTTP {} on retry", code),
-                ));
-            }
-            self.rx = spawn_reader(resp);
-            self.done = false;
-            Ok(())
-        }
-    }
-
-    fn spawn_reader(mut resp: Response) -> Receiver<StreamChunk> {
-        let (tx, rx) = mpsc::channel();
-        let _ = thread::spawn(move || {
-            let mut buf = [0u8; 8192];
-            loop {
-                match resp.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        if tx
-                            .send(StreamChunk {
-                                at: Instant::now(),
-                                data: buf[..n].to_vec(),
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        rx
-    }
-
-    impl Read for StreamBody {
-        fn read(&mut self, out: &mut [u8]) -> IoResult<usize> {
-            if self.done {
-                return Ok(0);
-            }
-            loop {
-                if (self.buf.position() as usize) < self.buf.get_ref().len() {
-                    return self.buf.read(out);
-                }
-                match self.rx.recv_timeout(self.check_interval) {
-                    Ok(chunk) => {
-                        self.record_chunk(chunk.at, chunk.data.len());
-                        self.buf = std::io::Cursor::new(chunk.data);
-                    }
-                    Err(RecvTimeoutError::Timeout) => {
-                        if self.low_speed_exceeded(Instant::now()) {
-                            if self.attempt < self.max_retries
-                                && should_retry_attempt(self.attempt, self.start)
-                            {
-                                self.attempt += 1;
-                                match self.try_retry() {
-                                    Ok(()) => {
-                                        self.buf = std::io::Cursor::new(b"RETRY:\n".to_vec());
-                                        continue;
-                                    }
-                                    Err(_) => {
-                                        self.done = true;
-                                        return Err(std::io::Error::new(
-                                            std::io::ErrorKind::TimedOut,
-                                            "stream low speed timeout",
-                                        ));
-                                    }
-                                }
-                            }
-                            self.done = true;
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::TimedOut,
-                                "stream low speed timeout",
-                            ));
-                        }
-                    }
-                    Err(RecvTimeoutError::Disconnected) => {
-                        self.done = true;
-                        return Ok(0);
-                    }
-                }
-            }
-        }
-    }
-
-    impl Drop for StreamBody {
-        fn drop(&mut self) {
-            self.done = true;
-        }
-    }
-
-    impl StreamBody {
-        fn record_chunk(&mut self, at: Instant, bytes: usize) {
-            self.samples.push_back(StreamSample { at, bytes });
-            self.window_bytes = self.window_bytes.saturating_add(bytes);
-            self.prune_window(at);
-        }
-
-        fn prune_window(&mut self, now: Instant) {
-            while let Some(sample) = self.samples.front() {
-                if now.saturating_duration_since(sample.at) <= self.low_speed_time {
-                    break;
-                }
-                self.window_bytes = self.window_bytes.saturating_sub(sample.bytes);
-                self.samples.pop_front();
-            }
-        }
-
-        fn low_speed_exceeded(&mut self, now: Instant) -> bool {
-            self.prune_window(now);
-            if now.duration_since(self.start) < self.low_speed_time {
-                return false;
-            }
-            self.window_bytes
-                < self
-                    .low_speed_limit
-                    .saturating_mul(self.low_speed_time.as_secs() as usize)
-        }
-    }
-
-    fn should_retry_attempt(attempt: u32, start: Instant) -> bool {
-        if attempt >= DEFAULT_RETRY_COUNT {
-            return false;
-        }
-        start.elapsed() + DEFAULT_RETRY_DELAY <= DEFAULT_RETRY_MAX_TIME
-    }
-
-    fn should_retry_status(code: u16) -> bool {
-        matches!(code, 408 | 409 | 425 | 429 | 500 | 502 | 503 | 504)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::{StreamBody, StreamChunk};
-        use reqwest::blocking::Client;
-        use reqwest::header::HeaderMap;
-        use std::collections::VecDeque;
-        use std::sync::mpsc;
-        use std::time::{Duration, Instant};
-
-        #[test]
-        fn low_speed_window_expires_without_bytes() {
-            let start = Instant::now();
-            let mut body = StreamBody {
-                client: Client::new(),
-                url: String::new(),
-                headers: HeaderMap::new(),
-                request_body: Vec::new(),
-                max_retries: 0,
-                retry_delay: Duration::from_secs(1),
-                start,
-                attempt: 0,
-                rx: mpsc::channel::<StreamChunk>().1,
-                buf: std::io::Cursor::new(Vec::new()),
-                done: false,
-                low_speed_limit: 1,
-                low_speed_time: Duration::from_secs(60),
-                check_interval: Duration::from_secs(1),
-                samples: VecDeque::new(),
-                window_bytes: 0,
-            };
-
-            assert!(!body.low_speed_exceeded(start + Duration::from_secs(59)));
-            assert!(body.low_speed_exceeded(start + Duration::from_secs(60)));
-        }
-
-        #[test]
-        fn low_speed_window_uses_recent_bytes_only() {
-            let start = Instant::now();
-            let mut body = StreamBody {
-                client: Client::new(),
-                url: String::new(),
-                headers: HeaderMap::new(),
-                request_body: Vec::new(),
-                max_retries: 0,
-                retry_delay: Duration::from_secs(1),
-                start,
-                attempt: 0,
-                rx: mpsc::channel::<StreamChunk>().1,
-                buf: std::io::Cursor::new(Vec::new()),
-                done: false,
-                low_speed_limit: 1,
-                low_speed_time: Duration::from_secs(60),
-                check_interval: Duration::from_secs(1),
-                samples: VecDeque::new(),
-                window_bytes: 0,
-            };
-
-            body.record_chunk(start + Duration::from_secs(30), 100);
-            assert!(!body.low_speed_exceeded(start + Duration::from_secs(60)));
-            assert!(body.low_speed_exceeded(start + Duration::from_secs(91)));
         }
     }
 }
@@ -446,14 +143,59 @@ use httpclient::{HTTPError, StreamClient};
 /// 全局 SIGINT 标志，防止多个 agent 相互覆盖 ctrlc handler。
 /// 只在 agent_run / interactive_mode 中设一次。
 static CTRLC_FLAG: AtomicBool = AtomicBool::new(false);
+/// 全局 cancel pipe 写端 FD，ctrlc handler 通过写入此 pipe 传播中断信号。
+static CANCEL_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
+
+/// 全局 tokio 运行时，嵌入在 sync 应用中使用 async HTTP。
+pub fn tokio_runtime() -> &'static tokio::runtime::Runtime {
+    use std::sync::OnceLock;
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| tokio::runtime::Runtime::new().expect("tokio runtime"))
+}
+
+/// 基于 std::sync::mpsc channel 的 Read 实现。
+/// async 数据流发送端写入 channel，parse_sse 通过这里读取。
+struct ChannelReader {
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for ChannelReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.buf.len() {
+            match self.rx.recv() {
+                Ok(data) => {
+                    self.buf = data;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0), // channel closed = EOF
+            }
+        }
+        let n = std::cmp::min(buf.len(), self.buf.len() - self.pos);
+        buf[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
 
 pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
-    // 全局 ctrlc handler：只在第一次调用时注册
+    // 创建全局 cancel pipe：ctrlc handler 写入，tool 执行通过 kqueue 等待读取
+    let (cancel_r, cancel_w) = nix::unistd::pipe()?;
+    CANCEL_WRITE_FD.store(cancel_w.as_raw_fd(), Ordering::SeqCst);
+    let cancel_read_fd = cancel_r.into_raw_fd();
+
+    // 全局 ctrlc handler：写入 cancel pipe（kqueue）+ 设置 CTRLC_FLAG（interrupted 轮询）
     ctrlc::set_handler(move || {
         CTRLC_FLAG.store(true, Ordering::SeqCst);
+        let fd = CANCEL_WRITE_FD.load(Ordering::SeqCst);
+        if fd >= 0 {
+            let _ = unsafe { libc::write(fd, b"x" as *const u8 as *const libc::c_void, 1) };
+        }
     }).ok();
 
     let mut rt = Agent::new(cfg, cwd, home)?;
+    rt.cancel_read_fd = cancel_read_fd;
 
     if rt.cfg.interactive || (rt.cfg.prompt.is_empty() && io::stdin().is_terminal()) {
         rt.cfg.interactive = true;
@@ -531,6 +273,7 @@ pub(crate) struct Agent {
     sub_agent_request_count: usize,          // SubAgent 请求计数
     stdout: RefCell<Box<dyn Write + Send>>,  // 可替换的输出目标（子 agent 时为 sink）
     stderr: RefCell<Box<dyn Write + Send>>,  // 可替换的错误输出目标（子 agent 时为 sink）
+    cancel_read_fd: i32,                      // cancel pipe 读端 FD，传给 Runner 做 kqueue wait
 }
 
 struct DisplayState {
@@ -550,30 +293,8 @@ struct LlmStream {
     interrupted: Arc<AtomicBool>,
 }
 
-struct CancelReader<R> {
-    inner: R,
-    cancel: Arc<AtomicBool>,
-    interrupted: Arc<AtomicBool>,
-}
 
-impl<R: Read> Read for CancelReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.cancel.load(Ordering::SeqCst) || self.interrupted.load(Ordering::SeqCst) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "cancelled",
-            ));
-        }
-        let n = self.inner.read(buf)?;
-        if self.cancel.load(Ordering::SeqCst) || self.interrupted.load(Ordering::SeqCst) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "cancelled",
-            ));
-        }
-        Ok(n)
-    }
-}
+
 
 impl LlmStream {
     fn next_event(&mut self) -> Result<Option<Event>> {
@@ -682,6 +403,7 @@ impl Agent {
             sub_agent_request_count: 0,
             stdout: RefCell::new(Box::new(io::stdout())),
             stderr: RefCell::new(Box::new(io::stderr())),
+            cancel_read_fd: 0, // 占位，稍后由 agent_run 设置
         };
 
         if new_session {
@@ -788,6 +510,7 @@ impl Agent {
                 sub_agent_request_count: 0,
                 stdout: RefCell::new(Box::new(io::empty())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
                 stderr: RefCell::new(Box::new(io::empty())),  // 子 agent 错误输出全部丢弃
+                cancel_read_fd: -1,
             };
 
             // 4. 执行 agent_loop
@@ -1009,8 +732,11 @@ impl Agent {
                     }
                     if let Err(e) = self.agent_loop(input) {
                         let msg = e.to_string();
-                        // 不打印 interrupted 错误
-                        if msg != "interrupted" {
+                        // 不打印中断相关的错误（包括 SSE 流被 Ctrl+C 断开的情况）
+                        let is_interrupt = msg == "interrupted"
+                            || msg == "sse_parse: cancelled"
+                            || msg.contains("ConnectionAborted");
+                        if !is_interrupt {
                             self.error(&msg);
                         }
                     }
@@ -1177,6 +903,8 @@ impl Agent {
         if CTRLC_FLAG.swap(false, Ordering::SeqCst) {
             self.interrupted.store(true, Ordering::SeqCst);
         }
+        // drain cancel pipe：清理上次可能残留的 Ctrl+C 数据，防止 PollReader 误判
+        crate::tools::drain_fd(self.cancel_read_fd);
 
         let result = (|| -> Result<()> {
             self.conv.add_user(&user_input)?;
@@ -1209,6 +937,8 @@ impl Agent {
                     config: self.cfg.clone(),
                     cwd: self.cwd.clone(),
                     home: self.home.clone(),
+                    interrupted: self.interrupted.clone(),
+                    cancel_fd: self.cancel_read_fd,
                 };
 
                 let mut stream = match self.llm_stream() {
@@ -1225,7 +955,25 @@ impl Agent {
                         return Err(e);
                     }
                 };
-                while let Some(evt) = stream.next_event()? {
+                loop {
+                    let evt = match stream.next_event() {
+                        Ok(Some(e)) => e,
+                        Ok(None) => break,
+                        Err(e) => {
+                            // SSE 解析错误：如果是中断导致的，走正常 interrupted 分支
+                            let msg = e.to_string();
+                            if self.is_interrupted()
+                                || msg.contains("cancelled")
+                                || msg.contains("ConnectionAborted")
+                            {
+                                stop = "interrupted".to_string();
+                            } else {
+                                // 非中断的解析错误，直接返回
+                                return Err(e);
+                            }
+                            break;
+                        }
+                    };
                     if self.is_interrupted() {
                         stop = "interrupted".to_string();
                         break;
@@ -1374,6 +1122,7 @@ impl Agent {
                     }
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
+                        CTRLC_FLAG.store(false, Ordering::SeqCst);
                         return Ok(());
                     }
                 } else {
@@ -1389,6 +1138,7 @@ impl Agent {
                         }
                         self.info("Interrupted.");
                     }
+                    CTRLC_FLAG.store(false, Ordering::SeqCst);
                     return Ok(());
                 }
             }
@@ -1598,16 +1348,11 @@ impl Agent {
         };
 
         let (tx, rx) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_thread = cancel.clone();
-        let interrupted_thread = self.interrupted.clone();
         let transport = self.transport.clone();
+
+        // 同步线程：http_stream → ChannelReader → BufReader → parse_sse → events
+        let (reader, cancel) = self.http_stream(resp);
         let _reader_thread = std::thread::spawn(move || {
-            let reader = CancelReader {
-                inner: resp,
-                cancel: cancel_thread,
-                interrupted: interrupted_thread,
-            };
             let mut send = |evt: Event| -> Result<()> {
                 tx.send(StreamMsg::Event(evt))
                     .map_err(|e| anyhow!(e.to_string()))
@@ -1735,6 +1480,7 @@ impl Agent {
                 return Err(e);
             }
         };
+        let (channel_reader, _cancel) = self.http_stream(resp);
         let mut out = String::new();
         let mut last_error = String::new();
         let mut stop_reason = String::new();
@@ -1742,7 +1488,6 @@ impl Agent {
             match evt {
                 Event::Text(TextEvent { content }) => out.push_str(&content),
                 Event::Usage(usage) => {
-                    // Record compact usage to events and stats (matches bash run_summary_call)
                     let compact_evt = json!({
                         "type":"usage",
                         "input_tokens":usage.input_tokens,
@@ -1754,26 +1499,10 @@ impl Agent {
                     let _ = self.append_event(compact_evt);
                     store::store_stats_update(&self.paths.stats, |stats| {
                         Self::add_stat_usize(stats, "compact_request_count", 1);
-                        Self::add_stat_usize(
-                            stats,
-                            "total_input_tokens",
-                            usage.input_tokens as usize,
-                        );
-                        Self::add_stat_usize(
-                            stats,
-                            "total_output_tokens",
-                            usage.output_tokens as usize,
-                        );
-                        Self::add_stat_usize(
-                            stats,
-                            "total_cache_read_tokens",
-                            usage.cache_read_input_tokens as usize,
-                        );
-                        Self::add_stat_usize(
-                            stats,
-                            "total_cache_creation_tokens",
-                            usage.cache_creation_input_tokens as usize,
-                        );
+                        Self::add_stat_usize(stats, "total_input_tokens", usage.input_tokens as usize);
+                        Self::add_stat_usize(stats, "total_output_tokens", usage.output_tokens as usize);
+                        Self::add_stat_usize(stats, "total_cache_read_tokens", usage.cache_read_input_tokens as usize);
+                        Self::add_stat_usize(stats, "total_cache_creation_tokens", usage.cache_creation_input_tokens as usize);
                     })?;
                     self.update_term_title();
                 }
@@ -1783,12 +1512,7 @@ impl Agent {
             }
             Ok(())
         };
-        let cancel_reader = CancelReader {
-            inner: resp,
-            cancel: self.interrupted.clone(),
-            interrupted: self.interrupted.clone(),
-        };
-        self.transport.parse_sse(Box::new(cancel_reader), &mut parse_emit)?;
+        self.transport.parse_sse(Box::new(channel_reader), &mut parse_emit)?;
         if out.is_empty() {
             bail!(
                 "failed to generate context summary: empty text response (stop_reason={}, error={})",
@@ -1797,6 +1521,35 @@ impl Agent {
             );
         }
         Ok(out)
+    }
+
+    /// 通过 mpsc channel 流式传输 HTTP 响应体，100ms 轮询 interrupted + CTRLC_FLAG 实现可中断。
+    /// 返回 (ChannelReader, Arc<AtomicBool>)，后者用于 LlmStream::drop 时取消流。
+    /// 同时检查 per-agent 的 interrupted 和全局的 CTRLC_FLAG，确保 Ctrl+C 能立即中断当前流。
+    fn http_stream(&self, resp: reqwest::Response) -> (ChannelReader, Arc<AtomicBool>) {
+        let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let interrupted = self.interrupted.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_clone = cancel.clone();
+        tokio_runtime().spawn(async move {
+            use tokio_stream::StreamExt;
+            let stream = resp.bytes_stream();
+            tokio::pin!(stream);
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                        if interrupted.load(Ordering::SeqCst) || CTRLC_FLAG.load(Ordering::SeqCst) || cancel_clone.load(Ordering::SeqCst) { break; }
+                    }
+                    chunk = stream.next() => {
+                        match chunk {
+                            Some(Ok(bytes)) => { if chunk_tx.send(bytes.to_vec()).is_err() { break; } }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+        });
+        (ChannelReader { rx: chunk_rx, buf: Vec::new(), pos: 0 }, cancel)
     }
 
     fn headers(&self) -> Vec<(String, String)> {
