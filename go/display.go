@@ -15,6 +15,7 @@ type TermDisplay struct {
 	writer         io.Writer // 输出目标（默认 os.Stdout）
 	lastChar       byte      // 上次输出的最后一个字符
 	prevThinking   bool      // 上一个事件是否为 THINKING
+	silent         bool      // stream-json 模式下抑制人类可读输出
 	titleFormatter func(model string) string
 }
 
@@ -60,8 +61,16 @@ func (d *TermDisplay) HumanText(s string) {
 	}
 }
 
+// SetSilent 设置静默模式（stream-json 时抑制人类可读输出）
+func (d *TermDisplay) SetSilent(s bool) {
+	d.silent = s
+}
+
 // SetTitle 设置终端标题
 func (d *TermDisplay) SetTitle(title string) {
+	if d.silent {
+		return
+	}
 	if d.titleFormatter != nil {
 		title = d.titleFormatter(title)
 	}
@@ -71,6 +80,9 @@ func (d *TermDisplay) SetTitle(title string) {
 
 // ShowEvent 显示一个 Event
 func (d *TermDisplay) ShowEvent(ev Event) {
+	if d.silent {
+		return
+	}
 	switch ev.Type {
 	case EventText:
 		// thinking → text 转换时补换行
