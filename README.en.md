@@ -19,7 +19,10 @@ Go (`goagent`) and Rust (`rustagent`) ports maintain the same semantics.
 ## Quick Start
 
 ```bash
-# Install
+# macOS — install via Homebrew (all three editions: bash/go/rust)
+brew install lloydzhou/tap/bash-agent
+
+# Or install bash-only manually (single file)
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 
@@ -47,11 +50,20 @@ OPENAI_BASE_URL=http://localhost:11434/v1 bash-agent -p openai -m llama3 "hello"
 
 ## Install
 
+### macOS (recommended)
 ```bash
-# bash (single file)
+brew install lloydzhou/tap/bash-agent
+```
+Installs three binaries: `bash-agent`, `goagent`, `rustagent`.
+
+### Manual (bash only)
+```bash
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
+```
 
+### Build from source
+```bash
 # Go
 go -C go build -o ~/.local/bin/goagent ./cmd/goagent
 

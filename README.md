@@ -19,7 +19,10 @@
 ## 快速开始
 
 ```bash
-# 安装
+# macOS — 通过 Homebrew 安装（包含 bash/go/rust 三个版本）
+brew install lloydzhou/tap/bash-agent
+
+# 或手动安装 Bash 版（单文件）
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 
@@ -47,11 +50,20 @@ OPENAI_BASE_URL=http://localhost:11434/v1 bash-agent -p openai -m llama3 "hello"
 
 ## 安装
 
+### macOS（推荐）
 ```bash
-# bash（单文件）
+brew install lloydzhou/tap/bash-agent
+```
+安装后包含 `bash-agent`、`goagent`、`rustagent` 三个二进制。
+
+### 手动安装 Bash 版
+```bash
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
+```
 
+### 从源码构建
+```bash
 # Go
 go -C go build -o ~/.local/bin/goagent ./cmd/goagent
 
