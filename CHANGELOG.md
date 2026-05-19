@@ -4,6 +4,15 @@
 
 ---
 
+## [3.0.3] - 2026-05-19
+
+### Fixed
+
+- **WebFetch 调用方式修正（Bash/Go/Rust）**：Jina Reader API (`r.jina.ai`) 不再支持 `?url=` 查询参数（返回 400），改为路径拼接 `r.jina.ai/<url>`（返回 200）。三端同步修改：`src/agent.sh`、`go/tools.go`、`rust/src/tools.rs`（`7c3f919`）
+- **Go stream-json 输出污染**：`--output-format stream-json` / `--print` 模式下 `TermDisplay.ShowEvent()` 无条件输出 ANSI 颜色码和人类可读文本，与 JSON 行混在一起。`TermDisplay` 新增 `silent` 标志，stream-json 模式下抑制人类可读输出，仅输出纯 JSON 行（`13a5425`）
+
+---
+
 ## [3.0.2] - 2026-05-17
 
 ### Fixed
@@ -590,7 +599,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...HEAD
+[3.0.3]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/lloydzhou/bash-agent/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...v3.0.0
