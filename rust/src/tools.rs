@@ -494,8 +494,7 @@ use crate::config::Config;
             let url = url.to_string();
             let result: Result<String> = rt.block_on(async move {
                 let mut req = client
-                    .get("https://r.jina.ai/")
-                    .query(&[("url", &url)])
+                    .get(format!("https://r.jina.ai/{url}"))
                     .timeout(std::time::Duration::from_secs(60));
                 if let Ok(key) = std::env::var("JINA_API_KEY") {
                     if !key.is_empty() {

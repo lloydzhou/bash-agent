@@ -500,13 +500,10 @@ func (td *ToolDispatcher) toolWebFetch(ctx context.Context, url string) (string,
 		return "", fmt.Errorf("no url provided")
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://r.jina.ai/", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://r.jina.ai/"+url, nil)
 	if err != nil {
 		return "", err
 	}
-	q := req.URL.Query()
-	q.Set("url", url)
-	req.URL.RawQuery = q.Encode()
 	if td.cfg.JinaAPIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+td.cfg.JinaAPIKey)
 	}

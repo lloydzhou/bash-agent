@@ -864,7 +864,7 @@ tool_plan_clear() {
 
 tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlencode "q=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" -H "X-Respond-With: no-content" "https://s.jina.ai/" 2>&1; }
 
-tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -G --data-urlencode "url=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/" 2>&1; }
+tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/$1" 2>&1; }
 
 # 启动异步子 agent：后台执行 agent_loop，完成后通过 INPUT_FIFO 发回 AGENT_RESULT
 # 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <result_text> <in> <out> <cr> <cc> <reqs>

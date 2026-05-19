@@ -167,6 +167,9 @@ Examples:
 	cwd, _ := os.Getwd()
 	store := agent.NewFileStore(home, cwd)
 	display := agent.NewTermDisplay()
+	if cfg.OutputFormat == "stream-json" {
+		display.SetSilent(true)
+	}
 	llm := agent.NewHTTPTransport(cfg)
 	tools := agent.NewToolDispatcher(cfg)
 
