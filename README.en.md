@@ -56,6 +56,16 @@ brew install lloydzhou/tap/bash-agent
 ```
 Installs three binaries: `bash-agent`, `goagent`, `rustagent`.
 
+### Arch Linux (AUR)
+```bash
+# Using yay
+yay -S bash-agent
+
+# Or using paru
+paru -S bash-agent
+```
+See [AUR package page](https://aur.archlinux.org/packages/bash-agent) for details.
+
 ### Manual (bash only)
 ```bash
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
