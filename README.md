@@ -1,6 +1,6 @@
 # bash-agent
 
-[English](README.en.md)
+[🌐 官网](https://lloydzhou.github.io/bash-agent/) · [English](README.en.md)
 
 极简 AI coding agent runtime。纯 `bash + awk`，零运行时依赖。
 
