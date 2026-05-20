@@ -56,6 +56,16 @@ brew install lloydzhou/tap/bash-agent
 ```
 安装后包含 `bash-agent`、`goagent`、`rustagent` 三个二进制。
 
+### Arch Linux（AUR）
+```bash
+# 使用 yay
+yay -S bash-agent
+
+# 或使用 paru
+paru -S bash-agent
+```
+详见 [AUR 包页面](https://aur.archlinux.org/packages/bash-agent)。
+
 ### 手动安装 Bash 版
 ```bash
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
