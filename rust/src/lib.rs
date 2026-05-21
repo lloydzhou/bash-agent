@@ -200,6 +200,21 @@ pub mod config {
                 if cfg.api_key.is_empty() {
                     cfg.api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
                 }
+                // DeepSeek auto-detection
+                if cfg.api_key.is_empty()
+                    && cfg.base_url.is_empty()
+                    && std::env::var("DEEPSEEK_API_KEY")
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false)
+                    && std::env::var("ANTHROPIC_BASE_URL").is_err()
+                    && std::env::var("OPENAI_BASE_URL").is_err()
+                {
+                    cfg.api_key = std::env::var("DEEPSEEK_API_KEY").unwrap();
+                    cfg.base_url = "https://api.deepseek.com/anthropic".to_string();
+                    if cfg.model.is_empty() {
+                        cfg.model = "deepseek-v4-flash".to_string();
+                    }
+                }
                 if cfg.base_url.is_empty() {
                     cfg.base_url = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
                 }

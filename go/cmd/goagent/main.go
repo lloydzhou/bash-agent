@@ -70,9 +70,11 @@ Options:
 Environment:
   ANTHROPIC_API_KEY       API key for Claude
   OPENAI_API_KEY          API key for OpenAI
+  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage
+  MODEL                   Default model name
   EFFORT                  Default thinking effort (default: high)
   THINKING                Default thinking mode (default: adaptive)
 
@@ -134,6 +136,17 @@ Examples:
 	case "claude":
 		if cfg.APIKey == "" {
 			cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
+		}
+		// DeepSeek auto-detection: DEEPSEEK_API_KEY 且未显式配置其他 base URL
+		if cfg.APIKey == "" && cfg.BaseURL == "" &&
+			os.Getenv("DEEPSEEK_API_KEY") != "" &&
+			os.Getenv("ANTHROPIC_BASE_URL") == "" &&
+			os.Getenv("OPENAI_BASE_URL") == "" {
+			cfg.APIKey = os.Getenv("DEEPSEEK_API_KEY")
+			cfg.BaseURL = "https://api.deepseek.com/anthropic"
+			if cfg.Model == "" {
+				cfg.Model = "deepseek-v4-flash"
+			}
 		}
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = os.Getenv("ANTHROPIC_BASE_URL")

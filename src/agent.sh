@@ -1331,11 +1331,13 @@ Options:
 Environment:
   ANTHROPIC_API_KEY       API key for Claude
   OPENAI_API_KEY          API key for OpenAI
+  DEEPSEEK_API_KEY        API key for DeepSeek (auto-detected, uses Anthropic-compatible endpoint)
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
   EFFORT                  Default thinking effort (default: high)
   THINKING                Default thinking mode (default: adaptive)
+  MODEL                   Default model name
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
@@ -1450,6 +1452,14 @@ validate_config() {
             util_die "Unknown provider: $PROVIDER (use claude|openai)"
             ;;
     esac
+
+    # Auto-detect DeepSeek API key: if DEEPSEEK_API_KEY is set, use DeepSeek's Anthropic endpoint
+    if [[ -z "$API_KEY" && -z "$BASE_URL" && -n "${DEEPSEEK_API_KEY:-}" ]]; then
+        PROVIDER="claude"
+        API_KEY="$DEEPSEEK_API_KEY"
+        BASE_URL="https://api.deepseek.com/anthropic"
+        : "${MODEL:=deepseek-v4-flash}"
+    fi
 
     if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
         case "$PROVIDER" in

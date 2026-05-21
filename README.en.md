@@ -35,6 +35,13 @@ bash-agent -i                    # interactive mode
 bash-agent --print "inspect"     # stream-json output
 ```
 
+### DeepSeek (Anthropic-compatible)
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+bash-agent "hello"   # auto-detected, uses deepseek-v4-flash
+```
+
 ### OpenAI-compatible APIs
 
 ```bash
