@@ -113,7 +113,7 @@ install_bash_only() {
     info "获取最新版本信息..."
     VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
       | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null)" \
-      || VERSION="v3.0.3"
+      || VERSION="v3.0.4"
   fi
 
   local url="https://raw.githubusercontent.com/$REPO/$VERSION/scripts/install.sh"
