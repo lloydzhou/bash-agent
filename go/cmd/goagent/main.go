@@ -70,7 +70,7 @@ Options:
 Environment:
   ANTHROPIC_API_KEY       API key for Claude
   OPENAI_API_KEY          API key for OpenAI
-  DEEPSEEK_API_KEY        Drop-in for ANTHROPIC_API_KEY (auto-configures DeepSeek endpoint + model)
+  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage

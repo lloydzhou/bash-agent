@@ -1331,15 +1331,13 @@ Options:
 Environment:
   ANTHROPIC_API_KEY       API key for Claude
   OPENAI_API_KEY          API key for OpenAI
-  DEEPSEEK_API_KEY        Drop-in for ANTHROPIC_API_KEY (auto-configures DeepSeek endpoint + model)
+  DEEPSEEK_API_KEY        API key for DeepSeek (auto-detected, uses Anthropic-compatible endpoint)
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
   EFFORT                  Default thinking effort (default: high)
   THINKING                Default thinking mode (default: adaptive)
   MODEL                   Default model name
-
-Note: DEEPSEEK_API_KEY is a fallback when ANTHROPIC_API_KEY is not set — auto-configures the DeepSeek endpoint + model.
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
