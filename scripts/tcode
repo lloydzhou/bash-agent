@@ -65,22 +65,29 @@ tmux send-keys -t "$SESSION:0.0" \
 tmux send-keys -t "$SESSION:0.1" \
   "exec $AGENT ${AGENT_ARGS[*]} -i" Enter
 
-# 确保 tmux 转发 pane title 到窗口标题
+# 窗口标题跟随动态更新的 window name（由 wrapper 后台轮询 pane 1 标题设置）
 tmux set-option -t "$SESSION" set-titles on 2>/dev/null || true
+tmux set-option -t "$SESSION" set-titles-string '#W' 2>/dev/null || true
 
 # ─── 创建 wrapper 脚本（避免引号问题）───
 WRAPPER=$(mktemp "${TMPDIR:-/tmp}/tcode-wrapper.XXXXXX")
 cat > "$WRAPPER" << WRAPPER_SCRIPT
 #!/usr/bin/env bash
 TC_SESSION="$SESSION"
-TC_AGENT="${AGENT}"
 HISTFILE="\${BASH_AGENT_HOME:-\$HOME}/.bash-agent/history"
 mkdir -p "\$(dirname "\$HISTFILE")" 2>/dev/null || true
 touch "\$HISTFILE" 2>/dev/null || true
 history -r "\$HISTFILE" 2>/dev/null || true
 
-# 设置当前 pane 标题（覆盖 窗口 title，tmux #T 用当前 pane 的 title）
-printf '\033]0;%s\007' "\$TC_AGENT"
+# 后台：轮询 agent pane 的 title → 更新窗口名称（状态栏可见）
+(
+    sleep 0.3
+    while true; do
+        title=\$(tmux display -t "\$TC_SESSION:0.1" -p '#{pane_title}' 2>/dev/null)
+        [[ -n "\$title" ]] && tmux rename-window -t "\$TC_SESSION:0" "\$title" 2>/dev/null || true
+        sleep 2
+    done
+) &
 
 int_caught=false
 trap 'int_caught=true; tmux send-keys -t "\$TC_SESSION:0.1" C-c' INT
