@@ -35,6 +35,13 @@ bash-agent -i                    # 交互模式
 bash-agent --print "inspect"     # stream-json 输出
 ```
 
+### DeepSeek 兼容（Anthropic 协议）
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+bash-agent "hello"   # 自动检测，使用 deepseek-v4-flash
+```
+
 ### OpenAI 兼容接口
 
 ```bash
