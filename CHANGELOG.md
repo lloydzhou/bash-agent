@@ -4,6 +4,28 @@
 
 ---
 
+## [3.0.4] - 2026-05-21
+
+### Added
+
+- **DEEPSEEK_API_KEY 自动检测（Bash/Go/Rust）**：当 `ANTHROPIC_API_KEY` 未设置时，自动检测
+  `DEEPSEEK_API_KEY` 并配置 DeepSeek Anthropic 兼容端点（`https://api.deepseek.com/anthropic`）
+  和 `deepseek-v4-flash` 模型。三端同步实现：`src/agent.sh`、`go/cmd/goagent/main.go`、
+  `rust/src/lib.rs`（`3aa1f39`）
+- **MODEL 环境变量**：三个版本均支持通过 `MODEL` 环境变量覆盖模型名称，优先级高于内置默认值
+  （`3aa1f39`）
+- **install.sh 安装脚本**：一键安装脚本，支持 macOS（Homebrew）和 Linux（自动检测包管理器）
+  （`73e1194`）
+- **Homebrew / AUR 安装支持**：添加 Homebrew Formula 和 Arch Linux AUR 安装文档（`73e1194`, `1d8ba15`）
+
+### Changed
+
+- **README 文档更新**：新增 DeepSeek 兼容小节、官网链接、AUR/Homebrew 安装说明；重构 LaTeX 公式
+  格式（`db8aad8`, `48381be`, `253e02a`）
+- **docs/ARCHITECTURE.md → docs/architecture.md**：文件名小写化（`0191e14`）
+
+---
+
 ## [3.0.3] - 2026-05-19
 
 ### Fixed
@@ -599,7 +621,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.4...HEAD
+[3.0.4]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...v3.0.4
 [3.0.3]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/lloydzhou/bash-agent/compare/v3.0.0...v3.0.1
