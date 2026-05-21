@@ -26,8 +26,9 @@ brew install lloydzhou/tap/bash-agent
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 
-# Set API key
-export ANTHROPIC_API_KEY="sk-ant-..."
+# Set API key (DeepSeek / Claude — pick one)
+export DEEPSEEK_API_KEY="sk-..."
+# export ANTHROPIC_API_KEY="sk-ant-..."
 
 # Run
 bash-agent "scan this repo and summarize"
@@ -114,7 +115,9 @@ Pre-built binaries (Go / Rust) are available on [Releases](https://github.com/ll
 
 | Variable | Description |
 | --- | --- |
+| `DEEPSEEK_API_KEY` | DeepSeek API key (auto-detected, uses Anthropic-compatible endpoint) |
 | `ANTHROPIC_API_KEY` | API key for Claude |
+| `MODEL` | Override model name (defaults per CLI table) |
 | `OPENAI_API_KEY` | API key for OpenAI |
 | `ANTHROPIC_BASE_URL` | Claude API base URL |
 | `OPENAI_BASE_URL` | OpenAI API base URL |
@@ -179,7 +182,7 @@ With Claude Sonnet 4 (compacting 45K tokens of history):
 
 ## Built-in Tools
 
-`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `Skill` · `WebSearch` · `WebFetch`
+`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
 
 > See [`docs/tools.md`](docs/tools.md) for details.
 

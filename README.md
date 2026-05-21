@@ -26,8 +26,9 @@ brew install lloydzhou/tap/bash-agent
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 
-# 设置 API key
-export ANTHROPIC_API_KEY="sk-ant-..."
+# 设置 API key（DeepSeek / Claude 二选一）
+export DEEPSEEK_API_KEY="sk-..."
+# export ANTHROPIC_API_KEY="sk-ant-..."
 
 # 运行
 bash-agent "scan this repo and summarize"
@@ -114,7 +115,9 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 
 | 变量 | 说明 |
 | --- | --- |
+| `DEEPSEEK_API_KEY` | DeepSeek API key（自动检测，使用 Anthropic 兼容端点） |
 | `ANTHROPIC_API_KEY` | Claude API key |
+| `MODEL` | 覆盖模型名（默认见 CLI 表格） |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `ANTHROPIC_BASE_URL` | Claude API base URL |
 | `OPENAI_BASE_URL` | OpenAI API base URL |
