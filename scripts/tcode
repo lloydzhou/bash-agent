@@ -65,20 +65,22 @@ tmux send-keys -t "$SESSION:0.0" \
 tmux send-keys -t "$SESSION:0.1" \
   "exec $AGENT ${AGENT_ARGS[*]} -i" Enter
 
-# 设置 tmux 窗口/ pane 标题
-tmux select-pane -T "$AGENT" -t "$SESSION:0.1" 2>/dev/null || true
-tmux set-option -t "$SESSION" set-titles-string '#T' 2>/dev/null || true
-tmux rename-window -t "$SESSION:0" "tcode: $AGENT" 2>/dev/null || true
+# 确保 tmux 转发 pane title 到窗口标题
+tmux set-option -t "$SESSION" set-titles on 2>/dev/null || true
 
 # ─── 创建 wrapper 脚本（避免引号问题）───
 WRAPPER=$(mktemp "${TMPDIR:-/tmp}/tcode-wrapper.XXXXXX")
 cat > "$WRAPPER" << WRAPPER_SCRIPT
 #!/usr/bin/env bash
 TC_SESSION="$SESSION"
+TC_AGENT="${AGENT}"
 HISTFILE="\${BASH_AGENT_HOME:-\$HOME}/.bash-agent/history"
 mkdir -p "\$(dirname "\$HISTFILE")" 2>/dev/null || true
 touch "\$HISTFILE" 2>/dev/null || true
 history -r "\$HISTFILE" 2>/dev/null || true
+
+# 设置当前 pane 标题（覆盖 窗口 title，tmux #T 用当前 pane 的 title）
+printf '\033]0;%s\007' "\$TC_AGENT"
 
 int_caught=false
 trap 'int_caught=true; tmux send-keys -t "\$TC_SESSION:0.1" C-c' INT
