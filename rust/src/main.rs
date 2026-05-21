@@ -182,6 +182,14 @@ fn print_usage() {
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
     println!("  -h, --help              Show this help");
+    println!();
+    println!("Environment:");
+    println!("  ANTHROPIC_API_KEY       API key for Claude");
+    println!("  OPENAI_API_KEY          API key for OpenAI");
+    println!("  DEEPSEEK_API_KEY        Drop-in for ANTHROPIC_API_KEY (auto-configures DeepSeek endpoint + model)");
+    println!("  ANTHROPIC_BASE_URL      Claude API base URL");
+    println!("  OPENAI_BASE_URL         OpenAI API base URL");
+    println!("  MODEL                   Default model name");
 }
 
 fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {
