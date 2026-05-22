@@ -150,12 +150,13 @@ Session 生命周期：
 ### 最终决策公式
 
 ```
-NetBenefit(k) = ① - ② - ③ - ④
+NetBenefit(k) = ① - ② - ③ - ④ - ⑤
 
 ① (R-1) × P_cache × H / 1e6                             后续 LLM 调用节省的缓存读取成本
 ② (S + K) × (P_input - P_cache) / 1e6                    压缩后首次 LLM 调用的缓存失效损失
 ③ [P_cache×(V+H) + P_input×L_instr + P_out×S] / 1e6     压缩请求成本
 ④ β × (1 - r^(c+1)) × R × avg × P_input / 1e6           信息失真预期成本
+⑤ DP_QUALITY_PENALTY × P_input × (V+K)² / (M × 1e6)     质量衰减惩罚
 ```
 
 **决策规则**：若存在 k 使 NetBenefit(k) > 0，选择最大收益的 k 执行压缩；否则不压缩。
@@ -178,6 +179,16 @@ NetBenefit(k) = ① - ② - ③ - ④
 
 增量摘要每次都有信息损失。累积保留率 r_t = r^(c+1)，与 k 无关。β 是折算系数，N_remain = R × avg 估算剩余任务规模。
 
+#### ⑤ 质量衰减惩罚
+
+上下文越长，模型回答质量越差，需要重试的概率越大。惩罚与上下文占比的平方成正比，加速增长。
+
+- **物理含义版**：`QP × P_input × M / 1e6 × ((V+K)/M)²`
+  - `QP × P_input × M / 1e6` = 满上下文时的基准惩罚金额
+  - `((V+K)/M)²` = 上下文占比的平方（0~1）
+- **化简版**：`QP × P_input × (V+K)² / (M × 1e6)`
+- `DP_QUALITY_PENALTY` 默认 0（关闭），推荐 0.1~0.2
+
 ### 变量定义
 
 | 变量 | 含义 | 获取方式 | 单位 |
@@ -197,6 +208,8 @@ NetBenefit(k) = ① - ② - ③ - ④
 | r | 单次摘要信息保留率 | DP_R = 0.8 | 比率 |
 | r_t | 累积保留率 | r^(c+1)，下限 0.37 | 比率 |
 | β | 信息损失折算系数 | DP_BETA = 0.03 | 无量纲 |
+| M | 模型最大上下文 token 数 | DP_MAX_CONTEXT = 200000 | token |
+| QP | 质量衰减惩罚系数 | DP_QUALITY_PENALTY = 0 | 无量纲 |
 | avg | 每次 LLM 请求平均 input token 数 | stats[3]/stats[1] 或 4000 | token |
 
 ### 环境变量
@@ -213,6 +226,8 @@ NetBenefit(k) = ① - ② - ③ - ④
 | DP_E_FIXED | 0 | 固定 E（0=使用 DP_BASELINE_E 计算） |
 | DP_R | 0.8 | 单次摘要信息保留率 |
 | DP_BETA | 0.03 | 信息损失折算系数 |
+| DP_MAX_CONTEXT | 200000 | 模型最大上下文 token 数 |
+| DP_QUALITY_PENALTY | 0 | 质量衰减惩罚系数（0=关闭，推荐 0.1~0.2） |
 | DP_MIN_KEEP_RATIO | 0.12 | 最少保留消息比例 |
 
 
@@ -297,7 +312,7 @@ L 可通过 stats 自动计算（`stats[1]/stats[0]`），DP_L=0 时启用自动
 
 ### 使用示例
 
-假设会话第 8 轮（t=8），累积上下文 120k token，固定前缀 30k token。保留最近 3 轮消息（k=3），K=25k，H=120k-25k=65k（注：H=total-K，V 不参与 H 计算）。预估 E=4，L=3，R=12。S=500，c=1，r_t=0.8^2=0.64。β=0.03，avg=4k。
+假设会话第 8 轮（t=8），累积上下文 120k token，固定前缀 30k token。保留最近 3 轮消息（k=3），K=25k，H=120k-25k=65k（注：H=total-K，V 不参与 H 计算）。预估 E=4，L=3，R=12。S=500，c=1，r_t=0.8^2=0.64。β=0.03，avg=4k。M=200K，QP=0.1。
 
 ```
 ① = (12-1) × 0.30 × 65000 / 1e6 = 11 × 0.0195 = 0.2145
@@ -306,8 +321,10 @@ L 可通过 stats 自动计算（`stats[1]/stats[0]`），DP_L=0 时启用自动
    = (21000 + 210 + 7500) / 1e6 = 0.0287
 ④ = 0.03 × (1-0.64) × 12 × 4000 × 3.0 / 1e6
    = 0.03 × 0.36 × 0.144 = 0.00156
+⑤ = 0.1 × 3.0 × (5000+25000)² / (200000 × 1e6)
+   = 0.3 × 9e8 / 2e11 = 0.00135
 
-NetBenefit = 0.2145 - 0.0689 - 0.0287 - 0.00156 = $0.115 → 正收益，执行压缩
+NetBenefit = 0.2145 - 0.0689 - 0.0287 - 0.00156 - 0.00135 = $0.114 → 正收益，执行压缩
 ```
 
 ---
@@ -351,8 +368,9 @@ Turn 20: E = max(-12, 4) = 4,  R = 20
   5. ② cache_miss = (S + K) × (P_input - P_cache) / 1e6
   6. ③ compact_cost = [P_cache×(V+H) + P_input×L_instr + P_out×S] / 1e6
   7. ④ info_loss = β × (1-r^(c+1)) × R × avg × P_input / 1e6
+  8. ⑤ quality_cost = QP × P_input × (V+K)² / (M × 1e6)
 
-  8. benefit = ① - ② - ③ - ④
+  9. benefit = ① - ② - ③ - ④ - ⑤
 
 如果 max(benefit) > 0:
   → 用最优 k 对齐到 user 消息边界
@@ -395,7 +413,7 @@ while (cut > 1 && role[cut] != "user") {
 
 | 文件 | 说明 |
 |------|------|
-| `src/awk/compact_dp.awk` | AWK 实现核心公式（91 行） |
+| `src/awk/compact_dp.awk` | AWK 实现核心公式（146 行） |
 | `src/agent.sh` | config 区域 + compact_dp_decision() + compact_context_window() |
 | `go/internal/conversation/compact_dp.go` | Go 实现（171 行） |
 | `go/internal/config/config.go` | Go DP 配置字段 + 环境变量覆盖 |

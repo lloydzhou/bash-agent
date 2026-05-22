@@ -162,11 +162,13 @@ DP algorithm environment variables:
 | `DP_BASELINE_E` | `8` | Expected remaining user input turns |
 | `DP_R` | `0.8` | Single summary info retention rate |
 | `DP_BETA` | `0.03` | Info loss penalty coefficient |
+| `DP_MAX_CONTEXT` | `200000` | Model max context window in tokens |
+| `DP_QUALITY_PENALTY` | `0` | Quality decay penalty (0=disabled, recommended 0.1~0.2) |
 | `DP_MIN_KEEP_RATIO` | `0.12` | Minimum message keep ratio |
 
 ## Context Compaction
 
-Compaction uses a cache-aware DP economics algorithm that computes a 4-term net benefit:
+Compaction uses a cache-aware DP economics algorithm that computes a 5-term net benefit:
 
 $$
 \begin{aligned}
@@ -174,9 +176,19 @@ $$
   \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{savings}} \\
 &\quad -\underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{cache miss}} \\
 &\quad -\underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{compact cost}} \\
-&\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}}
+&\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}} \\
+&\quad -\underbrace{\texttt{DP\_QUALITY\_PENALTY} \cdot P_{\text{input}} \cdot \frac{(V + K)^2}{M \cdot 10^6}}_{⑤\;\text{quality decay}}
 \end{aligned}
 $$
+
+The physical meaning of term ⑤:
+
+$$
+⑤ = (\texttt{DP\_QUALITY\_PENALTY} \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
+$$
+
+- **Base price** = `DP_QUALITY_PENALTY` × `P_input` × `M / 1e6`: penalty amount at full context
+- **Ratio squared** = `((V+K)/M)²`: context usage ratio (0~1), squared for accelerated growth
 
 - All parameters overridable via env vars (`DP_P_INPUT`, `DP_L`, `DP_BETA`, etc.)
 - Safety valve: force compact when context exceeds 90% of limit
