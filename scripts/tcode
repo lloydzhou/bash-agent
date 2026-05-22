@@ -59,7 +59,7 @@ done
 
 # ─── Pane 0: 左侧 — watch list-sessions ───
 tmux send-keys -t "$SESSION:0.0" \
-  "exec env$ENV_VARS PATH='$PATH' $SHELL -c 'exec 2>/dev/null; exec watch -n 2 \"exec 2>/dev/null; exec $AGENT --list-sessions 2>/dev/null\"'" Enter
+  "exec env$ENV_VARS PATH='$PATH' $SHELL -c 'exec 2>/dev/null; exec watch -n 2 -t \"exec 2>/dev/null; exec $AGENT --list-sessions 2>/dev/null\"'" Enter
 
 # ─── Pane 1: 右上 — agent 主进程 ───
 tmux send-keys -t "$SESSION:0.1" \
