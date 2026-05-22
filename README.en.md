@@ -176,7 +176,7 @@ $$
 &\quad -\underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{cache miss}} \\
 &\quad -\underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{compact cost}} \\
 &\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}} \\
-&\quad -\underbrace{Q \cdot P_{\text{input}} \cdot \frac{(V + K)^2}{M \cdot 10^6}}_{⑤\;\text{quality decay}}
+&\quad -\underbrace{Q \cdot P_{\text{input}} \cdot \frac{M}{10^6} \cdot \left(\frac{V + K}{M}\right)^2}_{⑤\;\text{quality decay}}
 \end{aligned}
 $$
 
