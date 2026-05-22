@@ -162,7 +162,6 @@ DP algorithm environment variables:
 | `DP_BASELINE_E` | `8` | Expected remaining user input turns |
 | `DP_R` | `0.8` | Single summary info retention rate |
 | `DP_BETA` | `0.03` | Info loss penalty coefficient |
-| `DP_MAX_CONTEXT` | `200000` | Model max context window in tokens |
 | `DP_QUALITY_PENALTY` | `0` | Quality decay penalty (0=disabled, recommended 0.1~0.2) |
 | `DP_MIN_KEEP_RATIO` | `0.12` | Minimum message keep ratio |
 
@@ -181,7 +180,7 @@ $$
 \end{aligned}
 $$
 
-The physical meaning of term ⑤:
+The physical meaning of term ⑤ (M = MAX_CONTEXT_TOKENS):
 
 $$
 ⑤ = (\texttt{DP\_QUALITY\_PENALTY} \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2

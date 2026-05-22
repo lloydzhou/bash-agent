@@ -161,7 +161,6 @@ DP 算法相关环境变量：
 | `DP_BASELINE_E` | `8` | 预期剩余用户输入轮数 |
 | `DP_R` | `0.8` | 单次摘要信息保留率 |
 | `DP_BETA` | `0.03` | 信息损失惩罚系数 |
-| `DP_MAX_CONTEXT` | `200000` | 模型最大上下文 token 数 |
 | `DP_QUALITY_PENALTY` | `0` | 质量衰减惩罚系数（0=关闭，推荐 0.1~0.2） |
 | `DP_MIN_KEEP_RATIO` | `0.12` | 最少保留消息比例 |
 
@@ -180,7 +179,7 @@ $$
 \end{aligned}
 $$
 
-其中 ⑤ 质量衰减项的物理含义：
+其中 ⑤ 质量衰减项的物理含义（M = MAX_CONTEXT_TOKENS）：
 
 $$
 ⑤ = (\texttt{DP\_QUALITY\_PENALTY} \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2

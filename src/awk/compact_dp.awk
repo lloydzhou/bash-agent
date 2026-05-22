@@ -22,7 +22,7 @@
 #     min_keep_ratio — minimum fraction of messages to retain
 #     r              — single-step summary retention rate
 #     beta           — info loss penalty coefficient
-#     max_context    — model max context window (DP_MAX_CONTEXT, default 200000)
+#     max_context    — model max context window (from MAX_CONTEXT_TOKENS, default 200000)
 #     quality_penalty— quality decay penalty factor (DP_QUALITY_PENALTY, default 0)
 #
 # Output: number of lines to keep (turn-aligned), or "0" if no compact
