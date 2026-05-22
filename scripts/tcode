@@ -66,9 +66,14 @@ set_session_env() {
 }
 set_session_env
 
-# ─── 三 pane 布局 ───
-tmux split-window -h -t "$SESSION:0.0"      # pane 0=左, pane 1=右
-tmux split-window -v -t "$SESSION:0.1"      # pane 1=右上(agent), pane 2=右下(输入)
+# ─── 计算分栏尺寸（25%/75%）───
+COLS=$(tput cols 2>/dev/null || echo 80)
+LEFT_W=$(( COLS * 25 / 100 ))
+RIGHT_W=$(( COLS - LEFT_W ))
+
+# ─── 三 pane 布局（创建时直接指定尺寸，无闪烁）───
+tmux split-window -h -l "$RIGHT_W" -t "$SESSION:0.0"   # pane 0=左(25%), pane 1=右(75%)
+tmux split-window -v -l 4 -t "$SESSION:0.1"             # pane 1=右上(agent), pane 2=右下(输入, 4行)
 
 # ─── 构建 exec env 需要的环境变量字符串 ───
 ENV_VARS=""
@@ -148,17 +153,6 @@ tmux send-keys -t "$SESSION:0.2" "exec $WRAPPER" Enter
 
 # 聚焦输入 pane
 tmux select-pane -t "$SESSION:0.2"
-
-# 缓存终端尺寸，attach 后 resize
-COLS=$(tput cols 2>/dev/null || echo 80)
-LINES=$(tput lines 2>/dev/null || echo 24)
-
-(sleep 0.5
- WIN_WIDTH=$(tmux display -t "$SESSION:0" -p '#{window_width}' 2>/dev/null || echo "$COLS")
- LEFT=$(( WIN_WIDTH * 25 / 100 ))
- tmux resize-pane -t "$SESSION:0.0" -x "$LEFT"
- tmux resize-pane -t "$SESSION:0.2" -y 4
-) &
 
 tmux attach -t "$SESSION" >/dev/null 2>&1 || true
 
