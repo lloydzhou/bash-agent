@@ -113,6 +113,9 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 
 ## tcode — tmux Chat UI 包装器
 
+<details>
+<summary>tmux 三栏界面包装器，点开查看详情</summary>
+
 `tcode` 是 agent 的 tmux 三栏界面包装器，提供 watch sidebar + agent 对话 + 输入框的布局。
 
 ```bash
@@ -129,6 +132,8 @@ tcode goagent -p openai -m gpt-4o
 ```
 
 支持 readline 输入、退出后打印 resume 信息、Ctrl+C 中断、Ctrl+D 干净退出。
+
+</details>
 
 ## 环境变量
 
