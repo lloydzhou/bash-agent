@@ -163,4 +163,4 @@ LINES=$(tput lines 2>/dev/null || echo 24)
 tmux attach -t "$SESSION" >/dev/null 2>&1 || true
 
 # 从 tmux 返回后（Ctrl+D 退出或 Ctrl+B D 分离），打印 resume 信息
-printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
+printf '\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
