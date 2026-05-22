@@ -621,7 +621,7 @@
 
 ---
 
-## [Unreleased]
+## [3.0.5] - 2026-05-22
 
 ### Added
 
@@ -632,7 +632,16 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.4...HEAD
+## [Unreleased]
+
+### Added
+
+- （暂无）
+
+---
+
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.5...HEAD
+[3.0.5]: https://github.com/lloydzhou/bash-agent/compare/v3.0.4...v3.0.5
 [3.0.4]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...v3.0.4
 [3.0.3]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...v3.0.2
