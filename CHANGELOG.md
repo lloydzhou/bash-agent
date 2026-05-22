@@ -4,6 +4,25 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- （暂无）
+
+---
+
+## [3.0.5] - 2026-05-22
+
+### Added
+
+- **tcode — tmux Chat UI 包装器**：三栏 TMUX 界面（watch sidebar + agent + 输入框），支持
+  bash-agent/goagent/rustagent。第一个参数可选（默认 rustagent），支持透传参数。创建 session
+  时同步终端尺寸并使用百分比分割消除闪烁。退出打印 resume 信息，支持 Ctrl+C 中断/Ctrl+D 干净
+  退出。CI 发布时自动包含 `dist/tcode`。Makefile 新增 `build-tcode` target（`feat/tmux-chat-ui`）
+
+---
+
 ## [3.0.4] - 2026-05-21
 
 ### Added
@@ -618,25 +637,6 @@
 - 双语文档：README.md（中文）和 README.en.md（英文）
 - Skills 机制和 Instruction file 加载
 - awk 解析器分层，JSON 提取和 unicode 解码
-
----
-
-## [3.0.5] - 2026-05-22
-
-### Added
-
-- **tcode — tmux Chat UI 包装器**：三栏 TMUX 界面（watch sidebar + agent + 输入框），支持
-  bash-agent/goagent/rustagent。第一个参数可选（默认 rustagent），支持透传参数。创建 session
-  时同步终端尺寸并使用百分比分割消除闪烁。退出打印 resume 信息，支持 Ctrl+C 中断/Ctrl+D 干净
-  退出。CI 发布时自动包含 `dist/tcode`。Makefile 新增 `build-tcode` target（`feat/tmux-chat-ui`）
-
----
-
-## [Unreleased]
-
-### Added
-
-- （暂无）
 
 ---
 
