@@ -97,7 +97,6 @@ cat > "$WRAPPER" << WRAPPER_SCRIPT
 #!/usr/bin/env bash
 TC_SESSION="$SESSION"
 TC_SESSION_ID="$SESSION_ID"
-TC_TMUX_SESSION="$SESSION"
 HISTFILE="\${BASH_AGENT_HOME:-\$HOME}/.bash-agent/history"
 mkdir -p "\$(dirname "\$HISTFILE")" 2>/dev/null || true
 touch "\$HISTFILE" 2>/dev/null || true
@@ -150,10 +149,6 @@ tmux send-keys -t "$SESSION:0.2" "exec $WRAPPER" Enter
 # 聚焦输入 pane
 tmux select-pane -t "$SESSION:0.2"
 
-echo "tmux session: $SESSION"
-echo "Ctrl+B D 分离，Ctrl+C 停止"
-echo "从输入框 Ctrl+D 干净退出，会返回这里打印 resume 信息"
-
 # 缓存终端尺寸，attach 后 resize
 COLS=$(tput cols 2>/dev/null || echo 80)
 LINES=$(tput lines 2>/dev/null || echo 24)
@@ -168,4 +163,4 @@ LINES=$(tput lines 2>/dev/null || echo 24)
 tmux attach -t "$SESSION" || true
 
 # 从 tmux 返回后（Ctrl+D 退出或 Ctrl+B D 分离），打印 resume 信息
-printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n\033[90mReattach: tmux attach -t %s\033[0m\n' "$SESSION_ID" "$SESSION"
+printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
