@@ -2164,6 +2164,19 @@ test_stats_awk() {
     check "stats.awk update/dump" "$result" \
         $'agent_request_count\t1' $'total_input_tokens\t10' $'total_output_tokens\t20' \
         $'total_cache_read_tokens\t3' $'total_cache_creation_tokens\t4' $'current_context_tokens\t30'
+    # --- 37h: Quality penalty suppresses compaction ---
+    gen_conv 20 100000 "$conv_file"
+    # QP=0 → compacts (k>0, verified by 37d)
+    # QP=500 → huge penalty, should suppress to 0
+    result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
+        -v e_fixed=8 -v L_fixed=5 \
+        -v total_requests=5 -v t=1 -v total_compact=0 \
+        -v total_input=20000 -v baseline_e=8 -v V=5000 \
+        -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
+        -v S=500 -v min_keep_ratio=0.12 -v r=0.8 -v beta=0.03 \
+        -v max_context=200000 -v quality_penalty=500.0 "$conv_file" 2>/dev/null)
+    check "compact_dp: quality_penalty=500 -> 0" "$result" "0"
+
     rm -rf "$tmpdir"
 }
 
@@ -2547,7 +2560,7 @@ test_compact_dp_awk() {
         done
     }
 
-    # dp_run: run compact_dp.awk with new 4-term formula
+    # dp_run: run compact_dp.awk with 5-term formula
     # Args: E L [c]
     # Internally maps to new interface: E fixed, L fixed, t=1 so E/L directly control R
     dp_run() {
@@ -2559,7 +2572,8 @@ test_compact_dp_awk() {
             -v baseline_e=8 -v V=5000 \
             -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
             -v S=500 -v min_keep_ratio=0.12 \
-            -v r=0.8 -v beta=0.03 "$conv_file" 2>/dev/null
+            -v r=0.8 -v beta=0.03 \
+            -v max_context=200000 -v quality_penalty=0 "$conv_file" 2>/dev/null
     }
 
     # --- 37a: Empty ---
