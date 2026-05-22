@@ -161,11 +161,12 @@ DP 算法相关环境变量：
 | `DP_BASELINE_E` | `8` | 预期剩余用户输入轮数 |
 | `DP_R` | `0.8` | 单次摘要信息保留率 |
 | `DP_BETA` | `0.03` | 信息损失惩罚系数 |
+| `DP_QUALITY_PENALTY` | `0.2` | 质量衰减惩罚系数（基于"Lost in the Middle"等研究） |
 | `DP_MIN_KEEP_RATIO` | `0.12` | 最少保留消息比例 |
 
 ## Context 压缩
 
-压缩使用基于缓存经济学的 DP 算法，在每一步计算 4 项净收益：
+压缩使用基于缓存经济学的 DP 算法，在每一步计算 5 项净收益：
 
 $$
 \begin{aligned}
@@ -173,9 +174,12 @@ $$
   \underbrace{\frac{(R - 1) \cdot P_{\text{cache}} \cdot H}{10^6}}_{①\;\text{后续节省}} \\
 &\quad -\underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{缓存失效}} \\
 &\quad -\underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{压缩成本}} \\
-&\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真}}
+&\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真}} \\
+&\quad -\underbrace{Q \cdot P_{\text{input}} \cdot \frac{M}{10^6} \cdot \left(\frac{V + K}{M}\right)^2}_{⑤\;\text{质量衰减}}
 \end{aligned}
 $$
+
+其中 M = MAX_CONTEXT_TOKENS，Q = DP_QUALITY_PENALTY（默认 0.2）。
 
 - 所有参数支持环境变量覆盖（`DP_P_INPUT`、`DP_L`、`DP_BETA` 等）
 - 安全阀：context > 90% 上限时强制压缩

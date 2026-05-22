@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -455,6 +456,137 @@ func TestSSEParser(t *testing.T) {
 	bt, tn, tid = tr.handleBlockStart(`{"type":"content_block_start","content_block":{"type":"tool_use","name":"Read","id":"toolu_123"}}`)
 	if bt != "tool" || tn != "Read" || tid != "toolu_123" {
 		t.Errorf("handleBlockStart tool: bt=%q tn=%q tid=%q", bt, tn, tid)
+	}
+}
+
+// ─── CompactDPDecision 测试 ───
+
+// writeConvRaw 直接写入原始 JSONL 行到 conversation 文件
+func writeConvRaw(t *testing.T, store *FileStore, lines []string) {
+	t.Helper()
+	dir := store.GetDir()
+	sessionID := store.SessionID()
+	convFile := filepath.Join(dir, sessionID, "conversation.jsonl")
+	f, err := os.OpenFile(convFile, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open conv file: %v", err)
+	}
+	defer f.Close()
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(f, line); err != nil {
+			t.Fatalf("write conv line: %v", err)
+		}
+	}
+}
+
+// genConv 生成 N 组 user+assistant 对话消息，总 token 数接近 target
+func genConv(groups, totalTokenTarget int) []string {
+	var lines []string
+	bytesPerLine := totalTokenTarget * 4 / groups / 3
+	if bytesPerLine < 20 {
+		bytesPerLine = 20
+	}
+	pad := strings.Repeat("x", bytesPerLine)
+	assistPad := strings.Repeat("y", bytesPerLine*2)
+	for i := 0; i < groups; i++ {
+		lines = append(lines, fmt.Sprintf(`{"role":"user","content":"%s"}`, pad))
+		lines = append(lines, fmt.Sprintf(`{"role":"assistant","content":"%s"}`, assistPad))
+	}
+	return lines
+}
+
+func TestCompactDPDecision_Empty(t *testing.T) {
+	store := newTestStore(t)
+	cfg := DefaultConfig()
+	n, err := store.CompactDPDecision(cfg)
+	if err != nil {
+		t.Fatalf("CompactDPDecision: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("empty conv: got %d, want 0", n)
+	}
+}
+
+func TestCompactDPDecision_Small(t *testing.T) {
+	store := newTestStore(t)
+	lines := genConv(2, 5000)
+	writeConvRaw(t, store, lines)
+
+	cfg := DefaultConfig()
+	cfg.DPEFixed = 8
+	cfg.DPFixed = 3.0
+	n, err := store.CompactDPDecision(cfg)
+	if err != nil {
+		t.Fatalf("CompactDPDecision: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("small conv: got %d, want 0", n)
+	}
+}
+
+func TestCompactDPDecision_Large(t *testing.T) {
+	store := newTestStore(t)
+	lines := genConv(20, 100000)
+	writeConvRaw(t, store, lines)
+
+	cfg := DefaultConfig()
+	cfg.DPEFixed = 8
+	cfg.DPFixed = 5.0
+	n, err := store.CompactDPDecision(cfg)
+	if err != nil {
+		t.Fatalf("CompactDPDecision: %v", err)
+	}
+	if n == 0 {
+		t.Error("large conv: expected > 0, got 0")
+	}
+}
+
+func TestCompactDPDecision_QualityPenaltySuppresses(t *testing.T) {
+	store := newTestStore(t)
+	lines := genConv(20, 100000)
+	writeConvRaw(t, store, lines)
+
+	cfg := DefaultConfig()
+	cfg.DPEFixed = 8
+	cfg.DPFixed = 5.0
+	cfg.DPQualityPenalty = 500.0
+	n, err := store.CompactDPDecision(cfg)
+	if err != nil {
+		t.Fatalf("CompactDPDecision: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("quality_penalty=500: got %d, want 0", n)
+	}
+}
+
+func TestCompactDPDecision_TurnAlignment(t *testing.T) {
+	store := newTestStore(t)
+	lines := []string{
+		`{"role":"assistant","content":"intro"}`,
+		`{"role":"user","content":"step 1"}`,
+		`{"role":"assistant","content":"response 1"}`,
+		`{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"result 1"}]}`,
+		`{"role":"assistant","content":"response 1b"}`,
+		`{"role":"user","content":"step 2"}`,
+		`{"role":"assistant","content":"response 2"}`,
+		`{"role":"user","content":"step 3"}`,
+	}
+	writeConvRaw(t, store, lines)
+
+	cfg := DefaultConfig()
+	cfg.DPEFixed = 10
+	cfg.DPFixed = 3.0
+	cfg.DPVPrefix = 0
+	cfg.DPSummaryLen = 0.001 // 非零小值，避免被默认值 400 覆盖
+	cfg.DPBeta = 0.001
+	cfg.DPQualityPenalty = 0.001 // 非零小值，避免被默认值 0.2 覆盖
+	n, err := store.CompactDPDecision(cfg)
+	if err != nil {
+		t.Fatalf("CompactDPDecision: %v", err)
+	}
+	// 期望保留 3 或 4 行（对齐到 user 边界）
+	if n != 3 && n != 4 {
+		t.Errorf("turn alignment: got %d, want 3 or 4", n)
 	}
 }
 

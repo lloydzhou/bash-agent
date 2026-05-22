@@ -22,6 +22,8 @@
 #     min_keep_ratio — minimum fraction of messages to retain
 #     r              — single-step summary retention rate
 #     beta           — info loss penalty coefficient
+#     max_context    — model max context window (from MAX_CONTEXT_TOKENS, default 200000)
+#     quality_penalty— quality decay penalty factor (DP_QUALITY_PENALTY, default 0)
 #
 # Output: number of lines to keep (turn-aligned), or "0" if no compact
 {
@@ -82,6 +84,12 @@ END {
     # ④ Info loss (constant across all k, computed once)
     info_loss = beta * (1.0 - r_t) * N_remain * p_input / 1000000
 
+    # ⑤ Quality penalty: use absolute context ratio (V+K)/M
+    #   quality_penalty is dimensionless (default 0.2 based on research data)
+    #   p_input is used because degraded quality → retry → new uncached input
+    if (quality_penalty == "") quality_penalty = 0.2
+    if (max_context == "" || max_context <= 0) max_context = 200000
+
     # Minimum lines to keep (hard floor)
     min_keep = int(NR * min_keep_ratio + 0.5)
     if (min_keep < 3) min_keep = 3
@@ -108,7 +116,12 @@ END {
         #    Cached prefix (V + H) at P_cache, instruction at P_input, output at P_out
         compact_cost = (p_cache * (V + H) + p_input * l_instr + p_out * S) / 1000000
 
-        benefit = savings - cache_miss - compact_cost - info_loss
+        # ⑤ Quality decay: longer context → worse answers → retry cost
+        #    原公式: QP * p_input * M/1e6 * ((V+K)/M)^2  ← 物理含义版
+        #    化简:   QP * p_input * (V+K)^2 / (M * 1e6)  ← 实际计算
+        quality_cost = quality_penalty * p_input * (V + K) ^ 2 / (max_context * 1000000)
+
+        benefit = savings - cache_miss - compact_cost - info_loss - quality_cost
 
         if (benefit > best_benefit) {
             best_benefit = benefit

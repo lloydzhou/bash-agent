@@ -1390,6 +1390,8 @@ impl Agent {
             e_fixed: self.cfg.dp_e_fixed,
             r: self.cfg.dp_r,
             beta: self.cfg.dp_beta,
+            quality_penalty: self.cfg.dp_quality_penalty,
+            max_context: self.cfg.max_context_tokens,
             min_keep_ratio: self.cfg.dp_min_keep_ratio,
         };
 

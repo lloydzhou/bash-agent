@@ -484,6 +484,7 @@ store_conv_dp_decision() {
         -v baseline_e="${5:-${DP_BASELINE_E:-8}}" -v e_fixed="${6:-${DP_E_FIXED:-0}}" -v L_fixed="${7:-${DP_L:-0}}" \
         -v V="${8:-${DP_V:-5000}}" -v p_input="${9:-${DP_P_INPUT:-3.0}}" -v p_cache="${10:-${DP_P_CACHE:-0.30}}" -v p_out="${11:-${DP_P_OUT:-15.0}}" \
         -v S="${12:-${DP_S:-500}}" -v min_keep_ratio="${13:-${DP_MIN_KEEP_RATIO:-0.12}}" -v r="${14:-${DP_R:-0.8}}" -v beta="${15:-${DP_BETA:-0.03}}" \
+        -v max_context="${16:-${MAX_CONTEXT_TOKENS:-200000}}" -v quality_penalty="${17:-${DP_QUALITY_PENALTY:-0.2}}" \
         -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"
 }
 

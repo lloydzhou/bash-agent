@@ -43,6 +43,7 @@ pub mod config {
         pub dp_e_fixed: i32,
         pub dp_r: f64,
         pub dp_beta: f64,
+        pub dp_quality_penalty: f64,
         pub dp_min_keep_ratio: f64,
         pub skills: Vec<String>,
         pub thinking: String,
@@ -82,6 +83,7 @@ pub mod config {
                 dp_e_fixed: 0,
                 dp_r: 0.8,
                 dp_beta: 0.5,
+                dp_quality_penalty: 0.2,
                 dp_min_keep_ratio: 0.12,
                 skills: Vec::new(),
                 thinking: "adaptive".to_string(),
@@ -184,6 +186,13 @@ pub mod config {
             if let Ok(f) = v.parse::<f64>() {
                 if f >= 0.0 {
                     cfg.dp_beta = f;
+                }
+            }
+        }
+        if let Ok(v) = std::env::var("DP_QUALITY_PENALTY") {
+            if let Ok(f) = v.parse::<f64>() {
+                if f >= 0.0 {
+                    cfg.dp_quality_penalty = f;
                 }
             }
         }
@@ -536,6 +545,7 @@ pub mod types {
         pub dp_e_fixed: i32,
         pub dp_r: f64,
         pub dp_beta: f64,
+        pub dp_quality_penalty: f64,
         pub dp_min_keep_ratio: f64,
         pub skills: Vec<String>,
         pub thinking: String,
@@ -567,6 +577,8 @@ pub mod compact_dp {
         pub e_fixed: i32,
         pub r: f64,
         pub beta: f64,
+        pub quality_penalty: f64,
+        pub max_context: usize,
         pub min_keep_ratio: f64,
     }
 
@@ -583,6 +595,8 @@ pub mod compact_dp {
                 e_fixed: 0,
                 r: 0.8,
                 beta: 0.03,
+                quality_penalty: 0.2,
+                max_context: 200_000,
                 min_keep_ratio: 0.12,
             }
         }
@@ -727,7 +741,11 @@ pub mod compact_dp {
             let compact_cost =
                 (cfg.p_cache * (vf + h) + cfg.p_input * l_instr + cfg.p_out * sf) / 1_000_000.0;
 
-            let benefit = savings - cache_miss - compact_cost - info_loss;
+            // ⑤ Quality decay: QP * p_input * (V+K)² / (M * 1e6)
+            let max_ctx = cfg.max_context as f64;
+            let quality_cost = cfg.quality_penalty * cfg.p_input * (vf + kf) * (vf + kf) / (max_ctx * 1_000_000.0);
+
+            let benefit = savings - cache_miss - compact_cost - info_loss - quality_cost;
 
             if benefit > best_benefit {
                 best_benefit = benefit;
@@ -749,6 +767,144 @@ pub mod compact_dp {
             adj = 1;
         }
         Some(adj)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use serde_json::json;
+
+        fn make_line(role: &str, content: &str) -> Value {
+            json!({"role": role, "content": content})
+        }
+
+        /// Generate alternating user/assistant lines with string content.
+        /// Even indices = user, odd = assistant. Each line has ~chars_per_line chars.
+        fn make_conv(msg_count: usize, chars_per_line: usize) -> Vec<Value> {
+            let mut lines = Vec::with_capacity(msg_count);
+            let pad_len = chars_per_line.saturating_sub(10);
+            let pad = if pad_len > 0 {
+                "x".repeat(pad_len)
+            } else {
+                String::new()
+            };
+            for i in 0..msg_count {
+                let role = if i % 2 == 0 { "user" } else { "assistant" };
+                let content = if i % 2 == 0 {
+                    format!("user_msg_{} {}", i, pad)
+                } else {
+                    format!("asst_resp_{} {}", i, pad)
+                };
+                lines.push(make_line(role, &content));
+            }
+            lines
+        }
+
+        #[test]
+        fn test_empty() {
+            let cfg = DPCompactConfig::default();
+            let result = compact_dp_decision(&[], &cfg, 0, 0, 0, 0);
+            assert!(result.is_none(), "empty conversation should return None");
+        }
+
+        #[test]
+        fn test_small() {
+            let cfg = DPCompactConfig::default();
+            // 2 lines, each ~20K chars → ~5K tokens, total ~10K — too small to compact
+            let lines = make_conv(2, 20000);
+            let result = compact_dp_decision(&lines, &cfg, 0, 0, 0, 0);
+            assert!(result.is_none(), "small conversation should return None");
+        }
+
+        #[test]
+        fn test_large() {
+            // Match bash test 37d: quality_penalty=0, fixed E=8, L=5
+            let cfg = DPCompactConfig {
+                quality_penalty: 0.0,
+                e_fixed: 8,
+                l_fixed: 5.0,
+                ..DPCompactConfig::default()
+            };
+            // 60 lines (30 user + 30 assistant), each ~50K chars → ~12.5K tokens
+            // Total: ~750K tokens → DP should find positive benefit
+            let lines = make_conv(60, 50000);
+            let result = compact_dp_decision(&lines, &cfg, 0, 1, 5, 20000);
+            assert!(result.is_some(), "large conversation should compact");
+            let n = result.unwrap();
+            assert!(n > 0, "keep count must be positive");
+            assert!(n <= lines.len(), "keep count must not exceed total lines");
+            // Verify turn alignment at cut point
+            let cut = lines.len() - n;
+            if cut > 0 {
+                let role_at_cut = lines[cut].get("role").and_then(Value::as_str).unwrap_or("");
+                assert_eq!(
+                    role_at_cut, "user",
+                    "cut point (line {}) must be at user boundary; got role={}",
+                    cut, role_at_cut
+                );
+            }
+        }
+
+        #[test]
+        fn test_quality_penalty_suppresses() {
+            // Same data as test_large but with extreme quality penalty
+            let cfg = DPCompactConfig {
+                quality_penalty: 500.0,
+                e_fixed: 8,
+                l_fixed: 5.0,
+                ..DPCompactConfig::default()
+            };
+            let lines = make_conv(60, 50000);
+            let result = compact_dp_decision(&lines, &cfg, 0, 1, 5, 20000);
+            assert!(result.is_none(), "quality_penalty=500 should suppress compaction");
+        }
+
+        #[test]
+        fn test_turn_alignment() {
+            // Pattern matching bash test 37f:
+            // assistant, user, assistant, assistant, user, assistant, user
+            // Each line padded to ~120 chars for enough tokens
+            let pad = "x".repeat(100);
+            let lines = vec![
+                make_line("assistant", &format!("intro {}", pad)),
+                make_line("user", &format!("step 1 {}", pad)),
+                make_line("assistant", &format!("response 1a {}", pad)),
+                make_line("assistant", &format!("response 1b {}", pad)),
+                make_line("user", &format!("step 2 {}", pad)),
+                make_line("assistant", &format!("response 2 {}", pad)),
+                make_line("user", &format!("step 3 {}", pad)),
+            ];
+            let cfg = DPCompactConfig {
+                quality_penalty: 0.0,
+                e_fixed: 10,
+                l_fixed: 3.0,
+                v: 0,
+                s: 0,
+                beta: 0.001,
+                min_keep_ratio: 0.12,
+                max_context: 200000,
+                ..DPCompactConfig::default()
+            };
+            let result = compact_dp_decision(&lines, &cfg, 0, 1, 3, 12000);
+            assert!(result.is_some(), "turn alignment test should compact");
+            let n = result.unwrap();
+            // Verify alignment: cut must be at a user message
+            let cut = lines.len() - n;
+            if cut > 0 {
+                let role_at_cut = lines[cut].get("role").and_then(Value::as_str).unwrap_or("");
+                assert_eq!(
+                    role_at_cut, "user",
+                    "cut point (line {}) must be at a user message; got role={}",
+                    cut, role_at_cut
+                );
+            }
+            // Expected: best_k=3 aligned to user, result should be 3
+            assert_eq!(
+                n, 3,
+                "expected keep=3 (aligned to user 'step 2'), got keep={}",
+                n
+            );
+        }
     }
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -693,6 +694,13 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 	a.pendingSubAgents++
 	a.subMu.Unlock()
 
+	// fork 模式：在 goroutine 前同步复制 conversation，避免竞态
+	if fork == "true" {
+		parentDir := filepath.Join(a.store.GetDir(), a.store.SessionID())
+		childDir := filepath.Join(a.store.GetDir(), sessionID)
+		_ = a.store.Fork(parentDir, childDir)
+	}
+
 	// 启动子 agent goroutine
 	go func() {
 		result := a.runSubAgent(ctx, sessionID, prompt, fork)
@@ -731,13 +739,6 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 	}
 	env := os.Environ()
 	env = append(env, "BASH_AGENT_HOME="+homeDir)
-
-	// fork 模式需要复制 conversation
-	if fork == "true" {
-		parentDir := a.store.GetDir()
-		childDir := parentDir + "/" + sessionID
-		_ = a.store.Fork(parentDir, childDir)
-	}
 
 	cmd := exec.CommandContext(ctx, self, args...)
 	cmd.Env = env
@@ -810,7 +811,7 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 	resultJSON, _ := json.Marshal(resultEvent)
 	_ = a.store.AppendEvent(string(resultJSON))
 
-	// 记录 sub_agent_end 事件
+// 记录 sub_agent_end 事件
 	endEvent := map[string]interface{}{
 		"type":       "sub_agent_end",
 		"session_id": r.SessionID,
