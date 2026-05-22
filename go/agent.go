@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -734,8 +735,8 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 
 	// fork 模式需要复制 conversation
 	if fork == "true" {
-		parentDir := a.store.GetDir()
-		childDir := parentDir + "/" + sessionID
+		parentDir := filepath.Join(a.store.GetDir(), a.store.SessionID())
+		childDir := filepath.Join(a.store.GetDir(), sessionID)
 		_ = a.store.Fork(parentDir, childDir)
 	}
 
