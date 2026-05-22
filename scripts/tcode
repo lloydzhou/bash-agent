@@ -1,26 +1,31 @@
 #!/usr/bin/env bash
-# tcode — 在 tmux 中模拟类 Chat 界面使用 bash-agent
+# tcode — tmux chat UI 包装器：在 tmux 三栏界面中运行 agent
 #
 # 布局:
 #   ┌──────────┬────────────────────────────────┐
-#   │          │  agent (bash-agent -i)         │
+#   │          │  agent (rustagent/goagent/...) │
 #   │  watch   │  (对话在此 pane 中完整展示)     │
 #   │  list-   │                                │
 #   │  sessions│                                │
 #   │  (25%)   │                                │
 #   │          ├────────────────────────────────┤
-#   │          │  > 输入行 (输入 → INPUT_FIFO)  │
+#   │          │  > 输入行                       │
 #   └──────────┴────────────────────────────────┘
 #
 # 用法:
-#   tcode                         # 默认 bash-agent
+#   tcode                         # 默认 rustagent
 #   tcode goagent                 # 用 goagent
 #   tcode rustagent --session x   # 透传参数
 
 set -euo pipefail
 
-AGENT="${1:-bash-agent}"
-shift 2>/dev/null || true
+# 第一个参数可选：指定 agent，默认 rustagent
+if [[ "${1:-}" =~ ^(bash-agent|goagent|rustagent|rust2agent)$ ]]; then
+    AGENT="$1"
+    shift
+else
+    AGENT="rustagent"
+fi
 ORIG_ARGS=("$@")
 SHELL="${SHELL:-/bin/bash}"
 
@@ -50,8 +55,8 @@ SESSION="$SESSION_ID"
 # ─── 清理残留 ───
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-# ─── 创建 session ───
-tmux new-session -d -s "$SESSION"
+# ─── 创建 session（同步终端尺寸，避免 attach 时比例变形）───
+tmux new-session -d -s "$SESSION" -x - -y -
 
 # ─── 设置 session 环境变量 ───
 set_session_env() {
@@ -66,14 +71,9 @@ set_session_env() {
 }
 set_session_env
 
-# ─── 计算分栏尺寸（25%/75%）───
-COLS=$(tput cols 2>/dev/null || echo 80)
-LEFT_W=$(( COLS * 25 / 100 ))
-RIGHT_W=$(( COLS - LEFT_W ))
-
-# ─── 三 pane 布局（创建时直接指定尺寸，无闪烁）───
-tmux split-window -h -l "$RIGHT_W" -t "$SESSION:0.0"   # pane 0=左(25%), pane 1=右(75%)
-tmux split-window -v -l 4 -t "$SESSION:0.1"             # pane 1=右上(agent), pane 2=右下(输入, 4行)
+# ─── 三 pane 布局 ───
+tmux split-window -h -l '75%' -t "$SESSION:0.0"      # 左 25%, 右 75%
+tmux split-window -v -l 4 -t "$SESSION:0.1"           # 右上(agent), 右下(输入, 4行)
 
 # ─── 构建 exec env 需要的环境变量字符串 ───
 ENV_VARS=""
