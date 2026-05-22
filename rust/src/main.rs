@@ -200,11 +200,14 @@ fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {
     }
     println!("{:<40} {:<16} PREVIEW", "NAME", "MODIFIED");
     for row in rows {
-        let mut preview = row.summary;
-        if preview.len() > 60 {
-            preview.truncate(57);
-            preview.push_str("...");
-        }
+        let raw_preview = row.summary;
+        let preview = if raw_preview.chars().count() > 60 {
+            let mut s: String = raw_preview.chars().take(57).collect();
+            s.push_str("...");
+            s
+        } else {
+            raw_preview
+        };
         let formatted = format_system_time(&row.modified);
         println!("{:<40} {:<16} {}", row.name, formatted, preview);
     }
