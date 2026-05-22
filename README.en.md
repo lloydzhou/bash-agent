@@ -162,7 +162,7 @@ DP algorithm environment variables:
 | `DP_BASELINE_E` | `8` | Expected remaining user input turns |
 | `DP_R` | `0.8` | Single summary info retention rate |
 | `DP_BETA` | `0.03` | Info loss penalty coefficient |
-| `DP_QUALITY_PENALTY` | `0` | Quality decay penalty (0=disabled, recommended 0.1~0.2) |
+| `DP_QUALITY_PENALTY` | `0.2` | Quality decay penalty (based on "Lost in the Middle" research) |
 | `DP_MIN_KEEP_RATIO` | `0.12` | Minimum message keep ratio |
 
 ## Context Compaction
@@ -186,7 +186,7 @@ $$
 ⑤ = (\texttt{DP\_QUALITY\_PENALTY} \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
 $$
 
-- **Base price** = `DP_QUALITY_PENALTY` × `P_input` × `M / 1e6`: penalty amount at full context
+- **Base price** = `DP_QUALITY_PENALTY`(default 0.2) × `P_input` × `M / 1e6`: penalty amount at full context
 - **Ratio squared** = `((V+K)/M)²`: context usage ratio (0~1), squared for accelerated growth
 
 - All parameters overridable via env vars (`DP_P_INPUT`, `DP_L`, `DP_BETA`, etc.)

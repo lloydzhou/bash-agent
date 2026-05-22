@@ -85,9 +85,9 @@ END {
     info_loss = beta * (1.0 - r_t) * N_remain * p_input / 1000000
 
     # ⑤ Quality penalty: use absolute context ratio (V+K)/M
-    #   quality_penalty is dimensionless (default 0 = disabled)
+    #   quality_penalty is dimensionless (default 0.2 based on research data)
     #   p_input is used because degraded quality → retry → new uncached input
-    if (quality_penalty == "") quality_penalty = 0
+    if (quality_penalty == "") quality_penalty = 0.2
     if (max_context == "" || max_context <= 0) max_context = 200000
 
     # Minimum lines to keep (hard floor)

@@ -161,7 +161,7 @@ DP 算法相关环境变量：
 | `DP_BASELINE_E` | `8` | 预期剩余用户输入轮数 |
 | `DP_R` | `0.8` | 单次摘要信息保留率 |
 | `DP_BETA` | `0.03` | 信息损失惩罚系数 |
-| `DP_QUALITY_PENALTY` | `0` | 质量衰减惩罚系数（0=关闭，推荐 0.1~0.2） |
+| `DP_QUALITY_PENALTY` | `0.2` | 质量衰减惩罚系数（基于"Lost in the Middle"等研究） |
 | `DP_MIN_KEEP_RATIO` | `0.12` | 最少保留消息比例 |
 
 ## Context 压缩
@@ -185,7 +185,7 @@ $$
 ⑤ = (\texttt{DP\_QUALITY\_PENALTY} \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
 $$
 
-- **基准价格** = `DP_QUALITY_PENALTY` × `P_input` × `M / 1e6`：满上下文时的惩罚金额
+- **基准价格** = `DP_QUALITY_PENALTY`(默认 0.2) × `P_input` × `M / 1e6`：满上下文时的惩罚金额
 - **比例平方** = `((V+K)/M)²`：上下文占比的平方，0~1 之间随比例加速上升
 
 - 所有参数支持环境变量覆盖（`DP_P_INPUT`、`DP_L`、`DP_BETA` 等）
