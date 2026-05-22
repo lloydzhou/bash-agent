@@ -104,6 +104,10 @@ while true; do
         # Ctrl+D / EOF: 退出
         tmux send-keys -t "\$TC_SESSION:0.1" C-d
         tmux send-keys -t "\$TC_SESSION:0.0" C-c
+        sleep 0.5
+        # 捕获 agent 的 resume session 信息
+        resume=\$(tmux capture-pane -t "\$TC_SESSION:0.1" -p -S -5 2>/dev/null | grep 'Resume with:' | tail -1)
+        [[ -n "\$resume" ]] && printf '\n\033[36m%s\033[0m\n' "\$resume"
         break
     fi
     printf '\033[A\033[2K'
