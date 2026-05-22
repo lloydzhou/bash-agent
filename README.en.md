@@ -176,17 +176,17 @@ $$
 &\quad -\underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{cache miss}} \\
 &\quad -\underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{compact cost}} \\
 &\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{info loss}} \\
-&\quad -\underbrace{\texttt{DP\_QUALITY\_PENALTY} \cdot P_{\text{input}} \cdot \frac{(V + K)^2}{M \cdot 10^6}}_{⑤\;\text{quality decay}}
+&\quad -\underbrace{Q \cdot P_{\text{input}} \cdot \frac{(V + K)^2}{M \cdot 10^6}}_{⑤\;\text{quality decay}}
 \end{aligned}
 $$
 
-The physical meaning of term ⑤ (M = MAX_CONTEXT_TOKENS):
+The physical meaning of term ⑤ (M = MAX_CONTEXT_TOKENS, Q = DP_QUALITY_PENALTY):
 
 $$
-⑤ = (\texttt{DP\_QUALITY\_PENALTY} \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
+⑤ = (Q \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
 $$
 
-- **Base price** = `DP_QUALITY_PENALTY`(default 0.2) × `P_input` × `M / 1e6`: penalty amount at full context
+- **Base price** = `Q × P_input × M / 1e6` (Q defaults to 0.2): penalty amount at full context
 - **Ratio squared** = `((V+K)/M)²`: context usage ratio (0~1), squared for accelerated growth
 
 - All parameters overridable via env vars (`DP_P_INPUT`, `DP_L`, `DP_BETA`, etc.)

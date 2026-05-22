@@ -175,17 +175,17 @@ $$
 &\quad -\underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{缓存失效}} \\
 &\quad -\underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{压缩成本}} \\
 &\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真}} \\
-&\quad -\underbrace{\texttt{DP\_QUALITY\_PENALTY} \cdot P_{\text{input}} \cdot \frac{(V + K)^2}{M \cdot 10^6}}_{⑤\;\text{质量衰减}}
+&\quad -\underbrace{Q \cdot P_{\text{input}} \cdot \frac{(V + K)^2}{M \cdot 10^6}}_{⑤\;\text{质量衰减}}
 \end{aligned}
 $$
 
-其中 ⑤ 质量衰减项的物理含义（M = MAX_CONTEXT_TOKENS）：
+其中 ⑤ 质量衰减项的物理含义（M = MAX_CONTEXT_TOKENS, Q = DP_QUALITY_PENALTY）：
 
 $$
-⑤ = (\texttt{DP\_QUALITY\_PENALTY} \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
+⑤ = (Q \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
 $$
 
-- **基准价格** = `DP_QUALITY_PENALTY`(默认 0.2) × `P_input` × `M / 1e6`：满上下文时的惩罚金额
+- **基准价格** = `Q × P_input × M / 1e6`（Q 默认 0.2）：满上下文时的惩罚金额
 - **比例平方** = `((V+K)/M)²`：上下文占比的平方，0~1 之间随比例加速上升
 
 - 所有参数支持环境变量覆盖（`DP_P_INPUT`、`DP_L`、`DP_BETA` 等）
