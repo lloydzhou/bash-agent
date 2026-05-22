@@ -12,6 +12,31 @@
 
 ---
 
+## [3.0.6] - 2026-05-23
+
+### Added
+
+- **DP 第 5 项质量衰减惩罚**：当上下文过长时模型回答质量下降，新增惩罚项
+  `Q × p_input × M/1e6 × ((V+K)/M)²`，与现有 4 项 DP 公式统一。
+  - Bash/Go/Rust 三端实现，公式一致
+  - 系数 `DP_QUALITY_PENALTY` 默认 0.2，基于 "Lost in the Middle" 论文数据
+  - 配置参数：`DP_QUALITY_PENALTY`（默认 0.2）
+  - 文档同步更新 README / compact-analysis.md
+
+### Fixed
+
+- **Go SubAgent fork 竞态条件**：Fork 从 goroutine 移至 LaunchSubAgent
+  同步执行，避免因复制含 tool_result 的对话导致子 agent 误走正常流程
+- **Go SubAgent fork 目录路径**：Fork 从项目目录改为 session 子目录
+- **Rust list_sessions preview 截断**：`.len()` → `.chars().count()`，
+  修复中文等多字节字符被截断问题
+
+### Tests
+
+- **Bash** tests/test.sh: 新增 37h quality_penalty 测试
+- **Go** agent_test.go: 5 个 CompactDPDecision 单元测试
+- **Rust** lib.rs: compact_dp::tests 5 个单元测试
+
 ## [3.0.5] - 2026-05-22
 
 ### Added
