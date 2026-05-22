@@ -46,6 +46,7 @@ type Config struct {
 	DPMinKeepRatio  float64 // minimum fraction of messages to retain
 	DPRetention     float64 // single-step summary retention rate
 	DPBeta          float64 // info loss penalty coefficient
+	DPQualityPenalty float64 // quality decay penalty coefficient (default 0.2)
 }
 
 // DefaultConfig 返回默认配置

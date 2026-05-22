@@ -43,6 +43,7 @@ pub mod config {
         pub dp_e_fixed: i32,
         pub dp_r: f64,
         pub dp_beta: f64,
+        pub dp_quality_penalty: f64,
         pub dp_min_keep_ratio: f64,
         pub skills: Vec<String>,
         pub thinking: String,
@@ -82,6 +83,7 @@ pub mod config {
                 dp_e_fixed: 0,
                 dp_r: 0.8,
                 dp_beta: 0.5,
+                dp_quality_penalty: 0.2,
                 dp_min_keep_ratio: 0.12,
                 skills: Vec::new(),
                 thinking: "adaptive".to_string(),
@@ -184,6 +186,13 @@ pub mod config {
             if let Ok(f) = v.parse::<f64>() {
                 if f >= 0.0 {
                     cfg.dp_beta = f;
+                }
+            }
+        }
+        if let Ok(v) = std::env::var("DP_QUALITY_PENALTY") {
+            if let Ok(f) = v.parse::<f64>() {
+                if f >= 0.0 {
+                    cfg.dp_quality_penalty = f;
                 }
             }
         }
@@ -536,6 +545,7 @@ pub mod types {
         pub dp_e_fixed: i32,
         pub dp_r: f64,
         pub dp_beta: f64,
+        pub dp_quality_penalty: f64,
         pub dp_min_keep_ratio: f64,
         pub skills: Vec<String>,
         pub thinking: String,
@@ -567,6 +577,8 @@ pub mod compact_dp {
         pub e_fixed: i32,
         pub r: f64,
         pub beta: f64,
+        pub quality_penalty: f64,
+        pub max_context: usize,
         pub min_keep_ratio: f64,
     }
 
@@ -583,6 +595,8 @@ pub mod compact_dp {
                 e_fixed: 0,
                 r: 0.8,
                 beta: 0.03,
+                quality_penalty: 0.2,
+                max_context: 200_000,
                 min_keep_ratio: 0.12,
             }
         }
@@ -727,7 +741,11 @@ pub mod compact_dp {
             let compact_cost =
                 (cfg.p_cache * (vf + h) + cfg.p_input * l_instr + cfg.p_out * sf) / 1_000_000.0;
 
-            let benefit = savings - cache_miss - compact_cost - info_loss;
+            // ⑤ Quality decay: QP * p_input * (V+K)² / (M * 1e6)
+            let max_ctx = cfg.max_context as f64;
+            let quality_cost = cfg.quality_penalty * cfg.p_input * (vf + kf) * (vf + kf) / (max_ctx * 1_000_000.0);
+
+            let benefit = savings - cache_miss - compact_cost - info_loss - quality_cost;
 
             if benefit > best_benefit {
                 best_benefit = benefit;
