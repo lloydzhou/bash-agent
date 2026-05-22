@@ -128,7 +128,9 @@ while true; do
         # Ctrl+D / EOF: 退出
         tmux send-keys -t "\$TC_SESSION:0.1" C-d
         tmux send-keys -t "\$TC_SESSION:0.0" C-c
-        printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n\033[90mReattach: tmux attach -t %s\033[0m\n' "\$TC_SESSION_ID" "\$TC_TMUX_SESSION"
+        sleep 0.3
+        # 退出 tmux 回到外部终端，让外部脚本打印 resume 信息
+        tmux detach-client 2>/dev/null || true
         break
     fi
     printf '\033[A\033[2K'
@@ -150,6 +152,7 @@ tmux select-pane -t "$SESSION:0.2"
 
 echo "tmux session: $SESSION"
 echo "Ctrl+B D 分离，Ctrl+C 停止"
+echo "从输入框 Ctrl+D 干净退出，会返回这里打印 resume 信息"
 
 # 缓存终端尺寸，attach 后 resize
 COLS=$(tput cols 2>/dev/null || echo 80)
@@ -162,4 +165,7 @@ LINES=$(tput lines 2>/dev/null || echo 24)
  tmux resize-pane -t "$SESSION:0.2" -y 4
 ) &
 
-tmux attach -t "$SESSION"
+tmux attach -t "$SESSION" || true
+
+# 从 tmux 返回后（Ctrl+D 退出或 Ctrl+B D 分离），打印 resume 信息
+printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n\033[90mReattach: tmux attach -t %s\033[0m\n' "$SESSION_ID" "$SESSION"
