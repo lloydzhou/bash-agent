@@ -117,8 +117,8 @@ END {
         compact_cost = (p_cache * (V + H) + p_input * l_instr + p_out * S) / 1000000
 
         # ⑤ Quality decay: longer context → worse answers → retry cost
-        #    formula: (quality_penalty * p_input * M / 1e6) * ((V+K)/M)^2
-        #         =  quality_penalty * p_input * (V+K)^2 / (M * 1e6)
+        #    原公式: QP * p_input * M/1e6 * ((V+K)/M)^2  ← 物理含义版
+        #    化简:   QP * p_input * (V+K)^2 / (M * 1e6)  ← 实际计算
         quality_cost = quality_penalty * p_input * (V + K) ^ 2 / (max_context * 1000000)
 
         benefit = savings - cache_miss - compact_cost - info_loss - quality_cost
