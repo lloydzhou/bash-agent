@@ -21,9 +21,29 @@ set -euo pipefail
 
 AGENT="${1:-bash-agent}"
 shift 2>/dev/null || true
-AGENT_ARGS=("$@")
+ORIG_ARGS=("$@")
 SESSION="tcode-$$"
 SHELL="${SHELL:-/bin/bash}"
+
+# ─── 提取或生成 session ID（与 agent.sh util_new_session_id 一致）───
+SESSION_ID=""
+PENDING_ARGS=()
+i=0
+while [[ $i -lt ${#ORIG_ARGS[@]} ]]; do
+    if [[ "${ORIG_ARGS[$i]}" == "--session" && $((i+1)) -lt ${#ORIG_ARGS[@]} ]]; then
+        SESSION_ID="${ORIG_ARGS[$((i+1))]}"
+        PENDING_ARGS+=("${ORIG_ARGS[$i]}" "${ORIG_ARGS[$((i+1))]}")
+        i=$((i+2))
+    else
+        PENDING_ARGS+=("${ORIG_ARGS[$i]}")
+        i=$((i+1))
+    fi
+done
+if [[ -z "$SESSION_ID" ]]; then
+    SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(printf '%04x' "$(( RANDOM << 1 | (RANDOM & 1) ))")"
+    PENDING_ARGS+=("--session" "$SESSION_ID")
+fi
+AGENT_ARGS=("${PENDING_ARGS[@]}")
 
 # ─── 清理残留 ───
 tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -74,6 +94,7 @@ WRAPPER=$(mktemp "${TMPDIR:-/tmp}/tcode-wrapper.XXXXXX")
 cat > "$WRAPPER" << WRAPPER_SCRIPT
 #!/usr/bin/env bash
 TC_SESSION="$SESSION"
+TC_SESSION_ID="$SESSION_ID"
 HISTFILE="\${BASH_AGENT_HOME:-\$HOME}/.bash-agent/history"
 mkdir -p "\$(dirname "\$HISTFILE")" 2>/dev/null || true
 touch "\$HISTFILE" 2>/dev/null || true
@@ -104,10 +125,7 @@ while true; do
         # Ctrl+D / EOF: 退出
         tmux send-keys -t "\$TC_SESSION:0.1" C-d
         tmux send-keys -t "\$TC_SESSION:0.0" C-c
-        sleep 0.5
-        # 捕获 agent 的 resume session 信息
-        resume=\$(tmux capture-pane -t "\$TC_SESSION:0.1" -p -S -5 2>/dev/null | grep 'Resume with:' | tail -1)
-        [[ -n "\$resume" ]] && printf '\n\033[36m%s\033[0m\n' "\$resume"
+        printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "\$TC_SESSION_ID"
         break
     fi
     printf '\033[A\033[2K'
