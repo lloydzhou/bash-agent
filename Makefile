@@ -1,8 +1,8 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust test test-bash test-go test-rust test-go-e2e test-rust-e2e clean
+.PHONY: build build-bash build-go build-rust build-tcode test test-bash test-go test-rust test-go-e2e test-rust-e2e clean
 
-build: build-bash build-go build-rust
+build: build-bash build-go build-rust build-tcode
 
 build-bash:
 	bash scripts/build.sh dist/agent.sh
@@ -23,6 +23,10 @@ build-rust2:
 	cd rust2 && cargo build --release -j 10
 	cp rust2/target/release/rust2agent dist/rust2agent
 	strip -x dist/rust2agent
+
+build-tcode:
+	cp scripts/tcode dist/tcode
+	chmod +x dist/tcode
 
 test: test-bash test-go test-rust
 

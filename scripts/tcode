@@ -1,35 +1,62 @@
 #!/usr/bin/env bash
-# tcode — 在 tmux 中模拟类 Chat 界面使用 bash-agent
+# tcode — tmux chat UI 包装器：在 tmux 三栏界面中运行 agent
 #
 # 布局:
 #   ┌──────────┬────────────────────────────────┐
-#   │          │  agent (bash-agent -i)         │
+#   │          │  agent (rustagent/goagent/...) │
 #   │  watch   │  (对话在此 pane 中完整展示)     │
 #   │  list-   │                                │
 #   │  sessions│                                │
 #   │  (25%)   │                                │
 #   │          ├────────────────────────────────┤
-#   │          │  > 输入行 (输入 → INPUT_FIFO)  │
+#   │          │  > 输入行                       │
 #   └──────────┴────────────────────────────────┘
 #
 # 用法:
-#   tcode                         # 默认 bash-agent
+#   tcode                         # 默认 rustagent
 #   tcode goagent                 # 用 goagent
 #   tcode rustagent --session x   # 透传参数
 
 set -euo pipefail
 
-AGENT="${1:-bash-agent}"
-shift 2>/dev/null || true
-AGENT_ARGS=("$@")
-SESSION="tcode-$$"
+# 第一个参数可选：指定 agent，默认 rustagent
+if [[ "${1:-}" =~ ^(bash-agent|goagent|rustagent|rust2agent)$ ]]; then
+    AGENT="$1"
+    shift
+else
+    AGENT="rustagent"
+fi
+ORIG_ARGS=("$@")
 SHELL="${SHELL:-/bin/bash}"
+
+# ─── 提取或生成 session ID（与 agent.sh util_new_session_id 一致）───
+SESSION_ID=""
+PENDING_ARGS=()
+i=0
+while [[ $i -lt ${#ORIG_ARGS[@]} ]]; do
+    if [[ "${ORIG_ARGS[$i]}" == "--session" && $((i+1)) -lt ${#ORIG_ARGS[@]} ]]; then
+        SESSION_ID="${ORIG_ARGS[$((i+1))]}"
+        PENDING_ARGS+=("${ORIG_ARGS[$i]}" "${ORIG_ARGS[$((i+1))]}")
+        i=$((i+2))
+    else
+        PENDING_ARGS+=("${ORIG_ARGS[$i]}")
+        i=$((i+1))
+    fi
+done
+if [[ -z "$SESSION_ID" ]]; then
+    SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(printf '%04x' "$(( RANDOM << 1 | (RANDOM & 1) ))")"
+    PENDING_ARGS+=("--session" "$SESSION_ID")
+fi
+AGENT_ARGS=("${PENDING_ARGS[@]}")
+
+# Tmux session 名与 agent session ID 一致
+SESSION="$SESSION_ID"
 
 # ─── 清理残留 ───
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-# ─── 创建 session ───
-tmux new-session -d -s "$SESSION"
+# ─── 创建 session（同步终端尺寸，避免 attach 时比例变形）───
+tmux new-session -d -s "$SESSION" -x - -y -
 
 # ─── 设置 session 环境变量 ───
 set_session_env() {
@@ -45,8 +72,8 @@ set_session_env() {
 set_session_env
 
 # ─── 三 pane 布局 ───
-tmux split-window -h -t "$SESSION:0.0"      # pane 0=左, pane 1=右
-tmux split-window -v -t "$SESSION:0.1"      # pane 1=右上(agent), pane 2=右下(输入)
+tmux split-window -h -l '75%' -t "$SESSION:0.0"      # 左 25%, 右 75%
+tmux split-window -v -l 4 -t "$SESSION:0.1"           # 右上(agent), 右下(输入, 4行)
 
 # ─── 构建 exec env 需要的环境变量字符串 ───
 ENV_VARS=""
@@ -74,6 +101,7 @@ WRAPPER=$(mktemp "${TMPDIR:-/tmp}/tcode-wrapper.XXXXXX")
 cat > "$WRAPPER" << WRAPPER_SCRIPT
 #!/usr/bin/env bash
 TC_SESSION="$SESSION"
+TC_SESSION_ID="$SESSION_ID"
 HISTFILE="\${BASH_AGENT_HOME:-\$HOME}/.bash-agent/history"
 mkdir -p "\$(dirname "\$HISTFILE")" 2>/dev/null || true
 touch "\$HISTFILE" 2>/dev/null || true
@@ -104,6 +132,9 @@ while true; do
         # Ctrl+D / EOF: 退出
         tmux send-keys -t "\$TC_SESSION:0.1" C-d
         tmux send-keys -t "\$TC_SESSION:0.0" C-c
+        sleep 0.3
+        # 退出 tmux 回到外部终端，让外部脚本打印 resume 信息
+        tmux detach-client 2>/dev/null || true
         break
     fi
     printf '\033[A\033[2K'
@@ -123,18 +154,7 @@ tmux send-keys -t "$SESSION:0.2" "exec $WRAPPER" Enter
 # 聚焦输入 pane
 tmux select-pane -t "$SESSION:0.2"
 
-echo "tmux session: $SESSION"
-echo "Ctrl+B D 分离，Ctrl+C 停止"
+tmux attach -t "$SESSION" >/dev/null 2>&1 || true
 
-# 缓存终端尺寸，attach 后 resize
-COLS=$(tput cols 2>/dev/null || echo 80)
-LINES=$(tput lines 2>/dev/null || echo 24)
-
-(sleep 0.5
- WIN_WIDTH=$(tmux display -t "$SESSION:0" -p '#{window_width}' 2>/dev/null || echo "$COLS")
- LEFT=$(( WIN_WIDTH * 25 / 100 ))
- tmux resize-pane -t "$SESSION:0.0" -x "$LEFT"
- tmux resize-pane -t "$SESSION:0.2" -y 4
-) &
-
-tmux attach -t "$SESSION"
+# 从 tmux 返回后（Ctrl+D 退出或 Ctrl+B D 分离），打印 resume 信息
+printf '\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"

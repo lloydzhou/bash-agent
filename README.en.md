@@ -111,6 +111,30 @@ Pre-built binaries (Go / Rust) are available on [Releases](https://github.com/ll
 | `--print` | stream-json output | - |
 | `-v` | verbose logging | - |
 
+## tcode — tmux Chat UI Wrapper
+
+<details>
+<summary>tmux 3-pane wrapper for the agent, click to expand</summary>
+
+`tcode` is a tmux 3-pane wrapper for the agent, with watch sidebar, agent chat, and input pane.
+
+```bash
+# Start (defaults to rustagent)
+tcode
+
+# Specify agent and passthrough args
+tcode goagent
+tcode rustagent --session my-session
+tcode goagent -p openai -m gpt-4o
+
+# Run directly from release download
+./tcode
+```
+
+Supports readline input, resume info on exit, Ctrl+C to interrupt, Ctrl+D to cleanly exit.
+
+</details>
+
 ## Environment Variables
 
 | Variable | Description |

@@ -621,6 +621,17 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **tcode — tmux Chat UI 包装器**：三栏 TMUX 界面（watch sidebar + agent + 输入框），支持
+  bash-agent/goagent/rustagent。第一个参数可选（默认 rustagent），支持透传参数。创建 session
+  时同步终端尺寸并使用百分比分割消除闪烁。退出打印 resume 信息，支持 Ctrl+C 中断/Ctrl+D 干净
+  退出。CI 发布时自动包含 `dist/tcode`。Makefile 新增 `build-tcode` target（`feat/tmux-chat-ui`）
+
+---
+
 [Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.4...HEAD
 [3.0.4]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...v3.0.4
 [3.0.3]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...v3.0.3
