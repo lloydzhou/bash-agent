@@ -22,7 +22,6 @@ set -euo pipefail
 AGENT="${1:-bash-agent}"
 shift 2>/dev/null || true
 ORIG_ARGS=("$@")
-SESSION="tcode-$$"
 SHELL="${SHELL:-/bin/bash}"
 
 # ─── 提取或生成 session ID（与 agent.sh util_new_session_id 一致）───
@@ -44,6 +43,9 @@ if [[ -z "$SESSION_ID" ]]; then
     PENDING_ARGS+=("--session" "$SESSION_ID")
 fi
 AGENT_ARGS=("${PENDING_ARGS[@]}")
+
+# Tmux session 名与 agent session ID 一致
+SESSION="$SESSION_ID"
 
 # ─── 清理残留 ───
 tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -95,6 +97,7 @@ cat > "$WRAPPER" << WRAPPER_SCRIPT
 #!/usr/bin/env bash
 TC_SESSION="$SESSION"
 TC_SESSION_ID="$SESSION_ID"
+TC_TMUX_SESSION="$SESSION"
 HISTFILE="\${BASH_AGENT_HOME:-\$HOME}/.bash-agent/history"
 mkdir -p "\$(dirname "\$HISTFILE")" 2>/dev/null || true
 touch "\$HISTFILE" 2>/dev/null || true
@@ -125,7 +128,7 @@ while true; do
         # Ctrl+D / EOF: 退出
         tmux send-keys -t "\$TC_SESSION:0.1" C-d
         tmux send-keys -t "\$TC_SESSION:0.0" C-c
-        printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "\$TC_SESSION_ID"
+        printf '\n\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n\033[90mReattach: tmux attach -t %s\033[0m\n' "\$TC_SESSION_ID" "\$TC_TMUX_SESSION"
         break
     fi
     printf '\033[A\033[2K'
