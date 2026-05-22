@@ -155,9 +155,27 @@ jobs:
           name: rustagent-${{ matrix.suffix }}
           path: dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
+  tcode:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy tcode
+        run: |
+          mkdir -p dist
+          cp scripts/tcode dist/tcode
+          chmod +x dist/tcode
+
+      - name: Upload tcode
+        uses: actions/upload-artifact@v4
+        with:
+          name: tcode
+          path: dist/tcode
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [bash-agent, goagent, rustagent]
+    needs: [bash-agent, goagent, rustagent, tcode]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -184,3 +202,4 @@ jobs:
             dist/rustagent-linux-arm64
             dist/rustagent-darwin-amd64
             dist/rustagent-darwin-arm64
+            dist/tcode
