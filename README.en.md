@@ -180,14 +180,7 @@ $$
 \end{aligned}
 $$
 
-The physical meaning of term ⑤ (M = MAX_CONTEXT_TOKENS, Q = DP_QUALITY_PENALTY):
-
-$$
-⑤ = (Q \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
-$$
-
-- **Base price** = `Q × P_input × M / 1e6` (Q defaults to 0.2): penalty amount at full context
-- **Ratio squared** = `((V+K)/M)²`: context usage ratio (0~1), squared for accelerated growth
+Where M = MAX_CONTEXT_TOKENS, Q = DP_QUALITY_PENALTY (default 0.2).
 
 - All parameters overridable via env vars (`DP_P_INPUT`, `DP_L`, `DP_BETA`, etc.)
 - Safety valve: force compact when context exceeds 90% of limit

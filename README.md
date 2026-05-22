@@ -179,14 +179,7 @@ $$
 \end{aligned}
 $$
 
-其中 ⑤ 质量衰减项的物理含义（M = MAX_CONTEXT_TOKENS, Q = DP_QUALITY_PENALTY）：
-
-$$
-⑤ = (Q \times P_{\text{input}} \times M / 10^6) \times ((V + K) / M)^2
-$$
-
-- **基准价格** = `Q × P_input × M / 1e6`（Q 默认 0.2）：满上下文时的惩罚金额
-- **比例平方** = `((V+K)/M)²`：上下文占比的平方，0~1 之间随比例加速上升
+其中 M = MAX_CONTEXT_TOKENS，Q = DP_QUALITY_PENALTY（默认 0.2）。
 
 - 所有参数支持环境变量覆盖（`DP_P_INPUT`、`DP_L`、`DP_BETA` 等）
 - 安全阀：context > 90% 上限时强制压缩
