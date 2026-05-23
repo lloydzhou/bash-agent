@@ -5,3 +5,4 @@
 dist/*
 go/goagent
 go/bash-agent
+c/*.o

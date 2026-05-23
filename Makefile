@@ -1,8 +1,8 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode test test-bash test-go test-rust test-go-e2e test-rust-e2e clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e clean
 
-build: build-bash build-go build-rust build-tcode
+build: build-bash build-go build-rust build-tcode build-c
 
 build-bash:
 	bash scripts/build.sh dist/agent.sh
@@ -28,6 +28,9 @@ build-tcode:
 	cp scripts/tcode dist/tcode
 	chmod +x dist/tcode
 
+build-c:
+	$(MAKE) -C c
+
 test: test-bash test-go test-rust
 
 test-bash:
@@ -48,5 +51,8 @@ test-rust:
 test-rust-e2e: build-rust
 	AGENT=./dist/rustagent bash tests/test.sh
 
+test-c-e2e: build-c
+	AGENT=./dist/cagent bash tests/test.sh
+
 clean:
-	rm -rf go/dist rust/target
+	rm -rf go/dist rust/target c/*.o c/../dist/cagent
