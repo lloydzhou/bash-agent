@@ -741,11 +741,17 @@ pub mod compact_dp {
             let compact_cost =
                 (cfg.p_cache * (vf + h) + cfg.p_input * l_instr + cfg.p_out * sf) / 1_000_000.0;
 
-            // ⑤ Quality decay: QP * p_input * (V+K)² / (M * 1e6)
+            // ⑤ Quality savings: 压缩减少上下文长度 → 改善回答质量 → 减少重试成本
+            //   不压缩: QP * p_input * (V+T)² / (M*1e6)
+            //   压缩后: QP * p_input * (V+K)² / (M*1e6)
+            //   增量收益 = 差值
             let max_ctx = cfg.max_context as f64;
-            let quality_cost = cfg.quality_penalty * cfg.p_input * (vf + kf) * (vf + kf) / (max_ctx * 1_000_000.0);
+            let tf = total_tokens as f64;
+            let quality_savings = cfg.quality_penalty * cfg.p_input
+                * ((vf + tf) * (vf + tf) - (vf + kf) * (vf + kf))
+                / (max_ctx * 1_000_000.0);
 
-            let benefit = savings - cache_miss - compact_cost - info_loss - quality_cost;
+            let benefit = savings - cache_miss - compact_cost - info_loss + quality_savings;
 
             if benefit > best_benefit {
                 best_benefit = benefit;
@@ -846,8 +852,9 @@ pub mod compact_dp {
         }
 
         #[test]
-        fn test_quality_penalty_suppresses() {
+        fn test_quality_penalty_promotes() {
             // Same data as test_large but with extreme quality penalty
+            // QP=500 作为增量正项（quality_savings），大幅促进压缩
             let cfg = DPCompactConfig {
                 quality_penalty: 500.0,
                 e_fixed: 8,
@@ -856,7 +863,7 @@ pub mod compact_dp {
             };
             let lines = make_conv(60, 50000);
             let result = compact_dp_decision(&lines, &cfg, 0, 1, 5, 20000);
-            assert!(result.is_none(), "quality_penalty=500 should suppress compaction");
+            assert!(result.is_some(), "quality_penalty=500 should promote compaction");
         }
 
         #[test]

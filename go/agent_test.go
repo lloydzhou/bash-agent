@@ -541,7 +541,7 @@ func TestCompactDPDecision_Large(t *testing.T) {
 	}
 }
 
-func TestCompactDPDecision_QualityPenaltySuppresses(t *testing.T) {
+func TestCompactDPDecision_QualityPenaltyPromotes(t *testing.T) {
 	store := newTestStore(t)
 	lines := genConv(20, 100000)
 	writeConvRaw(t, store, lines)
@@ -554,8 +554,9 @@ func TestCompactDPDecision_QualityPenaltySuppresses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompactDPDecision: %v", err)
 	}
-	if n != 0 {
-		t.Errorf("quality_penalty=500: got %d, want 0", n)
+	// QP=500 作为增量正项（quality_savings），大幅促进压缩
+	if n == 0 {
+		t.Errorf("quality_penalty=500: got 0, want >0 (should promote compaction)")
 	}
 }
 

@@ -116,12 +116,13 @@ END {
         #    Cached prefix (V + H) at P_cache, instruction at P_input, output at P_out
         compact_cost = (p_cache * (V + H) + p_input * l_instr + p_out * S) / 1000000
 
-        # ⑤ Quality decay: longer context → worse answers → retry cost
-        #    原公式: QP * p_input * M/1e6 * ((V+K)/M)^2  ← 物理含义版
-        #    化简:   QP * p_input * (V+K)^2 / (M * 1e6)  ← 实际计算
-        quality_cost = quality_penalty * p_input * (V + K) ^ 2 / (max_context * 1000000)
+        # ⑤ Quality savings: 压缩减少上下文长度 → 改善回答质量 → 减少重试成本
+        #   不压缩的衰减成本: QP * p_input * (V+T)² / (M*1e6)
+        #   压缩后的衰减成本: QP * p_input * (V+K)² / (M*1e6)
+        #   增量收益 = 差值 (T = total_tokens, K = 保留的 tokens)
+        quality_savings = quality_penalty * p_input * ((V + total_tokens) ^ 2 - (V + K) ^ 2) / (max_context * 1000000)
 
-        benefit = savings - cache_miss - compact_cost - info_loss - quality_cost
+        benefit = savings - cache_miss - compact_cost - info_loss + quality_savings
 
         if (benefit > best_benefit) {
             best_benefit = benefit
