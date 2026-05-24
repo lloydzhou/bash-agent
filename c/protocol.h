@@ -63,6 +63,7 @@ typedef enum {
     DISPLAY_ERROR,               /* 错误信息 */
     DISPLAY_SUB_AGENT_RESULT,    /* SubAgent 结果摘要 */
     DISPLAY_SUB_AGENT_START,     /* SubAgent 启动通知 */
+    DISPLAY_CONTEXT_UPDATE,      /* 上下文压缩通知 */
 } DisplayMsgType;
 
 typedef struct {
@@ -94,6 +95,7 @@ DisplayMessage display_msg_stop(const char *reason);
 DisplayMessage display_msg_error(const char *content);
 DisplayMessage display_msg_sub_agent_start(const char *session_id, const char *desc);
 DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *status, const char *summary);
+DisplayMessage display_msg_context_update(int dropped, int kept);
 
 /* 释放 DisplayMessage 内部动态分配的内存 */
 void display_message_free(DisplayMessage *msg);

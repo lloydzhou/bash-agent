@@ -77,6 +77,7 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             case DISPLAY_ERROR: type_name = "error"; break;
             case DISPLAY_SUB_AGENT_START: type_name = "sub_agent_start"; break;
             case DISPLAY_SUB_AGENT_RESULT: type_name = "sub_agent_result"; break;
+            case DISPLAY_CONTEXT_UPDATE: type_name = "context_update"; break;
         }
         sb_append_char(&buf, '{');
         sb_append(&buf, "\"type\":");
@@ -173,6 +174,11 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
 
         case DISPLAY_STOP:
             ensure_newline(ds, out);
+            if (msg->content && strcmp(msg->content, "interrupted") == 0) {
+                fprintf(out, "\x1b[36mInterrupted.\x1b[0m\n");
+                fflush(out);
+                ds->last_char[0] = '\n';
+            }
             break;
 
         case DISPLAY_ERROR:
@@ -187,6 +193,14 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             ensure_newline(ds, out);
             fprintf(out, "\x1b[35m[sub-agent %s] started\x1b[0m\n",
                     msg->session_id ? msg->session_id : "?");
+            fflush(out);
+            ds->last_char[0] = '\n';
+            break;
+
+        case DISPLAY_CONTEXT_UPDATE:
+            ensure_newline(ds, out);
+            fprintf(out, "\x1b[36m[compact] dropped %d lines, kept %d\x1b[0m\n",
+                    msg->in_tokens, msg->out_tokens);
             fflush(out);
             ds->last_char[0] = '\n';
             break;

@@ -108,6 +108,16 @@ DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *
     return m;
 }
 
+DisplayMessage display_msg_context_update(int dropped, int kept) {
+    DisplayMessage m;
+    memset(&m, 0, sizeof(m));
+    m.type = DISPLAY_CONTEXT_UPDATE;
+    /* in_tokens 复用为 dropped，out_tokens 复用为 kept */
+    m.in_tokens = dropped;
+    m.out_tokens = kept;
+    return m;
+}
+
 /* ============================================================
  * DisplayMessage 释放
  * ============================================================ */

@@ -56,12 +56,7 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
             if (sctx->accum.stop_reason) free(sctx->accum.stop_reason);
             sctx->accum.stop_reason = util_strdup(evt->content);
         }
-        /* 推送 stop 到 display + 记录事件 */
-        {
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_stop(evt->content ? evt->content : "end_turn");
-            push_display_event(sctx->paths, sctx->display_queue, dm);
-        }
+        /* STOP 的 display 推送统一由 agent_loop 处理，避免重复 */
         break;
 
     case SSE_ERROR:
@@ -744,6 +739,14 @@ int agent_loop(Agent *agent, const char *user_input) {
         free(lines);
 
         if (sse_rc != 0) {
+            /* Ctrl+C 中断：输出 STOP interrupted 而不是 ERROR */
+            if (agent->interrupted) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_stop("interrupted");
+                push_display_event(&agent->paths, agent->display_queue, dm);
+                sse_accum_free(accum);
+                return 0;
+            }
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_error(accum->error ? accum->error : "HTTP request failed");
             push_display_event(&agent->paths, agent->display_queue, dm);
@@ -1688,6 +1691,13 @@ int agent_compact_context(Agent *agent, const char *trigger) {
 
     /* 截断 conversation */
     store_conv_trim_tail(agent->paths.conversation, keep);
+
+    /* 推送 CONTEXT_UPDATE 到 display */
+    if (agent->display_queue) {
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_context_update(drop, keep);
+        push_display_event(&agent->paths, agent->display_queue, dm);
+    }
 
     for (int i = 0; i < line_count; i++) free(lines[i]);
     free(lines);
