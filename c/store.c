@@ -107,6 +107,19 @@ int store_session_init(const SessionPaths *p, int is_new) {
                    "\"total_cache_creation_tokens\":0,\"current_context_tokens\":0,"
                    "\"last_updated\":\"\"}\n");
         fclose(f);
+
+        /* 写入 session_start 事件（与 bash 版对齐） */
+        {
+            StrBuf evt;
+            sb_init(&evt);
+            sb_append(&evt, "{\"type\":\"session_start\",\"session_id\":");
+            /* 从 session_dir 路径提取 session_id */
+            const char *sid = strrchr(p->session_dir, '/');
+            sb_append_json_string(&evt, sid ? sid + 1 : "");
+            sb_append_char(&evt, '}');
+            store_event_append(p, evt.data);
+            sb_free(&evt);
+        }
     } else {
         touch_file(p->stats);
     }

@@ -7,6 +7,140 @@
 #include <signal.h>
 
 /* ============================================================
+ * 流式 SSE 回调 — 同时累积到 accum 并实时推送到 display queue
+ *
+ * 架构与 Go 版 streamCallback 一致：
+ *   text/thinking  → 累积 accum + 立即 push display
+ *   tool_call 等   → 仅累积 accum（需要完整数据）
+ * ============================================================ */
+
+/* 前置声明 */
+static void push_display(MsgQueue *dq, DisplayMessage *msg);
+static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayMessage *msg);
+
+typedef struct {
+    SseAccumulator accum;
+    MsgQueue *display_queue;
+    const SessionPaths *paths;      /* 用于记录事件到 events.jsonl */
+} StreamDisplayCtx;
+
+static void stream_display_callback(void *ctx, const SseEvent *evt) {
+    StreamDisplayCtx *sctx = (StreamDisplayCtx *)ctx;
+
+    switch (evt->type) {
+    case SSE_TEXT:
+        /* 累积 */
+        sb_append(&sctx->accum.text, evt->content);
+        /* 实时推送 display + 记录事件 */
+        {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_text(evt->content);
+            push_display_event(sctx->paths, sctx->display_queue, dm);
+        }
+        break;
+
+    case SSE_THINKING:
+        /* 累积 */
+        sb_append(&sctx->accum.thinking, evt->content);
+        /* 实时推送 display + 记录事件 */
+        {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_thinking(evt->content);
+            push_display_event(sctx->paths, sctx->display_queue, dm);
+        }
+        break;
+
+    case SSE_STOP:
+        sctx->accum.stopped = 1;
+        if (evt->content) {
+            if (sctx->accum.stop_reason) free(sctx->accum.stop_reason);
+            sctx->accum.stop_reason = util_strdup(evt->content);
+        }
+        /* 推送 stop 到 display + 记录事件 */
+        {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_stop(evt->content ? evt->content : "end_turn");
+            push_display_event(sctx->paths, sctx->display_queue, dm);
+        }
+        break;
+
+    case SSE_ERROR:
+        if (sctx->accum.error) free(sctx->accum.error);
+        sctx->accum.error = util_strdup(evt->content ? evt->content : "unknown error");
+        {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_error(sctx->accum.error);
+            push_display_event(sctx->paths, sctx->display_queue, dm);
+        }
+        break;
+
+    case SSE_USAGE:
+        if (evt->in_tokens > 0) sctx->accum.in_tokens = evt->in_tokens;
+        if (evt->out_tokens > 0) sctx->accum.out_tokens = evt->out_tokens;
+        if (evt->cache_read_tokens > 0) sctx->accum.cache_read_tokens = evt->cache_read_tokens;
+        if (evt->cache_creation_tokens > 0) sctx->accum.cache_creation_tokens = evt->cache_creation_tokens;
+        break;
+
+    case SSE_TOOL_CALL_START: {
+        SseAccumulator *acc = &sctx->accum;
+        if (acc->tool_count >= acc->tool_cap) {
+            acc->tool_cap *= 2;
+            acc->tools = realloc(acc->tools, acc->tool_cap * sizeof(ToolCallAccum));
+        }
+        ToolCallAccum *tc = &acc->tools[acc->tool_count];
+        memset(tc, 0, sizeof(*tc));
+        tc->id = util_strdup(evt->tool_id);
+        tc->name = util_strdup(evt->tool_name);
+        sb_init(&tc->input_json);
+        acc->tool_count++;
+        break;
+    }
+
+    case SSE_TOOL_INPUT_DELTA: {
+        SseAccumulator *acc = &sctx->accum;
+        if (acc->tool_count > 0 && evt->content) {
+            sb_append(&acc->tools[acc->tool_count - 1].input_json, evt->content);
+        }
+        break;
+    }
+
+    case SSE_TOOL_CALL: {
+        SseAccumulator *acc = &sctx->accum;
+        if (acc->tool_count >= acc->tool_cap) {
+            acc->tool_cap *= 2;
+            acc->tools = realloc(acc->tools, acc->tool_cap * sizeof(ToolCallAccum));
+        }
+        ToolCallAccum *tc = &acc->tools[acc->tool_count];
+        memset(tc, 0, sizeof(*tc));
+        tc->id = util_strdup(evt->tool_id ? evt->tool_id : "");
+        tc->name = util_strdup(evt->tool_name ? evt->tool_name : "");
+        sb_init(&tc->input_json);
+        sb_append(&tc->input_json, evt->tool_input ? evt->tool_input : "{}");
+        acc->tool_count++;
+        break;
+    }
+
+    case SSE_RETRY:
+        sb_truncate(&sctx->accum.text, 0);
+        sb_truncate(&sctx->accum.thinking, 0);
+        for (int i = 0; i < sctx->accum.tool_count; i++) {
+            free(sctx->accum.tools[i].id);
+            free(sctx->accum.tools[i].name);
+            sb_free(&sctx->accum.tools[i].input_json);
+        }
+        sctx->accum.tool_count = 0;
+        sctx->accum.stopped = 0;
+        if (sctx->accum.stop_reason) { free(sctx->accum.stop_reason); sctx->accum.stop_reason = NULL; }
+        if (sctx->accum.error) { free(sctx->accum.error); sctx->accum.error = NULL; }
+        sctx->accum.in_tokens = 0;
+        sctx->accum.out_tokens = 0;
+        sctx->accum.cache_read_tokens = 0;
+        sctx->accum.cache_creation_tokens = 0;
+        break;
+    }
+}
+
+/* ============================================================
  * SubAgent 线程参数（前置声明，agent_loop 中需要引用）
  * ============================================================ */
 typedef struct {
@@ -131,12 +265,379 @@ static void push_display(MsgQueue *dq, DisplayMessage *msg) {
     }
 }
 
+/* 将 DisplayMessage 转为事件 JSON 字符串（用于 events.jsonl） */
+static char *display_msg_to_event(DisplayMessage *msg) {
+    StrBuf buf;
+    sb_init(&buf);
+
+    switch (msg->type) {
+    case DISPLAY_TEXT:
+        sb_append(&buf, "{\"type\":\"text\",\"content\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
+    case DISPLAY_THINKING:
+        sb_append(&buf, "{\"type\":\"thinking\",\"content\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
+    case DISPLAY_TOOL_CALL:
+        sb_append(&buf, "{\"type\":\"tool_call\",\"name\":");
+        sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+        sb_append(&buf, ",\"id\":");
+        sb_append_json_string(&buf, msg->tool_id ? msg->tool_id : "");
+        sb_append(&buf, ",\"input\":");
+        if (msg->tool_input) {
+            /* tool_input 已是 JSON 字符串，直接输出 */
+            sb_append(&buf, msg->tool_input);
+        } else {
+            sb_append(&buf, "{}");
+        }
+        sb_append_char(&buf, '}');
+        break;
+    case DISPLAY_TOOL_RESULT:
+        sb_append(&buf, "{\"type\":\"tool_result\",\"tool_use_id\":");
+        sb_append_json_string(&buf, msg->tool_id ? msg->tool_id : "");
+        sb_append(&buf, ",\"name\":");
+        sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+        sb_append(&buf, ",\"content\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
+    case DISPLAY_USAGE:
+        sb_appendf(&buf,
+            "{\"type\":\"usage\",\"input_tokens\":%d,\"output_tokens\":%d,"
+            "\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d,"
+            "\"kind\":\"agent\"}",
+            msg->in_tokens, msg->out_tokens,
+            msg->cache_read_tokens, msg->cache_creation_tokens);
+        break;
+    case DISPLAY_STOP:
+        sb_append(&buf, "{\"type\":\"stop\",\"reason\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
+    case DISPLAY_ERROR:
+        sb_append(&buf, "{\"type\":\"error\",\"message\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
+    case DISPLAY_SUB_AGENT_START:
+        sb_append(&buf, "{\"type\":\"sub_agent_start\",\"session_id\":");
+        sb_append_json_string(&buf, msg->session_id ? msg->session_id : "");
+        sb_append_char(&buf, '}');
+        break;
+    case DISPLAY_SUB_AGENT_RESULT:
+        sb_append(&buf, "{\"type\":\"sub_agent_result\",\"session_id\":");
+        sb_append_json_string(&buf, msg->session_id ? msg->session_id : "");
+        sb_append_char(&buf, '}');
+        break;
+    default:
+        sb_free(&buf);
+        return NULL;
+    }
+
+    return buf.data;
+}
+
+/* 推送 display 消息并同步记录事件 */
+static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayMessage *msg) {
+    if (!msg) return;
+    /* 先记录事件（读取 msg 字段），再推送（交出 msg 所有权给 display 线程）。
+     * 顺序很重要：mq_push 后 display 线程可能异步 free(msg)，
+     * 此时再读取 msg->content 等字段就是 use-after-free。 */
+    if (paths) {
+        char *evt = display_msg_to_event(msg);
+        if (evt) {
+            store_event_append(paths, evt);
+            free(evt);
+        }
+    }
+    if (dq) mq_push(dq, msg);
+}
+
+/* ============================================================
+ * agent_replay_events — 从 events.jsonl 重放最近 N 轮事件
+ *
+ * 对应 bash 版：store_event_recent_turn_lines 10 | event_replay.awk | display_stream
+ * 核心逻辑：累积 per-token 的 text/thinking 事件为完整块，然后推送 DisplayMessage。
+ * ============================================================ */
+
+/* 最近 N 轮事件的起始行号 */
+static int find_recent_turn_start(const SessionPaths *paths, int max_turns) {
+    char **lines = NULL;
+    int count = 0;
+    if (store_event_lines(paths, &lines, &count) != 0 || count == 0) return -1;
+
+    int user_input_count = 0;
+    int start_line = -1;
+    for (int i = count - 1; i >= 0; i--) {
+        if (strstr(lines[i], "\"type\":\"user_input\"")) {
+            user_input_count++;
+            start_line = i;
+            if (user_input_count >= max_turns) break;
+        }
+    }
+
+    /* 释放 */
+    for (int i = 0; i < count; i++) free(lines[i]);
+    free(lines);
+
+    return start_line;
+}
+
+void agent_replay_events(Agent *agent, int max_turns) {
+    char **lines = NULL;
+    int count = 0;
+    if (store_event_lines(&agent->paths, &lines, &count) != 0 || count == 0) return;
+
+    int start = find_recent_turn_start(&agent->paths, max_turns);
+    if (start < 0) {
+        for (int i = 0; i < count; i++) free(lines[i]);
+        free(lines);
+        return;
+    }
+
+    /* 累积缓冲 */
+    StrBuf acc_text, acc_thinking;
+    sb_init(&acc_text);
+    sb_init(&acc_thinking);
+
+    for (int i = start; i < count; i++) {
+        const char *line = lines[i];
+        JsonParse jp = json_parse_root(line);
+        if (jp.error) {  continue; }
+
+        char *type = json_get_string(jp.val, "type");
+        if (!type) {  continue; }
+
+        if (strcmp(type, "user_input") == 0) {
+            /* flush 累积 */
+            if (acc_thinking.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_thinking(acc_thinking.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_thinking, 0);
+            }
+            if (acc_text.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(acc_text.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_text, 0);
+            }
+            /* 显示 user_input（与 Rust 版 display_replay_event USER_MESSAGE 对齐） */
+            char *content = json_get_string(jp.val, "content");
+            if (content && content[0]) {
+                /* 截断到 77 字符（加 "..." 共 80） */
+                size_t clen = strlen(content);
+                if (clen > 80) {
+                    content[77] = '.';
+                    content[78] = '.';
+                    content[79] = '.';
+                    content[80] = '\0';
+                }
+                /* 取第一行 */
+                char *nl = strchr(content, '\n');
+                if (nl) *nl = '\0';
+
+                StrBuf user_display;
+                sb_init(&user_display);
+                sb_appendf(&user_display, "\n\x1b[32m> %s\x1b[0m\n", content);
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(user_display.data);
+                push_display(agent->display_queue, dm);
+                sb_free(&user_display);
+            }
+            free(content);
+        }
+        else if (strcmp(type, "text") == 0) {
+            /* flush thinking */
+            if (acc_thinking.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_thinking(acc_thinking.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_thinking, 0);
+            }
+            char *content = json_get_string(jp.val, "content");
+            if (content && *content) sb_append(&acc_text, content);
+            free(content);
+        }
+        else if (strcmp(type, "thinking") == 0) {
+            /* flush text */
+            if (acc_text.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(acc_text.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_text, 0);
+            }
+            char *content = json_get_string(jp.val, "content");
+            if (content && *content) sb_append(&acc_thinking, content);
+            free(content);
+        }
+        else if (strcmp(type, "tool_call") == 0) {
+            /* flush 累积 */
+            if (acc_thinking.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_thinking(acc_thinking.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_thinking, 0);
+            }
+            if (acc_text.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(acc_text.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_text, 0);
+            }
+            char *name = json_get_string(jp.val, "name");
+            char *id = json_get_string(jp.val, "id");
+            /* 从 input 提取摘要（截断） */
+            char summary[84] = "";
+            JsonVal input_val = json_get(jp.val, "input");
+            if (input_val.type != JSON_NULL) {
+                char *input_str = json_as_string(input_val);
+                if (input_str) {
+                    size_t slen = strlen(input_str);
+                    if (slen > 80) {
+                        memcpy(summary, input_str, 80);
+                        strcpy(summary + 80, "...");
+                    } else {
+                        memcpy(summary, input_str, slen);
+                        summary[slen] = '\0';
+                    }
+                    free(input_str);
+                }
+            }
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_tool_call(id ? id : "", name ? name : "", summary);
+            push_display(agent->display_queue, dm);
+            free(name); free(id);
+        }
+        else if (strcmp(type, "tool_result") == 0) {
+            /* flush 累积 */
+            if (acc_thinking.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_thinking(acc_thinking.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_thinking, 0);
+            }
+            if (acc_text.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(acc_text.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_text, 0);
+            }
+            char *content = json_get_string(jp.val, "content");
+            /* 截断到 200 字符（与 bash 版 event_replay.awk 对齐） */
+            if (content) {
+                size_t len = strlen(content);
+                if (len > 200) {
+                    content[200] = '.';
+                    content[201] = '.';
+                    content[202] = '.';
+                    content[203] = '\0';
+                }
+            }
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_tool_result(content ? content : "", 0);
+            push_display(agent->display_queue, dm);
+            free(content);
+        }
+        else if (strcmp(type, "sub_agent_result") == 0) {
+            /* flush 累积 */
+            if (acc_thinking.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_thinking(acc_thinking.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_thinking, 0);
+            }
+            if (acc_text.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(acc_text.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_text, 0);
+            }
+            char *sid = json_get_string(jp.val, "session_id");
+            char *status = json_get_string(jp.val, "status");
+            char *text = json_get_string(jp.val, "text");
+            /* 截断 text */
+            if (text) {
+                size_t len = strlen(text);
+                if (len > 200) {
+                    text[200] = '.';
+                    text[201] = '.';
+                    text[202] = '.';
+                    text[203] = '\0';
+                }
+            }
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_sub_agent_result(sid ? sid : "", status ? status : "ok", text ? text : "");
+            push_display(agent->display_queue, dm);
+            free(sid); free(status); free(text);
+        }
+        else if (strcmp(type, "error") == 0) {
+            /* flush 累积 */
+            if (acc_thinking.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_thinking(acc_thinking.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_thinking, 0);
+            }
+            if (acc_text.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(acc_text.data);
+                push_display(agent->display_queue, dm);
+                sb_truncate(&acc_text, 0);
+            }
+            char *message = json_get_string(jp.val, "message");
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_error(message ? message : "unknown");
+            push_display(agent->display_queue, dm);
+            free(message);
+        }
+        /* stop, usage, session_start, retry, sub_agent_start, sub_agent_end 等跳过 */
+
+        free(type);
+        
+    }
+
+    /* flush 最后的累积 */
+    if (acc_thinking.len > 0) {
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_thinking(acc_thinking.data);
+        push_display(agent->display_queue, dm);
+    }
+    if (acc_text.len > 0) {
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_text(acc_text.data);
+        push_display(agent->display_queue, dm);
+    }
+
+    sb_free(&acc_text);
+    sb_free(&acc_thinking);
+    for (int i = 0; i < count; i++) free(lines[i]);
+    free(lines);
+}
+
 /* ============================================================
  * agent_loop — 单次 LLM 对话循环
  * ============================================================ */
 
 int agent_loop(Agent *agent, const char *user_input) {
     if (!user_input || !user_input[0]) return 0;
+
+    /* 记录 user_input 事件（与 bash 版对齐） */
+    {
+        StrBuf evt;
+        sb_init(&evt);
+        sb_append(&evt, "{\"type\":\"user_input\",\"content\":");
+        sb_append_json_string(&evt, user_input);
+        sb_append_char(&evt, '}');
+        store_event_append(&agent->paths, evt.data);
+        sb_free(&evt);
+    }
+
+    /* 重置中断标志 */
+    agent->interrupted = 0;
 
     /* 添加 user 消息到 conversation */
     store_conv_add_user(agent->paths.conversation, user_input);
@@ -170,15 +671,6 @@ int agent_loop(Agent *agent, const char *user_input) {
             sb_free(&ss_buf);
         }
     }
-
-    /* 记录 user_input 事件 */
-    StrBuf evt_buf;
-    sb_init(&evt_buf);
-    sb_appendf(&evt_buf, "{\"type\":\"user_input\",\"content\":");
-    sb_append_json_string(&evt_buf, user_input);
-    sb_append(&evt_buf, "}");
-    store_event_append(&agent->paths, evt_buf.data);
-    sb_free(&evt_buf);
 
     int turn = 0;
     while (turn < agent->max_turns) {
@@ -230,15 +722,20 @@ int agent_loop(Agent *agent, const char *user_input) {
         }
 
         /* ---- SSE 流式请求 ---- */
-        /* 准备累积器 */
-        SseAccumulator accum;
-        sse_accum_init(&accum);
+        /* 准备流式上下文（累积 + 实时 display） */
+        StreamDisplayCtx sctx;
+        sse_accum_init(&sctx.accum);
+        sctx.display_queue = agent->display_queue;
+        sctx.paths = &agent->paths;
 
         int sse_rc = http_post_sse(agent->api_url, headers, hdr_count,
                                    body, strlen(body),
                                    agent->provider,
-                                   sse_accum_callback, &accum,
+                                   stream_display_callback, &sctx,
                                    &agent->interrupted);
+
+        /* 回收引用 — accum 已嵌入 sctx 中 */
+        SseAccumulator *accum = &sctx.accum;
 
         free(body);
         free(system_prompt);
@@ -248,35 +745,25 @@ int agent_loop(Agent *agent, const char *user_input) {
 
         if (sse_rc != 0) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_error(accum.error ? accum.error : "HTTP request failed");
-            push_display(agent->display_queue, dm);
-            sse_accum_free(&accum);
+            *dm = display_msg_error(accum->error ? accum->error : "HTTP request failed");
+            push_display_event(&agent->paths, agent->display_queue, dm);
+            sse_accum_free(accum);
             return -1;
         }
 
-        if (accum.error) {
+        if (accum->error) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_error(accum.error);
-            push_display(agent->display_queue, dm);
-            sse_accum_free(&accum);
+            *dm = display_msg_error(accum->error);
+            push_display_event(&agent->paths, agent->display_queue, dm);
+            sse_accum_free(accum);
             return -1;
         }
 
-        /* ---- 显示流式文本（SSE 已实时累积到 accum） ---- */
-        if (accum.text.len > 0) {
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_text(accum.text.data);
-            push_display(agent->display_queue, dm);
-        }
-        if (accum.thinking.len > 0) {
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_thinking(accum.thinking.data);
-            push_display(agent->display_queue, dm);
-        }
+        /* text/thinking 已在 stream_display_callback 中实时推送，此处不再批量推送 */
 
         /* ---- 显示工具调用 ---- */
-        for (int i = 0; i < accum.tool_count; i++) {
-            ToolCallAccum *tc = &accum.tools[i];
+        for (int i = 0; i < accum->tool_count; i++) {
+            ToolCallAccum *tc = &accum->tools[i];
             /* 从 input_json 提取摘要 */
             char *summary = NULL;
             if (tc->input_json.len > 0) {
@@ -326,54 +813,57 @@ int agent_loop(Agent *agent, const char *user_input) {
 
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_tool_call(tc->id, tc->name, summary);
-            push_display(agent->display_queue, dm);
+            /* 覆盖 tool_input 为完整 JSON（用于事件记录） */
+            free(dm->tool_input);
+            dm->tool_input = util_strdup(tc->input_json.data);
+            push_display_event(&agent->paths, agent->display_queue, dm);
             free(summary);
         }
 
         /* ---- 更新 token 统计 ---- */
-        agent->last_input_tokens = accum.in_tokens;
-        agent->last_output_tokens = accum.out_tokens;
-        agent->last_cache_read_tokens = accum.cache_read_tokens;
-        agent->last_cache_creation_tokens = accum.cache_creation_tokens;
-        agent->last_context_tokens = accum.in_tokens + accum.out_tokens +
-            accum.cache_read_tokens + accum.cache_creation_tokens;
+        agent->last_input_tokens = accum->in_tokens;
+        agent->last_output_tokens = accum->out_tokens;
+        agent->last_cache_read_tokens = accum->cache_read_tokens;
+        agent->last_cache_creation_tokens = accum->cache_creation_tokens;
+        agent->last_context_tokens = accum->in_tokens + accum->out_tokens +
+            accum->cache_read_tokens + accum->cache_creation_tokens;
 
-        if (accum.in_tokens > 0 || accum.out_tokens > 0) {
+        if (accum->in_tokens > 0 || accum->out_tokens > 0) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_usage(accum.in_tokens, accum.out_tokens,
-                                    accum.cache_read_tokens, accum.cache_creation_tokens);
-            push_display(agent->display_queue, dm);
+            *dm = display_msg_usage(accum->in_tokens, accum->out_tokens,
+                                    accum->cache_read_tokens, accum->cache_creation_tokens);
+            push_display_event(&agent->paths, agent->display_queue, dm);
         }
 
         /* ---- 保存 assistant 消息到 conversation ---- */
         const char **tc_ids = NULL, **tc_names = NULL, **tc_inputs = NULL;
-        if (accum.tool_count > 0) {
-            tc_ids = malloc(accum.tool_count * sizeof(char*));
-            tc_names = malloc(accum.tool_count * sizeof(char*));
-            tc_inputs = malloc(accum.tool_count * sizeof(char*));
-            for (int i = 0; i < accum.tool_count; i++) {
-                tc_ids[i] = accum.tools[i].id;
-                tc_names[i] = accum.tools[i].name;
-                tc_inputs[i] = accum.tools[i].input_json.data;
+        if (accum->tool_count > 0) {
+            tc_ids = malloc(accum->tool_count * sizeof(char*));
+            tc_names = malloc(accum->tool_count * sizeof(char*));
+            tc_inputs = malloc(accum->tool_count * sizeof(char*));
+            for (int i = 0; i < accum->tool_count; i++) {
+                tc_ids[i] = accum->tools[i].id;
+                tc_names[i] = accum->tools[i].name;
+                tc_inputs[i] = accum->tools[i].input_json.data;
             }
         }
         store_conv_add_assistant(agent->paths.conversation,
-                          accum.thinking.data, accum.text.data,
-                          accum.tool_count, tc_ids, tc_names, tc_inputs);
+                          accum->thinking.data, accum->text.data,
+                          accum->tool_count, tc_ids, tc_names, tc_inputs);
         free(tc_ids);
         free(tc_names);
         free(tc_inputs);
 
         /* ---- 执行工具调用 ---- */
-        if (accum.tool_count > 0 && accum.stop_reason &&
-            (strcmp(accum.stop_reason, "tool_use") == 0 ||
-             strcmp(accum.stop_reason, "tool_calls") == 0)) {
+        if (accum->tool_count > 0 && accum->stop_reason &&
+            (strcmp(accum->stop_reason, "tool_use") == 0 ||
+             strcmp(accum->stop_reason, "tool_calls") == 0)) {
 
-            const char **result_ids = malloc(accum.tool_count * sizeof(char*));
-            const char **result_contents = malloc(accum.tool_count * sizeof(char*));
+            const char **result_ids = malloc(accum->tool_count * sizeof(char*));
+            const char **result_contents = malloc(accum->tool_count * sizeof(char*));
 
-            for (int i = 0; i < accum.tool_count; i++) {
-                ToolCallAccum *tc = &accum.tools[i];
+            for (int i = 0; i < accum->tool_count; i++) {
+                ToolCallAccum *tc = &accum->tools[i];
                 ToolResult tr;
 
                 /* SubAgent 特殊处理 */
@@ -442,7 +932,7 @@ int agent_loop(Agent *agent, const char *user_input) {
                     /* display 只显示 summary 行 */
                     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                     *dm = display_msg_tool_result(summary.data, tr.exit_code);
-                    push_display(agent->display_queue, dm);
+                    push_display_event(&agent->paths, agent->display_queue, dm);
 
                     /* conversation 保存 file_summary + "\n" + 工具结果 */
                     StrBuf conv_result;
@@ -458,7 +948,7 @@ int agent_loop(Agent *agent, const char *user_input) {
                     /* 显示工具结果 */
                     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                     *dm = display_msg_tool_result(tr.output ? tr.output : "(empty)", tr.exit_code);
-                    push_display(agent->display_queue, dm);
+                    push_display_event(&agent->paths, agent->display_queue, dm);
                 }
 
                 result_ids[i] = tc->id;
@@ -478,7 +968,8 @@ int agent_loop(Agent *agent, const char *user_input) {
                         result_contents[i] = tr.output;
                     }
                 } else {
-                    result_contents[i] = tr.output ? tr.output : "";
+                    /* result_contents 必须是 malloc'd 指针，因为后面会 free */
+                    result_contents[i] = tr.output ? tr.output : util_strdup("");
                 }
 
                 /* PlanClear / PlanConfirm 触发 compact */
@@ -488,11 +979,11 @@ int agent_loop(Agent *agent, const char *user_input) {
             }
 
             /* 保存 tool_results */
-            store_conv_add_tool_results(agent->paths.conversation, accum.tool_count,
+            store_conv_add_tool_results(agent->paths.conversation, accum->tool_count,
                                   result_ids, result_contents);
 
             /* 释放 tool result 输出 */
-            for (int i = 0; i < accum.tool_count; i++) {
+            for (int i = 0; i < accum->tool_count; i++) {
                 free((void*)result_contents[i]);
             }
             free(result_ids);
@@ -500,18 +991,18 @@ int agent_loop(Agent *agent, const char *user_input) {
         }
 
         /* ---- 显示 stop ---- */
-        if (accum.stop_reason) {
+        if (accum->stop_reason) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_stop(accum.stop_reason);
-            push_display(agent->display_queue, dm);
+            *dm = display_msg_stop(accum->stop_reason);
+            push_display_event(&agent->paths, agent->display_queue, dm);
         }
 
         /* ---- 判断是否继续循环 ---- */
-        int should_continue = (accum.stop_reason != NULL) &&
-            (strcmp(accum.stop_reason, "tool_use") == 0 ||
-             strcmp(accum.stop_reason, "tool_calls") == 0);
+        int should_continue = (accum->stop_reason != NULL) &&
+            (strcmp(accum->stop_reason, "tool_use") == 0 ||
+             strcmp(accum->stop_reason, "tool_calls") == 0);
 
-        sse_accum_free(&accum);
+        sse_accum_free(accum);
 
         if (!should_continue) break;
         if (agent->interrupted) break;
@@ -534,7 +1025,21 @@ int agent_main_loop(Agent *agent) {
 
         switch (msg->type) {
             case MSG_USER_INPUT: {
+                /* 重置 interrupted 标志。
+                 * 防止等待输入时的 Ctrl+C（设了 agent->interrupted=1）
+                 * 残留到 agent_loop 开始时导致立即中断。
+                 * 模仿 Rust 版 agent_loop_stream 入口的 CTRLC_FLAG.swap(false) 模式。 */
+                agent->interrupted = 0;
+
                 agent_loop(agent, msg->data.user_input.text);
+
+                /* 处理完成：signal done（通知 readline 线程继续读下一行） */
+                if (msg->data.user_input.done_mutex) {
+                    pthread_mutex_lock(msg->data.user_input.done_mutex);
+                    *(msg->data.user_input.done_flag) = 1;
+                    pthread_cond_signal(msg->data.user_input.done_cond);
+                    pthread_mutex_unlock(msg->data.user_input.done_mutex);
+                }
                 break;
             }
             case MSG_AGENT_RESULT: {
@@ -707,7 +1212,7 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     /* 显示启动通知 */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_start(sub_session_id, description);
-    push_display(agent->display_queue, dm);
+    push_display_event(&agent->paths, agent->display_queue, dm);
 
     /* 增加活跃子 agent 计数 */
     agent->active_sub_count++;
@@ -751,7 +1256,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
     /* 显示结果 */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_result(session_id, status, text);
-    push_display(agent->display_queue, dm);
+    push_display_event(&agent->paths, agent->display_queue, dm);
 
     /* 记录 usage 事件（kind=sub_agent, sub_session_id） */
     {

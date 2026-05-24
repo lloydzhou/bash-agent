@@ -41,13 +41,23 @@ typedef struct {
 
 static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     StreamCtx *sctx = (StreamCtx *)userdata;
+
+    /* 中断检查：模仿 Rust 版 100ms 轮询 CTRLC_FLAG / Go 版 ctx.Done()。
+     * curl 每次收到数据块时调用此回调，如果返回 0 curl 会中止传输。
+     * 这不是精确的 100ms 轮询，但对 SSE 流（每 token 一个 data 行）足够快。 */
+    if (sctx->cancelled && *(sctx->cancelled)) {
+        return 0; /* curl 视为错误，curl_easy_perform 返回 CURLE_WRITE_ERROR */
+    }
+
     size_t total = size * nmemb;
 
     /* 按行处理 SSE 数据 */
     for (size_t i = 0; i < total; i++) {
+        if (sctx->cancelled && *(sctx->cancelled)) {
+            return 0; /* 每行之间也检查 */
+        }
         if (ptr[i] == '\n') {
-            /* 完整一行，处理 */
-            sb_append_char(&sctx->line_buf, '\0');
+            /* 完整一行，处理 — sb_append_char 自动维护 \0 终止 */
             char *line = sctx->line_buf.data;
             /* 去掉 \r */
             size_t llen = strlen(line);
@@ -122,6 +132,10 @@ HttpResponse http_post(const char *url, const char **headers, int header_count,
     return resp;
 }
 
+/* forward declaration — 定义在 sse_parse_event 之前 */
+static void emit_simple_event(sse_callback_fn callback, void *ctx,
+                              SseEventType type, const char *content);
+
 int http_post_sse(const char *url, const char **headers, int header_count,
                   const char *body, size_t body_len,
                   const char *provider,
@@ -160,9 +174,107 @@ int http_post_sse(const char *url, const char **headers, int header_count,
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     }
 
+    /* 处理非 SSE 响应：如果 line_buf 中有残留 JSON，作为完整响应解析 */
+    if (rc == CURLE_OK && sctx.line_buf.data && sctx.line_buf.len > 0) {
+        char *residual = sctx.line_buf.data;
+        /* 去掉前导空白 */
+        while (*residual == ' ' || *residual == '\t' || *residual == '\r' || *residual == '\n') residual++;
+        if (*residual == '{') {
+            /* 非 SSE 的完整 JSON 响应 — 按格式解析 */
+            size_t pos = 0;
+            JsonParse jp = json_parse(residual, &pos);
+            if (!jp.error) {
+                char *err_msg = json_get_string(jp.val, "error");
+                if (err_msg) {
+                    emit_simple_event(callback, ctx, SSE_ERROR, err_msg);
+                    free(err_msg);
+                } else if (strcmp(provider, "claude") == 0) {
+                    /* Claude 非流式响应 */
+                    JsonVal content = json_get(jp.val, "content");
+                    if (content.type == JSON_ARRAY) {
+                        int clen = json_array_len(content);
+                        for (int i = 0; i < clen; i++) {
+                            JsonVal block = json_array_get(content, i);
+                            char *btype = json_get_string(block, "type");
+                            if (btype && strcmp(btype, "text") == 0) {
+                                char *txt = json_get_string(block, "text");
+                                if (txt) { emit_simple_event(callback, ctx, SSE_TEXT, txt); free(txt); }
+                            } else if (btype && strcmp(btype, "thinking") == 0) {
+                                char *txt = json_get_string(block, "thinking");
+                                if (txt) { emit_simple_event(callback, ctx, SSE_THINKING, txt); free(txt); }
+                            } else if (btype && strcmp(btype, "tool_use") == 0) {
+                                char *id = json_get_string(block, "id");
+                                char *name = json_get_string(block, "name");
+                                SseEvent evt;
+                                memset(&evt, 0, sizeof(evt));
+                                evt.type = SSE_TOOL_CALL;
+                                evt.tool_id = id;
+                                evt.tool_name = name;
+                                evt.tool_input = "{}"; /* 非 SSE 模式简化处理 */
+                                callback(ctx, &evt);
+                                free(id); free(name);
+                            }
+                            free(btype);
+                        }
+                    }
+                    /* stop_reason */
+                    char *stop_reason = json_get_string(jp.val, "stop_reason");
+                    if (stop_reason) {
+                        emit_simple_event(callback, ctx, SSE_STOP, stop_reason);
+                        free(stop_reason);
+                    }
+                    /* usage */
+                    JsonVal usage = json_get(jp.val, "usage");
+                    if (usage.type != JSON_NULL) {
+                        SseEvent evt;
+                        memset(&evt, 0, sizeof(evt));
+                        evt.type = SSE_USAGE;
+                        evt.in_tokens = json_get_int(usage, "input_tokens");
+                        evt.out_tokens = json_get_int(usage, "output_tokens");
+                        evt.cache_read_tokens = json_get_int(usage, "cache_read_input_tokens");
+                        evt.cache_creation_tokens = json_get_int(usage, "cache_creation_input_tokens");
+                        callback(ctx, &evt);
+                    }
+                } else {
+                    /* OpenAI 非流式响应 */
+                    JsonVal choices = json_get(jp.val, "choices");
+                    if (choices.type == JSON_ARRAY) {
+                        JsonVal choice = json_array_get(choices, 0);
+                        JsonVal msg = json_get(choice, "message");
+                        char *content = json_get_string(msg, "content");
+                        if (content) {
+                            emit_simple_event(callback, ctx, SSE_TEXT, content);
+                            free(content);
+                        }
+                        char *finish = json_get_string(choice, "finish_reason");
+                        if (finish) {
+                            emit_simple_event(callback, ctx, SSE_STOP, finish);
+                            free(finish);
+                        }
+                    }
+                    JsonVal usage = json_get(jp.val, "usage");
+                    if (usage.type != JSON_NULL) {
+                        SseEvent evt;
+                        memset(&evt, 0, sizeof(evt));
+                        evt.type = SSE_USAGE;
+                        evt.in_tokens = json_get_int(usage, "prompt_tokens");
+                        evt.out_tokens = json_get_int(usage, "completion_tokens");
+                        callback(ctx, &evt);
+                    }
+                }
+            }
+        }
+    }
+
     sb_free(&sctx.line_buf);
     curl_slist_free_all(hdrs);
     curl_easy_cleanup(curl);
+
+    /* 如果是被 cancelled 中断的，发送 STOP interrupted 让 agent_loop 正常结束 */
+    if (rc == CURLE_WRITE_ERROR && cancelled && *cancelled) {
+        emit_simple_event(callback, ctx, SSE_STOP, "interrupted");
+        return 0;  /* 不是错误——是被中断的正常退出 */
+    }
 
     if (rc != CURLE_OK) return -1;
     if (http_code >= 400) return (int)http_code;  /* HTTP 错误码作为负返回值的替代 */
@@ -462,6 +574,7 @@ char *build_claude_request(const char *model, const char *system_prompt,
     sb_append_json_string(&buf, model);
     sb_append(&buf, ",\"max_tokens\":");
     sb_appendf(&buf, "%d", max_tokens);
+    sb_append(&buf, ",\"stream\":true");
 
     /* system prompt */
     sb_append(&buf, ",\"system\":[{\"type\":\"text\",\"text\":");

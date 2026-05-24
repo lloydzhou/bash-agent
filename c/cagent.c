@@ -266,17 +266,32 @@ int main(int argc, char *argv[]) {
         dcfg.interactive = 1;
         display_thread_start(&display_thread, &dcfg);
 
+        /* Replay 最近 10 轮事件（复用 display 线程渲染） */
+        agent_replay_events(agent, 10);
+        /* replay 后输出换行 */
+        {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_text("\n");
+            mq_push(&display_queue, dm);
+        }
+
         /* readline 线程 */
         pthread_t readline_thread;
         ReadlineConfig rcfg;
+        memset(&rcfg, 0, sizeof(rcfg));
         rcfg.input_queue = &input_queue;
         rcfg.interactive = 1;
+        rcfg.home = home;
+        /* 设置 SIGINT handler 中要设置的 agent->interrupted 指针 */
+        readline_set_agent_interrupted(&agent->interrupted);
         readline_thread_start(&readline_thread, &rcfg);
 
         /* 主循环 */
         agent_main_loop(agent);
 
         /* 等待线程结束 */
+        /* 注意：readline 线程可能已经 close 了 input_queue（Ctrl+D/exit），
+         * 也可能没有（agent 出错退出）。安全起见再 close 一次（重复 close 无害）。 */
         mq_close(&input_queue);
         pthread_join(readline_thread, NULL);
         display_thread_stop(&display_queue);
@@ -284,7 +299,7 @@ int main(int argc, char *argv[]) {
 
         fprintf(stderr, "\x1b[36mGoodbye!\x1b[0m\n");
         fprintf(stderr, "\x1b[90mResume with: --session %s  or  --continue\x1b[0m\n",
-                agent->paths.session_dir ? "..." : "?");
+                effective_session ? effective_session : "?");
     } else {
         /* 非交互模式 */
         /* display 线程（仍然需要，用于输出） */

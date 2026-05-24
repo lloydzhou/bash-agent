@@ -98,6 +98,9 @@ char *agent_build_prompt(Agent *agent);
 /* 上下文压缩 */
 int agent_compact_context(Agent *agent, const char *trigger);
 
+/* 从 events.jsonl 重放最近 N 轮事件到 display_queue */
+void agent_replay_events(Agent *agent, int max_turns);
+
 /* 更新终端标题 */
 void agent_update_title(Agent *agent);
 
