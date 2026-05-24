@@ -6,9 +6,18 @@
 
 ## [Unreleased]
 
-### Added
+---
 
-- （暂无）
+## [3.0.7] - 2026-05-24
+
+### Fixed
+
+- **compact_dp ⑤ 符号修正**：第五项从减项（quality_cost 绝对衰减）改为加项（quality_savings 增量收益）
+  - 旧：`① - ② - ③ - ④ - ⑤`，⑤ = QP×P_input×(V+K)²/(M×1e6)
+  - 新：`① - ② - ③ - ④ + ⑤`，⑤ = QP×P_input×[(V+T)²-(V+K)²]/(M×1e6)
+  - 修正物理语义：压缩缩短上下文→改善质量→应为正收益
+  - QP 越大越促进压缩（旧逻辑方向相反）
+  - Bash/Go/Rust 三端同步 + 测试断言翻转 + 文档/README/README.en 更新
 
 ---
 
