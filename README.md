@@ -175,11 +175,11 @@ $$
 &\quad -\underbrace{\frac{(S + K) \cdot (P_{\text{input}} - P_{\text{cache}})}{10^6}}_{②\;\text{缓存失效}} \\
 &\quad -\underbrace{\frac{P_{\text{cache}}(V + H) + P_{\text{input}} \cdot L_{\text{instr}} + P_{\text{out}} \cdot S}{10^6}}_{③\;\text{压缩成本}} \\
 &\quad -\underbrace{\frac{\beta \cdot (1 - r^{c+1}) \cdot R \cdot \text{avg} \cdot P_{\text{input}}}{10^6}}_{④\;\text{信息失真}} \\
-&\quad -\underbrace{Q \cdot P_{\text{input}} \cdot \frac{M}{10^6} \cdot \left(\frac{V + K}{M}\right)^2}_{⑤\;\text{质量衰减}}
+&\quad +\underbrace{Q \cdot P_{\text{input}} \cdot \frac{(V + T)^2 - (V + K)^2}{M \cdot 10^6}}_{⑤\;\text{质量改善收益}}
 \end{aligned}
 $$
 
-其中 M = MAX_CONTEXT_TOKENS，Q = DP_QUALITY_PENALTY（默认 0.2）。
+其中 M = MAX_CONTEXT_TOKENS，T = total_tokens，Q = DP_QUALITY_PENALTY（默认 0.2）。
 
 - 所有参数支持环境变量覆盖（`DP_P_INPUT`、`DP_L`、`DP_BETA` 等）
 - 安全阀：context > 90% 上限时强制压缩
