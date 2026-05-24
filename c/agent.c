@@ -1033,7 +1033,52 @@ int agent_main_loop(Agent *agent) {
 
                 agent_loop(agent, msg->data.user_input.text);
 
-                /* 处理完成：signal done（通知 readline 线程继续读下一行） */
+                /* 如果有活跃的 sub-agent，继续处理它们的结果，
+                 * 直到所有 sub-agent 完成才 signal done。
+                 * 这避免 readline 线程在 sub-agent 结果到达前显示提示符，
+                 * 导致输出与提示符交错混乱。
+                 * 模仿 bash 版 agent_run_loop 的单线程行为：
+                 * bash 版是同步的，agent_loop 处理 sub-agent 结果后
+                 * 才显示下一轮提示符。 */
+                while (agent->active_sub_count > 0) {
+                    void *sub_data = NULL;
+                    if (mq_pop(agent->input_queue, &sub_data) != 0) break;
+                    InputMessage *sub_msg = (InputMessage *)sub_data;
+                    if (!sub_msg) continue;
+
+                    if (sub_msg->type == MSG_AGENT_RESULT) {
+                        agent_handle_sub_agent_result(agent,
+                            sub_msg->data.agent_result.session_id,
+                            sub_msg->data.agent_result.status,
+                            sub_msg->data.agent_result.thinking,
+                            sub_msg->data.agent_result.text,
+                            sub_msg->data.agent_result.in_tokens,
+                            sub_msg->data.agent_result.out_tokens,
+                            sub_msg->data.agent_result.cache_read_tokens,
+                            sub_msg->data.agent_result.cache_creation_tokens);
+
+                        StrBuf ctx;
+                        sb_init(&ctx);
+                        sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
+                                   sub_msg->data.agent_result.session_id,
+                                   sub_msg->data.agent_result.status,
+                                   sub_msg->data.agent_result.in_tokens,
+                                   sub_msg->data.agent_result.out_tokens,
+                                   sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
+                                   sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
+                        agent_loop(agent, ctx.data);
+                        sb_free(&ctx);
+                    } else {
+                        /* 非预期消息（如另一个 USER_INPUT），放回队列 */
+                        /* 简单处理：也执行它 */
+                        /* 这里不会发生，因为 readline 线程在等 done */
+                        agent_loop(agent, sub_msg->data.user_input.text);
+                    }
+                    input_message_free(sub_msg);
+                    free(sub_msg);
+                }
+
+                /* 所有轮次完成：signal done（通知 readline 线程继续读下一行） */
                 if (msg->data.user_input.done_mutex) {
                     pthread_mutex_lock(msg->data.user_input.done_mutex);
                     *(msg->data.user_input.done_flag) = 1;
@@ -1043,7 +1088,7 @@ int agent_main_loop(Agent *agent) {
                 break;
             }
             case MSG_AGENT_RESULT: {
-                /* SubAgent 结果处理 */
+                /* SubAgent 结果处理（非交互模式下直接到达此处） */
                 agent_handle_sub_agent_result(agent,
                     msg->data.agent_result.session_id,
                     msg->data.agent_result.status,
