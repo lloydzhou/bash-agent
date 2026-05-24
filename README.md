@@ -179,8 +179,6 @@ $$
 \end{aligned}
 $$
 
-其中 M = MAX_CONTEXT_TOKENS，T = total_tokens，Q = DP_QUALITY_PENALTY（默认 0.2）。
-
 - 所有参数支持环境变量覆盖（`DP_P_INPUT`、`DP_L`、`DP_BETA` 等）
 - 安全阀：context > 90% 上限时强制压缩
 
