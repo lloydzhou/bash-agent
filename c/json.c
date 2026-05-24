@@ -300,7 +300,7 @@ char *json_string_val(JsonVal v) {
                 case 'r':  buf[out++] = '\r'; break;
                 case 't':  buf[out++] = '\t'; break;
                 case 'u': {
-                    /* 简单处理：只处理 ASCII 范围的 \uXXXX */
+                    /* \uXXXX — 支持 surrogate pair */
                     unsigned int cp = 0;
                     for (int j = 0; j < 4 && i + 1 < end; j++) {
                         i++;
@@ -310,13 +310,41 @@ char *json_string_val(JsonVal v) {
                         else if (h >= 'a' && h <= 'f') cp += h - 'a' + 10;
                         else if (h >= 'A' && h <= 'F') cp += h - 'A' + 10;
                     }
+                    /* high surrogate? 检查紧跟的 \uDC00-\uDFFF */
+                    if (cp >= 0xD800 && cp <= 0xDBFF &&
+                        i + 1 < end && src[i + 1] == '\\' && src[i + 2] == 'u') {
+                        size_t saved = i;
+                        i += 2; /* 跳过 \u */
+                        unsigned int lo = 0;
+                        int valid = 1;
+                        for (int j = 0; j < 4 && i + 1 < end; j++) {
+                            i++;
+                            char h = src[i];
+                            if (h >= '0' && h <= '9') lo = lo * 16 + (h - '0');
+                            else if (h >= 'a' && h <= 'f') lo = lo * 16 + (h - 'a' + 10);
+                            else if (h >= 'A' && h <= 'F') lo = lo * 16 + (h - 'A' + 10);
+                            else { valid = 0; break; }
+                        }
+                        if (valid && lo >= 0xDC00 && lo <= 0xDFFF) {
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                        } else {
+                            /* 不是合法 low surrogate，回退 */
+                            i = saved;
+                        }
+                    }
+                    /* UTF-8 编码 */
                     if (cp < 0x80) {
                         buf[out++] = (char)cp;
                     } else if (cp < 0x800) {
                         buf[out++] = (char)(0xC0 | (cp >> 6));
                         buf[out++] = (char)(0x80 | (cp & 0x3F));
-                    } else {
+                    } else if (cp < 0x10000) {
                         buf[out++] = (char)(0xE0 | (cp >> 12));
+                        buf[out++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                        buf[out++] = (char)(0x80 | (cp & 0x3F));
+                    } else {
+                        buf[out++] = (char)(0xF0 | (cp >> 18));
+                        buf[out++] = (char)(0x80 | ((cp >> 12) & 0x3F));
                         buf[out++] = (char)(0x80 | ((cp >> 6) & 0x3F));
                         buf[out++] = (char)(0x80 | (cp & 0x3F));
                     }
@@ -374,6 +402,10 @@ void json_obj_iter_init(JsonObjectIter *it, JsonVal obj) {
 }
 
 bool json_obj_iter_next(JsonObjectIter *it) {
+    /* 释放上一次迭代的 key */
+    free((char *)it->key);
+    it->key = NULL;
+
     const char *src = it->src;
     if (!src) return false;
     skip_ws(src, &it->pos);
@@ -415,4 +447,9 @@ int jsonl_append(const char *path, const char *json_line) {
     fprintf(f, "%s\n", json_line);
     fclose(f);
     return 0;
+}
+
+void json_obj_iter_cleanup(JsonObjectIter *it) {
+    free((char *)it->key);
+    it->key = NULL;
 }

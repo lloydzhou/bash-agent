@@ -191,7 +191,7 @@ int store_conv_add_user(const char *path, const char *content) {
     sb_init(&buf);
     sb_appendf(&buf, "{\"role\":\"user\",\"content\":");
     sb_append_json_string(&buf, content);
-    sb_append(&buf, "}\n");
+    sb_append(&buf, "}");
     int rc = jsonl_append(path, buf.data);
     sb_free(&buf);
     return rc;
@@ -225,7 +225,7 @@ int store_conv_add_assistant(const char *path, const char *thinking, const char 
         sb_append(&buf, "}");
     }
 
-    sb_append(&buf, "]}\n");
+    sb_append(&buf, "]}");
     int rc = jsonl_append(path, buf.data);
     sb_free(&buf);
     return rc;
@@ -388,7 +388,6 @@ int store_stats_update(const char *path, stats_update_fn fn, void *ctx) {
         /* 值直接取原始文本 */
         size_t vlen = it.val.end - it.val.start;
         sb_appendn(&buf, jp.val.src + it.val.start, vlen);
-        free((char*)it.key);
     }
     sb_append_char(&buf, '}');
     sb_append_char(&buf, '\n');

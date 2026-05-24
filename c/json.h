@@ -100,7 +100,7 @@ char *json_as_string(JsonVal v);
  * ============================================================ */
 
 typedef struct {
-    const char *key;        /* 键名（指向 src 内部，零拷贝） */
+    const char *key;        /* 键名（malloc 分配，_next 自动释放上次） */
     JsonVal val;            /* 值 */
     /* 内部状态 */
     const char *src;
@@ -110,6 +110,7 @@ typedef struct {
 
 void json_obj_iter_init(JsonObjectIter *it, JsonVal obj);
 bool json_obj_iter_next(JsonObjectIter *it);
+void json_obj_iter_cleanup(JsonObjectIter *it);  /* 提前退出循环时调用 */
 
 /* ============================================================
  * JSON Lines 追加写入
