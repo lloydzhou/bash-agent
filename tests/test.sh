@@ -2638,10 +2638,9 @@ TURNEOF
         && { green "compact_dp: long session E=4 -> $result"; ((PASS++)); } \
         || { red "compact_dp: long session E=4 -> $result"; ((FAIL++)); }
 
-    # --- 37h: Quality penalty suppresses compaction ---
+    # --- 37h: Quality penalty promotes compaction (增量收益项) ---
     gen_conv 20 100000 "$conv_file"
-    # QP=0 → compacts (k>0, verified by 37d)
-    # QP=500 → huge penalty, should suppress to 0
+    # QP=500 → 巨大的 quality_savings 正项，应促进压缩 (k>0)
     result=$(protocol_awk -f "$AWK_DIR/compact_dp.awk" \
         -v e_fixed=8 -v L_fixed=5 \
         -v total_requests=5 -v t=1 -v total_compact=0 \
@@ -2649,7 +2648,9 @@ TURNEOF
         -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
         -v S=500 -v min_keep_ratio=0.12 -v r=0.8 -v beta=0.03 \
         -v max_context=200000 -v quality_penalty=500.0 "$conv_file" 2>/dev/null)
-    check "compact_dp: quality_penalty=500 -> 0" "$result" "0"
+    [[ -n "$result" && "$result" != "0" ]] \
+        && { green "compact_dp: quality_penalty=500 promotes -> $result"; ((PASS++)); } \
+        || { red "compact_dp: quality_penalty=500 promotes -> $result (expected >0)"; ((FAIL++)); }
 
     rm -rf "$tmpdir"
 }
