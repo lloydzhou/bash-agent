@@ -193,19 +193,16 @@ jobs:
           sudo apt-get install -y libcurl4-openssl-dev ripgrep
           if [ "${{ matrix.suffix }}" = "linux-arm64" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
-            # 备份并重写 sources.list，只保留 amd64
-            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-            sudo bash -c 'cat > /etc/apt/sources.list << EOF
-deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
-deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-EOF'
+            # 重写 sources.list，只保留 amd64
+            sudo bash -c 'echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse" > /etc/apt/sources.list'
+            sudo bash -c 'echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse" >> /etc/apt/sources.list'
+            sudo bash -c 'echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse" >> /etc/apt/sources.list'
+            sudo bash -c 'echo "deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse" >> /etc/apt/sources.list'
             # 添加 arm64 架构支持（使用 ports 源）
             sudo dpkg --add-architecture arm64
-            echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse' | sudo tee /etc/apt/sources.list.d/arm64-ports.list
-            echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse' | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
-            echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse' | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
+            echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
             sudo apt-get update
             sudo apt-get install -y libcurl4-openssl-dev:arm64
           fi
