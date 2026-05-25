@@ -578,9 +578,10 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 		cacheMiss := (S + float64(K)) * (pInput - pCache) / 1e6
 		compactCost := (pCache*(V+float64(H)) + pInput*lInstr + pOut*S) / 1e6
 
-		// ⑤ Quality decay: longer context → worse answers → retry cost
-		// 物理含义: QP * p_input * M/1e6 * ((V+K)/M)²
-		// 化简: QP * p_input * (V+K)² / (M * 1e6)
+		// ⑤ Quality savings: 压缩减少上下文长度 → 改善回答质量 → 减少重试成本
+		//   不压缩: QP * p_input * (V+T)² / (M*1e6)
+		//   压缩后: QP * p_input * (V+K)² / (M*1e6)
+		//   增量收益 = 差值
 		maxCtx := float64(cfg.MaxContextTokens)
 		if maxCtx <= 0 {
 			maxCtx = 200000
@@ -589,10 +590,11 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 		if qp == 0 {
 			qp = 0.2 // 默认开启，基于 "Lost in the Middle" 论文
 		}
-		vf := V + float64(K)
-		qualityCost := qp * pInput * vf * vf / (maxCtx * 1e6)
+		vPlusT := V + float64(totalTokens)
+		vPlusK := V + float64(K)
+		qualitySavings := qp * pInput * (vPlusT*vPlusT - vPlusK*vPlusK) / (maxCtx * 1e6)
 
-		benefit := savings - cacheMiss - compactCost - infoLoss - qualityCost
+		benefit := savings - cacheMiss - compactCost - infoLoss + qualitySavings
 
 		if benefit > bestBenefit {
 			bestBenefit = benefit
