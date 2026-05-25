@@ -114,13 +114,12 @@ DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *
     return m;
 }
 
-DisplayMessage display_msg_context_update(int dropped, int kept) {
+DisplayMessage display_msg_context_update(const char *trigger) {
     DisplayMessage m;
     memset(&m, 0, sizeof(m));
     m.type = DISPLAY_CONTEXT_UPDATE;
-    /* in_tokens 复用为 dropped，out_tokens 复用为 kept */
-    m.in_tokens = dropped;
-    m.out_tokens = kept;
+    /* 复用 tool_name 字段存 trigger（避免改结构体） */
+    m.tool_name = util_strdup(trigger ? trigger : "auto");
     return m;
 }
 

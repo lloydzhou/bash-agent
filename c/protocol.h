@@ -97,7 +97,7 @@ DisplayMessage display_msg_sub_agent_start(const char *session_id, const char *d
 DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *status,
                                              const char *thinking, const char *text,
                                              int in_tokens, int out_tokens);
-DisplayMessage display_msg_context_update(int dropped, int kept);
+DisplayMessage display_msg_context_update(const char *trigger);
 
 /* 释放 DisplayMessage 内部动态分配的内存 */
 void display_message_free(DisplayMessage *msg);

@@ -9,6 +9,7 @@
 #include <sys/utsname.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <time.h>
 
 /* ============================================================
  * 流式 SSE 回调 — 同时累积到 accum 并实时推送到 display queue
@@ -635,16 +636,9 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     /* 添加 user 消息到 conversation */
     store_conv_add_user(agent->paths.conversation, user_input);
 
-    /* 递增 turn 计数 */
-    char *stats_content = store_stats_read(agent->paths.stats);
-    if (stats_content) {
-        JsonParse jp = json_parse_root(stats_content);
-        if (!jp.error) {
-            /* 简单地修改 JSON 字符串中的 current_turn_count */
-            /* 由于我们的 JSON 解析器是零拷贝的，这里用文件重写方式 */
-        }
-        free(stats_content);
-    }
+    /* 递增 turn 计数 — 对齐 bash 版 store_stats_update current_turn_count=+1 */
+    store_stats_set_int_file(agent->paths.stats, "current_turn_count",
+        store_stats_get_file_int(agent->paths.stats, "current_turn_count") + 1);
 
     /* 记录事件：新 session 时记录 session_start */
     {
@@ -841,6 +835,28 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             push_display_event(&agent->paths, agent->display_queue, dm);
         }
 
+        /* 更新 stats.json — 对齐 bash 版 agent_record_usage:
+         * store_stats_update agent_request_count=+1 total_input_tokens=+N ... */
+        if (accum->in_tokens > 0 || accum->out_tokens > 0) {
+            store_stats_set_int_file(agent->paths.stats, "agent_request_count",
+                store_stats_get_file_int(agent->paths.stats, "agent_request_count") + 1);
+            store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
+                store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + accum->in_tokens);
+            store_stats_set_int_file(agent->paths.stats, "total_output_tokens",
+                store_stats_get_file_int(agent->paths.stats, "total_output_tokens") + accum->out_tokens);
+            store_stats_set_int_file(agent->paths.stats, "total_cache_read_tokens",
+                store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + accum->cache_read_tokens);
+            store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
+                store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + accum->cache_creation_tokens);
+            /* 对齐 bash 版: store_stats_update current_context_tokens=${_ctx_tokens} */
+            if (agent->last_context_tokens > 0) {
+                store_stats_set_int_file(agent->paths.stats, "current_context_tokens",
+                    agent->last_context_tokens);
+            }
+            /* 对齐 bash 版 store_stats_update 末尾的 display_term_title */
+            agent_update_title(agent);
+        }
+
         /* ---- 保存 assistant 消息到 conversation ---- */
         const char **tc_ids = NULL, **tc_names = NULL, **tc_inputs = NULL;
         if (accum->tool_count > 0) {
@@ -978,15 +994,20 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     result_contents[i] = tr.output ? tr.output : util_strdup("");
                 }
 
-                /* PlanClear / PlanConfirm 触发 compact */
-                if (strcmp(tc->name, "PlanClear") == 0 || strcmp(tc->name, "PlanConfirm") == 0) {
-                    agent_compact_context(agent, "store_plan_clear");
-                }
             }
 
             /* 保存 tool_results */
             store_conv_add_tool_results(agent->paths.conversation, accum->tool_count,
                                   result_ids, result_contents);
+
+            /* PlanClear / PlanConfirm 触发 compact（在 tool_result 写入之后） */
+            for (int i = 0; i < accum->tool_count; i++) {
+                if (strcmp(accum->tools[i].name, "PlanClear") == 0 ||
+                    strcmp(accum->tools[i].name, "PlanConfirm") == 0) {
+                    agent_compact_context(agent, "store_plan_clear");
+                    break;
+                }
+            }
 
             /* 释放 tool result 输出 */
             for (int i = 0; i < accum->tool_count; i++) {
@@ -994,6 +1015,23 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             }
             free(result_ids);
             free(result_contents);
+        }
+
+        /* ---- 致命 stop reason: error/max_tokens/length → 立即退出 ---- */
+        /* 对齐 bash 版: return 1，max_tokens/length 时额外发 ERROR */
+        if (accum->stop_reason) {
+            if (strcmp(accum->stop_reason, "error") == 0) {
+                sse_accum_free(accum);
+                return -1;
+            }
+            if (strcmp(accum->stop_reason, "max_tokens") == 0 ||
+                strcmp(accum->stop_reason, "length") == 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_error("Response truncated (max_tokens reached)");
+                push_display_event(&agent->paths, agent->display_queue, dm);
+                sse_accum_free(accum);
+                return -1;
+            }
         }
 
         /* ---- 显示 stop ---- */
@@ -1012,6 +1050,15 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
 
         if (!should_continue) break;
         if (agent->interrupted) break;
+    }
+
+    /* 对齐 bash 版: turn >= MAX_TURNS 时发 ERROR */
+    if (turn >= agent->max_turns) {
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        char errbuf[128];
+        snprintf(errbuf, sizeof(errbuf), "Max turns (%d) reached", agent->max_turns);
+        *dm = display_msg_error(errbuf);
+        push_display_event(&agent->paths, agent->display_queue, dm);
     }
 
     return 0;
@@ -1039,6 +1086,9 @@ int agent_main_loop(Agent *agent) {
 
                 agent_loop(agent, msg->data.user_input.text, "user_input");
 
+                /* 对齐 bash 版: 每轮 agent_loop 完成后刷新终端标题 */
+                agent_update_title(agent);
+
                 /* 如果有活跃的 sub-agent，继续处理它们的结果，
                  * 直到所有 sub-agent 完成才 signal done。
                  * 这避免 readline 线程在 sub-agent 结果到达前显示提示符，
@@ -1061,7 +1111,8 @@ int agent_main_loop(Agent *agent) {
                             sub_msg->data.agent_result.in_tokens,
                             sub_msg->data.agent_result.out_tokens,
                             sub_msg->data.agent_result.cache_read_tokens,
-                            sub_msg->data.agent_result.cache_creation_tokens);
+                            sub_msg->data.agent_result.cache_creation_tokens,
+                            sub_msg->data.agent_result.request_count);
 
                         StrBuf ctx;
                         sb_init(&ctx);
@@ -1101,7 +1152,8 @@ int agent_main_loop(Agent *agent) {
                     msg->data.agent_result.in_tokens,
                     msg->data.agent_result.out_tokens,
                     msg->data.agent_result.cache_read_tokens,
-                    msg->data.agent_result.cache_creation_tokens);
+                    msg->data.agent_result.cache_creation_tokens,
+                    msg->data.agent_result.request_count);
 
                 /* 将结果注入 conversation 并触发 agent loop */
                 StrBuf ctx;
@@ -1222,6 +1274,7 @@ static void *sub_agent_thread_fn(void *arg) {
     msg->data.agent_result.out_tokens = sub->last_output_tokens;
     msg->data.agent_result.cache_read_tokens = sub->last_cache_read_tokens;
     msg->data.agent_result.cache_creation_tokens = sub->last_cache_creation_tokens;
+    msg->data.agent_result.request_count = store_stats_get_file_int(sub->paths.stats, "agent_request_count");
     mq_push(args->input_queue, msg);
 
     agent_destroy(sub);
@@ -1299,7 +1352,8 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
                                    const char *status, const char *thinking,
                                    const char *text,
                                    int in_tokens, int out_tokens,
-                                   int cache_read, int cache_creation) {
+                                   int cache_read, int cache_creation,
+                                   int request_count) {
     agent->active_sub_count--;
 
     /* 显示结果 */
@@ -1321,14 +1375,56 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
         sb_free(&evt);
     }
 
-    /* 更新统计 — TODO: 复用 bash 的 store_stats_update 模式 */
+    /* 更新统计 — 对齐 bash 版 agent_handle_sub_result:
+     * store_stats_update total_input_tokens=+N total_output_tokens=+N
+     *   total_cache_read_tokens=+N total_cache_creation_tokens=+N
+     *   sub_agent_request_count=+1 agent_request_count=+N */
+    store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + in_tokens);
+    store_stats_set_int_file(agent->paths.stats, "total_output_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_output_tokens") + out_tokens);
+    store_stats_set_int_file(agent->paths.stats, "total_cache_read_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + cache_read);
+    store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + cache_creation);
+    store_stats_set_int_file(agent->paths.stats, "sub_agent_request_count",
+        store_stats_get_file_int(agent->paths.stats, "sub_agent_request_count") + 1);
+    /* agent_request_count 累加子 agent 的请求数 */
+    store_stats_set_int_file(agent->paths.stats, "agent_request_count",
+        store_stats_get_file_int(agent->paths.stats, "agent_request_count") + request_count);
+    agent_update_title(agent);
 
-    /* 记录 sub_agent_end 事件 */
+    /* 记录 sub_agent_result 事件 — 对齐 bash 版，供 replay 和 stream-json 复现 */
     {
+        StrBuf evt;
+        sb_init(&evt);
+        sb_appendf(&evt, "{\"type\":\"sub_agent_result\",\"session_id\":");
+        sb_append_json_string(&evt, session_id);
+        sb_appendf(&evt, ",\"status\":");
+        sb_append_json_string(&evt, status);
+        sb_appendf(&evt, ",\"input_tokens\":%d,\"output_tokens\":%d", in_tokens, out_tokens);
+        sb_appendf(&evt, ",\"thinking\":");
+        sb_append_json_string(&evt, thinking ? thinking : "");
+        sb_appendf(&evt, ",\"text\":");
+        sb_append_json_string(&evt, text ? text : "");
+        sb_append(&evt, "}");
+        store_event_append(&agent->paths, evt.data);
+        sb_free(&evt);
+    }
+
+    /* 记录 sub_agent_end 事件 — 对齐 bash 版，带 timestamp */
+    {
+        time_t now = time(NULL);
+        struct tm tm_buf;
+        gmtime_r(&now, &tm_buf);
+        char ts[32];
+        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
+
         StrBuf evt;
         sb_init(&evt);
         sb_appendf(&evt, "{\"type\":\"sub_agent_end\",\"session_id\":");
         sb_append_json_string(&evt, session_id);
+        sb_appendf(&evt, ",\"timestamp\":\"%s\"", ts);
         sb_appendf(&evt, ",\"status\":");
         sb_append_json_string(&evt, status);
         sb_append(&evt, "}");
@@ -1980,7 +2076,21 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         for (int i = 0; i < quick_count; i++) free(quick_lines[i]);
         free(quick_lines);
 
-        if (dp_keep > 0) need_compact = 1;
+        if (dp_keep > 0) {
+            need_compact = 1;
+        } else {
+            /* DP 不建议压缩，但 context_tokens 接近上限时仍然压缩 */
+            char *stats2 = store_stats_read(agent->paths.stats);
+            if (stats2) {
+                JsonParse jp2 = json_parse_root(stats2);
+                if (!jp2.error) {
+                    int ct = json_get_int(jp2.val, "current_context_tokens");
+                    if (ct > 0 && ct > agent->max_context_tokens * 90 / 100)
+                        need_compact = 1;
+                }
+                free(stats2);
+            }
+        }
     }
 
     if (!need_compact) return 0;
@@ -2015,9 +2125,28 @@ int agent_compact_context(Agent *agent, const char *trigger) {
                                     agent->max_context_tokens,
                                     turn_count, total_requests,
                                     total_compact, total_input);
-    if (keep <= 0) {
-        /* DP 决策不压缩，fallback 保留 20% */
-        keep = line_count * 20 / 100;
+    /* DP 返回 0（不值得）或 >= line_count（全保留）→ fallback */
+    if (keep <= 0 || keep >= line_count) {
+        /* plan_clear / plan_confirm 强制按比例截断 */
+        if (strcmp(trigger, "store_plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
+            keep = (int)((double)line_count * 0.12 + 0.5);
+        } else {
+            /* auto 模式：检查 context_tokens 是否接近上限 */
+            int ct = 0;
+            char *stats3 = store_stats_read(agent->paths.stats);
+            if (stats3) {
+                JsonParse jp3 = json_parse_root(stats3);
+                if (!jp3.error) ct = json_get_int(jp3.val, "current_context_tokens");
+                free(stats3);
+            }
+            if (ct > 0 && ct > agent->max_context_tokens * 90 / 100) {
+                keep = (int)((double)line_count * 0.12 + 0.5);
+            } else {
+                for (int i = 0; i < line_count; i++) free(lines[i]);
+                free(lines);
+                return 0;
+            }
+        }
     }
     if (keep < 4) keep = 4;
     if (keep >= line_count) {
@@ -2040,6 +2169,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. "
         "Do NOT think. Just output the summary directly as plain text. "
         "Summarize the key information from the messages above into a concise context summary. "
+        "Update the existing summary snapshot using the messages above. "
         "Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:";
 
     /* 构造 summary 请求体 */
@@ -2093,10 +2223,20 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     /* 截断 conversation */
     store_conv_trim_tail(agent->paths.conversation, keep);
 
+    /* 更新 stats（与 bash 版一致：compact_request_count+1, current_turn_count=remaining） */
+    {
+        int remaining = store_conv_user_turn_count(agent->paths.conversation);
+        store_stats_set_int_file(agent->paths.stats, "compact_request_count",
+            store_stats_get_file_int(agent->paths.stats, "compact_request_count") + 1);
+        store_stats_set_int_file(agent->paths.stats, "current_turn_count", remaining);
+    }
+    /* 对齐 bash 版: store_stats_update 末尾调 display_term_title */
+    agent_update_title(agent);
+
     /* 推送 CONTEXT_UPDATE 到 display */
     if (agent->display_queue) {
         DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-        *dm = display_msg_context_update(drop, keep);
+        *dm = display_msg_context_update(trigger);
         push_display_event(&agent->paths, agent->display_queue, dm);
     }
 
@@ -2121,9 +2261,15 @@ void agent_update_title(Agent *agent) {
     int ar = json_get_int(jp.val, "agent_request_count");
     int ai = json_get_int(jp.val, "total_input_tokens");
     int ao = json_get_int(jp.val, "total_output_tokens");
+    int cr = json_get_int(jp.val, "total_cache_read_tokens");
+    int ct = json_get_int(jp.val, "current_context_tokens");
 
-    fprintf(stderr, "\x1b]0;%s T:%d R:%d I:%d O:%d\x07",
-            agent->model, tc, ar, ai, ao);
+    /* 对齐 bash 版 term_title.awk: model T:turn R:req I:in+cr(pct) O:out C:ctx */
+    int total_i = ai + cr;
+    int pct = (total_i > 0) ? (cr * 100 / total_i) : 0;
+
+    fprintf(stderr, "\x1b]0;%s T:%d R:%d I:%d(%d%%) O:%d C:%d\x07",
+            agent->model, tc, ar, total_i, pct, ao, ct);
     fflush(stderr);
 
     free(stats_content);

@@ -92,6 +92,10 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                        msg->in_tokens, msg->out_tokens,
                        msg->cache_read_tokens, msg->cache_creation_tokens);
         }
+        if (msg->type == DISPLAY_CONTEXT_UPDATE) {
+            sb_append(&buf, ",\"kind\":\"compact\",\"trigger\":");
+            sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "auto");
+        }
         if (msg->type == DISPLAY_TOOL_CALL) {
             if (msg->tool_name) {
                 sb_append(&buf, ",\"name\":");
@@ -196,8 +200,8 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
 
         case DISPLAY_CONTEXT_UPDATE:
             ensure_newline(ds, out);
-            fprintf(out, "\x1b[36m[compact] dropped %d lines, kept %d\x1b[0m\n",
-                    msg->in_tokens, msg->out_tokens);
+            fprintf(out, "\x1b[36mContext compacted (%s).\x1b[0m\n",
+                    msg->tool_name ? msg->tool_name : "auto");
             fflush(out);
             ds->last_char[0] = '\n';
             break;

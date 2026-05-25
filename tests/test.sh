@@ -2654,6 +2654,7 @@ TURNEOF
 
     rm -rf "$tmpdir"
 }
+
 test_agent_stats_json() {
     info "Test 36: stats.json created on agent run"
     local home_dir stats_file
@@ -2665,6 +2666,143 @@ test_agent_stats_json() {
     else
         red "Agent stats.json created"; echo "  Stats file: $stats_file (content: $(cat "$stats_file" 2>/dev/null || echo 'N/A'))"; ((FAIL++)) || true
     fi
+    rm -rf "$home_dir"
+}
+
+# Test 36b: stats.json usage values — validate all token fields
+# Mock server returns: message_start usage={input_tokens:10, output_tokens:0}
+#                       message_delta  usage={output_tokens:7}
+# Expected: agent_request_count=1, total_input=10, total_output=7,
+#           total_cache_read=0, total_cache_creation=0,
+#           current_context_tokens = 10+7+0+0 = 17
+test_agent_stats_usage_values() {
+    info "Test 36b: stats.json usage token values"
+    local home_dir stats_file
+    home_dir=$(mktemp -d)
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' >/dev/null 2>&1 || true
+    stats_file=$(find "$home_dir" -name 'stats.json' 2>/dev/null | head -1)
+
+    if [[ -z "$stats_file" ]]; then
+        red "stats.json usage values: stats file not found"; ((FAIL++)) || true
+        rm -rf "$home_dir"
+        return
+    fi
+
+    local stats_content
+    stats_content=$(cat "$stats_file" 2>/dev/null || echo '{}')
+
+    _json_val() {
+        # Extract numeric value from JSON: "key":value
+        echo "$stats_content" | grep -o "\"$1\":[[:space:]]*[0-9]*" | grep -o '[0-9]*$'
+    }
+
+    local arc=$(_json_val agent_request_count)
+    local tin=$(_json_val total_input_tokens)
+    local tout=$(_json_val total_output_tokens)
+    local tcr=$(_json_val total_cache_read_tokens)
+    local tcc=$(_json_val total_cache_creation_tokens)
+    local cctx=$(_json_val current_context_tokens)
+
+    # agent_request_count should be 1
+    if [[ "$arc" == "1" ]]; then
+        green "stats agent_request_count=1"; ((PASS++)) || true
+    else
+        red "stats agent_request_count=$arc (expected 1)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_input_tokens should be 10
+    if [[ "$tin" == "10" ]]; then
+        green "stats total_input_tokens=10"; ((PASS++)) || true
+    else
+        red "stats total_input_tokens=$tin (expected 10)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_output_tokens should be 7
+    if [[ "$tout" == "7" ]]; then
+        green "stats total_output_tokens=7"; ((PASS++)) || true
+    else
+        red "stats total_output_tokens=$tout (expected 7)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_cache_read_tokens should be 0
+    if [[ "$tcr" == "0" ]]; then
+        green "stats total_cache_read_tokens=0"; ((PASS++)) || true
+    else
+        red "stats total_cache_read_tokens=$tcr (expected 0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_cache_creation_tokens should be 0
+    if [[ "$tcc" == "0" ]]; then
+        green "stats total_cache_creation_tokens=0"; ((PASS++)) || true
+    else
+        red "stats total_cache_creation_tokens=$tcc (expected 0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # current_context_tokens = in+out+cr+cc = 10+7+0+0 = 17
+    if [[ "$cctx" == "17" ]]; then
+        green "stats current_context_tokens=17"; ((PASS++)) || true
+    else
+        red "stats current_context_tokens=$cctx (expected 17)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 36c: stats.json with cache tokens — validate cache_read/cache_creation
+# Mock server returns: message_start usage={input_tokens:10, cache_read_input_tokens:50}
+#                       message_delta  usage={output_tokens:7, cache_read_input_tokens:30, cache_creation_input_tokens:20}
+# Expected: total_input=10, total_output=7, total_cache_read=50 (max from start/delta),
+#           total_cache_creation=20, current_context_tokens = 10+7+50+20 = 87
+test_agent_stats_cache_tokens() {
+    info "Test 36c: stats.json cache token values"
+    local home_dir stats_file
+    home_dir=$(mktemp -d)
+    # Use a marker that triggers cache tokens in mock server
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'READ_FILE_MARKER' >/dev/null 2>&1 || true
+    stats_file=$(find "$home_dir" -name 'stats.json' 2>/dev/null | head -1)
+
+    if [[ -z "$stats_file" ]]; then
+        red "stats.json cache tokens: stats file not found"; ((FAIL++)) || true
+        rm -rf "$home_dir"
+        return
+    fi
+
+    local stats_content
+    stats_content=$(cat "$stats_file" 2>/dev/null || echo '{}')
+
+    _json_val() {
+        echo "$stats_content" | grep -o "\"$1\":[[:space:]]*[0-9]*" | grep -o '[0-9]*$'
+    }
+
+    local tin=$(_json_val total_input_tokens)
+    local tout=$(_json_val total_output_tokens)
+    local tcr=$(_json_val total_cache_read_tokens)
+    local tcc=$(_json_val total_cache_creation_tokens)
+    local cctx=$(_json_val current_context_tokens)
+
+    # total_cache_read_tokens should be > 0 (from mock server)
+    if [[ "$tcr" -gt 0 ]] 2>/dev/null; then
+        green "stats total_cache_read_tokens=$tcr (>0)"; ((PASS++)) || true
+    else
+        red "stats total_cache_read_tokens=$tcr (expected >0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_cache_creation_tokens should be > 0 (from mock server)
+    if [[ "$tcc" -gt 0 ]] 2>/dev/null; then
+        green "stats total_cache_creation_tokens=$tcc (>0)"; ((PASS++)) || true
+    else
+        red "stats total_cache_creation_tokens=$tcc (expected >0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # current_context_tokens should be > total_input_tokens + total_output_tokens
+    # (because it includes cache tokens)
+    local min_expected=$(( tin + tout ))
+    if [[ "$cctx" -gt "$min_expected" ]] 2>/dev/null; then
+        green "stats current_context_tokens=$cctx (> $min_expected)"; ((PASS++)) || true
+    else
+        red "stats current_context_tokens=$cctx (expected > $min_expected)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
     rm -rf "$home_dir"
 }
 
@@ -2892,6 +3030,8 @@ test_agent_edit_code_snippet
 test_stats_awk
 test_agent_max_context
 test_agent_stats_json
+test_agent_stats_usage_values
+test_agent_stats_cache_tokens
 test_compact_dp_awk
 test_compact_turn_keep_awk
 test_agent_compact_context

@@ -274,6 +274,8 @@ int main(int argc, char *argv[]) {
             *dm = display_msg_text("\n");
             mq_push(&display_queue, dm);
         }
+        /* 对齐 bash/Rust 版: replay 后更新终端标题 */
+        agent_update_title(agent);
 
         /* readline 线程 */
         pthread_t readline_thread;
@@ -342,7 +344,8 @@ int main(int argc, char *argv[]) {
                         msg->data.agent_result.in_tokens,
                         msg->data.agent_result.out_tokens,
                         msg->data.agent_result.cache_read_tokens,
-                        msg->data.agent_result.cache_creation_tokens);
+                        msg->data.agent_result.cache_creation_tokens,
+                        msg->data.agent_result.request_count);
 
                     /* 将结果注入 conversation 并触发新的 agent_loop */
                     StrBuf ctx;

@@ -350,16 +350,88 @@ void store_stats_add_int(JsonVal obj, const char *key, int delta) {
 }
 
 void store_stats_set_int(JsonVal obj, const char *key, int value) {
-    /* 读取 JSON → 修改 → 写回。由于 JsonVal 是零拷贝视图，
-     * store_stats_update 函数需要整体重写。这里用直接文件操作。 */
-    /* 注意：这个函数需要在 store_stats_update 的回调中使用，
-     * 它实际上操作的是文件内容。我们需要用不同的方式。 */
-    (void)obj; (void)key; (void)value;
-    /* 实际实现见 store_stats_update */
+    /* 原地修改 JSON 源字符串中的数字值。
+     * 仅在 store_stats_update 的回调中使用。
+     * 新数字位数 <= 旧数字位数时直接覆写，多余位用空格填充。
+     * 新数字位数 > 旧数字位数时无法原地修改，跳过。 */
+    if (!obj.src) return;
+    /* 在源文本中找到 "key":<number> 模式 */
+    char search[128];
+    snprintf(search, sizeof(search), "\"%s\"", key);
+    const char *p = strstr(obj.src, search);
+    if (!p) return;
+    p += strlen(search);
+    /* 跳过空白和冒号 */
+    while (*p == ' ' || *p == ':') p++;
+    /* p 现在指向值的开始 */
+    const char *val_start = p;
+    /* 找到值的结束（逗号、}或空白） */
+    while (*p && *p != ',' && *p != '}' && *p != ' ' && *p != '\n' && *p != '\r') p++;
+    int old_len = (int)(p - val_start);
+    char new_val[32];
+    snprintf(new_val, sizeof(new_val), "%d", value);
+    int new_len = (int)strlen(new_val);
+    if (new_len > old_len) return; /* 无法原地扩展 */
+    memcpy((char*)val_start, new_val, new_len);
+    /* 用空格填充多余位置 */
+    for (int i = new_len; i < old_len; i++) ((char*)val_start)[i] = ' ';
 }
 
 int store_stats_get_int(JsonVal obj, const char *key) {
     return json_get_int(obj, key);
+}
+
+/* 简易文件级操作：从 stats 文件中读取整数字段 */
+int store_stats_get_file_int(const char *path, const char *key) {
+    char *content = store_stats_read(path);
+    if (!content) return 0;
+    JsonParse jp = json_parse_root(content);
+    int val = jp.error ? 0 : json_get_int(jp.val, key);
+    free(content);
+    return val;
+}
+
+/* 简易文件级操作：设置 stats 文件中的整数字段（原地修改 JSON 数字值） */
+/* 设置 stats 文件中的整数字段。
+ * 由于原地覆盖在值变长时会失败（如 0→13），改用解析→修改→重建策略。 */
+void store_stats_set_int_file(const char *path, const char *key, int value) {
+    char *content = store_stats_read(path);
+    if (!content) return;
+    JsonParse jp = json_parse_root(content);
+    if (!jp.error) {
+        char search[128];
+        snprintf(search, sizeof(search), "\"%s\"", key);
+        char *p = strstr((char*)jp.val.src, search);
+        if (p) {
+            p += strlen(search);
+            while (*p == ' ' || *p == ':') p++;
+            char *vs = p;
+            while (*p && *p != ',' && *p != '}' && *p != ' ' && *p != '\n' && *p != '\r') p++;
+            int old_len = (int)(p - vs);
+            char nv[32];
+            snprintf(nv, sizeof(nv), "%d", value);
+            int nl = (int)strlen(nv);
+
+            if (nl <= old_len) {
+                /* 原地覆盖，用空格填充多余空间 */
+                memcpy(vs, nv, nl);
+                for (int i = nl; i < old_len; i++) vs[i] = ' ';
+                util_write_file(path, content);
+            } else {
+                /* 值变长：切分拼接，重建 JSON 文件 */
+                int prefix_len = (int)(vs - content);
+                int suffix_start = (int)(p - content);
+                StrBuf rebuilt;
+                sb_init(&rebuilt);
+                sb_appendn(&rebuilt, content, prefix_len);
+                sb_append(&rebuilt, nv);
+                sb_append(&rebuilt, content + suffix_start);
+                util_write_file(path, rebuilt.data);
+                sb_free(&rebuilt);
+            }
+        }
+    }
+    free(content);
 }
 
 /* 通用 stats 更新：读取→修改→写回 */

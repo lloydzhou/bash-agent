@@ -90,7 +90,8 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
                                    const char *status, const char *thinking,
                                    const char *text,
                                    int in_tokens, int out_tokens,
-                                   int cache_read, int cache_creation);
+                                   int cache_read, int cache_creation,
+                                   int request_count);
 
 /* 构建 system prompt */
 char *agent_build_prompt(Agent *agent);

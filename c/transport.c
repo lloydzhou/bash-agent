@@ -379,8 +379,14 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                 memset(&evt, 0, sizeof(evt));
                 evt.type = SSE_USAGE;
                 evt.out_tokens = json_get_int(usage, "output_tokens");
-                evt.cache_read_tokens = json_get_int(usage, "cache_read_input_tokens");
-                evt.cache_creation_tokens = json_get_int(usage, "cache_creation_input_tokens");
+                /* input/cache_* 字段仅在 message_start 未提供时取（与 Rust 版对齐）
+                 * OpenAI 路径无 message_start，通过 transport 合成 message_delta */
+                int it = json_get_int(usage, "input_tokens");
+                int cr = json_get_int(usage, "cache_read_input_tokens");
+                int cc = json_get_int(usage, "cache_creation_input_tokens");
+                if (it > 0) evt.in_tokens = it;
+                if (cr > 0) evt.cache_read_tokens = cr;
+                if (cc > 0) evt.cache_creation_tokens = cc;
                 callback(ctx, &evt);
             }
         } else if (strcmp(type, "message_start") == 0) {
@@ -576,10 +582,11 @@ char *build_claude_request(const char *model, const char *system_prompt,
     sb_appendf(&buf, "%d", max_tokens);
     sb_append(&buf, ",\"stream\":true");
 
-    /* system prompt */
-    sb_append(&buf, ",\"system\":[{\"type\":\"text\",\"text\":");
-    sb_append_json_string(&buf, system_prompt);
-    sb_append(&buf, "}]");
+    /* system prompt — 与 bash/Go/Rust 一致用字符串格式，触发 API prompt caching */
+    if (system_prompt && system_prompt[0]) {
+        sb_append(&buf, ",\"system\":");
+        sb_append_json_string(&buf, system_prompt);
+    }
 
     /* thinking */
     if (thinking && strcmp(thinking, "disabled") != 0) {
