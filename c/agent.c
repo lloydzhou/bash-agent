@@ -435,14 +435,8 @@ void agent_replay_events(Agent *agent, int max_turns) {
             /* 显示 user_input（与 Rust 版 display_replay_event USER_MESSAGE 对齐） */
             char *content = json_get_string(jp.val, "content");
             if (content && content[0]) {
-                /* 截断到 77 字符（加 "..." 共 80） */
-                size_t clen = strlen(content);
-                if (clen > 80) {
-                    content[77] = '.';
-                    content[78] = '.';
-                    content[79] = '.';
-                    content[80] = '\0';
-                }
+                /* 截断到 80 字节（含 "..."），UTF-8 安全 */
+                util_truncate_str(content, 80);
                 /* 取第一行 */
                 char *nl = strchr(content, '\n');
                 if (nl) *nl = '\0';
@@ -503,14 +497,9 @@ void agent_replay_events(Agent *agent, int max_turns) {
             if (input_val.type != JSON_NULL) {
                 char *input_str = json_as_string(input_val);
                 if (input_str) {
-                    size_t slen = strlen(input_str);
-                    if (slen > 80) {
-                        memcpy(summary, input_str, 80);
-                        strcpy(summary + 80, "...");
-                    } else {
-                        memcpy(summary, input_str, slen);
-                        summary[slen] = '\0';
-                    }
+                    strncpy(summary, input_str, sizeof(summary) - 1);
+                    summary[sizeof(summary) - 1] = '\0';
+                    util_truncate_str(summary, 80);
                     free(input_str);
                 }
             }
@@ -534,15 +523,9 @@ void agent_replay_events(Agent *agent, int max_turns) {
                 sb_truncate(&acc_text, 0);
             }
             char *content = json_get_string(jp.val, "content");
-            /* 截断到 200 字符（与 bash 版 event_replay.awk 对齐） */
+            /* 截断到 200 字节（含 "..."，UTF-8 安全） */
             if (content) {
-                size_t len = strlen(content);
-                if (len > 200) {
-                    content[200] = '.';
-                    content[201] = '.';
-                    content[202] = '.';
-                    content[203] = '\0';
-                }
+                util_truncate_str(content, 200);
             }
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_tool_result(content ? content : "", 0);
@@ -569,22 +552,13 @@ void agent_replay_events(Agent *agent, int max_turns) {
             char *text = json_get_string(jp.val, "text");
             int in_tok = json_get_int(jp.val, "input_tokens");
             int out_tok = json_get_int(jp.val, "output_tokens");
-            /* 截断 thinking */
+            /* 截断 thinking（无省略号，UTF-8 安全） */
             if (thinking) {
-                size_t len = strlen(thinking);
-                if (len > 120) {
-                    thinking[120] = '\0';
-                }
+                thinking[util_utf8_truncate_len(thinking, 120)] = '\0';
             }
-            /* 截断 text */
+            /* 截断 text（UTF-8 安全） */
             if (text) {
-                size_t len = strlen(text);
-                if (len > 200) {
-                    text[200] = '.';
-                    text[201] = '.';
-                    text[202] = '.';
-                    text[203] = '\0';
-                }
+                util_truncate_str(text, 200);
             }
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_sub_agent_result(sid ? sid : "", status ? status : "ok",

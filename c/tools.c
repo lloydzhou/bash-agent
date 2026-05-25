@@ -1,4 +1,5 @@
 #include "tools.h"
+#include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -662,10 +663,11 @@ char *tool_call_summary(const char *name, JsonVal input) {
     }
 
     if (field) {
-        /* 截断过长的命令 */
+        /* 截断过长的命令（UTF-8 安全） */
         int len = (int)strlen(field);
         if (len > 80) {
-            sb_appendf(&buf, "%s(%.*s...)", name, 77, field);
+            int slen = (int)util_utf8_truncate_len(field, 77);
+            sb_appendf(&buf, "%s(%.*s...)", name, slen, field);
         } else {
             sb_appendf(&buf, "%s(%s)", name, field);
         }

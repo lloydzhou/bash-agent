@@ -212,19 +212,19 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                 fprintf(out, "\x1b[31m[sub-agent %s] failed\x1b[0m\n",
                         msg->session_id ? msg->session_id : "?");
             }
-            /* thinking — 灰色，截断 120 字符 */
+            /* thinking — 灰色，截断 120 字节（UTF-8 安全） */
             if (msg->tool_name && msg->tool_name[0]) {
-                int tlen = (int)strlen(msg->tool_name);
+                int tlen = (int)util_utf8_truncate_len(msg->tool_name, 120);
                 fprintf(out, "\x1b[90m%.*s%s\x1b[0m\n",
-                        tlen > 120 ? 120 : tlen, msg->tool_name,
-                        tlen > 120 ? "…" : "");
+                        tlen, msg->tool_name,
+                        strlen(msg->tool_name) > 120 ? "…" : "");
             }
-            /* text — 截断 120 字符 */
+            /* text — 截断 120 字节（UTF-8 安全） */
             if (msg->content && msg->content[0]) {
-                int clen = (int)strlen(msg->content);
+                int clen = (int)util_utf8_truncate_len(msg->content, 120);
                 fprintf(out, "%.*s%s\n",
-                        clen > 120 ? 120 : clen, msg->content,
-                        clen > 120 ? "…" : "");
+                        clen, msg->content,
+                        strlen(msg->content) > 120 ? "…" : "");
             }
             fflush(out);
             ds->last_char[0] = '\n';

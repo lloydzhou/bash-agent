@@ -192,6 +192,28 @@ int util_utf8_char_count(const char *s) {
     return count;
 }
 
+size_t util_utf8_truncate_len(const char *s, size_t max_bytes) {
+    size_t len = strlen(s);
+    if (len <= max_bytes) return len;
+    /* 从 max_bytes 处往前跳过 UTF-8 后继字节 (10xxxxxx)，确保不在字符中间切断 */
+    while (max_bytes > 0 && ((unsigned char)s[max_bytes] & 0xC0) == 0x80) {
+        max_bytes--;
+    }
+    return max_bytes;
+}
+
+void util_truncate_str(char *s, size_t max_total) {
+    size_t len = strlen(s);
+    if (len <= max_total) return;
+    /* 留 3 字节给 "..."，UTF-8 安全截断 */
+    size_t cut = (max_total >= 3) ? max_total - 3 : 0;
+    cut = util_utf8_truncate_len(s, cut);
+    s[cut] = '.';
+    s[cut + 1] = '.';
+    s[cut + 2] = '.';
+    s[cut + 3] = '\0';
+}
+
 char *util_rtrim(char *s) {
     size_t len = strlen(s);
     while (len > 0 && (s[len-1] == '\n' || s[len-1] == '\r' ||

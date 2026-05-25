@@ -58,6 +58,12 @@ long util_epoch_seconds(void);
 /* 计算 UTF-8 字符数（近似 token 计数用） */
 int util_utf8_char_count(const char *s);
 
+/* 返回不超过 max_bytes 的安全截断位置（不切断 UTF-8 多字节字符） */
+size_t util_utf8_truncate_len(const char *s, size_t max_bytes);
+
+/* 原地截断到 max_total 字节以内（UTF-8 安全），超长时尾部追加 "..." */
+void util_truncate_str(char *s, size_t max_total);
+
 /* trim 尾部空白 */
 char *util_rtrim(char *s);
 
