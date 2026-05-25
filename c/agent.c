@@ -697,6 +697,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         int hdr_count = 0;
         headers[hdr_count++] = "Content-Type: application/json";
         headers[hdr_count++] = "User-Agent: claude-cli/1.0.33 (max, cli)";
+        headers[hdr_count++] = "x-app: cli";
 
         if (strcmp(agent->provider, "claude") == 0) {
             snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", agent->api_key);
@@ -738,17 +739,24 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 sse_accum_free(accum);
                 return 0;
             }
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_error(accum->error ? accum->error : "HTTP request failed");
-            push_display_event(&agent->paths, agent->display_queue, dm);
+            /* 对齐 bash 版 END 块：总是发出 STOP + ERROR */
+            DisplayMessage *dm_err = malloc(sizeof(DisplayMessage));
+            *dm_err = display_msg_error(accum->error ? accum->error : "HTTP request failed");
+            push_display_event(&agent->paths, agent->display_queue, dm_err);
+            DisplayMessage *dm_stop = malloc(sizeof(DisplayMessage));
+            *dm_stop = display_msg_stop("error");
+            push_display_event(&agent->paths, agent->display_queue, dm_stop);
             sse_accum_free(accum);
             return -1;
         }
 
         if (accum->error) {
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_error(accum->error);
-            push_display_event(&agent->paths, agent->display_queue, dm);
+            DisplayMessage *dm_err = malloc(sizeof(DisplayMessage));
+            *dm_err = display_msg_error(accum->error);
+            push_display_event(&agent->paths, agent->display_queue, dm_err);
+            DisplayMessage *dm_stop = malloc(sizeof(DisplayMessage));
+            *dm_stop = display_msg_stop("error");
+            push_display_event(&agent->paths, agent->display_queue, dm_stop);
             sse_accum_free(accum);
             return -1;
         }
@@ -1000,10 +1008,22 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             store_conv_add_tool_results(agent->paths.conversation, accum->tool_count,
                                   result_ids, result_contents);
 
-            /* PlanClear / PlanConfirm 触发 compact（在 tool_result 写入之后） */
+            /* PlanClear / PlanConfirm 触发 compact（在 tool_result 写入之后）
+             * 对齐 bash 版: PlanConfirm→先 compact 再 mv draft→plan; PlanClear→compact+clear */
             for (int i = 0; i < accum->tool_count; i++) {
-                if (strcmp(accum->tools[i].name, "PlanClear") == 0 ||
-                    strcmp(accum->tools[i].name, "PlanConfirm") == 0) {
+                if (strcmp(accum->tools[i].name, "PlanConfirm") == 0) {
+                    agent_compact_context(agent, "plan_confirm");
+                    /* compact 后执行 mv draft→plan（对齐 bash 版 tool_plan_confirm 顺序） */
+                    {
+                        char *draft = store_plan_draft_read(&agent->paths);
+                        if (draft && draft[0]) {
+                            store_plan_set(&agent->paths, draft);
+                            store_plan_draft_clear(&agent->paths);
+                        }
+                        free(draft);
+                    }
+                    break;
+                } else if (strcmp(accum->tools[i].name, "PlanClear") == 0) {
                     agent_compact_context(agent, "plan_clear");
                     break;
                 }
@@ -1792,6 +1812,10 @@ char *agent_build_prompt(Agent *agent) {
                 free(pc);
             }
         }
+        /* bash 版去掉尾部 \n */
+        if (ifiles.len > 0 && ifiles.data[ifiles.len - 1] == '\n') {
+            sb_truncate(&ifiles, ifiles.len - 1);
+        }
         prompt_append_section(&buf, "instruction-files", ifiles.data, NULL);
         sb_free(&ifiles);
     }
@@ -1822,6 +1846,10 @@ char *agent_build_prompt(Agent *agent) {
                 free(skill_dir);
                 free(content);
             }
+        }
+        /* bash 版去掉尾部 \n */
+        if (skills.len > 0 && skills.data[skills.len - 1] == '\n') {
+            sb_truncate(&skills, skills.len - 1);
         }
         prompt_append_section(&buf, "selected-skills", skills.data, NULL);
         sb_free(&skills);
@@ -2201,6 +2229,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     int hdr_count = 0;
     headers[hdr_count++] = "Content-Type: application/json";
     headers[hdr_count++] = "User-Agent: claude-cli/1.0.33 (max, cli)";
+    headers[hdr_count++] = "x-app: cli";
     if (strcmp(agent->provider, "claude") == 0) {
         snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", agent->api_key);
         headers[hdr_count++] = auth_header;
@@ -2222,6 +2251,9 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         /* 保存 summary */
         store_summary_set(&agent->paths, accum.text.data);
     }
+    /* 保存 compact 的 token 消耗（sse_accum_free 前提取） */
+    int compact_in = accum.in_tokens, compact_out = accum.out_tokens;
+    int compact_cr = accum.cache_read_tokens, compact_cc = accum.cache_creation_tokens;
     sse_accum_free(&accum);
     free(summary_body);
     sb_free(&dropped);
@@ -2229,12 +2261,22 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     /* 截断 conversation */
     store_conv_trim_tail(agent->paths.conversation, keep);
 
-    /* 更新 stats（与 bash 版一致：compact_request_count+1, current_turn_count=remaining） */
+    /* 更新 stats（与 bash 版一致：compact_request_count+1, current_turn_count=remaining,
+     * 累加 compact 的 token 消耗到 total_* — 对齐 agent_record_usage "compact"） */
     {
         int remaining = store_conv_user_turn_count(agent->paths.conversation);
         store_stats_set_int_file(agent->paths.stats, "compact_request_count",
             store_stats_get_file_int(agent->paths.stats, "compact_request_count") + 1);
         store_stats_set_int_file(agent->paths.stats, "current_turn_count", remaining);
+        /* 累加 compact 的 token 消耗（对齐 bash 版 agent_record_usage） */
+        store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
+            store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + compact_in);
+        store_stats_set_int_file(agent->paths.stats, "total_output_tokens",
+            store_stats_get_file_int(agent->paths.stats, "total_output_tokens") + compact_out);
+        store_stats_set_int_file(agent->paths.stats, "total_cache_read_tokens",
+            store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + compact_cr);
+        store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
+            store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + compact_cc);
     }
     /* 对齐 bash 版: store_stats_update 末尾调 display_term_title */
     agent_update_title(agent);

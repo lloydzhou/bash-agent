@@ -187,9 +187,9 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
 
         case DISPLAY_ERROR:
             ensure_newline(ds, out);
-            fprintf(out, "\x1b[31mError: %s\x1b[0m\n",
+            fprintf(stderr, "\x1b[31mError: %s\x1b[0m\n",
                     msg->content ? msg->content : "unknown");
-            fflush(out);
+            fflush(stderr);
             ds->last_char[0] = '\n';
             break;
 

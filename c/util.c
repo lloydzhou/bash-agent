@@ -179,6 +179,17 @@ char *util_timestamp_now(void) {
     return buf;
 }
 
+long util_parse_size(const char *s) {
+    if (!s || !*s) return -1;
+    char *endp = NULL;
+    long val = strtol(s, &endp, 10);
+    if (endp == s || val <= 0) return -1;
+    if (*endp == 'k' || *endp == 'K') { val *= 1000; endp++; }
+    else if (*endp == 'm' || *endp == 'M') { val *= 1000000; endp++; }
+    else if (*endp == 'g' || *endp == 'G') { val *= 1000000000; endp++; }
+    return (*endp == '\0') ? val : -1;
+}
+
 long util_epoch_seconds(void) {
     return (long)time(NULL);
 }

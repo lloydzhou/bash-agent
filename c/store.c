@@ -24,13 +24,51 @@ void store_session_paths_free(SessionPaths *p) {
 }
 
 char *store_session_project_key(const char *cwd) {
-    /* 将路径中的 / 替换为 - */
-    char *key = util_strdup(cwd);
+    /* 对齐 bash 版 AWK 算法：
+     *   sub(/^\/+/, "", $0)              — 去前导 /
+     *   gsub(/\//, "-", $0)              — / → -
+     *   gsub(/[^A-Za-z0-9._-]/, "-", $0) — 非字母数字._- → -
+     *   gsub(/-+/, "-", $0)              — 压缩连续 -
+     *   sub(/^-+/, "", $0)               — 去前导 -
+     *   sub(/-+$/, "", $0)               — 去尾部 -
+     *   print "-" $0                      — 加 - 前缀
+     */
+    if (!cwd || !cwd[0]) return util_strdup("-");
+
+    size_t len = strlen(cwd);
+    char *key = malloc(len + 3); /* 足够加前缀 - */
     if (!key) return NULL;
-    for (char *p = key; *p; p++) {
-        if (*p == '/') *p = '-';
+
+    /* 跳过前导 / */
+    const char *src = cwd;
+    while (*src == '/') src++;
+
+    /* 逐步转换 */
+    size_t ki = 0;
+    char prev = '\0';
+    for (; *src; src++) {
+        char c = *src;
+        if (c == '/') c = '-';
+        else if (!(  (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                     (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+            c = '-';
+        /* 压缩连续 - */
+        if (c == '-' && prev == '-') continue;
+        key[ki++] = c;
+        prev = c;
     }
-    return key;
+    key[ki] = '\0';
+
+    /* 去尾部 - */
+    while (ki > 0 && key[ki - 1] == '-') key[--ki] = '\0';
+
+    /* 加前缀 - */
+    char *result = malloc(ki + 2);
+    if (!result) { free(key); return NULL; }
+    result[0] = '-';
+    memcpy(result + 1, key, ki + 1);
+    free(key);
+    return result;
 }
 
 SessionPaths store_session_paths_for(const char *home, const char *cwd, const char *session_id) {
@@ -102,7 +140,8 @@ int store_session_init(const SessionPaths *p, int is_new) {
         FILE *f = fopen(p->stats, "w");
         if (!f) return -1;
         fprintf(f, "{\"current_turn_count\":0,\"agent_request_count\":0,"
-                   "\"compact_request_count\":0,\"total_input_tokens\":0,"
+                   "\"compact_request_count\":0,\"sub_agent_request_count\":0,"
+                   "\"total_input_tokens\":0,"
                    "\"total_output_tokens\":0,\"total_cache_read_tokens\":0,"
                    "\"total_cache_creation_tokens\":0,\"current_context_tokens\":0,"
                    "\"last_updated\":\"\"}\n");
@@ -129,12 +168,23 @@ int store_session_init(const SessionPaths *p, int is_new) {
 int store_session_init_sub(const SessionPaths *parent_paths, const SessionPaths *sub_paths, int fork) {
     if (store_session_init(sub_paths, 1) != 0) return -1;
     if (fork) {
-        /* 复制父会话的 conversation.jsonl 到子会话 */
+        /* 复制父会话文件到子会话 — 对齐 bash 版 store_session_fork:
+         * cp conversation.jsonl, summary.txt, plan.md */
         char *parent_conv = util_read_file(parent_paths->conversation);
         if (parent_conv && strlen(parent_conv) > 0) {
             util_write_file(sub_paths->conversation, parent_conv);
         }
         free(parent_conv);
+        char *parent_summary = util_read_file(parent_paths->summary);
+        if (parent_summary && strlen(parent_summary) > 0) {
+            util_write_file(sub_paths->summary, parent_summary);
+        }
+        free(parent_summary);
+        char *parent_plan = util_read_file(parent_paths->plan);
+        if (parent_plan && strlen(parent_plan) > 0) {
+            util_write_file(sub_paths->plan, parent_plan);
+        }
+        free(parent_plan);
     }
     return 0;
 }
@@ -244,7 +294,7 @@ int store_conv_add_tool_results(const char *path, int count, const char **tool_u
         sb_append_json_string(&buf, contents[i]);
         sb_append(&buf, "}");
     }
-    sb_append(&buf, "]}\n");
+    sb_append(&buf, "]}");
     int rc = jsonl_append(path, buf.data);
     sb_free(&buf);
     return rc;
@@ -393,41 +443,82 @@ int store_stats_get_file_int(const char *path, const char *key) {
 
 /* 简易文件级操作：设置 stats 文件中的整数字段（原地修改 JSON 数字值） */
 /* 设置 stats 文件中的整数字段。
- * 由于原地覆盖在值变长时会失败（如 0→13），改用解析→修改→重建策略。 */
+ * 由于原地覆盖在值变长时会失败（如 0→13），改用解析→修改→重建策略。
+ * 同时更新 last_updated 字段 — 对齐 bash 版 stats.awk _now() */
 void store_stats_set_int_file(const char *path, const char *key, int value) {
     char *content = store_stats_read(path);
     if (!content) return;
     JsonParse jp = json_parse_root(content);
     if (!jp.error) {
-        char search[128];
-        snprintf(search, sizeof(search), "\"%s\"", key);
-        char *p = strstr((char*)jp.val.src, search);
-        if (p) {
-            p += strlen(search);
-            while (*p == ' ' || *p == ':') p++;
-            char *vs = p;
-            while (*p && *p != ',' && *p != '}' && *p != ' ' && *p != '\n' && *p != '\r') p++;
-            int old_len = (int)(p - vs);
-            char nv[32];
-            snprintf(nv, sizeof(nv), "%d", value);
-            int nl = (int)strlen(nv);
+        /* 先更新 last_updated */
+        {
+            time_t now = time(NULL);
+            struct tm tm_buf;
+            gmtime_r(&now, &tm_buf);
+            char ts[32];
+            strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
+            /* 查找并替换 last_updated 值 */
+            const char *lu_search = "\"last_updated\":\"";
+            char *lu_pos = strstr((char*)content, lu_search);
+            if (lu_pos) {
+                char *val_start = lu_pos + strlen(lu_search);
+                char *val_end = strchr(val_start, '"');
+                if (val_end) {
+                    size_t old_len = val_end - val_start;
+                    size_t new_len = strlen(ts);
+                    if (new_len == old_len) {
+                        memcpy(val_start, ts, new_len);
+                    } else {
+                        /* 长度不同，重建 */
+                        StrBuf rebuilt;
+                        sb_init(&rebuilt);
+                        sb_appendn(&rebuilt, content, val_start - content);
+                        sb_append(&rebuilt, ts);
+                        sb_append(&rebuilt, val_end);
+                        util_write_file(path, rebuilt.data);
+                        sb_free(&rebuilt);
+                        free(content);
+                        /* 重新读取以更新 key */
+                        content = store_stats_read(path);
+                        if (!content) return;
+                        jp = json_parse_root(content);
+                        if (jp.error) { free(content); return; }
+                    }
+                }
+            }
+        }
+        /* 再更新目标 key */
+        {
+            char search[128];
+            snprintf(search, sizeof(search), "\"%s\"", key);
+            char *p = strstr((char*)jp.val.src, search);
+            if (p) {
+                p += strlen(search);
+                while (*p == ' ' || *p == ':') p++;
+                char *vs = p;
+                while (*p && *p != ',' && *p != '}' && *p != ' ' && *p != '\n' && *p != '\r') p++;
+                int old_len = (int)(p - vs);
+                char nv[32];
+                snprintf(nv, sizeof(nv), "%d", value);
+                int nl = (int)strlen(nv);
 
-            if (nl <= old_len) {
-                /* 原地覆盖，用空格填充多余空间 */
-                memcpy(vs, nv, nl);
-                for (int i = nl; i < old_len; i++) vs[i] = ' ';
-                util_write_file(path, content);
-            } else {
-                /* 值变长：切分拼接，重建 JSON 文件 */
-                int prefix_len = (int)(vs - content);
-                int suffix_start = (int)(p - content);
-                StrBuf rebuilt;
-                sb_init(&rebuilt);
-                sb_appendn(&rebuilt, content, prefix_len);
-                sb_append(&rebuilt, nv);
-                sb_append(&rebuilt, content + suffix_start);
-                util_write_file(path, rebuilt.data);
-                sb_free(&rebuilt);
+                if (nl <= old_len) {
+                    /* 原地覆盖，用空格填充多余空间 */
+                    memcpy(vs, nv, nl);
+                    for (int i = nl; i < old_len; i++) vs[i] = ' ';
+                    util_write_file(path, content);
+                } else {
+                    /* 值变长：切分拼接，重建 JSON 文件 */
+                    int prefix_len = (int)(vs - content);
+                    int suffix_start = (int)(p - content);
+                    StrBuf rebuilt;
+                    sb_init(&rebuilt);
+                    sb_appendn(&rebuilt, content, prefix_len);
+                    sb_append(&rebuilt, nv);
+                    sb_append(&rebuilt, content + suffix_start);
+                    util_write_file(path, rebuilt.data);
+                    sb_free(&rebuilt);
+                }
             }
         }
     }

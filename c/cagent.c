@@ -59,6 +59,11 @@ int main(int argc, char *argv[]) {
     const char *session_id = "";
     const char *output_fmt = "human";
     const char *max_context_str = NULL;
+    const char *max_tokens_str = NULL;
+    const char *max_turns_str = NULL;
+    const char *effort_str = NULL;
+    const char *thinking_str = NULL;
+    const char *tool_timeout_str = NULL;
     int do_continue = 0;
     int force_interactive = 0;
     int verbose = 0;
@@ -105,16 +110,15 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--max-context") == 0 && i + 1 < argc) {
             max_context_str = argv[++i];
         } else if (strcmp(argv[i], "--max-tokens") == 0 && i + 1 < argc) {
-            /* skip value */
-            i++;
+            max_tokens_str = argv[++i];
         } else if (strcmp(argv[i], "--max-turns") == 0 && i + 1 < argc) {
-            i++;
+            max_turns_str = argv[++i];
         } else if (strcmp(argv[i], "--effort") == 0 && i + 1 < argc) {
-            i++;
+            effort_str = argv[++i];
         } else if (strcmp(argv[i], "--thinking") == 0 && i + 1 < argc) {
-            i++;
+            thinking_str = argv[++i];
         } else if (strcmp(argv[i], "--tool-timeout") == 0 && i + 1 < argc) {
-            i++;
+            tool_timeout_str = argv[++i];
         } else if (strcmp(argv[i], "--list-sessions") == 0) {
             fprintf(stderr, "Sessions listing not implemented\n");
             return 0;
@@ -130,16 +134,8 @@ int main(int argc, char *argv[]) {
 
     /* 校验 --max-context（在 API key 检查之前，与 bash 版一致） */
     if (max_context_str) {
-        char *endp = NULL;
-        long val = strtol(max_context_str, &endp, 10);
-        if (endp == max_context_str || val <= 0) {
-            fprintf(stderr, "Error: Invalid --max-context: %s\n", max_context_str);
-            return 1;
-        }
-        if (*endp == 'k' || *endp == 'K') { val *= 1000; endp++; }
-        else if (*endp == 'm' || *endp == 'M') { val *= 1000000; endp++; }
-        else if (*endp == 'g' || *endp == 'G') { val *= 1000000000; endp++; }
-        if (*endp != '\0') {
+        long val = util_parse_size(max_context_str);
+        if (val <= 0) {
             fprintf(stderr, "Error: Invalid --max-context: %s\n", max_context_str);
             return 1;
         }
@@ -154,7 +150,7 @@ int main(int argc, char *argv[]) {
     if (strcmp(provider, "claude") == 0) {
         effective_api_key = util_strdup(api_key ? api_key : util_env("ANTHROPIC_API_KEY", ""));
         effective_base_url = util_strdup(base_url ? base_url : util_env("ANTHROPIC_BASE_URL", ""));
-        effective_model = util_strdup(model ? model : "claude-sonnet-4-20250514");
+        effective_model = util_strdup(model ? model : (getenv("MODEL") && getenv("MODEL")[0] ? getenv("MODEL") : "claude-sonnet-4-20250514"));
 
         /* DeepSeek 自动检测 */
         if (!effective_api_key[0] && !effective_base_url[0]) {
@@ -178,7 +174,7 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(provider, "openai") == 0) {
         effective_api_key = util_strdup(api_key ? api_key : util_env("OPENAI_API_KEY", ""));
         effective_base_url = util_strdup(base_url ? base_url : util_env("OPENAI_BASE_URL", ""));
-        effective_model = util_strdup(model ? model : "gpt-4o");
+        effective_model = util_strdup(model ? model : (getenv("MODEL") && getenv("MODEL")[0] ? getenv("MODEL") : "gpt-4o"));
 
         if (!effective_api_key[0] && !effective_base_url[0]) {
             fprintf(stderr, "Error: no API key. Set OPENAI_API_KEY or use --api-key\n");
@@ -244,14 +240,29 @@ int main(int argc, char *argv[]) {
     agent->verbose = verbose;
     agent->output_format = (strcmp(output_fmt, "stream-json") == 0) ? 1 : 0;
 
+    /* 设置 CLI 参数到 agent — 支持 k/m/g 后缀 */
+    {
+        long v;
+        if (max_tokens_str) {
+            v = util_parse_size(max_tokens_str);
+            if (v > 0) agent->max_tokens = (int)v;
+        }
+        if (max_turns_str) {
+            v = util_parse_size(max_turns_str);
+            if (v > 0) agent->max_turns = (int)v;
+        }
+        if (tool_timeout_str) {
+            v = util_parse_size(tool_timeout_str);
+            if (v > 0) agent->tool_timeout_secs = (int)v;
+        }
+        if (effort_str) { free(agent->effort); agent->effort = util_strdup(effort_str); }
+        if (thinking_str) { free(agent->thinking); agent->thinking = util_strdup(thinking_str); }
+    }
+
     /* 设置 --max-context（已在参数解析阶段校验） */
     if (max_context_str) {
-        char *endp = NULL;
-        long val = strtol(max_context_str, &endp, 10);
-        if (*endp == 'k' || *endp == 'K') val *= 1000;
-        else if (*endp == 'm' || *endp == 'M') val *= 1000000;
-        else if (*endp == 'g' || *endp == 'G') val *= 1000000000;
-        agent->max_context_tokens = (int)val;
+        long val = util_parse_size(max_context_str);
+        if (val > 0) agent->max_context_tokens = (int)val;
     }
 
     if (interactive) {

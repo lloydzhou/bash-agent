@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <signal.h>
+#include <curl/curl.h>
 
 void tool_result_free(ToolResult *r) {
     if (!r) return;
@@ -202,18 +203,60 @@ static ToolResult tool_edit(const char *input_json) {
 
     util_write_file(path, new_content);
 
-    /* 生成 diff 摘要（计算 +/- 行数） */
-    /* 精确计算：数 old_str 和 new_str 的行数差异 */
-    int old_lines = 0, new_lines = 0;
-    if (old_len > 0) { old_lines = 1; for (size_t i = 0; i < old_len; i++) if (old_str[i] == '\n') old_lines++; }
-    if (new_len > 0) { new_lines = 1; for (size_t i = 0; i < new_len; i++) if (new_str[i] == '\n') new_lines++; }
+    /* 生成 diff 摘要 — 对齐 bash 版: diff -u --label a/$label --label b/$label */
+    int added = 0, removed = 0;
+    {
+        /* 用临时文件做 diff */
+        char tmppath[256];
+        snprintf(tmppath, sizeof(tmppath), "/tmp/edit_diff_%d.tmp", (int)getpid());
+        FILE *tmpf = fopen(tmppath, "w");
+        if (tmpf) {
+            fputs(new_content, tmpf);
+            fclose(tmpf);
 
-    StrBuf buf;
-    sb_init(&buf);
-    sb_appendf(&buf, "Edit(%s) [+%d -%d lines]", path,
-               new_lines > old_lines ? new_lines - old_lines : 0,
-               old_lines > new_lines ? old_lines - new_lines : 0);
-    r.output = buf.data;
+            StrBuf diffcmd;
+            sb_init(&diffcmd);
+            const char *label = path;
+            if (label[0] == '/') label++;
+            sb_appendf(&diffcmd, "diff -u --label 'a/%s' --label 'b/%s' -- '%s' '%s' 2>/dev/null || true",
+                       label, label, path, tmppath);
+            FILE *dp = popen(diffcmd.data, "r");
+            if (dp) {
+                StrBuf diffout;
+                sb_init(&diffout);
+                char lbuf[65536];
+                while (fgets(lbuf, sizeof(lbuf), dp)) {
+                    /* 计数 added/removed 行 */
+                    if (lbuf[0] == '+' && lbuf[1] != '+' && lbuf[1] != '\n') added++;
+                    else if (lbuf[0] == '-' && lbuf[1] != '-' && lbuf[1] != '\n') removed++;
+                    sb_append(&diffout, lbuf);
+                }
+                pclose(dp);
+
+                /* 输出: Edit(path) [+N -N lines]\n<diff> */
+                StrBuf buf;
+                sb_init(&buf);
+                sb_appendf(&buf, "Edit(%s) [+%d -%d lines]\n", path, added, removed);
+                if (diffout.len > 0) {
+                    sb_append(&buf, diffout.data);
+                }
+                r.output = buf.data;
+                sb_free(&diffout);
+            } else {
+                StrBuf buf;
+                sb_init(&buf);
+                sb_appendf(&buf, "Edit(%s) [+%d -%d lines]", path, 0, 0);
+                r.output = buf.data;
+            }
+            sb_free(&diffcmd);
+            remove(tmppath);
+        } else {
+            StrBuf buf;
+            sb_init(&buf);
+            sb_appendf(&buf, "Edit(%s) [diff unavailable]", path);
+            r.output = buf.data;
+        }
+    }
 
     free(content);
     free(new_content);
@@ -242,6 +285,40 @@ static const char *bash_deny_reason(const char *cmd) {
     /* fork bomb */
     if (strstr(cmd, ":(){:|:&};:"))
         return "blocked fork bomb pattern";
+    /* 设备写入保护 — 对齐 bash 版 device_write_re:
+     * 检测 > /dev/sdX, >> /dev/diskN, of=/dev/nvme... 等 */
+    {
+        /* 简化匹配：查找 > 或 >> 或 of= 后跟 /dev/(sd|disk|rdisk|nvme|vd|xvd|hd) */
+        const char *p = cmd;
+        while ((p = strstr(p, "/dev/")) != NULL) {
+            const char *dev = p + 5;
+            /* 检查是否是块设备名 */
+            int is_block = 0;
+            if (strncmp(dev, "sd", 2) == 0 || strncmp(dev, "vd", 2) == 0 ||
+                strncmp(dev, "hd", 2) == 0 || strncmp(dev, "xvd", 3) == 0) is_block = 1;
+            else if (strncmp(dev, "disk", 4) == 0 || strncmp(dev, "rdisk", 5) == 0) is_block = 1;
+            else if (strncmp(dev, "nvme", 4) == 0) is_block = 1;
+            if (is_block) {
+                /* 检查前面是否有重定向（> 或 >>）或 of= */
+                const char *before = p;
+                /* 向前跳过空白 */
+                while (before > cmd && (before[-1] == ' ' || before[-1] == '\t')) before--;
+                if (before > cmd) {
+                    if (before[-1] == '>' || before[-1] == '=') {
+                        /* 前面是 > 或 >> 或 of= */
+                        /* 再检查是否是 of= 前缀 */
+                        if (before[-1] == '=') {
+                            if (before - 2 >= cmd && before[-2] == 'f' && before[-3] == 'o')
+                                return "blocked device write pattern";
+                        } else {
+                            return "blocked device write pattern";
+                        }
+                    }
+                }
+            }
+            p += 5;
+        }
+    }
     return NULL;
 }
 
@@ -381,30 +458,35 @@ static ToolResult tool_glob(const char *input_json, const char *cwd) {
     }
 
     const char *base = (path && path[0]) ? path : cwd;
-    char *full_pattern = util_path_join(base, pattern);
 
+    /* 对齐 bash 版: rg --files "$path" -g "$pattern" — 递归搜索 */
+    StrBuf cmd;
+    sb_init(&cmd);
+    sb_append(&cmd, "rg --files ");
+    sb_append_json_string(&cmd, base);
+    sb_append(&cmd, " -g ");
+    sb_append_json_string(&cmd, pattern);
+    sb_append(&cmd, " 2>/dev/null || true");
+
+    FILE *pipe = popen(cmd.data, "r");
     StrBuf buf;
     sb_init(&buf);
-
-    glob_t gl;
-    int rc = glob(full_pattern, GLOB_NOSORT, NULL, &gl);
-    if (rc == 0) {
-        for (size_t i = 0; i < gl.gl_pathc; i++) {
-            if (i > 0) sb_append(&buf, "\n");
-            sb_append(&buf, gl.gl_pathv[i]);
+    if (pipe) {
+        char linebuf[65536];
+        while (fgets(linebuf, sizeof(linebuf), pipe)) {
+            sb_append(&buf, linebuf);
         }
-        globfree(&gl);
-    } else if (rc == GLOB_NOMATCH) {
-        /* 无匹配，返回空 */
+        pclose(pipe);
+    }
+    /* 去掉尾部换行 */
+    if (buf.len > 0 && buf.data[buf.len - 1] == '\n') {
+        buf.data[--buf.len] = '\0';
     }
 
     r.output = buf.data[0] ? buf.data : util_strdup("(no matches)");
-    if (r.output == buf.data) {
-        /* buf.data 已被使用，不要 free */
-    } else {
-        sb_free(&buf);
-    }
-    free(full_pattern);
+    if (r.output != buf.data) sb_free(&buf);
+
+    sb_free(&cmd);
     free(pattern);
     free(path);
     return r;
@@ -430,16 +512,17 @@ static ToolResult tool_grep(const char *input_json, const char *cwd) {
 
     const char *base = (path && path[0]) ? path : cwd;
 
-    /* 构建 ripgrep 命令 */
+    /* 构建 ripgrep 命令 — 对齐 bash 版: rg -n --color never --heading [-C N] [-g GLOB] -- PATTERN PATH */
     StrBuf cmd;
     sb_init(&cmd);
-    sb_append(&cmd, "rg --no-heading ");
+    sb_append(&cmd, "rg -n --color never --heading ");
     if (context > 0) sb_appendf(&cmd, "-C %d ", context);
     if (glob_pat && glob_pat[0]) sb_appendf(&cmd, "-g '%s' ", glob_pat);
+    sb_append(&cmd, "-- ");
     sb_append_json_string(&cmd, pattern);
     sb_append(&cmd, " ");
     sb_append_json_string(&cmd, base);
-    sb_append(&cmd, " 2>&1 || true");
+    sb_append(&cmd, " 2>/dev/null || true");
 
     /* 执行 */
     FILE *pipe = popen(cmd.data, "r");
@@ -507,11 +590,9 @@ static ToolResult tool_todo_write(const char *input_json) {
 
 static ToolResult tool_plan_confirm(const SessionPaths *paths) {
     ToolResult r = {NULL, 0};
+    /* 只检查 draft 是否存在，不做 mv — mv 由 agent_loop 在 compact 之后执行
+     * 对齐 bash 版: agent_compact_context(plan_confirm) → store_plan_confirm(mv) */
     if (paths && store_plan_draft_read(paths) && store_plan_draft_read(paths)[0]) {
-        char *draft = store_plan_draft_read(paths);
-        store_plan_set(paths, draft);
-        store_plan_draft_clear(paths);
-        free(draft);
         r.output = util_strdup("Plan confirmed.");
     } else {
         r.output = util_strdup("No plan draft to confirm.");
@@ -577,6 +658,61 @@ static ToolResult tool_skill(const char *input_json, const char *home, const cha
     return r;
 }
 
+/* HTTP GET 辅助函数 */
+typedef struct {
+    char *data;
+    size_t len;
+    size_t cap;
+} WebBuf;
+
+static size_t web_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
+    WebBuf *buf = (WebBuf *)userdata;
+    size_t total = size * nmemb;
+    if (buf->len + total + 1 > buf->cap) {
+        size_t newcap = buf->cap ? buf->cap * 2 : 4096;
+        while (newcap < buf->len + total + 1) newcap *= 2;
+        buf->data = realloc(buf->data, newcap);
+        buf->cap = newcap;
+    }
+    memcpy(buf->data + buf->len, ptr, total);
+    buf->len += total;
+    buf->data[buf->len] = '\0';
+    return total;
+}
+
+static char *web_get(const char *url, const char **headers, int header_count, long timeout_secs) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return util_strdup("Error: curl init failed");
+
+    WebBuf buf = {NULL, 0, 0};
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, web_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_secs);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    struct curl_slist *slist = NULL;
+    for (int i = 0; i < header_count; i++) {
+        slist = curl_slist_append(slist, headers[i]);
+    }
+    if (slist) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, slist);
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(slist);
+
+    if (res != CURLE_OK) {
+        char *err = util_strdup(curl_easy_strerror(res));
+        curl_easy_cleanup(curl);
+        free(buf.data);
+        return err;
+    }
+
+    curl_easy_cleanup(curl);
+    if (!buf.data) return util_strdup("");
+    return buf.data;
+}
+
 static ToolResult tool_web_search(const char *input_json) {
     ToolResult r = {NULL, 0};
     JsonParse jp = json_parse_root(input_json);
@@ -591,14 +727,75 @@ static ToolResult tool_web_search(const char *input_json) {
         r.exit_code = 1;
         return r;
     }
-    r.output = util_strdup("WebSearch not implemented in C version");
+
+    /* 构建 URL: https://s.jina.ai/?q=<encoded_query> */
+    StrBuf url;
+    sb_init(&url);
+    sb_append(&url, "https://s.jina.ai/");
+
+    /* URL 编码 query */
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        char *encoded = curl_easy_escape(curl, query, 0);
+        if (encoded) {
+            sb_append(&url, "?q=");
+            sb_append(&url, encoded);
+            curl_free(encoded);
+        }
+        curl_easy_cleanup(curl);
+    }
+
+    /* 构建 headers */
+    const char *api_key = getenv("JINA_API_KEY");
+    const char *headers[2];
+    int header_count = 0;
+    char auth_header[512];
+    if (api_key && api_key[0]) {
+        snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
+        headers[header_count++] = auth_header;
+    }
+    headers[header_count++] = "X-Respond-With: no-content";
+
+    r.output = web_get(url.data, headers, header_count, 30);
+    sb_free(&url);
     free(query);
     return r;
 }
 
 static ToolResult tool_web_fetch(const char *input_json) {
     ToolResult r = {NULL, 0};
-    r.output = util_strdup("WebFetch not implemented in C version");
+    JsonParse jp = json_parse_root(input_json);
+    if (jp.error) {
+        r.output = util_strdup("Error: invalid JSON");
+        r.exit_code = 1;
+        return r;
+    }
+    char *url = json_get_string(jp.val, "url");
+    if (!url) {
+        r.output = util_strdup("Error: missing 'url'");
+        r.exit_code = 1;
+        return r;
+    }
+
+    /* 构建 URL: https://r.jina.ai/<url> */
+    StrBuf full_url;
+    sb_init(&full_url);
+    sb_append(&full_url, "https://r.jina.ai/");
+    sb_append(&full_url, url);
+
+    /* 构建 headers */
+    const char *api_key = getenv("JINA_API_KEY");
+    const char *headers[1];
+    int header_count = 0;
+    char auth_header[512];
+    if (api_key && api_key[0]) {
+        snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
+        headers[header_count++] = auth_header;
+    }
+
+    r.output = web_get(full_url.data, headers, header_count, 60);
+    sb_free(&full_url);
+    free(url);
     return r;
 }
 

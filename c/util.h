@@ -52,6 +52,9 @@ const char *util_env(const char *name, const char *defval);
 /* 获取当前时间戳字符串 (ISO 8601) */
 char *util_timestamp_now(void);
 
+/* 解析带 k/m/g 后缀的数字（对齐 bash 版 util_parse_size） */
+long util_parse_size(const char *s);
+
 /* 获取当前 epoch 秒 */
 long util_epoch_seconds(void);
 

@@ -588,28 +588,13 @@ char *build_claude_request(const char *model, const char *system_prompt,
         sb_append_json_string(&buf, system_prompt);
     }
 
-    /* thinking */
+    /* thinking — 对齐 bash 版: {"type":"adaptive"} + {"output_config":{"effort":"high"}} */
     if (thinking && strcmp(thinking, "disabled") != 0) {
-        int budget = 10000;
-        if (effort) {
-            if (strcmp(effort, "low") == 0) budget = 10000;
-            else if (strcmp(effort, "medium") == 0) budget = 10000;
-            else if (strcmp(effort, "high") == 0) budget = 10000;
-            else if (strcmp(effort, "xhigh") == 0) budget = 30000;
-            else if (strcmp(effort, "max") == 0) budget = -1;
-        }
         sb_append(&buf, ",\"thinking\":{\"type\":");
-        if (strcmp(thinking, "enabled") == 0) {
-            sb_append(&buf, "\"enabled\"");
-        } else {
-            sb_append(&buf, "\"enabled\"");
-        }
-        sb_append(&buf, ",\"budget_tokens\":");
-        if (budget < 0) {
-            sb_appendf(&buf, "%d", max_tokens);
-        } else {
-            sb_appendf(&buf, "%d", budget);
-        }
+        sb_append_json_string(&buf, thinking);
+        sb_append(&buf, "}");
+        sb_append(&buf, ",\"output_config\":{\"effort\":");
+        sb_append_json_string(&buf, effort ? effort : "high");
         sb_append(&buf, "}");
     }
 
