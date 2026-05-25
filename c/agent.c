@@ -2149,7 +2149,10 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         }
     }
     if (keep < 4) keep = 4;
-    if (keep >= line_count) {
+    /* 对齐 bash 版: plan_clear/plan_confirm 绕过 keep >= line_count 守卫 */
+    if (keep >= line_count &&
+        strcmp(trigger, "store_plan_clear") != 0 &&
+        strcmp(trigger, "plan_confirm") != 0) {
         for (int i = 0; i < line_count; i++) free(lines[i]);
         free(lines);
         return 0;

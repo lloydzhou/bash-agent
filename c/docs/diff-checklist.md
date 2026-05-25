@@ -86,10 +86,11 @@
 - **C**：静默继续（conversation 已 trim 但 summary 为空/旧值）
 - **影响**：C 版可能在无 summary 的情况下继续运行
 
-### 2.7 🟡 Compact：plan_* 强制压缩可能被 guard 阻止
+### 2.7 ~~🟡 Compact：plan_* 强制压缩可能被 guard 阻止~~ ✅
 - **Bash**：plan_clear/plan_confirm 强制执行，即使 keep==0
 - **C**：`if (keep >= line_count) return 0` 可能阻止 plan_* 的强制压缩
-- **影响**：plan_clear/plan_confirm 可能不生效
+- **修复**：添加 trigger 检查，plan_clear/plan_confirm 绕过守卫
+- **影响**：plan_clear/plan_confirm 现在可以正常工作
 
 ### 2.8 🟡 Compact：compact_request_count 无条件 +1
 - **Bash**：只有 summary 成功才 +1（通过 `agent_record_usage`）
