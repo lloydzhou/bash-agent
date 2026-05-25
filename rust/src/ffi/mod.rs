@@ -49,12 +49,18 @@ pub fn line(prompt: &str) -> Result<String, LineError> {
     })?;
 
     // Clear errno before calling linenoise
+    #[cfg(target_os = "macos")]
     unsafe { *libc::__error() = 0 };
+    #[cfg(target_os = "linux")]
+    unsafe { *libc::__errno_location() = 0 };
 
     let ptr = unsafe { linenoise(c_prompt.as_ptr()) };
 
     if ptr.is_null() {
+        #[cfg(target_os = "macos")]
         let err = unsafe { *libc::__error() };
+        #[cfg(target_os = "linux")]
+        let err = unsafe { *libc::__errno_location() };
         if err == libc::EAGAIN {
             Err(LineError::Interrupted)
         } else if err == libc::ENOENT || err == 0 {
