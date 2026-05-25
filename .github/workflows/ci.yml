@@ -193,7 +193,10 @@ jobs:
           sudo apt-get install -y libcurl4-openssl-dev ripgrep
           if [ "${{ matrix.suffix }}" = "linux-arm64" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu
+            # 添加 arm64 架构支持（使用 ports 源，避免 security 源 404）
             sudo dpkg --add-architecture arm64
+            echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse' | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+            echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse' | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
             sudo apt-get update
             sudo apt-get install -y libcurl4-openssl-dev:arm64
           fi
