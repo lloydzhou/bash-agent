@@ -98,13 +98,19 @@ DisplayMessage display_msg_sub_agent_start(const char *session_id, const char *d
     return m;
 }
 
-DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *status, const char *summary) {
+DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *status,
+                                             const char *thinking, const char *text,
+                                             int in_tokens, int out_tokens) {
     DisplayMessage m;
     memset(&m, 0, sizeof(m));
     m.type = DISPLAY_SUB_AGENT_RESULT;
     m.session_id = util_strdup(session_id);
-    m.content = util_strdup(summary);
+    m.content = util_strdup(text ? text : "");
     m.tool_exit_code = (strcmp(status, "ok") == 0) ? 0 : 1;
+    m.in_tokens = in_tokens;
+    m.out_tokens = out_tokens;
+    /* 把 thinking 存入 tool_name 字段复用（避免改结构体） */
+    m.tool_name = util_strdup(thinking ? thinking : "");
     return m;
 }
 

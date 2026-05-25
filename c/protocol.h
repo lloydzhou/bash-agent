@@ -94,7 +94,9 @@ DisplayMessage display_msg_usage(int in_tok, int out_tok, int cache_read, int ca
 DisplayMessage display_msg_stop(const char *reason);
 DisplayMessage display_msg_error(const char *content);
 DisplayMessage display_msg_sub_agent_start(const char *session_id, const char *desc);
-DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *status, const char *summary);
+DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *status,
+                                             const char *thinking, const char *text,
+                                             int in_tokens, int out_tokens);
 DisplayMessage display_msg_context_update(int dropped, int kept);
 
 /* 释放 DisplayMessage 内部动态分配的内存 */

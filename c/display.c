@@ -190,11 +190,8 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             break;
 
         case DISPLAY_SUB_AGENT_START:
-            ensure_newline(ds, out);
-            fprintf(out, "\x1b[35m[sub-agent %s] started\x1b[0m\n",
-                    msg->session_id ? msg->session_id : "?");
-            fflush(out);
-            ds->last_char[0] = '\n';
+            /* bash 版不单独展示 start，靠 tool_result 显示。
+             * C 版也一样，不额外输出。 */
             break;
 
         case DISPLAY_CONTEXT_UPDATE:
@@ -205,21 +202,34 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             ds->last_char[0] = '\n';
             break;
 
-        case DISPLAY_SUB_AGENT_RESULT:
+        case DISPLAY_SUB_AGENT_RESULT: {
             ensure_newline(ds, out);
             if (msg->tool_exit_code == 0) {
-                fprintf(out, "\x1b[35m[sub-agent %s] completed\x1b[0m\n",
-                        msg->session_id ? msg->session_id : "?");
+                fprintf(out, "\x1b[35m[sub-agent %s] completed (in=%d, out=%d)\x1b[0m\n",
+                        msg->session_id ? msg->session_id : "?",
+                        msg->in_tokens, msg->out_tokens);
             } else {
                 fprintf(out, "\x1b[31m[sub-agent %s] failed\x1b[0m\n",
                         msg->session_id ? msg->session_id : "?");
             }
+            /* thinking — 灰色，截断 120 字符 */
+            if (msg->tool_name && msg->tool_name[0]) {
+                int tlen = (int)strlen(msg->tool_name);
+                fprintf(out, "\x1b[90m%.*s%s\x1b[0m\n",
+                        tlen > 120 ? 120 : tlen, msg->tool_name,
+                        tlen > 120 ? "…" : "");
+            }
+            /* text — 截断 120 字符 */
             if (msg->content && msg->content[0]) {
-                fprintf(out, "%s\n", msg->content);
+                int clen = (int)strlen(msg->content);
+                fprintf(out, "%.*s%s\n",
+                        clen > 120 ? 120 : clen, msg->content,
+                        clen > 120 ? "…" : "");
             }
             fflush(out);
             ds->last_char[0] = '\n';
             break;
+        }
     }
 }
 

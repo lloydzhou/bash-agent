@@ -1,10 +1,14 @@
 #include "agent.h"
+#include "tools_embed.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/utsname.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 /* ============================================================
  * 流式 SSE 回调 — 同时累积到 accum 并实时推送到 display queue
@@ -325,6 +329,14 @@ static char *display_msg_to_event(DisplayMessage *msg) {
     case DISPLAY_SUB_AGENT_RESULT:
         sb_append(&buf, "{\"type\":\"sub_agent_result\",\"session_id\":");
         sb_append_json_string(&buf, msg->session_id ? msg->session_id : "");
+        sb_append(&buf, ",\"status\":");
+        sb_append_json_string(&buf, (msg->tool_exit_code == 0) ? "ok" : "failed");
+        sb_appendf(&buf, ",\"input_tokens\":%d,\"output_tokens\":%d",
+                   msg->in_tokens, msg->out_tokens);
+        sb_append(&buf, ",\"thinking\":");
+        sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+        sb_append(&buf, ",\"text\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
         sb_append_char(&buf, '}');
         break;
     default:
@@ -553,7 +565,17 @@ void agent_replay_events(Agent *agent, int max_turns) {
             }
             char *sid = json_get_string(jp.val, "session_id");
             char *status = json_get_string(jp.val, "status");
+            char *thinking = json_get_string(jp.val, "thinking");
             char *text = json_get_string(jp.val, "text");
+            int in_tok = json_get_int(jp.val, "input_tokens");
+            int out_tok = json_get_int(jp.val, "output_tokens");
+            /* 截断 thinking */
+            if (thinking) {
+                size_t len = strlen(thinking);
+                if (len > 120) {
+                    thinking[120] = '\0';
+                }
+            }
             /* 截断 text */
             if (text) {
                 size_t len = strlen(text);
@@ -565,9 +587,10 @@ void agent_replay_events(Agent *agent, int max_turns) {
                 }
             }
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_sub_agent_result(sid ? sid : "", status ? status : "ok", text ? text : "");
+            *dm = display_msg_sub_agent_result(sid ? sid : "", status ? status : "ok",
+                                                thinking, text ? text : "", in_tok, out_tok);
             push_display(agent->display_queue, dm);
-            free(sid); free(status); free(text);
+            free(sid); free(status); free(thinking); free(text);
         }
         else if (strcmp(type, "error") == 0) {
             /* flush 累积 */
@@ -617,11 +640,12 @@ void agent_replay_events(Agent *agent, int max_turns) {
  * agent_loop — 单次 LLM 对话循环
  * ============================================================ */
 
-int agent_loop(Agent *agent, const char *user_input) {
+int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     if (!user_input || !user_input[0]) return 0;
 
-    /* 记录 user_input 事件（与 bash 版对齐） */
-    {
+    /* 记录 user_input 事件 — 仅当 turn_kind 为 "user_input" 时记录
+     * （与 bash 版对齐：sub_agent_result turn 不记录 user_input 事件） */
+    if (turn_kind == NULL || strcmp(turn_kind, "user_input") == 0) {
         StrBuf evt;
         sb_init(&evt);
         sb_append(&evt, "{\"type\":\"user_input\",\"content\":");
@@ -690,9 +714,8 @@ int agent_loop(Agent *agent, const char *user_input) {
             return -1;
         }
 
-        /* 读取 tools.json */
-        char *tools_json = util_read_file("c/tools.json");
-        if (!tools_json) tools_json = util_strdup("[]");
+        /* tools.json 编译时嵌入 */
+        const char *tools_json = embedded_tools_json;
 
         /* 构建请求体 */
         char *body = build_claude_request(agent->model, system_prompt,
@@ -734,7 +757,7 @@ int agent_loop(Agent *agent, const char *user_input) {
 
         free(body);
         free(system_prompt);
-        free(tools_json);
+        /* tools_json 是嵌入常量，不需要 free */
         for (int i = 0; i < line_count; i++) free(lines[i]);
         free(lines);
 
@@ -781,6 +804,12 @@ int agent_loop(Agent *agent, const char *user_input) {
                         field = json_get_string(jp2.val, "command");
                     } else if (strcmp(tc->name, "Skill") == 0) {
                         field = json_get_string(jp2.val, "name");
+                    } else if (strcmp(tc->name, "SubAgent") == 0) {
+                        field = json_get_string(jp2.val, "description");
+                    } else if (strcmp(tc->name, "WebSearch") == 0) {
+                        field = json_get_string(jp2.val, "query");
+                    } else if (strcmp(tc->name, "WebFetch") == 0 || strcmp(tc->name, "WebReader") == 0) {
+                        field = json_get_string(jp2.val, "url");
                     } else if (strcmp(tc->name, "TodoWrite") == 0) {
                         /* 计算 completed/total */
                         JsonVal todos_arr = json_get(jp2.val, "todos");
@@ -1034,7 +1063,7 @@ int agent_main_loop(Agent *agent) {
                  * 模仿 Rust 版 agent_loop_stream 入口的 CTRLC_FLAG.swap(false) 模式。 */
                 agent->interrupted = 0;
 
-                agent_loop(agent, msg->data.user_input.text);
+                agent_loop(agent, msg->data.user_input.text, "user_input");
 
                 /* 如果有活跃的 sub-agent，继续处理它们的结果，
                  * 直到所有 sub-agent 完成才 signal done。
@@ -1069,13 +1098,11 @@ int agent_main_loop(Agent *agent) {
                                    sub_msg->data.agent_result.out_tokens,
                                    sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
                                    sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
-                        agent_loop(agent, ctx.data);
+                        agent_loop(agent, ctx.data, "sub_agent_result");
                         sb_free(&ctx);
                     } else {
-                        /* 非预期消息（如另一个 USER_INPUT），放回队列 */
                         /* 简单处理：也执行它 */
-                        /* 这里不会发生，因为 readline 线程在等 done */
-                        agent_loop(agent, sub_msg->data.user_input.text);
+                        agent_loop(agent, sub_msg->data.user_input.text, "user_input");
                     }
                     input_message_free(sub_msg);
                     free(sub_msg);
@@ -1112,7 +1139,7 @@ int agent_main_loop(Agent *agent) {
                            msg->data.agent_result.out_tokens,
                            msg->data.agent_result.thinking ? msg->data.agent_result.thinking : "",
                            msg->data.agent_result.text ? msg->data.agent_result.text : "");
-                agent_loop(agent, ctx.data);
+                agent_loop(agent, ctx.data, "sub_agent_result");
                 sb_free(&ctx);
                 break;
             }
@@ -1170,7 +1197,7 @@ static void *sub_agent_thread_fn(void *arg) {
     /* (在子线程中不做这个，因为工具执行用的是 popen) */
 
     /* 执行 agent_loop */
-    int rc = agent_loop(sub, args->prompt);
+    int rc = agent_loop(sub, args->prompt, "user_input");
 
     /* 提取结果：取最后一条 assistant 消息 */
     char **lines = NULL;
@@ -1303,7 +1330,8 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
 
     /* 显示结果 */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-    *dm = display_msg_sub_agent_result(session_id, status, text);
+    *dm = display_msg_sub_agent_result(session_id, status, thinking,
+                                       text, in_tokens, out_tokens);
     push_display_event(&agent->paths, agent->display_queue, dm);
 
     /* 记录 usage 事件（kind=sub_agent, sub_session_id） */
@@ -1320,25 +1348,6 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
     }
 
     /* 更新统计 — TODO: 复用 bash 的 store_stats_update 模式 */
-    /* bash: store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out ... */
-
-    /* 记录 sub_agent_result 事件 */
-    {
-        StrBuf evt;
-        sb_init(&evt);
-        sb_appendf(&evt, "{\"type\":\"sub_agent_result\",\"session_id\":");
-        sb_append_json_string(&evt, session_id);
-        sb_appendf(&evt, ",\"status\":");
-        sb_append_json_string(&evt, status);
-        sb_appendf(&evt, ",\"input_tokens\":%d,\"output_tokens\":%d", in_tokens, out_tokens);
-        sb_appendf(&evt, ",\"thinking\":");
-        sb_append_json_string(&evt, thinking ? thinking : "");
-        sb_appendf(&evt, ",\"text\":");
-        sb_append_json_string(&evt, text ? text : "");
-        sb_append(&evt, "}");
-        store_event_append(&agent->paths, evt.data);
-        sb_free(&evt);
-    }
 
     /* 记录 sub_agent_end 事件 */
     {
@@ -1357,209 +1366,431 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
 }
 
 /* ============================================================
- * system prompt 构建
+ * system prompt 构建 — 辅助函数
+ * ============================================================ */
+
+/* 追加 XML section：<tag>\ncontent\n</tag> 或 <tag name="name">\ncontent\n</tag> */
+static void prompt_append_section(StrBuf *buf, const char *tag,
+                                   const char *content, const char *name) {
+    if (!content || !content[0]) return;
+    if (name && name[0]) {
+        sb_appendf(buf, "<%s name=\"%s\">\n%s\n</%s>\n", tag, name, content, tag);
+    } else {
+        sb_appendf(buf, "<%s>\n%s\n</%s>\n", tag, content, tag);
+    }
+}
+
+/* 检测 locale：LC_ALL → LC_MESSAGES → LANG → "en_US"，去掉 .xxx 后缀 */
+static const char *detect_locale(void) {
+    const char *loc = util_env("LC_ALL", NULL);
+    if (!loc || !loc[0]) loc = util_env("LC_MESSAGES", NULL);
+    if (!loc || !loc[0]) loc = util_env("LANG", NULL);
+    if (!loc || !loc[0]) loc = "en_US";
+    /* 去掉 .xxx 后缀（静态缓冲区，需调用者立即使用） */
+    static __thread char buf[128];
+    strncpy(buf, loc, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *dot = strchr(buf, '.');
+    if (dot) *dot = '\0';
+    return buf;
+}
+
+/* 在 dir 下查找指令文件，返回路径（需 free） */
+static char *find_instruction_file(const char *dir) {
+    const char *candidates[] = {
+        "AGENTS.md", "AGENT.md", "CLAUDE.md", ".claude/CLAUDE.md", NULL
+    };
+    for (int i = 0; candidates[i]; i++) {
+        char *path = util_path_join(dir, candidates[i]);
+        FILE *f = fopen(path, "r");
+        if (f) {
+            fclose(f);
+            return path;
+        }
+        free(path);
+    }
+    return NULL;
+}
+
+/* 从 SKILL.md 内容中提取摘要：优先 description: 行，否则取第一个非空非标题非---行 */
+static void extract_skill_summary(const char *md, StrBuf *out) {
+    const char *p = md;
+    char line[1024];
+    int found = 0;
+    char fallback[1024] = "";
+
+    while (*p) {
+        /* 读取一行 */
+        int li = 0;
+        while (*p && *p != '\n' && li < (int)sizeof(line) - 1) {
+            line[li++] = *p++;
+        }
+        line[li] = '\0';
+        if (*p == '\n') p++;
+
+        /* trim */
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        char *e = s + strlen(s);
+        while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) e--;
+        *e = '\0';
+        if (*s == '\0') continue;
+
+        /* description: 行 */
+        if (strncmp(s, "description:", 12) == 0) {
+            char *val = s + 12;
+            while (*val == ' ' || *val == '\t') val++;
+            /* 去掉引号 */
+            size_t vl = strlen(val);
+            if (vl >= 2 && ((val[0] == '"' && val[vl-1] == '"') ||
+                            (val[0] == '\'' && val[vl-1] == '\''))) {
+                val++;
+                vl -= 2;
+            }
+            sb_appendn(out, val, vl);
+            found = 1;
+            return;
+        }
+        /* fallback：非标题、非---、非``` */
+        if (!found && fallback[0] == '\0' && s[0] != '#' &&
+            !(s[0] == '-' && s[1] == '-' && s[2] == '-' && s[3] == '\0') &&
+            !(s[0] == '`' && s[1] == '`' && s[2] == '`')) {
+            strncpy(fallback, s, sizeof(fallback) - 1);
+            fallback[sizeof(fallback) - 1] = '\0';
+        }
+    }
+    if (!found && fallback[0]) {
+        sb_append(out, fallback);
+    }
+}
+
+/* 扫描 skill 目录列表（去重），构建 skill-index */
+static void build_skill_index(StrBuf *index, const char *cwd, const char *home) {
+    /* 搜索路径 */
+    char *dirs[4];
+    int dcount = 0;
+    {
+        char *p = util_path_join(cwd, ".claude/skills");
+        dirs[dcount++] = p;
+        p = util_path_join(cwd, "skills");
+        dirs[dcount++] = p;
+        if (home && home[0]) {
+            p = util_path_join(home, ".claude/skills");
+            dirs[dcount++] = p;
+        }
+        dirs[dcount] = NULL;
+    }
+
+    /* 去重 seen 列表 */
+    char *seen[256];
+    int seen_count = 0;
+
+    for (int d = 0; d < dcount; d++) {
+        DIR *dir = opendir(dirs[d]);
+        if (!dir) continue;
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            /* 检查是否已 seen */
+            int dup = 0;
+            for (int s = 0; s < seen_count; s++) {
+                if (strcmp(seen[s], ent->d_name) == 0) { dup = 1; break; }
+            }
+            if (dup) continue;
+
+            /* 检查 SKILL.md 是否存在 */
+            char *md_path = util_path_join(dirs[d], ent->d_name);
+            char *skill_md = util_path_join(md_path, "SKILL.md");
+            free(md_path);
+            char *md_content = util_read_file(skill_md);
+            free(skill_md);
+            if (!md_content || !md_content[0]) { free(md_content); continue; }
+
+            /* 记录 seen */
+            if (seen_count < 256) seen[seen_count++] = util_strdup(ent->d_name);
+
+            /* 提取摘要 */
+            StrBuf summary;
+            sb_init(&summary);
+            extract_skill_summary(md_content, &summary);
+            free(md_content);
+
+            sb_appendf(index, "- %s", ent->d_name);
+            if (summary.len > 0) sb_appendf(index, ": %s", summary.data);
+            sb_append_char(index, '\n');
+            sb_free(&summary);
+        }
+        closedir(dir);
+    }
+    /* 清理 */
+    for (int d = 0; d < dcount; d++) free(dirs[d]);
+    for (int s = 0; s < seen_count; s++) free(seen[s]);
+}
+
+/* 加载 skill 内容，替换 ${BASH_AGENT_SKILL_DIR}，返回需 free 的字符串 */
+static char *load_skill_content(const char *skill_name, const char *cwd, const char *home, char **out_skill_dir) {
+    /* 搜索路径 */
+    char *dirs[4];
+    int dcount = 0;
+    {
+        char *p = util_path_join(cwd, ".claude/skills");
+        dirs[dcount++] = p;
+        p = util_path_join(cwd, "skills");
+        dirs[dcount++] = p;
+        if (home && home[0]) {
+            p = util_path_join(home, ".claude/skills");
+            dirs[dcount++] = p;
+        }
+        dirs[dcount] = NULL;
+    }
+
+    for (int d = 0; d < dcount; d++) {
+        char *skill_dir_path = util_path_join(dirs[d], skill_name);
+        char *md_path = util_path_join(skill_dir_path, "SKILL.md");
+        char *content = util_read_file(md_path);
+        free(md_path);
+        if (content) {
+            /* 替换 ${BASH_AGENT_SKILL_DIR} */
+            const char *placeholder = strstr(content, "${BASH_AGENT_SKILL_DIR}");
+            if (placeholder) {
+                StrBuf replaced;
+                sb_init(&replaced);
+                size_t prefix_len = placeholder - content;
+                sb_appendn(&replaced, content, prefix_len);
+                sb_append(&replaced, skill_dir_path);
+                sb_append(&replaced, placeholder + strlen("${BASH_AGENT_SKILL_DIR}"));
+                free(content);
+                content = replaced.data;
+            }
+            /* 格式: Base directory: <dir>\n\n<content> */
+            StrBuf full;
+            sb_init(&full);
+            sb_appendf(&full, "Base directory: %s\n\n%s", skill_dir_path, content);
+            free(content);
+            if (out_skill_dir) *out_skill_dir = skill_dir_path;
+            else free(skill_dir_path);
+            for (int i = 0; i < dcount; i++) free(dirs[i]);
+            return full.data;
+        }
+        free(skill_dir_path);
+    }
+    for (int i = 0; i < dcount; i++) free(dirs[i]);
+    return NULL;
+}
+
+/* ============================================================
+ * system prompt 构建 — 主函数
  * ============================================================ */
 
 char *agent_build_prompt(Agent *agent) {
     StrBuf buf;
     sb_init(&buf);
 
-    /* 简化版 system prompt — 与 bash/go/rust 对齐需要完整移植 agent_build_prompt */
-    sb_append(&buf, "You are bash-agent, a lightweight coding agent that works in a terminal.\n");
-    sb_appendf(&buf, "pwd: %s\n", agent->cwd);
-    sb_appendf(&buf, "home: %s\n", agent->home);
-    sb_append(&buf, "platform: Darwin\n");
-    sb_appendf(&buf, "shell: %s\n", util_env("SHELL", "/bin/zsh"));
-    sb_append(&buf, "\n- Be concise and concrete. No pleasantries, no explanations unless asked.\n");
-    sb_append(&buf, "- Prefer safe, exact edits.\n");
-    sb_append(&buf, "- Report failures clearly.\n");
+    const char *locale = detect_locale();
+    int is_zh = (locale[0] == 'z' && locale[1] == 'h');
 
-    /* ---- Instruction files ---- */
-    /* 搜索路径与 bash 版本一致：
-       全局: $HOME/.bash-agent/{AGENTS.md,AGENT.md,CLAUDE.md,.claude/CLAUDE.md}
-       项目: $CWD/{AGENTS.md,AGENT.md,CLAUDE.md,.claude/CLAUDE.md} */
+    /* 1. agent-identity */
     {
-        const char *global_candidates[] = {
-            "/AGENTS.md", "/AGENT.md", "/CLAUDE.md", "/.claude/CLAUDE.md", NULL
-        };
-        /* 全局指令 */
-        for (int c = 0; global_candidates[c]; c++) {
-            StrBuf path;
-            sb_init(&path);
-            sb_appendf(&path, "%s/.bash-agent%s", agent->home, global_candidates[c]);
-            char *content = util_read_file(path.data);
-            sb_free(&path);
-            if (content && content[0]) {
-                sb_appendf(&buf, "\n<instruction-file name=\"global\">\n%s\n</instruction-file>\n", content);
-                free(content);
-                break;
-            }
-            free(content);
-        }
-        /* 项目指令 */
-        for (int c = 0; global_candidates[c]; c++) {
-            StrBuf path;
-            sb_init(&path);
-            sb_appendf(&path, "%s%s", agent->cwd, global_candidates[c]);
-            char *content = util_read_file(path.data);
-            sb_free(&path);
-            if (content && content[0]) {
-                sb_appendf(&buf, "\n<instruction-file name=\"project\">\n%s\n</instruction-file>\n", content);
-                free(content);
-                break;
-            }
-            free(content);
-        }
+        const char *identity = "You are bash-agent, a lightweight coding agent that works in a terminal.";
+        if (is_zh) identity = "你是 bash-agent，一个在终端中运行的轻量级编码智能体。";
+        prompt_append_section(&buf, "agent-identity", identity, NULL);
     }
 
-    /* ---- Skills ---- */
-    /* Skill index */
+    /* 2. environment */
     {
-        /* 扫描 .claude/skills/ 和 skills/ 目录 */
-        StrBuf skill_index;
-        sb_init(&skill_index);
+        StrBuf env;
+        sb_init(&env);
+        sb_appendf(&env, "lang: %s\n", locale);
+        sb_appendf(&env, "pwd: %s\n", agent->cwd);
+        sb_appendf(&env, "home: %s\n", agent->home);
+        /* platform via uname */
+        {
+            struct utsname uts;
+            if (uname(&uts) == 0) {
+                sb_appendf(&env, "platform: %s\n", uts.sysname);
+            } else {
+                sb_append(&env, "platform: unknown\n");
+            }
+        }
+        sb_appendf(&env, "shell: %s", util_env("SHELL", "/bin/zsh"));
+        prompt_append_section(&buf, "environment", env.data, NULL);
+        sb_free(&env);
+    }
 
-        const char *skill_dirs[] = {
-            ".claude/skills",
-            "skills",
-            NULL
-        };
-        for (int d = 0; skill_dirs[d]; d++) {
-            StrBuf list_cmd;
-            sb_init(&list_cmd);
-            sb_appendf(&list_cmd, "ls -1 '%s' 2>/dev/null", skill_dirs[d]);
-            FILE *pipe = popen(list_cmd.data, "r");
-            if (pipe) {
-                char linebuf[256];
-                while (fgets(linebuf, sizeof(linebuf), pipe)) {
-                    /* trim newline */
-                    size_t len = strlen(linebuf);
-                    if (len > 0 && linebuf[len-1] == '\n') linebuf[--len] = '\0';
-                    /* 读取 SKILL.md 的第一段作为摘要 */
-                    StrBuf skill_path;
-                    sb_init(&skill_path);
-                    sb_appendf(&skill_path, "%s/%s/SKILL.md", skill_dirs[d], linebuf);
-                    char *md = util_read_file(skill_path.data);
-                    sb_free(&skill_path);
-                    if (md && md[0]) {
-                        /* 提取第一行标题和后续内容作为摘要 */
-                        char *nl = strchr(md, '\n');
-                        /* 跳过标题行，取第一段非空文本 */
-                        char *desc = nl ? nl + 1 : md;
-                        while (*desc == '\n' || *desc == '\r') desc++;
-                        char *end = strstr(desc, "\n\n");
-                        if (end) *end = '\0';
-                        sb_appendf(&skill_index, "- %s: %s\n", linebuf, desc);
-                    }
-                    free(md);
+    /* 3. rules */
+    {
+        const char *rules = "- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n"
+                            "- Prefer safe, exact edits.\n"
+                            "- Report failures clearly.";
+        prompt_append_section(&buf, "rules", rules, NULL);
+    }
+
+    /* 4. using-your-tools */
+    {
+        const char *tool_guidance =
+            "- Use Read for a single file. If you need multiple files, call Read multiple times.\n"
+            "- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n"
+            "- Use Glob and Grep for one pattern at a time.\n"
+            "- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n"
+            "- Use multiple tool calls in one response when they are independent.\n"
+            "- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n"
+            "- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n"
+            "- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n"
+            "- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.";
+        prompt_append_section(&buf, "using-your-tools", tool_guidance, NULL);
+    }
+
+    /* 5. sub-agent-guidance */
+    {
+        const char *sag =
+            "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n"
+            "- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n"
+            "- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n"
+            "- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n"
+            "- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n"
+            "- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.\n"
+            "- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.";
+        prompt_append_section(&buf, "sub-agent-guidance", sag, NULL);
+    }
+
+    /* 6. todo-guidance */
+    {
+        const char *todo =
+            "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n"
+            "- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n"
+            "- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n"
+            "- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n"
+            "- Keep the checklist short, concrete, and actionable.\n"
+            "- Prefer exactly one in_progress item when work is actively underway.\n"
+            "- Mark items completed immediately after finishing them, and remove stale items that no longer matter.";
+        prompt_append_section(&buf, "todo-guidance", todo, NULL);
+    }
+
+    /* 7. plan-lifecycle-guidance */
+    {
+        StrBuf plg;
+        sb_init(&plg);
+        sb_append(&plg, "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n");
+        sb_appendf(&plg, "- **Files**: PLAN_DRAFT_FILE: %s | PLAN_FILE: %s\n",
+                   agent->paths.plan_draft ? agent->paths.plan_draft : "<not set>",
+                   agent->paths.plan ? agent->paths.plan : "<not set>");
+        sb_append(&plg, "- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n");
+        sb_append(&plg, "- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n"
+                        "  Every user reply MUST be classified as exactly ONE of:\n"
+                        "  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n"
+                        "  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n"
+                        "  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n"
+                        "  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n");
+        sb_append(&plg, "- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n"
+                        "- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.");
+        prompt_append_section(&buf, "plan-lifecycle-guidance", plg.data, NULL);
+        sb_free(&plg);
+    }
+
+    /* 8. instruction-files */
+    {
+        StrBuf ifiles;
+        sb_init(&ifiles);
+        /* 全局: $HOME/.bash-agent/ */
+        {
+            StrBuf global_dir;
+            sb_init(&global_dir);
+            sb_appendf(&global_dir, "%s/.bash-agent", agent->home);
+            char *gf = find_instruction_file(global_dir.data);
+            sb_free(&global_dir);
+            if (gf) {
+                char *gc = util_read_file(gf);
+                free(gf);
+                if (gc && gc[0]) {
+                    prompt_append_section(&ifiles, "instruction-file", gc, "global");
                 }
-                pclose(pipe);
+                free(gc);
             }
-            sb_free(&list_cmd);
         }
-
-        if (skill_index.len > 0) {
-            sb_append(&buf, "\n<skill-index>\n");
-            sb_append(&buf, skill_index.data);
-            sb_append(&buf, "</skill-index>\n");
+        /* 项目: $CWD/ */
+        {
+            char *pf = find_instruction_file(agent->cwd);
+            if (pf) {
+                char *pc = util_read_file(pf);
+                free(pf);
+                if (pc && pc[0]) {
+                    prompt_append_section(&ifiles, "instruction-file", pc, "project");
+                }
+                free(pc);
+            }
         }
-        sb_free(&skill_index);
+        prompt_append_section(&buf, "instruction-files", ifiles.data, NULL);
+        sb_free(&ifiles);
     }
 
-    /* 注入选定的 skills */
-    for (int i = 0; i < agent->skill_count; i++) {
-        const char *skill_name = agent->skill_names[i];
-        /* 搜索路径: .claude/skills/NAME/SKILL.md, skills/NAME/SKILL.md, ~/.claude/skills/NAME/SKILL.md */
-        const char *search_paths[] = {
-            ".claude/skills",
-            "skills",
-            NULL
-        };
-        char *skill_content = NULL;
-        for (int d = 0; search_paths[d]; d++) {
-            StrBuf sp;
-            sb_init(&sp);
-            sb_appendf(&sp, "%s/%s/SKILL.md", search_paths[d], skill_name);
-            skill_content = util_read_file(sp.data);
-            sb_free(&sp);
-            if (skill_content) break;
+    /* 9. skill-index */
+    {
+        StrBuf si;
+        sb_init(&si);
+        build_skill_index(&si, agent->cwd, agent->home);
+        /* bash 版去掉尾部 \n */
+        if (si.len > 0 && si.data[si.len - 1] == '\n') {
+            sb_truncate(&si, si.len - 1);
         }
-        if (!skill_content) {
-            /* 尝试 home 目录 */
-            StrBuf sp;
-            sb_init(&sp);
-            sb_appendf(&sp, "%s/.claude/skills/%s/SKILL.md", agent->home, skill_name);
-            skill_content = util_read_file(sp.data);
-            sb_free(&sp);
-        }
-        if (skill_content && skill_content[0]) {
-            /* 替换 ${BASH_AGENT_SKILL_DIR} 占位符 */
-            StrBuf skill_dir;
-            sb_init(&skill_dir);
-            /* 找到 skill 所在目录 */
-            for (int d = 0; search_paths[d]; d++) {
-                StrBuf sp;
-                sb_init(&sp);
-                sb_appendf(&sp, "%s/%s/SKILL.md", search_paths[d], skill_name);
-                FILE *f = fopen(sp.data, "r");
-                sb_free(&sp);
-                if (f) { fclose(f); sb_appendf(&skill_dir, "%s/%s", search_paths[d], skill_name); break; }
-            }
-            if (skill_dir.len == 0) {
-                sb_appendf(&skill_dir, "%s/.claude/skills/%s", agent->home, skill_name);
-            }
-
-            /* 简单替换 ${BASH_AGENT_SKILL_DIR}/helper.sh 为实际路径 */
-            char *placeholder = strstr(skill_content, "${BASH_AGENT_SKILL_DIR}");
-            if (placeholder) {
-                StrBuf replaced;
-                sb_init(&replaced);
-                size_t prefix_len = placeholder - skill_content;
-                sb_appendn(&replaced, skill_content, prefix_len);
-                sb_append(&replaced, skill_dir.data);
-                sb_append(&replaced, placeholder + strlen("${BASH_AGENT_SKILL_DIR}"));
-                free(skill_content);
-                skill_content = replaced.data;
-            }
-
-            sb_appendf(&buf, "\n<skill name=\"%s\" path=\"%s\">\n%s\n</skill>\n",
-                       skill_name, skill_dir.data, skill_content);
-            sb_free(&skill_dir);
-        }
-        free(skill_content);
+        prompt_append_section(&buf, "skill-index", si.data, NULL);
+        sb_free(&si);
     }
 
-    /* 读取 summary */
-    char *summary = store_summary_get(&agent->paths);
-    if (summary) {
-        sb_appendf(&buf, "\n<context-snapshot>\n%s\n</context-snapshot>\n", summary);
+    /* 10. selected-skills */
+    {
+        StrBuf skills;
+        sb_init(&skills);
+        for (int i = 0; i < agent->skill_count; i++) {
+            const char *skill_name = agent->skill_names[i];
+            char *skill_dir = NULL;
+            char *content = load_skill_content(skill_name, agent->cwd, agent->home, &skill_dir);
+            if (content) {
+                prompt_append_section(&skills, "skill", content, skill_name);
+                free(skill_dir);
+                free(content);
+            }
+        }
+        prompt_append_section(&buf, "selected-skills", skills.data, NULL);
+        sb_free(&skills);
+    }
+
+    /* 11. current-plan */
+    {
+        char *plan = util_read_file(agent->paths.plan);
+        if (plan && plan[0]) {
+            /* bash 版 name 属性 = plan 文件路径 */
+            prompt_append_section(&buf, "current-plan", plan, agent->paths.plan);
+        }
+        free(plan);
+    }
+
+    /* 12. context-snapshot */
+    {
+        char *summary = store_summary_get(&agent->paths);
+        if (summary && summary[0]) {
+            prompt_append_section(&buf, "context-snapshot", summary, NULL);
+        }
         free(summary);
     }
 
-    /* 读取 plan */
-    char *plan = util_read_file(agent->paths.plan);
-    if (plan && plan[0]) {
-        sb_appendf(&buf, "\n<current-plan>\n%s\n</current-plan>\n", plan);
+    /* 13. output-language */
+    {
+        StrBuf ol;
+        sb_init(&ol);
+        if (is_zh) {
+            sb_append(&ol, "再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！");
+        } else {
+            sb_appendf(&ol, "MUST use \"%s\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.", locale);
+        }
+        prompt_append_section(&buf, "output-language", ol.data, NULL);
+        sb_free(&ol);
     }
-    free(plan);
 
-    /* Plan lifecycle guidance */
-    sb_append(&buf, "\n<plan-lifecycle-guidance>\n"
-        "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n"
-        "- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n"
-        "- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), TodoWrite=progress tracker. Do NOT mix.\n"
-        "</plan-lifecycle-guidance>\n");
-
-    /* Todo guidance（硬编码） */
-    sb_append(&buf, "\n<todo-guidance>\n"
-        "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n"
-        "- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n"
-        "- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n"
-        "- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n"
-        "- Keep the checklist short, concrete, and actionable.\n"
-        "- Prefer exactly one in_progress item when work is actively underway.\n"
-        "- Mark items completed immediately after finishing them, and remove stale items that no longer matter.\n"
-        "</todo-guidance>\n");
+    /* 去掉末尾 \n（bash 版 printf '%s' "${output%$'\\n'}"） */
+    if (buf.len > 0 && buf.data[buf.len - 1] == '\n') {
+        buf.data[buf.len - 1] = '\0';
+        buf.len--;
+    }
 
     return buf.data;
 }

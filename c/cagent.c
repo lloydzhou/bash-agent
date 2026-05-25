@@ -312,7 +312,7 @@ int main(int argc, char *argv[]) {
 
         /* 直接执行 agent_loop */
         if (prompt) {
-            agent_loop(agent, prompt);
+            agent_loop(agent, prompt, "user_input");
         } else {
             /* 从 stdin 读取 */
             StrBuf input;
@@ -322,7 +322,7 @@ int main(int argc, char *argv[]) {
                 sb_append(&input, linebuf);
             }
             if (input.len > 0) {
-                agent_loop(agent, input.data);
+                agent_loop(agent, input.data, "user_input");
             }
             sb_free(&input);
         }
@@ -354,7 +354,7 @@ int main(int argc, char *argv[]) {
                                msg->data.agent_result.out_tokens,
                                msg->data.agent_result.thinking ? msg->data.agent_result.thinking : "",
                                msg->data.agent_result.text ? msg->data.agent_result.text : "");
-                    agent_loop(agent, ctx.data);
+                    agent_loop(agent, ctx.data, "sub_agent_result");
                     sb_free(&ctx);
                 }
                 input_message_free(msg);
