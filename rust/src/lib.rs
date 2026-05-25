@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod ffi;
 pub mod sse;
 pub mod util;
 pub mod store;

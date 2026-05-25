@@ -20,12 +20,11 @@ use crate::util::{
     truncate_str,
 };
 use anyhow::{Result, anyhow, bail};
-use rustyline::DefaultEditor;
-use rustyline::error::ReadlineError;
+use crate::ffi;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fs;
-use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::io::IntoRawFd;
 use std::path::PathBuf;
@@ -615,43 +614,25 @@ impl Agent {
         if let Some(parent) = history_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut rl = DefaultEditor::new()?;
-        if let Ok(file) = fs::File::open(&history_path) {
-            for line in BufReader::new(file).lines() {
-                let line = line?;
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                let _ = rl.add_history_entry(trimmed);
-            }
-        }
+        let history_path_str = history_path.to_string_lossy().to_string();
+        ffi::history_load(&history_path_str);
 
         // 启动 readline 线程，将用户输入发送到消息队列
         let msg_tx_arc = self.msg_tx.clone();
-        let history_path_clone = history_path.clone();
+        let history_path_clone = history_path.to_string_lossy().to_string();
         let readline_handle = std::thread::spawn(move || {
-            let mut rl = DefaultEditor::new().unwrap();
-            if let Ok(file) = fs::File::open(&history_path_clone) {
-                for line in BufReader::new(file).lines() {
-                    if let Ok(line) = line {
-                        let trimmed = line.trim();
-                        if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                            let _ = rl.add_history_entry(trimmed);
-                        }
-                    }
-                }
-            }
+            ffi::history_load(&history_path_clone);
+            ffi::history_set_max_len(1000);
             // 借鉴 bash 版本：线程退出时主动 drop 发送端，让 main_loop 收到 Disconnected
             let result = (|| {
                 loop {
-                    let line = match rl.readline("> ") {
+                    let line = match ffi::line("> ") {
                         Ok(s) => s.trim_end().to_string(),
-                        Err(ReadlineError::Interrupted) => {
+                        Err(ffi::LineError::Interrupted) => {
                             // Ctrl+C 重新输入当前行（与 Go 版本一致）
                             continue;
                         }
-                        Err(ReadlineError::Eof) => {
+                        Err(ffi::LineError::Eof) => {
                             // Ctrl+D 退出
                             return;
                         }
@@ -665,14 +646,8 @@ impl Agent {
                     if line == "exit" || line == "quit" {
                         return;
                     }
-                    let _ = rl.add_history_entry(line.as_str());
-                    if let Ok(mut file) = fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&history_path_clone)
-                    {
-                        let _ = writeln!(file, "{line}");
-                    }
+                    ffi::history_add(&line);
+                    ffi::history_save(&history_path_clone);
                     // 创建同步 channel
                     let (done_tx, done_rx) = mpsc::channel();
                     // 将用户输入发送到消息队列
