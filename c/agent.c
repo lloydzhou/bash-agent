@@ -1293,7 +1293,10 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
 
     char *raw_id = util_new_session_id();
     char *sub_session_id;
-    asprintf(&sub_session_id, "sub_%s", raw_id);
+    if (asprintf(&sub_session_id, "sub_%s", raw_id) < 0) {
+        free(raw_id);
+        return util_strdup("Error: failed to allocate session id");
+    }
     free(raw_id);
 
     /* 记录 sub_agent_start 事件 */
