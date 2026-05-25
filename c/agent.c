@@ -1004,7 +1004,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             for (int i = 0; i < accum->tool_count; i++) {
                 if (strcmp(accum->tools[i].name, "PlanClear") == 0 ||
                     strcmp(accum->tools[i].name, "PlanConfirm") == 0) {
-                    agent_compact_context(agent, "store_plan_clear");
+                    agent_compact_context(agent, "plan_clear");
                     break;
                 }
             }
@@ -2037,7 +2037,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     /* 判断是否需要压缩 */
     int need_compact = 0;
 
-    if (strcmp(trigger, "store_plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
+    if (strcmp(trigger, "plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
         need_compact = 1;
     } else {
         /* auto 模式：读取 stats，然后调用 DP 决策 */
@@ -2128,7 +2128,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     /* DP 返回 0（不值得）或 >= line_count（全保留）→ fallback */
     if (keep <= 0 || keep >= line_count) {
         /* plan_clear / plan_confirm 强制按比例截断 */
-        if (strcmp(trigger, "store_plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
+        if (strcmp(trigger, "plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
             keep = (int)((double)line_count * 0.12 + 0.5);
         } else {
             /* auto 模式：检查 context_tokens 是否接近上限 */
@@ -2151,7 +2151,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     if (keep < 4) keep = 4;
     /* 对齐 bash 版: plan_clear/plan_confirm 绕过 keep >= line_count 守卫 */
     if (keep >= line_count &&
-        strcmp(trigger, "store_plan_clear") != 0 &&
+        strcmp(trigger, "plan_clear") != 0 &&
         strcmp(trigger, "plan_confirm") != 0) {
         for (int i = 0; i < line_count; i++) free(lines[i]);
         free(lines);

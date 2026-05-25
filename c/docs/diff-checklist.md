@@ -97,10 +97,11 @@
 - **C**：进入 compact 流程就 +1
 - **影响**：统计不准
 
-### 2.9 🟡 Compact：trigger 值不一致
+### 2.9 ~~🟡 Compact：trigger 值不一致~~ ✅
 - **Bash**：分别传 `plan_clear` / `plan_confirm` / `auto`
 - **C**：PlanClear 和 PlanConfirm 统一传 `"store_plan_clear"`
-- **影响**：事件记录和 display 输出中 trigger 字段不同
+- **修复**：改为与 bash 版一致的 `plan_clear` / `plan_confirm`
+- **影响**：trigger 值现在与 bash 版完全一致
 
 ### 2.10 🟡 Fork 时 C 版不复制 `summary.txt` 和 `plan.md`
 - **Bash**：fork 复制三个文件（summary.txt, plan.md, plan.draft）
