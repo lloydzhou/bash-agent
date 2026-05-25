@@ -10,8 +10,6 @@ build-bash:
 build-go:
 	mkdir -p go/.gocache go/.gomodcache dist
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go mod download
-	@# Patch go-prompt: remove multiline continuation prefix to match Rust rustyline behavior
-	bash scripts/patch-go-prompt.sh go/.gomodcache
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go build -ldflags="-s -w" -trimpath -o ../dist/goagent ./cmd/goagent
 
 build-rust:
@@ -39,7 +37,6 @@ test-bash:
 test-go:
 	mkdir -p go/.gocache go/.gomodcache
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go mod download
-	bash scripts/patch-go-prompt.sh go/.gomodcache
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go test ./...
 
 test-go-e2e: build-go

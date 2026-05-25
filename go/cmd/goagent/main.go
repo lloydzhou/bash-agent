@@ -6,10 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-
-	goprompt "github.com/joeycumines/go-prompt"
 
 	agent "github.com/lloyd/claude-code/bash-agent/go2"
 )
@@ -248,7 +245,7 @@ Examples:
 	}
 }
 
-// runInteractive 交互模式（使用 go-prompt 支持上下箭头历史）
+// runInteractive 交互模式（使用 linenoise + 独立 goroutine，对齐 c/readline.c 架构）
 func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStore, display *agent.TermDisplay, home, model, initialInput string) {
 	fmt.Println("\033[36mbash-agent interactive mode (type 'exit' or Ctrl+D to quit)\033[0m")
 
@@ -258,61 +255,25 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	// 更新终端标题
 	display.SetTitle(store.FormatTitle(model))
 
-	// History 文件
-	historyPath := filepath.Join(home, ".bash-agent", "history")
-	_ = os.MkdirAll(filepath.Dir(historyPath), 0o755)
-
-	// 加载历史
-	var history []string
-	if data, err := os.ReadFile(historyPath); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "#") {
-				history = append(history, line)
-			}
-		}
-	}
+	// 启动 readline goroutine
+	rl := NewReadline(home)
+	rl.Start()
 
 	// 如果有初始输入，先执行
 	if initialInput != "" {
-		if f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			_, _ = fmt.Fprintln(f, initialInput)
-			f.Close()
-		}
 		if err := a.RunLoop(ctx, initialInput, "user_input"); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 	}
 
-	executor := func(in string) {
-		input := strings.TrimSpace(in)
-		if input == "" || input == "exit" || input == "quit" {
-			return
-		}
-		// 追加到历史文件
-		if f, err := os.OpenFile(historyPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			_, _ = fmt.Fprintln(f, input)
-			f.Close()
-		}
+	// 主循环：从 readline goroutine 接收输入，交给 agent 处理
+	for input := range rl.Input() {
 		if err := a.RunLoop(ctx, input, "user_input"); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
+		rl.Done() // 通知 readline goroutine 可以显示下一个提示符
 	}
 
-	p := goprompt.New(
-		executor,
-		goprompt.WithPrefix("> "),
-		goprompt.WithPrefixTextColor(goprompt.Green),
-		goprompt.WithHistory(history),
-		goprompt.WithExecuteOnEnterCallback(func(p *goprompt.Prompt, indentSize int) (int, bool) {
-			return 0, true
-		}),
-		goprompt.WithExitChecker(func(in string, breakline bool) bool {
-			return strings.TrimSpace(in) == "exit" || strings.TrimSpace(in) == "quit"
-		}),
-	)
-
-	_ = p.RunNoExit()
 	fmt.Printf("\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n", store.SessionID())
 }
 
