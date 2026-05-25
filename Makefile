@@ -29,7 +29,7 @@ build-tcode:
 build-c:
 	$(MAKE) -C c
 
-test: test-bash test-go test-rust
+test: test-bash test-go test-rust test-c-e2e
 
 test-bash:
 	bash tests/test.sh
@@ -52,4 +52,5 @@ test-c-e2e: build-c
 	AGENT=./dist/cagent bash tests/test.sh
 
 clean:
-	rm -rf go/dist rust/target c/*.o c/../dist/cagent
+	rm -rf go/dist rust/target dist/cagent
+	$(MAKE) -C c clean

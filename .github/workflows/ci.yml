@@ -164,6 +164,29 @@ jobs:
           name: rustagent-${{ matrix.suffix }}
           path: dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
+  cagent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev
+
+      - name: Build cagent
+        run: make build-c
+
+      - name: Test cagent
+        run: make test-c-e2e
+
+      - name: Upload cagent
+        uses: actions/upload-artifact@v4
+        with:
+          name: cagent-linux-amd64
+          path: dist/cagent
+
   tcode:
     runs-on: ubuntu-latest
     steps:
@@ -184,7 +207,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [bash-agent, goagent, rustagent, tcode]
+    needs: [bash-agent, goagent, rustagent, cagent, tcode]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -211,4 +234,5 @@ jobs:
             dist/rustagent-linux-arm64
             dist/rustagent-darwin-amd64
             dist/rustagent-darwin-arm64
+            dist/cagent-linux-amd64
             dist/tcode

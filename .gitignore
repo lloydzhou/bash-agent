@@ -6,3 +6,5 @@ dist/*
 go/goagent
 go/bash-agent
 c/*.o
+c/build/
+c/tools_embed.h
