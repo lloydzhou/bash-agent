@@ -1769,6 +1769,170 @@ char *agent_build_prompt(Agent *agent) {
     return buf.data;
 }
 
+/* ── 辅助：从环境变量读取 double，fallback 默认值 ── */
+static double dp_env_d(const char *name, double def) {
+    const char *v = getenv(name);
+    if (!v || !*v) return def;
+    char *end;
+    double d = strtod(v, &end);
+    return (*end == '\0') ? d : def;
+}
+
+static int dp_env_i(const char *name, int def) {
+    const char *v = getenv(name);
+    if (!v || !*v) return def;
+    return atoi(v);
+}
+
+/*
+ * DP 最优 compact 决策 — 移植自 compact_dp.awk
+ *
+ * 计算 5 项 benefit：
+ *   ① savings   — 后续 LLM 调用的缓存节省
+ *   ② cache_miss — 首次压缩请求的缓存失效成本
+ *   ③ compact_cost — 压缩请求本身的费用
+ *   ④ info_loss — 信息丢失的惩罚
+ *   ⑤ quality_savings — 压缩后的质量改善收益
+ *
+ * 返回：保留行数（对齐到 user 消息边界），0 表示不压缩
+ */
+static int compact_dp_decision(char **lines, int n, int max_context_tokens,
+                               int turn_count, int total_requests,
+                               int total_compact, int total_input) {
+    if (n == 0) return 0;
+
+    /* 每行 token 大小: (字节数+3)/4 + 1 */
+    int *sizes = (int *)malloc((size_t)n * sizeof(int));
+    int *is_user = (int *)calloc((size_t)n, sizeof(int));
+    if (!sizes || !is_user) { free(sizes); free(is_user); return 0; }
+
+    int total_tokens = 0;
+    for (int i = 0; i < n; i++) {
+        sizes[i] = (int)((strlen(lines[i]) + 3) / 4) + 1;
+        total_tokens += sizes[i];
+        /* 标记 user 消息（非 tool_result） */
+        is_user[i] = (strstr(lines[i], "\"role\":\"user\"") != NULL &&
+                      strstr(lines[i], "\"content\":[") == NULL) ? 1 : 0;
+    }
+
+    /* ── 参数（环境变量 / 默认值，对齐 bash 版）── */
+    int baseline_e    = dp_env_i("DP_BASELINE_E", 8);
+    int e_fixed       = dp_env_i("DP_E_FIXED", 0);
+    double L_fixed    = dp_env_d("DP_L", 0.0);
+    double V          = dp_env_d("DP_V", 5000.0);
+    double p_input    = dp_env_d("DP_P_INPUT", 3.0);
+    double p_cache    = dp_env_d("DP_P_CACHE", 0.30);
+    double p_out      = dp_env_d("DP_P_OUT", 15.0);
+    double S          = dp_env_d("DP_S", 500.0);
+    double min_keep_ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.12);
+    double r          = dp_env_d("DP_R", 0.8);
+    double beta       = dp_env_d("DP_BETA", 0.03);
+    double quality_penalty = dp_env_d("DP_QUALITY_PENALTY", 0.2);
+    int max_ctx       = (max_context_tokens > 0) ? max_context_tokens : 200000;
+
+    /* ── E: expected remaining user-input rounds ── */
+    double E;
+    if (e_fixed > 0) {
+        E = (double)e_fixed;
+    } else if (baseline_e > 0) {
+        int remaining = baseline_e - turn_count;
+        int floor_val = (baseline_e > 1) ? baseline_e / 2 : 2;
+        E = (remaining > floor_val) ? (double)remaining : (double)floor_val;
+    } else {
+        E = 2.0;
+    }
+
+    /* ── L: avg LLM calls per user input ── */
+    double L;
+    if (L_fixed > 0.0) {
+        L = L_fixed;
+    } else if (turn_count > 0 && total_requests > 0) {
+        L = (double)total_requests / (double)turn_count;
+    } else {
+        L = 5.0;
+    }
+    if (L < 1.0) L = 1.0;
+
+    /* ── avg: avg input tokens per LLM request ── */
+    double avg;
+    if (total_requests > 0 && total_input > 0) {
+        avg = (double)total_input / (double)total_requests;
+    } else {
+        avg = 4000.0;
+    }
+
+    /* R = total expected remaining LLM calls */
+    double R = E * L;
+
+    /* summary instruction length */
+    double l_instr = 70.0;
+
+    /* cumulative retention */
+    int c = total_compact;
+    double r_t = 1.0;
+    for (int i = 0; i <= c; i++) r_t *= r;
+    if (r_t < 0.37) r_t = 0.37;
+
+    /* N_remain: expected remaining input tokens */
+    double N_remain = R * avg;
+
+    /* ④ Info loss (constant across all k) */
+    double info_loss = beta * (1.0 - r_t) * N_remain * p_input / 1e6;
+
+    /* min_keep floor */
+    int min_keep = (int)((double)n * min_keep_ratio + 0.5);
+    if (min_keep < 3) min_keep = 3;
+    if (min_keep > n) min_keep = n;
+
+    /* ── DP 遍历所有 k ── */
+    int best_k = 0;
+    double best_benefit = -1e18;
+
+    for (int k = min_keep; k <= n; k++) {
+        /* K = tokens in last k lines */
+        int K = 0;
+        for (int i = n - k; i < n; i++) K += sizes[i];
+        int H = total_tokens - K;
+        if (H <= 0) continue;
+
+        /* ① Savings */
+        double savings = (R - 1.0) * p_cache * (double)H / 1e6;
+        /* ② Cache miss */
+        double cache_miss = (S + (double)K) * (p_input - p_cache) / 1e6;
+        /* ③ Compact cost */
+        double compact_cost = (p_cache * (V + (double)H) + p_input * l_instr + p_out * S) / 1e6;
+        /* ⑤ Quality savings */
+        double v_plus_T = V + (double)total_tokens;
+        double v_plus_K = V + (double)K;
+        double quality_savings = quality_penalty * p_input *
+            (v_plus_T * v_plus_T - v_plus_K * v_plus_K) /
+            ((double)max_ctx * 1e6);
+
+        double benefit = savings - cache_miss - compact_cost - info_loss + quality_savings;
+        if (benefit > best_benefit) {
+            best_benefit = benefit;
+            best_k = k;
+        }
+    }
+
+    int result = 0;
+    if (best_benefit > 0.0) {
+        /* 对齐到 user message 边界 */
+        int adj = best_k;
+        int cut = n - adj;
+        while (cut > 0 && !is_user[cut]) {
+            cut--;
+        }
+        adj = n - cut;
+        if (adj < 1) adj = 1;
+        result = adj;
+    }
+
+    free(sizes);
+    free(is_user);
+    return result;
+}
+
 /* ============================================================
  * 上下文压缩
  * ============================================================ */
@@ -1780,33 +1944,43 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     if (strcmp(trigger, "store_plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
         need_compact = 1;
     } else {
-        /* auto 模式：检查 context tokens */
-        /* 从 stats.json 中读取 current_context_tokens */
-        int ctx_tokens = agent->last_context_tokens;
-        if (ctx_tokens <= 0) {
-            char *stats_content = store_stats_read(agent->paths.stats);
-            if (stats_content) {
-                JsonParse jp = json_parse_root(stats_content);
-                if (!jp.error) {
-                    ctx_tokens = json_get_int(jp.val, "current_context_tokens");
-                }
-                free(stats_content);
+        /* auto 模式：读取 stats，然后调用 DP 决策 */
+        int turn_count = 0, total_requests = 0;
+        int total_compact = 0, total_input = 0;
+
+        char *stats_content = store_stats_read(agent->paths.stats);
+        if (stats_content) {
+            JsonParse jp = json_parse_root(stats_content);
+            if (!jp.error) {
+                turn_count     = json_get_int(jp.val, "current_turn_count");
+                total_requests = json_get_int(jp.val, "agent_request_count");
+                total_compact  = json_get_int(jp.val, "compact_request_count");
+                total_input    = json_get_int(jp.val, "total_input_tokens");
             }
+            free(stats_content);
         }
-        if (ctx_tokens > 0 &&
-            ctx_tokens >= agent->max_context_tokens * 90 / 100) {
-            need_compact = 1;
+
+        /* 快速前置检查：太短的对话不需要 DP */
+        char **quick_lines = NULL;
+        int quick_count = 0;
+        if (store_conv_line_count(agent->paths.conversation, &quick_lines, &quick_count) != 0)
+            return 0;
+
+        if (quick_count <= 4) {
+            for (int i = 0; i < quick_count; i++) free(quick_lines[i]);
+            free(quick_lines);
+            return 0;
         }
-        /* 也检查 conversation 行数 */
-        if (!need_compact) {
-            char **lines = NULL;
-            int line_count = 0;
-            if (store_conv_line_count(agent->paths.conversation, &lines, &line_count) == 0) {
-                if (line_count > 100) need_compact = 1;
-                for (int i = 0; i < line_count; i++) free(lines[i]);
-                free(lines);
-            }
-        }
+
+        /* DP 决策 */
+        int dp_keep = compact_dp_decision(quick_lines, quick_count,
+                                           agent->max_context_tokens,
+                                           turn_count, total_requests,
+                                           total_compact, total_input);
+        for (int i = 0; i < quick_count; i++) free(quick_lines[i]);
+        free(quick_lines);
+
+        if (dp_keep > 0) need_compact = 1;
     }
 
     if (!need_compact) return 0;
@@ -1821,8 +1995,30 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         return 0;
     }
 
-    /* 计算保留行数（保留最后 20% 或至少 4 行） */
-    int keep = line_count * 20 / 100;
+    /* 使用 DP 决策确定保留行数 */
+    int turn_count = 0, total_requests = 0;
+    int total_compact = 0, total_input = 0;
+
+    char *stats2 = store_stats_read(agent->paths.stats);
+    if (stats2) {
+        JsonParse jp2 = json_parse_root(stats2);
+        if (!jp2.error) {
+            turn_count     = json_get_int(jp2.val, "current_turn_count");
+            total_requests = json_get_int(jp2.val, "agent_request_count");
+            total_compact  = json_get_int(jp2.val, "compact_request_count");
+            total_input    = json_get_int(jp2.val, "total_input_tokens");
+        }
+        free(stats2);
+    }
+
+    int keep = compact_dp_decision(lines, line_count,
+                                    agent->max_context_tokens,
+                                    turn_count, total_requests,
+                                    total_compact, total_input);
+    if (keep <= 0) {
+        /* DP 决策不压缩，fallback 保留 20% */
+        keep = line_count * 20 / 100;
+    }
     if (keep < 4) keep = 4;
     if (keep >= line_count) {
         for (int i = 0; i < line_count; i++) free(lines[i]);
