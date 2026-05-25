@@ -44,27 +44,35 @@ jobs:
           path: dist/agent.sh
 
   goagent:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - goos: linux
+          - runner: ubuntu-latest
+            goos: linux
             goarch: amd64
             suffix: linux-amd64
             ext: ""
-          - goos: linux
+            cc: gcc
+          - runner: ubuntu-latest
+            goos: linux
             goarch: arm64
             suffix: linux-arm64
             ext: ""
-          - goos: darwin
-            goarch: amd64
-            suffix: darwin-amd64
-            ext: ""
-          - goos: darwin
+            cc: aarch64-linux-gnu-gcc
+          - runner: macos-14
+            goos: darwin
             goarch: arm64
             suffix: darwin-arm64
             ext: ""
+            cc: cc
+          - runner: macos-14
+            goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+            ext: ""
+            cc: cc
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,17 +82,20 @@ jobs:
         with:
           go-version-file: go/go.mod
 
-      - name: Run Go tests (linux only)
-        if: matrix.goos == 'linux'
+      - name: Run Go tests (linux amd64 only)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: make test-go
 
-      - name: Download go dependencies
-        run: go -C go mod download
+      - name: Install cross linker (linux arm64)
+        if: matrix.goos == 'linux' && matrix.goarch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build goagent
         run: |
           mkdir -p dist
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CC=${{ matrix.cc }} \
             go -C go build -ldflags="-s -w" -o ../dist/goagent-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/goagent
 
       - name: Upload goagent
