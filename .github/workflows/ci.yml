@@ -78,10 +78,8 @@ jobs:
         if: matrix.goos == 'linux'
         run: make test-go
 
-      - name: Download and patch go-prompt dependency
-        run: |
-          go -C go mod download
-          bash scripts/patch-go-prompt.sh "$(go -C go env GOMODCACHE)"
+      - name: Download go dependencies
+        run: go -C go mod download
 
       - name: Build goagent
         run: |
