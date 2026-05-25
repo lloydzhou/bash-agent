@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -g -Ivendor/linenoise
+CFLAGS  = -std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -g -D_GNU_SOURCE -Ivendor/linenoise
 LDFLAGS = -lcurl -lpthread
 
 BUILDDIR = build

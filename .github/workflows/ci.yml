@@ -208,7 +208,7 @@ jobs:
           if [ "${{ matrix.suffix }}" = "linux-arm64" ]; then
             make -C c CC=${{ matrix.cc }} 'LDFLAGS=-L/usr/lib/aarch64-linux-gnu -lcurl -lpthread'
           elif [ "${{ matrix.suffix }}" = "darwin-amd64" ]; then
-            make -C c CC=${{ matrix.cc }} 'CFLAGS=-std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -arch x86_64 -Ivendor/linenoise' 'LDFLAGS=-lcurl -arch x86_64'
+            make -C c CC=${{ matrix.cc }} 'CFLAGS=-std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -D_GNU_SOURCE -arch x86_64 -Ivendor/linenoise' 'LDFLAGS=-lcurl -arch x86_64'
           else
             make -C c CC=${{ matrix.cc }}
           fi
