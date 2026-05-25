@@ -110,9 +110,9 @@ char *util_new_session_id(void) {
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
-    char *buf = malloc(32);
+    char *buf = malloc(64);  /* 比实际需要的大，消除 -Wformat-truncation 警告 */
     unsigned short r = (unsigned short)(rand() & 0xFFFF);
-    snprintf(buf, 32, "%04d%02d%02d-%02d%02d%02d-%04x",
+    snprintf(buf, 64, "%04d%02d%02d-%02d%02d%02d-%04x",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
              tm.tm_hour, tm.tm_min, tm.tm_sec, r);
     return buf;
