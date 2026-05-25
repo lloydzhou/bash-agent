@@ -165,27 +165,66 @@ jobs:
           path: dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
   cagent:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            suffix: linux-amd64
+            cc: gcc
+          - runner: ubuntu-latest
+            suffix: linux-arm64
+            cc: aarch64-linux-gnu-gcc
+          - runner: macos-14
+            suffix: darwin-arm64
+            cc: cc
+          - runner: macos-14
+            suffix: darwin-amd64
+            cc: cc
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install build dependencies (linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libcurl4-openssl-dev
+          if [ "${{ matrix.suffix }}" = "linux-arm64" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            sudo apt-get install -y libcurl4-openssl-dev:arm64
+          fi
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install curl
 
       - name: Build cagent
-        run: make build-c
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.suffix }}" = "linux-arm64" ]; then
+            make -C c CC=${{ matrix.cc }} 'LDFLAGS=-L/usr/lib/aarch64-linux-gnu -lcurl -lpthread'
+          elif [ "${{ matrix.suffix }}" = "darwin-amd64" ]; then
+            make -C c CC=${{ matrix.cc }} 'CFLAGS=-std=c11 -Wall -Wextra -Wno-unused-parameter -O2 -arch x86_64 -Ivendor/linenoise' 'LDFLAGS=-lcurl -arch x86_64'
+          else
+            make -C c CC=${{ matrix.cc }}
+          fi
+          mv dist/cagent dist/cagent-${{ matrix.suffix }}
 
-      - name: Test cagent
-        run: make test-c-e2e
+      - name: Test cagent (linux amd64 only)
+        if: matrix.suffix == 'linux-amd64'
+        run: |
+          cp dist/cagent-linux-amd64 dist/cagent
+          AGENT=./dist/cagent bash tests/test.sh
 
       - name: Upload cagent
         uses: actions/upload-artifact@v4
         with:
-          name: cagent-linux-amd64
-          path: dist/cagent
+          name: cagent-${{ matrix.suffix }}
+          path: dist/cagent-${{ matrix.suffix }}
 
   tcode:
     runs-on: ubuntu-latest
@@ -235,4 +274,7 @@ jobs:
             dist/rustagent-darwin-amd64
             dist/rustagent-darwin-arm64
             dist/cagent-linux-amd64
+            dist/cagent-linux-arm64
+            dist/cagent-darwin-amd64
+            dist/cagent-darwin-arm64
             dist/tcode
