@@ -7,10 +7,13 @@ build: build-bash build-go build-rust build-tcode build-c
 build-bash:
 	bash scripts/build.sh dist/agent.sh
 
-build-go:
+build-go: go/tools.json
 	mkdir -p go/.gocache go/.gomodcache dist
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go mod download
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go build -ldflags="-s -w" -trimpath -o ../dist/goagent ./cmd/goagent
+
+go/tools.json: src/tools.json
+	cp src/tools.json go/tools.json
 
 build-rust:
 	cd rust && cargo build --release -j 10
