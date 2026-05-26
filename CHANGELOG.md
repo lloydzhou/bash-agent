@@ -8,6 +8,77 @@
 
 ---
 
+## [4.0.0] - 2026-05-26
+
+> **重大版本升级**：新增 C 语言运行时，项目从三语言（Bash/Go/Rust）扩展为四语言。
+> system prompt 升级为 P0 协议面，四版本逐字一致性保证跨版本 KV cache 复用。
+
+### Added
+
+- **C 语言运行时（cagent）**：完整的第四个运行时实现，~6,000 行纯 C 代码
+  - `c/agent.c` — 主循环、工具分发、compact、sub-agent、prompt builder（2,337 行）
+  - `c/transport.c` — libcurl 流式 SSE、重试、Ctrl+C 中断（624 行）
+  - `c/store.c` — JSONL conversation、stats.json、session 管理（613 行）
+  - `c/tools.c` — Read/Write/Edit/Bash/Glob/Grep/SubAgent/TodoWrite/Plan（877 行）
+  - `c/protocol.c` — LLM 响应解析、tool_use 提取、stream event（137 行）
+  - `c/display.c` — 终端输出、千位分隔、流式 text/thinking（270 行）
+  - `c/json.c` — 零依赖 JSON 解析器、surrogate pair 修复（455 行）
+  - `c/msgqueue.c` — sub-agent 异步结果传递（90 行）
+  - `c/util.c` — 字符串、文件、JSON escape 等辅助函数（259 行）
+  - `c/cagent.c` — 入口、命令行解析、REPL、信号处理（394 行）
+  - 二进制 ~176KB（动态链接 libcurl），依赖极小
+- **linenoise 统一 readline 方案**：Go/Rust/C 三端统一使用 `vendor/linenoise/`
+  - Go：从 go-prompt 迁移到 linenoise CGo 嵌入（`go/linenoise/`）
+  - Rust：从 rustyline 迁移到 linenoise FFI（`rust/src/ffi/`）
+  - C：内建 linenoise，UTF-8 安全截断、Ctrl+C/D 支持
+  - 消除三个不同的 readline 依赖，共享同一份源码
+- **cagent 多平台 CI 构建**：GitHub Actions 支持 linux amd64/arm64 + darwin arm64/amd64
+- **tools.json 单一来源**：统一 `src/tools.json`，Go/Rust/C 通过 symlink 或 embed 引用，消除 drift
+- **DP compact 决策（C 版）**：5 项 DP 公式完整实现，与 Bash/Go/Rust 一致
+
+### Changed
+
+- **system prompt 升级为 P0 协议面**：system prompt 是 KV cache 的前缀协议面，
+  任何 section 顺序、标签包装、空行、尾部换行、`name` 属性转义或静态文案漂移都会导致
+  跨版本切换 cache miss。以下差异已全部修复，四版本现在逐字一致：
+  - name 属性转义统一为 JSON-style（`\"` `\\` `\n` 等），之前 Rust 用 XML-escape，C 不转义
+  - Go `selected-skills` 恢复外层 `<selected-skills>` 包装
+  - Rust `sub-agent-guidance` 中 Fork mode 从末尾移至第 3 条
+  - Rust skill 前缀 `Base directory for this skill:` → `Base directory:`
+  - Rust 空白过滤 `trim().is_empty()` → `is_empty()`
+- **`pathToProjectKey` 完整规范化**：Go/C 重写为 Bash 版完整规则（去非字母数字、压缩连续 `-`、
+  去首尾 `-`），修复同一路径不同 key 导致 session 无法跨版本复用
+- **Go tool_result 写入时序对齐**：从循环内逐条写入改为循环外批量写入，与 Bash/Rust/C 一致
+- **Go Read/Write conversation 内容对齐**：display/event 保留 file summary 前缀，
+  conversation 保存原始工具结果；Edit 工具 conversation 只保存首行
+- **Go compact token 统计对齐**：`SummaryCall` 返回 usage，compact 后累加到 stats 并追加
+  compact usage event
+- **AGENT.md 更新**：四版本一致性检查清单，system prompt 列为最高优先级
+
+### Fixed
+
+- **C 版 28 项行为差异修复**：session key 计算、SSE 解析、stats 记录、plan trigger 名称、
+  plan_clear/plan_confirm 守卫绕过、UTF-8 安全截断等
+- **C 版 sub_agent_result 重复展示 + thinking/text/token 缺失**
+- **C 版 json.c surrogate pair + iter key 泄漏、store.c 双换行**
+- **Rust `current_context_tokens` 仅在 > 0 时写入**，与 bash/c/go 对齐
+- **Go stats.json 缺失字段**：`sub_agent_request_count` 等初始值补齐
+
+### Tests
+
+- `tests/test.sh` 扩展至 526 行，覆盖工具函数、SubAgent、JSON 解析、compact 决策、stats.awk
+- Go 新增 `TestPathToProjectKeyMatchesBash`、`TestFileStoreToolResultConvOutput`、
+  `TestFileStoreCompactStats`
+- Go e2e 10 项跨版本一致性测试
+- 四版本 e2e 测试全部通过（118 pass / 0 fail）
+
+### Removed
+
+- `scripts/patch-go-prompt.sh` — Go linenoise 迁移后不再需要
+- `go/go.mod` / `go/go.sum` 中 rustyline / go-prompt 相关依赖
+
+---
+
 ## [3.0.7] - 2026-05-24
 
 ### Fixed
@@ -674,8 +745,9 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v3.0.5...HEAD
-[3.0.5]: https://github.com/lloydzhou/bash-agent/compare/v3.0.4...v3.0.5
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/lloydzhou/bash-agent/compare/v3.0.7...v4.0.0
+[3.0.7]: https://github.com/lloydzhou/bash-agent/compare/v3.0.6...v3.0.7
 [3.0.4]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...v3.0.4
 [3.0.3]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...v3.0.2
