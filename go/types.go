@@ -121,15 +121,17 @@ type ToolResultInfo struct {
 
 // Stats 会话统计数据
 type Stats struct {
-	TurnCount     int     `json:"current_turn_count"`          // user turn count
-	InputTokens   int     `json:"total_input_tokens"`          // cumulative input
-	OutputTokens  int     `json:"total_output_tokens"`         // cumulative output
-	CacheWrite    int     `json:"total_cache_creation_tokens"` // cumulative cache write
-	CacheRead     int     `json:"total_cache_read_tokens"`     // cumulative cache read
-	TotalCost     float64 `json:"total_cost"`                  // cumulative cost
-	TotalRequests int     `json:"agent_request_count"`         // total LLM requests
-	TotalCompact  int     `json:"compact_request_count"`       // number of compactions
-	ContextTokens int     `json:"current_context_tokens"`      // current context size
+	TurnCount        int     `json:"current_turn_count"`          // user turn count
+	InputTokens      int     `json:"total_input_tokens"`          // cumulative input
+	OutputTokens     int     `json:"total_output_tokens"`         // cumulative output
+	CacheWrite       int     `json:"total_cache_creation_tokens"` // cumulative cache write
+	CacheRead        int     `json:"total_cache_read_tokens"`     // cumulative cache read
+	TotalCost        float64 `json:"total_cost"`                  // cumulative cost
+	TotalRequests    int     `json:"agent_request_count"`         // total LLM requests
+	TotalCompact     int     `json:"compact_request_count"`       // number of compactions
+	ContextTokens    int     `json:"current_context_tokens"`      // current context size
+	SubAgentRequests int     `json:"sub_agent_request_count"`     // sub-agent requests
+	LastUpdated      string  `json:"last_updated"`                // ISO 8601 timestamp
 }
 
 // SessionRow session 列表行

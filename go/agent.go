@@ -218,10 +218,12 @@ func (a *Agent) BuildPrompt() string {
 
 func (a *Agent) RecordUsage(usage Usage, kind, model string) int {
 	ctxTokens := usage.InputTokens + usage.OutputTokens + usage.CacheRead + usage.CacheWrite
-	a.ctxTokens = ctxTokens
 	_ = a.store.UpdateStats(usage, model)
-	// 更新 ContextTokens 到 stats
-	a.store.SetContextTokens(ctxTokens)
+	// 仅在 ctxTokens > 0 时更新（与 bash 版 `if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]` 一致）
+	if ctxTokens > 0 {
+		a.ctxTokens = ctxTokens
+		a.store.SetContextTokens(ctxTokens)
+	}
 	return ctxTokens
 }
 
