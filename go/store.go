@@ -89,6 +89,17 @@ func (s *FileStore) IncrementCompact() error {
 	return s.flushStats()
 }
 
+func (s *FileStore) UpdateCompactStats(usage Usage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stats.TotalCompact++
+	s.stats.InputTokens += usage.InputTokens
+	s.stats.OutputTokens += usage.OutputTokens
+	s.stats.CacheRead += usage.CacheRead
+	s.stats.CacheWrite += usage.CacheWrite
+	return s.flushStats()
+}
+
 func (s *FileStore) SetContextTokens(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -320,7 +331,11 @@ func (s *FileStore) AddToolResults(results []ToolResultInfo) error {
 		if i > 0 {
 			buf.WriteString(",")
 		}
-		buf.WriteString(UtilBuildToolResultJSON(r.ToolID, r.Output, "tool_result"))
+		output := r.Output
+		if r.ConvOutput != "" {
+			output = r.ConvOutput
+		}
+		buf.WriteString(UtilBuildToolResultJSON(r.ToolID, output, "tool_result"))
 	}
 	buf.WriteString("]")
 	line := fmt.Sprintf(`{"role":"user","content":%s}`, buf.String())
@@ -886,11 +901,23 @@ func splitNonEmpty(s string) []string {
 }
 
 func pathToProjectKey(absPath string) string {
-	// 把 /Users/foo/project → -Users-foo-project（与 bash 版一致）
-	key := strings.ReplaceAll(absPath, "/", "-")
-	key = strings.ReplaceAll(key, ":", "")
-	// bash 版: 先去前导 /，再加前缀 -
-	key = strings.TrimPrefix(key, "-")
+	s := strings.TrimLeft(absPath, "/")
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		c := r
+		if r == '/' {
+			c = '-'
+		} else if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			c = '-'
+		}
+		if c == '-' && prevDash {
+			continue
+		}
+		b.WriteRune(c)
+		prevDash = c == '-'
+	}
+	key := strings.Trim(b.String(), "-")
 	key = "-" + key
 	if len(key) > 200 {
 		key = key[:200]
@@ -936,4 +963,3 @@ func (s *FileStore) ListSessionRows() []SessionRow {
 	}
 	return rows
 }
-

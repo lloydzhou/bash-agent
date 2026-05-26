@@ -363,7 +363,7 @@ impl Agent {
             let mut f = std::fs::File::create(&paths.stats)?;
             write!(
                 f,
-                r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#,
+                r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"sub_agent_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#,
                 '\n'
             )?;
         }
@@ -985,6 +985,7 @@ impl Agent {
                             output =
                                 tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
 
+                            let mut conv_content = String::new();
                             if call.name == "PlanClear" {
                                 let _ = self.compact_context_window("plan_clear");
                                 let _ = store::store_plan_clear(&self.paths);
@@ -1011,13 +1012,13 @@ impl Agent {
                                 output = self.handle_sub_agent(&call.fields);
                             }
 
-                            let mut conv_content = String::new();
                             if call.name == "Edit" {
                                 // Tool output = summary_line + "\n" + colorized_diff + "\n" (matches bash tool_edit)
                                 // Conv file gets summary only (matches bash: result_for_conv = first line)
                                 conv_content = first_line(&output).to_string();
                             } else if call.name == "Read" || call.name == "Write" {
                                 // Prepend file summary to content (matches bash behavior)
+                                conv_content = output.clone();
                                 let file_summary = Store::file_tool_result_summary(
                                     &call.name,
                                     call.fields.get("path").map(String::as_str).unwrap_or(""),

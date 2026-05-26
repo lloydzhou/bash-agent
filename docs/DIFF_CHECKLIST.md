@@ -9,9 +9,9 @@
 
 | # | 差异 | 严重性 | 说明 |
 |---|------|--------|------|
-| S1 | `sub_agent_request_count` 初始值缺失 | 🔴高 | `store_session_init` 写入的初始 stats.json 无此字段。`store_stats_set_int_file` 用 `strstr` 搜索 key，找不到则静默跳过，导致该字段永远不会被正确更新 |
+| S1 | `sub_agent_request_count` 初始值缺失 | ✅已修 | C/Rust 新 session 初始 stats.json 已包含该字段 |
 | S2 | `last_updated` 从不更新 | 🟡低 | 初始化时写入空字符串 `""`，后续所有 `store_stats_set_int_file` 都不触及此字段 |
-| S3 | Compact 的 token 统计缺失 | 🔴高 | Bash 版 compact 调用 `agent_record_usage` 累加 compact 的 input/output/cache tokens 到 `total_*` 字段。C 版 `agent_compact_context()` 只更新 `compact_request_count` 和 `current_turn_count`，不累加 compact 的 token 消耗 |
+| S3 | Compact 的 token 统计缺失 | ✅已修 | Bash/C/Rust/Go compact 都会累加 compact 的 input/output/cache tokens 到 `total_*` 字段，并记录 compact usage event |
 | S4 | 数字格式尾随空格 | 🟡低 | `store_stats_set_int_file` 原地修改时，短值用空格填充（如 `"total_input_tokens":5  `） |
 | S5 | 终端标题无千位分隔 | 🟡低 | Bash 版 `fmt()` 函数输出 `1,234`，C 版直接 `%d` 输出 `1234` |
 
@@ -54,8 +54,10 @@
 
 | # | 差异 | 严重性 | 说明 |
 |---|------|--------|------|
-| ST1 | 项目 key 计算不一致 | 🔴高 | Bash 版做了完整规范化（去非字母数字、压缩连续 `-` 等），C 版只做 `/ → -` 替换。同一路径可能生成不同 key，导致 session 无法跨版本复用 |
+| ST1 | 项目 key 计算不一致 | ✅已修 | Go/Rust/C 已按 Bash 版完整规范化规则对齐（去非字母数字、压缩连续 `-`、去首尾 `-`） |
 | ST2 | tool_result 追加额外换行 | 🟡低 | Bash 版 tool_result 追加了额外 `\n`，可能在 conversation.jsonl 中产生空行 |
+| ST3 | Go tool_result 写入顺序不同 | ✅已修 | Go 已改为先持久化 assistant/tool_use，再持久化 tool_result，和 Bash/Rust/C 对齐 |
+| ST4 | Read/Write tool_result 写入 conversation 内容不同 | ✅已修 | Go/Rust/C 已改为 display/event 保留 file summary，conversation 保存原始工具结果，和 Bash 对齐 |
 
 ---
 
@@ -100,11 +102,17 @@
 
 ## 10. System Prompt
 
+> P0 要求：system prompt 必须在 Bash / Go / Rust / C 间逐字一致。它是 LLM KV cache 的前缀协议面；任何 section 顺序、标签包装、空行、尾部换行、`name` 属性转义或静态文案漂移都会导致跨版本切换 cache miss。
+
 | # | 差异 | 严重性 | 说明 |
 |---|------|--------|------|
-| SP1 | instruction-files 嵌套内容缺少尾部 `\n` 剥离 | 🟡低 | C 版未剥离嵌套内容尾部换行，导致 `</instruction-files>` 前多一个空行 |
-| SP2 | selected-skills 嵌套内容缺少尾部 `\n` 剥离 | 🟡低 | 同上，`</selected-skills>` 前多一个空行 |
-| SP3 | name 属性缺少转义 | 🟡低 | Bash 版对 name 调用 `util_json_escape()`，C 版不做转义。当前所有 name 值无特殊字符，无实际影响 |
+| SP0 | system prompt 逐字一致性 | 🔴高 | Bash 为基准；Go/Rust/C 的 section 顺序、包装、空行、尾部换行、`name` 属性转义和静态文案必须逐字一致 |
+| SP1 | instruction-files 嵌套内容缺少尾部 `\n` 剥离 | ✅已修 | C 版已剥离嵌套内容尾部换行，避免 `</instruction-files>` 前多一个空行 |
+| SP2 | selected-skills 嵌套内容缺少尾部 `\n` 剥离 | ✅已修 | C 版已剥离嵌套内容尾部换行 |
+| SP3 | name 属性缺少转义 | ✅已修 | Go/Rust/C 已按 Bash 的 JSON-style attribute escape 对齐 |
+| SP4 | Go selected-skills 外层缺失 | ✅已修 | Go 已恢复 `<selected-skills>` 外层 section |
+| SP5 | Rust sub-agent-guidance 文案顺序不同 | ✅已修 | Rust 已按 Bash 顺序放置 Fork mode |
+| SP6 | Rust skill 完整内容前缀不同 | ✅已修 | Rust 已使用 `Base directory: ...` |
 
 > 静态文本内容：**完全一致** ✅
 > 分段顺序（13段）：**完全一致** ✅
@@ -114,12 +122,10 @@
 ## 修复优先级排序
 
 ### P0 — 必须立即修复（功能错误）
-1. **S1** sub_agent_request_count 初始值缺失
-2. **S3** Compact 的 token 统计缺失
-3. **ST1** 项目 key 计算不一致
-4. **SSE2** 流异常终止无保护
-5. **PL2** PlanConfirm 缺 mv 操作
-6. **T7** SubAgent fork 模式缺文件复制
+1. **SP0** system prompt 逐字一致性（KV cache 前缀协议）
+2. **SSE2** 流异常终止无保护
+3. **PL2** PlanConfirm 缺 mv 操作
+4. **T7** SubAgent fork 模式缺文件复制
 
 ### P1 — 应该修复（行为不一致）
 7. **SSE3** tool input JSON 不做 unescape

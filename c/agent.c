@@ -964,15 +964,6 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     *dm = display_msg_tool_result(summary.data, tr.exit_code);
                     push_display_event(&agent->paths, agent->display_queue, dm);
 
-                    /* conversation 保存 file_summary + "\n" + 工具结果 */
-                    StrBuf conv_result;
-                    sb_init(&conv_result);
-                    sb_append(&conv_result, summary.data);
-                    sb_append(&conv_result, "\n");
-                    if (tr.output) sb_append(&conv_result, tr.output);
-                    free(tr.output);
-                    tr.output = conv_result.data;
-
                     free(summary.data);
                 } else {
                     /* 显示工具结果 */
@@ -1463,11 +1454,33 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
  * ============================================================ */
 
 /* 追加 XML section：<tag>\ncontent\n</tag> 或 <tag name="name">\ncontent\n</tag> */
+static void prompt_append_attr_escaped(StrBuf *buf, const char *src) {
+    if (!src) return;
+    for (; *src; src++) {
+        unsigned char c = (unsigned char)*src;
+        switch (c) {
+            case '"':  sb_append(buf, "\\\""); break;
+            case '\\': sb_append(buf, "\\\\"); break;
+            case '\b': sb_append(buf, "\\b"); break;
+            case '\f': sb_append(buf, "\\f"); break;
+            case '\n': sb_append(buf, "\\n"); break;
+            case '\r': sb_append(buf, "\\r"); break;
+            case '\t': sb_append(buf, "\\t"); break;
+            default:
+                if (c < 0x20) sb_appendf(buf, "\\u%04x", c);
+                else sb_append_char(buf, c);
+                break;
+        }
+    }
+}
+
 static void prompt_append_section(StrBuf *buf, const char *tag,
                                    const char *content, const char *name) {
     if (!content || !content[0]) return;
     if (name && name[0]) {
-        sb_appendf(buf, "<%s name=\"%s\">\n%s\n</%s>\n", tag, name, content, tag);
+        sb_appendf(buf, "<%s name=\"", tag);
+        prompt_append_attr_escaped(buf, name);
+        sb_appendf(buf, "\">\n%s\n</%s>\n", content, tag);
     } else {
         sb_appendf(buf, "<%s>\n%s\n</%s>\n", tag, content, tag);
     }

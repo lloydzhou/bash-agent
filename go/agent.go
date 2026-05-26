@@ -91,7 +91,7 @@ func (a *Agent) BuildPrompt() string {
 		sb.WriteString(tag)
 		if name != "" {
 			sb.WriteString(" name=\"")
-			sb.WriteString(name)
+			sb.WriteString(UtilJSONEscape(name))
 			sb.WriteString("\"")
 		}
 		sb.WriteString(">\n")
@@ -188,11 +188,13 @@ func (a *Agent) BuildPrompt() string {
 	appendSection("skill-index", skillIndex, "")
 
 	// selected skills
+	var selectedSkills strings.Builder
 	for _, sn := range a.cfg.SkillNames {
 		if content, err := a.loadSkillContent(sn); err == nil {
-			appendSection("skill", content, sn)
+			UtilAppendSection(&selectedSkills, "skill", content, sn)
 		}
 	}
+	appendSection("selected-skills", strings.TrimRight(selectedSkills.String(), "\n"), "")
 
 	// current plan (with plan file name as attribute)
 	if plan, err := a.store.GetPlan(); err == nil && plan != "" {
@@ -233,6 +235,13 @@ func mustGetwd() string {
 		return "?"
 	}
 	return wd
+}
+
+func firstLine(s string) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 // ─── Skill / Instruction 辅助函数 ───
@@ -390,7 +399,7 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 		return false, fmt.Errorf("read dropped messages: %w", err)
 	}
 
-	summaryResponse, err := a.llm.SummaryCall(ctx, droppedMessages)
+	summaryResponse, summaryUsage, err := a.llm.SummaryCall(ctx, droppedMessages)
 	if err != nil {
 		return false, fmt.Errorf("summary call failed: %w", err)
 	}
@@ -400,8 +409,19 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 		_ = a.store.ConvTrimTail(keepLines)
 	}
 
-	// 更新 compact 计数
-	_ = a.store.IncrementCompact()
+	if summaryUsage.InputTokens > 0 || summaryUsage.OutputTokens > 0 || summaryUsage.CacheRead > 0 || summaryUsage.CacheWrite > 0 {
+		ev := map[string]interface{}{
+			"type":                        "usage",
+			"input_tokens":                summaryUsage.InputTokens,
+			"output_tokens":               summaryUsage.OutputTokens,
+			"cache_read_input_tokens":     summaryUsage.CacheRead,
+			"cache_creation_input_tokens": summaryUsage.CacheWrite,
+			"kind":                        "compact",
+		}
+		evJSON, _ := json.Marshal(ev)
+		_ = a.store.AppendEvent(string(evJSON))
+		_ = a.store.UpdateCompactStats(summaryUsage)
+	}
 
 	// 重置 turn count 为剩余 user turn 数（与 bash 版一致）
 	remainingTurns, _ := a.store.ConvUserTurnCount()
@@ -513,6 +533,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 
 		var text, thinking string
 		var toolCalls []ToolCallInfo
+		var toolResults []ToolResultInfo
 		var stopReason string
 		var usage Usage
 		var loopErr string
@@ -556,13 +577,15 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 						output = "Error: " + toolErr.Error()
 					}
 					output = FormatToolResult(output)
+					convOutput := output
 
-					// 对 Read/Write 加 FileSummary 前缀
 					switch tc.Name {
 					case "Read", "Write":
 						pathParam := params["path"]
 						fs := FileSummary(tc.Name, pathParam)
 						output = fs + "\n" + output
+					case "Edit":
+						convOutput = firstLine(output)
 					}
 
 					// 显示结果
@@ -576,28 +599,24 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 						"input": json.RawMessage(tc.Input),
 					})
 					a.emitJSON(map[string]interface{}{
-						"type":       "tool_result",
+						"type":        "tool_result",
 						"tool_use_id": tc.ID,
-						"name":       tc.Name,
-						"content":    output,
+						"name":        tc.Name,
+						"content":     output,
 					})
 
-					// 添加工具结果到 conversation
-					results := []ToolResultInfo{
-						{ToolID: tc.ID, ToolName: tc.Name, Output: output},
-					}
-					_ = a.store.AddToolResults(results)
+					toolResults = append(toolResults, ToolResultInfo{ToolID: tc.ID, ToolName: tc.Name, Output: output, ConvOutput: convOutput})
 				}
 			case EventUsage:
 				if u, ok := ev.Payload.(Usage); ok {
 					usage = u
 					a.emitJSON(map[string]interface{}{
-						"type":                         "usage",
-						"input_tokens":                 u.InputTokens,
-						"output_tokens":                u.OutputTokens,
-						"cache_read_input_tokens":      u.CacheRead,
-						"cache_creation_input_tokens":   u.CacheWrite,
-						"kind":                         "agent",
+						"type":                        "usage",
+						"input_tokens":                u.InputTokens,
+						"output_tokens":               u.OutputTokens,
+						"cache_read_input_tokens":     u.CacheRead,
+						"cache_creation_input_tokens": u.CacheWrite,
+						"kind":                        "agent",
 					})
 				}
 			case EventStop:
@@ -647,6 +666,9 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 
 		// 保存 assistant 消息
 		_ = a.store.AddAssistantMessage(text, thinking, toolCalls)
+		if len(toolResults) > 0 {
+			_ = a.store.AddToolResults(toolResults)
+		}
 
 		// tool_use → 继续循环
 		if stopReason == "tool_use" || stopReason == "tool_calls" {
@@ -802,18 +824,18 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 
 	// 记录 sub_agent_result 事件（供 replay 和 stream-json 复现）
 	resultEvent := map[string]interface{}{
-		"type":         "sub_agent_result",
-		"session_id":   r.SessionID,
-		"status":       r.Status,
+		"type":          "sub_agent_result",
+		"session_id":    r.SessionID,
+		"status":        r.Status,
 		"input_tokens":  r.InputTokens,
 		"output_tokens": r.OutputTokens,
-		"thinking":     r.Thinking,
-		"text":         r.Text,
+		"thinking":      r.Thinking,
+		"text":          r.Text,
 	}
 	resultJSON, _ := json.Marshal(resultEvent)
 	_ = a.store.AppendEvent(string(resultJSON))
 
-// 记录 sub_agent_end 事件
+	// 记录 sub_agent_end 事件
 	endEvent := map[string]interface{}{
 		"type":       "sub_agent_end",
 		"session_id": r.SessionID,

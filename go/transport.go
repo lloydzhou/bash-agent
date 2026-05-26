@@ -73,7 +73,7 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 
 // ─── SummaryCall: 压缩用的摘要调用（返回纯文本）───
 
-func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages string) (string, error) {
+func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages string) (string, Usage, error) {
 	// 将 JSONL 转成 JSON 数组，并追加 summary instruction
 	summaryInstruction := "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:"
 
@@ -93,15 +93,20 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages string)
 
 	ch, err := t.Call(ctx, string(messagesJSON), "", "", 4096, "disabled")
 	if err != nil {
-		return "", err
+		return "", Usage{}, err
 	}
 	var text string
 	var lastError string
+	var usage Usage
 	for ev := range ch {
 		switch ev.Type {
 		case EventText:
 			if len(ev.Fields) > 1 {
 				text += ev.Fields[1]
+			}
+		case EventUsage:
+			if u, ok := ev.Payload.(Usage); ok {
+				usage = u
 			}
 		case EventError:
 			if len(ev.Fields) > 1 {
@@ -110,9 +115,9 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages string)
 		}
 	}
 	if text == "" {
-		return "", fmt.Errorf("empty summary response (error=%s)", lastError)
+		return "", usage, fmt.Errorf("empty summary response (error=%s)", lastError)
 	}
-	return text, nil
+	return text, usage, nil
 }
 
 func NewHTTPTransport(cfg Config) *HTTPTransport {
@@ -269,8 +274,8 @@ func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
 
 	var chunk struct {
 		Choices []struct {
-			Index        int `json:"index"`
-			Delta        struct {
+			Index int `json:"index"`
+			Delta struct {
 				Role      string `json:"role"`
 				Content   string `json:"content"`
 				ToolCalls []struct {
@@ -286,8 +291,8 @@ func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
 			PromptTokensDetails struct {
 				CachedTokens int `json:"cached_tokens"`
 			} `json:"prompt_tokens_details"`
@@ -433,10 +438,10 @@ func (t *HTTPTransport) extractJSONValue(data, key string) string {
 func (t *HTTPTransport) extractUsageFromDelta(data string, inputTokens, outputTokens, cacheRead, cacheCreate *int) {
 	var d struct {
 		Usage struct {
-			OutputTokens              int `json:"output_tokens"`
-			InputTokens               int `json:"input_tokens"`
-			CacheReadInputTokens      int `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens  int `json:"cache_creation_input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 		Delta struct {
 			StopReason string `json:"stop_reason"`
