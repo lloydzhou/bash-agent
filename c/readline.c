@@ -89,6 +89,7 @@ static void *readline_thread_fn(void *arg) {
                 *last_slash = '/';
             }
         }
+        linenoiseSetMultiLine(1);
         linenoiseHistorySetMaxLen(4096);
         linenoiseHistoryLoad(hist_path);
 

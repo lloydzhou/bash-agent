@@ -50,7 +50,6 @@ func (s *FileStore) UpdateStats(usage Usage, model string) error {
 	s.stats.OutputTokens += usage.OutputTokens
 	s.stats.CacheWrite += usage.CacheWrite
 	s.stats.CacheRead += usage.CacheRead
-	s.stats.TotalCost += usage.Cost
 
 	return s.flushStats()
 }
