@@ -592,11 +592,13 @@ static ToolResult tool_plan_confirm(const SessionPaths *paths) {
     ToolResult r = {NULL, 0};
     /* 只检查 draft 是否存在，不做 mv — mv 由 agent_loop 在 compact 之后执行
      * 对齐 bash 版: agent_compact_context(plan_confirm) → store_plan_confirm(mv) */
-    if (paths && store_plan_draft_read(paths) && store_plan_draft_read(paths)[0]) {
+    char *draft = paths ? store_plan_draft_read(paths) : NULL;
+    if (draft && draft[0]) {
         r.output = util_strdup("Plan confirmed.");
     } else {
         r.output = util_strdup("No plan draft to confirm.");
     }
+    free(draft);
     return r;
 }
 

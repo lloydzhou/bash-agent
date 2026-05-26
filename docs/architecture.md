@@ -688,11 +688,15 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
 当前事件类型：
 
 - `session_start`
+- `user_input`
 - `text`
 - `thinking`
 - `tool_call`
 - `tool_result`
 - `usage`
+- `sub_agent_start`
+- `sub_agent_result`
+- `sub_agent_end`
 - `stop`
 - `error`
 - `context_update`
@@ -701,7 +705,10 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
 
 - 每行一个 JSON 事件
 - 不混入 human 文本
-- 不把 session 内部事件直接混入 stdout
+- bash 版本由 `store_event_append` 统一写入 `events.jsonl`
+- `output-format=stream-json` 时，`store_event_append` 使用同一行 JSON tee 到 stdout
+- display 层只负责人类可读渲染，不再单独序列化 stream-json
+- bash 通过 RESP pipe 连接 agent loop 和 display；C/Go/Rust 使用结构化 display event 队列传递同一层语义
 
 `usage` 当前字段：
 

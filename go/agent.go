@@ -25,6 +25,8 @@ type Agent struct {
 	llm              Transport
 	tools            *ToolDispatcher
 	display          *TermDisplay
+	displayCh        chan Event
+	displayWG        sync.WaitGroup
 	toolDefs         string // JSON 格式工具定义
 	ctxTokens        int    // 当前上下文 token 数
 	pendingSubAgents int    // 等待中的子 agent 数量
@@ -53,12 +55,38 @@ func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatch
 		display:     display,
 		subResultCh: make(chan SubAgentResult, 8),
 	}
+	if cfg.OutputFormat != "stream-json" {
+		a.displayCh = make(chan Event, 128)
+		a.displayWG.Add(1)
+		go func() {
+			defer a.displayWG.Done()
+			for ev := range a.displayCh {
+				a.display.ShowEvent(ev)
+			}
+		}()
+	}
 	// 设置回调
 	a.tools.SetSubAgentLauncher(a.LaunchSubAgent)
 	a.tools.SetPlanConfirm(a.HandlePlanConfirm)
 	a.tools.SetPlanClear(a.HandlePlanClear)
 	a.tools.SetSkillLoader(a.LoadSkill)
 	return a
+}
+
+func (a *Agent) EmitDisplay(ev Event) {
+	if a.displayCh == nil {
+		return
+	}
+	a.displayCh <- ev
+}
+
+func (a *Agent) CloseDisplay() {
+	if a.displayCh == nil {
+		return
+	}
+	close(a.displayCh)
+	a.displayWG.Wait()
+	a.displayCh = nil
 }
 
 // SetToolDefs 设置工具定义 JSON
@@ -418,8 +446,7 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 			"cache_creation_input_tokens": summaryUsage.CacheWrite,
 			"kind":                        "compact",
 		}
-		evJSON, _ := json.Marshal(ev)
-		_ = a.store.AppendEvent(string(evJSON))
+		a.emitJSON(ev)
 		_ = a.store.UpdateCompactStats(summaryUsage)
 	}
 
@@ -486,9 +513,7 @@ func (a *Agent) emitJSON(obj map[string]interface{}) {
 func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	// 记录 user_input 事件（提前到 AddUserMessage 之前，与 bash 版一致）
 	if turnKind == "user_input" {
-		ev := map[string]interface{}{"type": "user_input", "content": userInput}
-		evJSON, _ := json.Marshal(ev)
-		_ = a.store.AppendEvent(string(evJSON))
+		a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
 	}
 
 	// 添加用户消息
@@ -514,7 +539,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	for turn := 0; turn < a.cfg.MaxTurns; turn++ {
 		// Compact
 		if compacted, _ := a.CompactContext(ctx, "auto"); compacted {
-			a.display.ShowEvent(Event{Type: EventContextUpdate, Fields: []string{"CONTEXT_UPDATE", "compact", "auto"}})
+			a.EmitDisplay(Event{Type: EventContextUpdate, Fields: []string{"CONTEXT_UPDATE", "compact", "auto"}})
 		}
 
 		// 获取 messages
@@ -527,7 +552,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		// LLM 调用
 		ch, err := a.llm.Call(ctx, messages, systemPrompt, a.toolDefs, a.cfg.MaxTokens, a.cfg.Thinking)
 		if err != nil {
-			a.display.ShowEvent(Event{Type: EventError, Fields: []string{"ERROR", err.Error()}})
+			a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", err.Error()}})
 			return err
 		}
 
@@ -546,13 +571,13 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 
 			switch ev.Type {
 			case EventText:
-				a.display.ShowEvent(ev)
+				a.EmitDisplay(ev)
 				if len(ev.Fields) > 1 {
 					text += ev.Fields[1]
 					a.emitJSON(map[string]interface{}{"type": "text", "content": ev.Fields[1]})
 				}
 			case EventThinking:
-				a.display.ShowEvent(ev)
+				a.EmitDisplay(ev)
 				if len(ev.Fields) > 1 {
 					thinking += ev.Fields[1]
 					a.emitJSON(map[string]interface{}{"type": "thinking", "content": ev.Fields[1]})
@@ -569,7 +594,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 					// 生成 CallSummary 并显示（替代 transport 的原始事件）
 					params := ExtractToolParams(tc.Name, json.RawMessage(tc.Input))
 					callSummary := a.tools.CallSummary(tc.Name, params)
-					a.display.ShowEvent(Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", tc.Name, tc.ID, tc.Input, callSummary}})
+					a.EmitDisplay(Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", tc.Name, tc.ID, tc.Input, callSummary}})
 
 					// 执行工具
 					output, toolErr := a.tools.Dispatch(ctx, tc.Name, params)
@@ -589,7 +614,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 					}
 
 					// 显示结果
-					a.display.ShowEvent(Event{Type: EventToolResult, Fields: []string{"TOOL_RESULT", tc.ID, tc.Name, output}})
+					a.EmitDisplay(Event{Type: EventToolResult, Fields: []string{"TOOL_RESULT", tc.ID, tc.Name, output}})
 
 					// stream-json + events.jsonl: 分别写 tool_call 和 tool_result（与 bash 版一致）
 					a.emitJSON(map[string]interface{}{
@@ -620,13 +645,13 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 					})
 				}
 			case EventStop:
-				a.display.ShowEvent(ev)
+				a.EmitDisplay(ev)
 				if len(ev.Fields) > 1 {
 					stopReason = ev.Fields[1]
 				}
 				a.emitJSON(map[string]interface{}{"type": "stop", "reason": stopReason})
 			case EventError:
-				a.display.ShowEvent(ev)
+				a.EmitDisplay(ev)
 				if len(ev.Fields) > 1 {
 					loopErr = ev.Fields[1]
 				}
@@ -635,7 +660,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 				// 与 bash 版对齐：ERROR 立即 break 出事件循环
 				break
 			default:
-				a.display.ShowEvent(ev)
+				a.EmitDisplay(ev)
 			}
 		}
 
@@ -647,8 +672,8 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		a.display.SetTitle(a.store.FormatTitle(a.cfg.Model))
 
 		if interrupted {
-			a.display.ShowEvent(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
-			_ = a.store.AppendEvent(`{"type":"stop","reason":"interrupted"}`)
+			a.EmitDisplay(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
+			a.emitJSON(map[string]interface{}{"type": "stop", "reason": "interrupted"})
 			return nil
 		}
 
@@ -656,7 +681,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		switch stopReason {
 		case "error", "max_tokens", "length":
 			if stopReason != "error" {
-				a.display.ShowEvent(Event{Type: EventError, Fields: []string{"ERROR", "Response truncated (max_tokens reached)"}})
+				a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", "Response truncated (max_tokens reached)"}})
 			}
 			if loopErr != "" {
 				return fmt.Errorf("LLM error: %s", loopErr)
@@ -710,8 +735,7 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 		"description": description,
 		"fork":        fork == "true",
 	}
-	startJSON, _ := json.Marshal(startEvent)
-	_ = a.store.AppendEvent(string(startJSON))
+	a.emitJSON(startEvent)
 
 	// 增加计数
 	a.subMu.Lock()
@@ -819,8 +843,7 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 		"kind":                        "sub_agent",
 		"sub_session_id":              r.SessionID,
 	}
-	usageJSON, _ := json.Marshal(usageEvent)
-	_ = a.store.AppendEvent(string(usageJSON))
+	a.emitJSON(usageEvent)
 
 	// 记录 sub_agent_result 事件（供 replay 和 stream-json 复现）
 	resultEvent := map[string]interface{}{
@@ -832,8 +855,7 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 		"thinking":      r.Thinking,
 		"text":          r.Text,
 	}
-	resultJSON, _ := json.Marshal(resultEvent)
-	_ = a.store.AppendEvent(string(resultJSON))
+	a.emitJSON(resultEvent)
 
 	// 记录 sub_agent_end 事件
 	endEvent := map[string]interface{}{
@@ -842,11 +864,10 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 		"timestamp":  time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 		"status":     r.Status,
 	}
-	endJSON, _ := json.Marshal(endEvent)
-	_ = a.store.AppendEvent(string(endJSON))
+	a.emitJSON(endEvent)
 
 	// 显示结果（统一走 Display 接口）
-	a.display.ShowEvent(Event{
+	a.EmitDisplay(Event{
 		Type: EventSubAgentResult,
 		Fields: []string{
 			"SUB_AGENT_RESULT",
@@ -869,14 +890,4 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 	// 注入为用户消息（不记录 user_input 事件，与 bash 版 agent_loop turn_kind=sub_agent_result 一致）
 	_ = a.store.AddUserMessage(injectMsg)
 
-	// stream-json 输出（含 thinking/text，与 bash 版一致）
-	a.emitJSON(map[string]interface{}{
-		"type":          "sub_agent_result",
-		"session_id":    r.SessionID,
-		"status":        r.Status,
-		"input_tokens":  r.InputTokens,
-		"output_tokens": r.OutputTokens,
-		"thinking":      r.Thinking,
-		"text":          r.Text,
-	})
 }

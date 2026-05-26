@@ -97,6 +97,9 @@ void store_stats_set_int(JsonVal obj, const char *key, int value);
 int store_stats_get_file_int(const char *path, const char *key);
 void store_stats_set_int_file(const char *path, const char *key, int value);
 
+void store_event_set_stream_json(int enabled);
+int store_event_stream_json_enabled(void);
+
 /* 从 stats 中读取整数值 */
 int store_stats_get_int(JsonVal obj, const char *key);
 
