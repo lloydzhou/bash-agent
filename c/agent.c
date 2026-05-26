@@ -313,6 +313,14 @@ static void push_display(MsgQueue *dq, DisplayMessage *msg) {
     }
 }
 
+static void display_tool_result_set_tool(DisplayMessage *msg, const ToolCallAccum *tc) {
+    if (!msg || !tc) return;
+    free(msg->tool_id);
+    free(msg->tool_name);
+    msg->tool_id = util_strdup(tc->id ? tc->id : "");
+    msg->tool_name = util_strdup(tc->name ? tc->name : "");
+}
+
 /* 将 DisplayMessage 转为事件 JSON 字符串（用于 events.jsonl） */
 static char *display_msg_to_event(DisplayMessage *msg) {
     StrBuf buf;
@@ -578,6 +586,8 @@ void agent_replay_events(Agent *agent, int max_turns) {
             }
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_tool_result(content ? content : "", 0);
+            dm->tool_id = json_get_string(jp.val, "tool_use_id");
+            dm->tool_name = json_get_string(jp.val, "name");
             push_display(agent->display_queue, dm);
             free(content);
         }
@@ -966,6 +976,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     /* display 只显示 summary 行 */
                     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                     *dm = display_msg_tool_result(summary.data, tr.exit_code);
+                    display_tool_result_set_tool(dm, tc);
                     push_display_event(&agent->paths, agent->display_queue, dm);
 
                     free(summary.data);
@@ -973,6 +984,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     /* 显示工具结果 */
                     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                     *dm = display_msg_tool_result(tr.output ? tr.output : "(empty)", tr.exit_code);
+                    display_tool_result_set_tool(dm, tc);
                     push_display_event(&agent->paths, agent->display_queue, dm);
                 }
 

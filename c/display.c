@@ -63,62 +63,79 @@ static void ensure_newline(DisplayState *ds, FILE *out) {
 static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                             int interactive, DisplayMessage *msg) {
     if (format == OUTPUT_STREAM_JSON) {
-        /* stream-json 模式：直接输出 JSON */
+        /* stream-json 模式：对齐 bash 版 util_msg_to_stream 的事件形状 */
         StrBuf buf;
         sb_init(&buf);
-        const char *type_name = "";
         switch (msg->type) {
-            case DISPLAY_TEXT: type_name = "text"; break;
-            case DISPLAY_THINKING: type_name = "thinking"; break;
-            case DISPLAY_TOOL_CALL: type_name = "tool_call"; break;
-            case DISPLAY_TOOL_RESULT: type_name = "tool_result"; break;
-            case DISPLAY_USAGE: type_name = "usage"; break;
-            case DISPLAY_STOP: type_name = "stop"; break;
-            case DISPLAY_ERROR: type_name = "error"; break;
-            case DISPLAY_SUB_AGENT_START: type_name = "sub_agent_start"; break;
-            case DISPLAY_SUB_AGENT_RESULT: type_name = "sub_agent_result"; break;
-            case DISPLAY_CONTEXT_UPDATE: type_name = "context_update"; break;
-        }
-        sb_append_char(&buf, '{');
-        sb_append(&buf, "\"type\":");
-        sb_append_json_string(&buf, type_name);
-        if (msg->content) {
-            sb_append(&buf, ",\"text\":");
-            sb_append_json_string(&buf, msg->content);
-        }
-        if (msg->type == DISPLAY_USAGE) {
-            sb_appendf(&buf, ",\"input_tokens\":%d,\"output_tokens\":%d,"
-                       "\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d",
+        case DISPLAY_TEXT:
+            sb_append(&buf, "{\"type\":\"text\",\"content\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_THINKING:
+            sb_append(&buf, "{\"type\":\"thinking\",\"content\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_TOOL_CALL:
+            sb_append(&buf, "{\"type\":\"tool_call\",\"name\":");
+            sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+            sb_append(&buf, ",\"id\":");
+            sb_append_json_string(&buf, msg->tool_id ? msg->tool_id : "");
+            sb_append(&buf, ",\"input\":");
+            sb_append(&buf, (msg->tool_input && msg->tool_input[0]) ? msg->tool_input : "{}");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_TOOL_RESULT:
+            sb_append(&buf, "{\"type\":\"tool_result\",\"tool_use_id\":");
+            sb_append_json_string(&buf, msg->tool_id ? msg->tool_id : "");
+            sb_append(&buf, ",\"name\":");
+            sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+            sb_append(&buf, ",\"content\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_USAGE:
+            sb_appendf(&buf, "{\"type\":\"usage\",\"input_tokens\":%d,\"output_tokens\":%d,"
+                       "\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d,"
+                       "\"kind\":\"agent\"}",
                        msg->in_tokens, msg->out_tokens,
                        msg->cache_read_tokens, msg->cache_creation_tokens);
-        }
-        if (msg->type == DISPLAY_CONTEXT_UPDATE) {
-            sb_append(&buf, ",\"kind\":\"compact\",\"trigger\":");
+            break;
+        case DISPLAY_STOP:
+            sb_append(&buf, "{\"type\":\"stop\",\"reason\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_ERROR:
+            sb_append(&buf, "{\"type\":\"error\",\"message\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_SUB_AGENT_START:
+            sb_append(&buf, "{\"type\":\"sub_agent_start\",\"session_id\":");
+            sb_append_json_string(&buf, msg->session_id ? msg->session_id : "");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_SUB_AGENT_RESULT:
+            sb_append(&buf, "{\"type\":\"sub_agent_result\",\"session_id\":");
+            sb_append_json_string(&buf, msg->session_id ? msg->session_id : "");
+            sb_append(&buf, ",\"status\":");
+            sb_append_json_string(&buf, msg->tool_exit_code == 0 ? "ok" : "failed");
+            sb_appendf(&buf, ",\"input_tokens\":%d,\"output_tokens\":%d",
+                       msg->in_tokens, msg->out_tokens);
+            sb_append(&buf, ",\"thinking\":");
+            sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+            sb_append(&buf, ",\"text\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
+        case DISPLAY_CONTEXT_UPDATE:
+            sb_append(&buf, "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":");
             sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "auto");
+            sb_append_char(&buf, '}');
+            break;
         }
-        if (msg->type == DISPLAY_TOOL_CALL) {
-            if (msg->tool_name) {
-                sb_append(&buf, ",\"name\":");
-                sb_append_json_string(&buf, msg->tool_name);
-            }
-            if (msg->tool_id) {
-                sb_append(&buf, ",\"id\":");
-                sb_append_json_string(&buf, msg->tool_id);
-            }
-            if (msg->tool_input) {
-                sb_append(&buf, ",\"input\":");
-                sb_append_json_string(&buf, msg->tool_input);
-            }
-        }
-        if (msg->type == DISPLAY_TOOL_RESULT && msg->content) {
-            sb_append(&buf, ",\"content\":");
-            sb_append_json_string(&buf, msg->content);
-        }
-        if (msg->type == DISPLAY_STOP && msg->content) {
-            sb_append(&buf, ",\"reason\":");
-            sb_append_json_string(&buf, msg->content);
-        }
-        sb_append_char(&buf, '}');
         fprintf(out, "%s\n", buf.data);
         fflush(out);
         sb_free(&buf);
