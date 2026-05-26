@@ -895,6 +895,7 @@ impl Agent {
                 last_char: String::from("\n"),
                 prev_was_thinking: false,
             };
+            let (display_tx, display_rx) = mpsc::channel::<DisplayEvent>();
 
             while turn < self.cfg.max_turns {
                 turn += 1;
@@ -959,15 +960,15 @@ impl Agent {
                     }
                     match evt {
                         Event::Thinking(ThinkingEvent { content }) => {
-                            self.display_event(&mut ds, DisplayEvent::Thinking(content.clone()))?;
+                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Thinking(content.clone()))?;
                             thinking.push_str(&content);
                         }
                         Event::Text(TextEvent { content }) => {
-                            self.display_event(&mut ds, DisplayEvent::Text(content.clone()))?;
+                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Text(content.clone()))?;
                             text.push_str(&content);
                         }
                         Event::ToolCall(call) => {
-                            self.display_event(&mut ds, DisplayEvent::ToolCall(call.clone()))?;
+                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::ToolCall(call.clone()))?;
                             calls.push(call.clone());
 
                             if self.is_interrupted() {
@@ -1038,24 +1039,21 @@ impl Agent {
                                 content: output.clone(),
                                 conv_content,
                             };
-                            self.display_event(
-                                &mut ds,
-                                DisplayEvent::ToolResult(tool_result.clone()),
-                            )?;
+                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::ToolResult(tool_result.clone()))?;
                             tool_results.push(tool_result);
                         }
                         Event::Usage(usage) => {
-                            self.display_event(&mut ds, DisplayEvent::Usage(usage))?;
+                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Usage(usage))?;
                         }
                         Event::Stop(StopEvent { reason }) => {
                             stop = reason.clone();
-                            self.display_event(&mut ds, DisplayEvent::Stop(reason))?;
+                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Stop(reason))?;
                             break;
                         }
                         Event::Error(ErrorEvent { message }) => {
                             loop_error = message.clone();
                             stop = "error".to_string();
-                            let _ = self.display_event(&mut ds, DisplayEvent::Error(message));
+                            let _ = self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Error(message));
                             break;
                         }
                         Event::Retry(RetryEvent {}) => {
@@ -1137,13 +1135,22 @@ impl Agent {
         .build_system_prompt()
     }
 
-    /// emit_and_append_event writes an event to events.jsonl (always) and to
-    /// stdout (only in stream-json mode). Mirrors Go's emitAndAppendEvent and
-    /// bash's session_append_line + (stream-json || human display) pattern.
+    /// append_event writes an event to events.jsonl and, in stream-json mode,
+    /// tees the same JSON line to stdout.
     fn emit_and_append_event(&self, value: Value) -> Result<()> {
-        self.append_event(value.clone())?;
-        if self.is_stream_json_mode() {
-            self.emit_stream(value)?;
+        self.append_event(value)
+    }
+
+    fn queue_display_event(
+        &mut self,
+        tx: &mpsc::Sender<DisplayEvent>,
+        rx: &mpsc::Receiver<DisplayEvent>,
+        ds: &mut DisplayState,
+        evt: DisplayEvent,
+    ) -> Result<()> {
+        tx.send(evt).map_err(|e| anyhow!(e.to_string()))?;
+        while let Ok(queued) = rx.try_recv() {
+            self.display_event(ds, queued)?;
         }
         Ok(())
     }
@@ -1560,7 +1567,11 @@ impl Agent {
         if self.paths.events.as_os_str().is_empty() {
             return Ok(());
         }
-        store::store_event_append_json(&self.paths, &value)
+        store::store_event_append_json(&self.paths, &value)?;
+        if self.is_stream_json_mode() {
+            self.emit_stream(value)?;
+        }
+        Ok(())
     }
 
     /// increment_turn_count increments the current_turn_count in stats.json.
@@ -1673,10 +1684,8 @@ impl Agent {
     /// Emit a context_update event: write to events.jsonl + emit to stream-json or print info.
     fn emit_context_update(&self, trigger: &str) -> Result<()> {
         let evt = json!({"type":"context_update","kind":"compact","trigger":trigger});
-        self.append_event(evt.clone())?;
-        if self.is_stream_json_mode() {
-            self.emit_stream(evt)?;
-        } else {
+        self.append_event(evt)?;
+        if !self.is_stream_json_mode() {
             self.info(&format!("Context compacted ({}).", trigger));
         }
         Ok(())

@@ -185,6 +185,7 @@ Examples:
 
 	// 创建 agent
 	a := agent.NewAgent(cfg, store, llm, tools, display)
+	defer a.CloseDisplay()
 
 	// 加载工具定义（编译时嵌入的 tools.json）
 	a.SetToolDefs(agent.UtilLoadToolDefs())

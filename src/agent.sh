@@ -404,7 +404,7 @@ store_session_resolve_continue() {
 # 处理子 agent 通过 FIFO 发回的 AGENT_RESULT 将 result_text 注入主 agent conversation，触发 agent_loop 让主 agent 处理
 store_event_append() {
     [[ -n "${SESSION_EVENT_FILE:-}" ]] || return 0
-    printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"
+    if util_is_stream_json; then printf '%s\n' "$1" | tee -a "$SESSION_EVENT_FILE"; else printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"; fi
 }
 
 store_conv_add_user() {
@@ -935,15 +935,12 @@ display_sub_agent_result() {
     DISPLAY_LAST_CHAR=$'\n'
 }
 
-# Convert REPLY_MESSAGE to a stream event JSON string (for events.jsonl and stream-json output). Prints JSON to stdout; returns 1 if type has no event representation.
-# Render a single RESP message from REPLY_MESSAGE (human-readable or stream-json).
-# JSON event construction is still handled by util_msg_to_stream().
+# Convert REPLY_MESSAGE to a stream event JSON string. Prints JSON to stdout;
+# returns 1 if type has no event representation.
+# Render a single RESP message from REPLY_MESSAGE in human-readable mode.
+# stream-json output is emitted by store_event_append teeing the event line.
 display_message() {
     local _type="${REPLY_MESSAGE[0]}" _tc_kv=() i _n _tc_summary="" _tr_name _tr_text="" _um_text
-    if util_is_stream_json; then
-        printf '%s\n' "$(util_msg_to_stream)"
-        return
-    fi
     case "$_type" in
         TEXT)
             if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
@@ -1146,7 +1143,7 @@ agent_handle_sub_result() {
     active_sub_count=$(( active_sub_count - 1 ))
     [[ "$silent" == true ]] && return 0
     # 展示结果摘要——通过 fd 7 交给 display_stream，不直接写 stdout（避免和子进程争终端）
-    ( util_write_msg "SUB_AGENT_RESULT" "$session_id" "$status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
+    util_is_stream_json || ( util_write_msg "SUB_AGENT_RESULT" "$session_id" "$status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
     agent_run_loop "[sub-agent $session_id] $status (in=$_in, out=$_out)"$'\n'"Thinking: $_thinking"$'\n'"Text: $_text" sub_agent_result
 }
 
@@ -1290,7 +1287,7 @@ agent_loop() {
         _reason="${REPLY_MESSAGE[1]-}"
         [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && active_sub_count=$(( active_sub_count + 1 ))
         _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
-        ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
+        util_is_stream_json || ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true
             break

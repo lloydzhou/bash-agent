@@ -18,6 +18,7 @@
 #include "msgqueue.h"
 #include "readline.h"
 #include "display.h"
+#include "store.h"
 #include "util.h"
 #include <curl/curl.h>
 #include <stdio.h>
@@ -226,6 +227,8 @@ int main(int argc, char *argv[]) {
     mq_init(&input_queue);
     mq_init(&display_queue);
 
+    store_event_set_stream_json(strcmp(output_fmt, "stream-json") == 0);
+
     /* 创建 Agent */
     Agent *agent = agent_create(provider, effective_model,
                                 effective_api_key, effective_base_url,
@@ -273,14 +276,14 @@ int main(int argc, char *argv[]) {
         pthread_t display_thread;
         DisplayConfig dcfg;
         dcfg.queue = &display_queue;
-        dcfg.format = agent->output_format ? OUTPUT_STREAM_JSON : OUTPUT_HUMAN;
+        dcfg.format = OUTPUT_HUMAN;
         dcfg.interactive = 1;
         display_thread_start(&display_thread, &dcfg);
 
         /* Replay 最近 10 轮事件（复用 display 线程渲染） */
-        agent_replay_events(agent, 10);
+        if (!agent->output_format) agent_replay_events(agent, 10);
         /* replay 后输出换行 */
-        {
+        if (!agent->output_format) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_text("\n");
             mq_push(&display_queue, dm);
@@ -319,7 +322,7 @@ int main(int argc, char *argv[]) {
         pthread_t display_thread;
         DisplayConfig dcfg;
         dcfg.queue = &display_queue;
-        dcfg.format = agent->output_format ? OUTPUT_STREAM_JSON : OUTPUT_HUMAN;
+        dcfg.format = OUTPUT_HUMAN;
         dcfg.interactive = 0;
         display_thread_start(&display_thread, &dcfg);
 

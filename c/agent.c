@@ -417,7 +417,12 @@ static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayM
             free(evt);
         }
     }
-    if (dq) mq_push(dq, msg);
+    if (dq && !store_event_stream_json_enabled()) {
+        mq_push(dq, msg);
+    } else {
+        display_message_free(msg);
+        free(msg);
+    }
 }
 
 /* ============================================================

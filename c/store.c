@@ -560,7 +560,21 @@ int store_stats_update(const char *path, stats_update_fn fn, void *ctx) {
  * events.jsonl 操作
  * ============================================================ */
 
+static _Thread_local int g_store_event_stream_json = 0;
+
+void store_event_set_stream_json(int enabled) {
+    g_store_event_stream_json = enabled ? 1 : 0;
+}
+
+int store_event_stream_json_enabled(void) {
+    return g_store_event_stream_json;
+}
+
 int store_event_append(const SessionPaths *p, const char *json_str) {
+    if (g_store_event_stream_json) {
+        printf("%s\n", json_str);
+        fflush(stdout);
+    }
     return jsonl_append(p->events, json_str);
 }
 

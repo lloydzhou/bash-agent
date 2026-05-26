@@ -89,8 +89,14 @@ agent_loop_stream
              │   ├─ display_human_text
              │   ├─ display_ensure_newline
              │   └─ display_sub_agent_result
-             └─ 或 stream-json (util_msg_to_stream → stdout)
+             └─ stream-json 不走 display_message；由 store_event_append tee 到 stdout
 ```
+
+Go/C/Rust 版本保留同一层级边界，但不强行复制 bash 的 RESP 编码：
+
+- C: `DisplayMessage` 经 `display_queue` 进入 display thread。
+- Go: `Event` 经 `displayCh` 进入 display goroutine。
+- Rust: `DisplayEvent` 经 `mpsc` display channel 进入 display consumer。
 
 ```text
 回放面: replay
