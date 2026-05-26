@@ -64,6 +64,7 @@ typedef enum {
     DISPLAY_SUB_AGENT_RESULT,    /* SubAgent 结果摘要 */
     DISPLAY_SUB_AGENT_START,     /* SubAgent 启动通知 */
     DISPLAY_CONTEXT_UPDATE,      /* 上下文压缩通知 */
+    DISPLAY_FLUSH,               /* display 队列同步屏障 */
 } DisplayMsgType;
 
 typedef struct {
@@ -83,6 +84,10 @@ typedef struct {
     int cache_creation_tokens;
     /* SubAgent 专用 */
     char *session_id;
+    /* DISPLAY_FLUSH 专用：display 线程处理到该消息后 signal */
+    pthread_mutex_t *flush_mutex;
+    pthread_cond_t *flush_cond;
+    int *flush_done;
 } DisplayMessage;
 
 /* 创建各种类型的 DisplayMessage */

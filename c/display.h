@@ -29,4 +29,7 @@ int display_thread_start(pthread_t *thread, const DisplayConfig *cfg);
 /* 请求 display 线程停止 */
 void display_thread_stop(MsgQueue *queue);
 
+/* 等待 display 线程处理完当前已入队的所有消息 */
+int display_flush(MsgQueue *queue);
+
 #endif /* DISPLAY_H */

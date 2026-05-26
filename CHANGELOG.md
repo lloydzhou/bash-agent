@@ -10,7 +10,7 @@
 
 ## [4.0.1] - 2026-05-27
 
-> **Bugfix 版本**：修复 cagent 统计/缓存/显示相关问题，对齐四端行为。
+> **Bugfix 版本**：修复 cagent 统计/缓存/显示相关问题，并统一 C/Go/Rust display queue 层级。
 
 ### Fixed
 
@@ -18,7 +18,8 @@
 - 对齐 linenoise 和 stats 行为
 - 对齐 cagent replay 工具显示
 - 对齐 cagent 流式事件输出
-- 对齐流式事件与显示队列（Go/Rust 同步）
+- 统一 C/Go/Rust 为长期 display queue + flush barrier，避免 linenoise 提示符在异步 display 输出前重绘导致错位
+- Rust 执行和 replay 统一映射为 `DisplayEvent`，复用同一 display renderer；`events.jsonl` / `stream-json` 仍在 event append 层同步处理，display queue 只负责人类可读输出
 
 ---
 

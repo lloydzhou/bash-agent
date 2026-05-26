@@ -61,6 +61,12 @@ func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatch
 		go func() {
 			defer a.displayWG.Done()
 			for ev := range a.displayCh {
+				if ev.Type == EventDisplayFlush {
+					if ack, ok := ev.Payload.(chan struct{}); ok {
+						close(ack)
+					}
+					continue
+				}
 				a.display.ShowEvent(ev)
 			}
 		}()
@@ -87,6 +93,18 @@ func (a *Agent) CloseDisplay() {
 	close(a.displayCh)
 	a.displayWG.Wait()
 	a.displayCh = nil
+}
+
+// FlushDisplay waits until the display goroutine has rendered all events
+// queued before this call. Interactive linenoise must not redraw the prompt
+// before asynchronous display output is drained.
+func (a *Agent) FlushDisplay() {
+	if a.displayCh == nil {
+		return
+	}
+	ack := make(chan struct{})
+	a.displayCh <- Event{Type: EventDisplayFlush, Payload: ack}
+	<-ack
 }
 
 // SetToolDefs 设置工具定义 JSON

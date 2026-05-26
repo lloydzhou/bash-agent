@@ -59,6 +59,14 @@ static void ensure_newline(DisplayState *ds, FILE *out) {
     }
 }
 
+static void signal_flush(DisplayMessage *msg) {
+    if (!msg->flush_mutex || !msg->flush_cond || !msg->flush_done) return;
+    pthread_mutex_lock(msg->flush_mutex);
+    *msg->flush_done = 1;
+    pthread_cond_signal(msg->flush_cond);
+    pthread_mutex_unlock(msg->flush_mutex);
+}
+
 /* 渲染一条 display 消息 */
 static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                             int interactive, DisplayMessage *msg) {
@@ -135,6 +143,10 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "auto");
             sb_append_char(&buf, '}');
             break;
+        case DISPLAY_FLUSH:
+            signal_flush(msg);
+            sb_free(&buf);
+            return;
         }
         fprintf(out, "%s\n", buf.data);
         fflush(out);
@@ -251,6 +263,10 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             ds->last_char[0] = '\n';
             break;
         }
+
+        case DISPLAY_FLUSH:
+            signal_flush(msg);
+            break;
     }
 }
 
@@ -284,4 +300,45 @@ int display_thread_start(pthread_t *thread, const DisplayConfig *cfg) {
 
 void display_thread_stop(MsgQueue *queue) {
     mq_close(queue);
+}
+
+int display_flush(MsgQueue *queue) {
+    if (!queue) return -1;
+
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int done = 0;
+    if (pthread_mutex_init(&mutex, NULL) != 0) return -1;
+    if (pthread_cond_init(&cond, NULL) != 0) {
+        pthread_mutex_destroy(&mutex);
+        return -1;
+    }
+
+    DisplayMessage *msg = calloc(1, sizeof(DisplayMessage));
+    if (!msg) {
+        pthread_cond_destroy(&cond);
+        pthread_mutex_destroy(&mutex);
+        return -1;
+    }
+    msg->type = DISPLAY_FLUSH;
+    msg->flush_mutex = &mutex;
+    msg->flush_cond = &cond;
+    msg->flush_done = &done;
+
+    pthread_mutex_lock(&mutex);
+    if (mq_push(queue, msg) != 0) {
+        pthread_mutex_unlock(&mutex);
+        free(msg);
+        pthread_cond_destroy(&cond);
+        pthread_mutex_destroy(&mutex);
+        return -1;
+    }
+    while (!done) {
+        pthread_cond_wait(&cond, &mutex);
+    }
+    pthread_mutex_unlock(&mutex);
+
+    pthread_cond_destroy(&cond);
+    pthread_mutex_destroy(&mutex);
+    return 0;
 }

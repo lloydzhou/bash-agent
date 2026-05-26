@@ -256,22 +256,24 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	// 更新终端标题
 	display.SetTitle(store.FormatTitle(model))
 
-	// 启动 readline goroutine
-	rl := NewReadline(home)
-	rl.Start()
-
 	// 如果有初始输入，先执行
 	if initialInput != "" {
 		if err := a.RunLoop(ctx, initialInput, "user_input"); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
+		a.FlushDisplay()
 	}
+
+	// 启动 readline goroutine
+	rl := NewReadline(home)
+	rl.Start()
 
 	// 主循环：从 readline goroutine 接收输入，交给 agent 处理
 	for input := range rl.Input() {
 		if err := a.RunLoop(ctx, input, "user_input"); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
+		a.FlushDisplay()
 		rl.Done() // 通知 readline goroutine 可以显示下一个提示符
 	}
 

@@ -1,4 +1,5 @@
 #include "agent.h"
+#include "display.h"
 #include "tools_embed.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -1165,7 +1166,12 @@ int agent_main_loop(Agent *agent) {
                     free(sub_msg);
                 }
 
-                /* 所有轮次完成：signal done（通知 readline 线程继续读下一行） */
+                /* 所有轮次完成：先等待 display 队列写完，再 signal done。
+                 * 否则 linenoise 可能先重绘下一轮提示符，和异步 display 输出交错。 */
+                if (agent->interactive) {
+                    display_flush(agent->display_queue);
+                }
+                /* signal done（通知 readline 线程继续读下一行） */
                 if (msg->data.user_input.done_mutex) {
                     pthread_mutex_lock(msg->data.user_input.done_mutex);
                     *(msg->data.user_input.done_flag) = 1;

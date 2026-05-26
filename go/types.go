@@ -94,6 +94,7 @@ const (
 	EventUserMessage                     // USER_INPUT (主循环)
 	EventAgentResult                     // AGENT_RESULT (子 agent 返回)
 	EventSubAgentResult                  // SUB_AGENT_RESULT (replay 用)
+	EventDisplayFlush                    // display queue 同步屏障
 )
 
 // Usage 记录 token 使用量

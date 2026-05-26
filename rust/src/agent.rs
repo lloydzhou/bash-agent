@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc;
+use std::thread;
 
 type TransportRef = Arc<dyn crate::transport::Transport>;
 
@@ -272,6 +273,8 @@ pub(crate) struct Agent {
     sub_agent_request_count: usize,          // SubAgent 请求计数
     stdout: RefCell<Box<dyn Write + Send>>,  // 可替换的输出目标（子 agent 时为 sink）
     stderr: RefCell<Box<dyn Write + Send>>,  // 可替换的错误输出目标（子 agent 时为 sink）
+    display_tx: Option<mpsc::Sender<DisplayCommand>>,
+    display_handle: Option<thread::JoinHandle<()>>,
     cancel_read_fd: i32,                      // cancel pipe 读端 FD，传给 Runner 做 kqueue wait
 }
 
@@ -333,6 +336,229 @@ enum DisplayEvent {
     Stop(String),
     Error(String),
     ToolResult(ToolResult),
+    UserMessage(String),
+    ContextUpdate(String),
+    SubAgentResult {
+        session_id: String,
+        status: String,
+        thinking: String,
+        text: String,
+        in_tokens: usize,
+        out_tokens: usize,
+    },
+}
+
+enum DisplayCommand {
+    Event(DisplayEvent),
+    Flush(mpsc::Sender<()>),
+}
+
+fn display_write_human(out: &mut dyn Write, interactive: bool, s: &str) -> Result<()> {
+    write!(out, "{}", normalize_display_text(s, interactive))?;
+    out.flush()?;
+    Ok(())
+}
+
+fn render_display_event(
+    ds: &mut DisplayState,
+    out: &mut dyn Write,
+    interactive: bool,
+    evt: DisplayEvent,
+) -> Result<()> {
+    match evt {
+        DisplayEvent::Thinking(content) => {
+            display_write_human(out, interactive, &format!("\x1b[90m{}\x1b[0m", content))?;
+            let display_content = normalize_display_text(&content, interactive);
+            if display_content.ends_with('\n') {
+                ds.last_char = "\n".to_string();
+            } else if let Some(c) = display_content.chars().last() {
+                ds.last_char = c.to_string();
+            }
+            ds.prev_was_thinking = true;
+        }
+        DisplayEvent::Text(content) => {
+            if ds.prev_was_thinking && ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+                ds.last_char = "\n".to_string();
+            }
+            display_write_human(out, interactive, &content)?;
+            let display_content = normalize_display_text(&content, interactive);
+            if display_content.ends_with('\n') {
+                ds.last_char = "\n".to_string();
+            } else if let Some(c) = display_content.chars().last() {
+                ds.last_char = c.to_string();
+            }
+            ds.prev_was_thinking = false;
+        }
+        DisplayEvent::ToolCall(call) => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+            }
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+            display_write_human(
+                out,
+                interactive,
+                &format!(
+                    "\x1b[33m[tool] {}\x1b[0m\n",
+                    build_tool_call_summary(&call.name, &call.fields)
+                ),
+            )?;
+        }
+        DisplayEvent::Usage(_) => {}
+        DisplayEvent::Stop(reason) => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+                ds.last_char = "\n".to_string();
+            }
+            if reason == "interrupted" {
+                display_write_human(out, interactive, "\x1b[36mInterrupted.\x1b[0m\n")?;
+                ds.last_char = "\n".to_string();
+            }
+            ds.prev_was_thinking = false;
+        }
+        DisplayEvent::Error(message) => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+            }
+            display_write_human(out, interactive, &format!("\x1b[31mError: {}\x1b[0m\n", message))?;
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+        }
+        DisplayEvent::UserMessage(content) => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+            }
+            display_write_human(out, interactive, &format!("\x1b[32m> {}\x1b[0m\n", truncate_for_replay(&content, 77)))?;
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+        }
+        DisplayEvent::ContextUpdate(trigger) => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+            }
+            display_write_human(out, interactive, &format!("\x1b[36mContext compacted ({}).\x1b[0m\n", trigger))?;
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+        }
+        DisplayEvent::ToolResult(result) => {
+            if result.content.is_empty() {
+                return Ok(());
+            }
+            let tr_text = if result.tool_name == "Edit" {
+                let mut s = normalize_display_text(&result.content, interactive);
+                if !s.ends_with('\n') {
+                    s.push('\n');
+                }
+                s
+            } else if result.tool_name == "Read" || result.tool_name == "Write" {
+                first_line(&result.content).to_string() + "\n"
+            } else {
+                normalize_display_text(&result.content, interactive) + "\n"
+            };
+            if ds.prev_was_thinking && ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+                ds.last_char = "\n".to_string();
+            }
+            ds.prev_was_thinking = false;
+            display_write_human(out, interactive, &tr_text)?;
+            if tr_text.ends_with('\n') {
+                ds.last_char = "\n".to_string();
+            } else if let Some(c) = tr_text.chars().last() {
+                ds.last_char = c.to_string();
+            }
+        }
+        DisplayEvent::SubAgentResult {
+            session_id,
+            status,
+            thinking,
+            text,
+            in_tokens,
+            out_tokens,
+        } => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+            }
+            if status == "ok" {
+                display_write_human(
+                    out,
+                    interactive,
+                    &format!(
+                        "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m\n",
+                        session_id, in_tokens, out_tokens
+                    ),
+                )?;
+            } else {
+                display_write_human(
+                    out,
+                    interactive,
+                    &format!("\x1b[31m[sub-agent {}] failed\x1b[0m\n", session_id),
+                )?;
+            }
+            if !thinking.is_empty() {
+                display_write_human(
+                    out,
+                    interactive,
+                    &format!("\x1b[90m{}\x1b[0m\n", truncate_str(&thinking, 120)),
+                )?;
+            }
+            if !text.is_empty() {
+                display_write_human(out, interactive, &format!("{}\n", truncate_str(&text, 120)))?;
+            }
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+        }
+    }
+    Ok(())
+}
+
+impl Agent {
+    fn start_display_worker(interactive: bool) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
+        let (tx, rx) = mpsc::channel::<DisplayCommand>();
+        let handle = thread::spawn(move || {
+            let mut ds = DisplayState {
+                last_char: String::from("\n"),
+                prev_was_thinking: false,
+            };
+            let mut out: Box<dyn Write + Send> = Box::new(io::stdout());
+            while let Ok(cmd) = rx.recv() {
+                match cmd {
+                    DisplayCommand::Event(evt) => {
+                        let _ = render_display_event(&mut ds, &mut out, interactive, evt);
+                    }
+                    DisplayCommand::Flush(done) => {
+                        let _ = out.flush();
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+        (tx, handle)
+    }
+
+    fn flush_display(&self) {
+        if let Some(tx) = &self.display_tx {
+            let (done_tx, done_rx) = mpsc::channel();
+            if tx.send(DisplayCommand::Flush(done_tx)).is_ok() {
+                let _ = done_rx.recv();
+            }
+        }
+    }
+
+    fn queue_display_only(&self, evt: DisplayEvent) {
+        if let Some(tx) = &self.display_tx {
+            let _ = tx.send(DisplayCommand::Event(evt));
+        }
+    }
+}
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        self.display_tx.take();
+        if let Some(handle) = self.display_handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl Agent {
@@ -384,6 +610,13 @@ impl Agent {
         let (msg_tx, msg_rx) = mpsc::channel(); // 初始化消息队列
         let msg_tx = Arc::new(Mutex::new(Some(msg_tx))); // 包装在 Arc<Mutex<Option>> 中
 
+        let (display_tx, display_handle) = if cfg.output_format == OutputFormat::StreamJson {
+            (None, None)
+        } else {
+            let (tx, handle) = Self::start_display_worker(cfg.interactive);
+            (Some(tx), Some(handle))
+        };
+
         let rt = Self {
             cfg,
             cwd,
@@ -406,6 +639,8 @@ impl Agent {
             sub_agent_request_count: 0,
             stdout: RefCell::new(Box::new(io::stdout())),
             stderr: RefCell::new(Box::new(io::stderr())),
+            display_tx,
+            display_handle,
             cancel_read_fd: 0, // 占位，稍后由 agent_run 设置
         };
 
@@ -513,6 +748,8 @@ impl Agent {
                 sub_agent_request_count: 0,
                 stdout: RefCell::new(Box::new(io::empty())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
                 stderr: RefCell::new(Box::new(io::empty())),  // 子 agent 错误输出全部丢弃
+                display_tx: None,
+                display_handle: None,
                 cancel_read_fd: -1,
             };
 
@@ -720,6 +957,7 @@ impl Agent {
                             self.error(&msg);
                         }
                     }
+                    self.flush_display();
                     // 通知 readline 线程处理完成
                     let _ = done.send(());
                 }
@@ -739,6 +977,7 @@ impl Agent {
                         let _ = write!(self.stderr.borrow_mut(), "\r\x1b[K");
                     }
                     self.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
+                    self.flush_display();
                 }
             }
 
@@ -815,29 +1054,15 @@ impl Agent {
         self.active_sub_count -= 1;
         self.sub_agent_request_count += 1;
 
-        // 6. 显示结果（通过 self.stderr，子 agent 结果到达主 agent 时在主终端显示）
-        if self.cfg.interactive {
-            let _ = write!(self.stderr.borrow_mut(), "\r\x1b[K");
-        }
-        if status == "ok" {
-            let _ = writeln!(
-                self.stderr.borrow_mut(),
-                "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m",
-                session_id, in_tokens, out_tokens
-            );
-        } else {
-            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[31m[sub-agent {}] failed\x1b[0m", session_id);
-        }
-        // thinking 用灰色显示
-        if !thinking.is_empty() {
-            let preview = truncate_str(thinking, 120);
-            let _ = writeln!(self.stderr.borrow_mut(), "\x1b[90m{}\x1b[0m", preview);
-        }
-        // text 用默认色显示
-        if !text.is_empty() {
-            let preview = truncate_str(text, 120);
-            let _ = writeln!(self.stderr.borrow_mut(), "{}", preview);
-        }
+        // 6. 显示结果：通过长期 display queue 渲染，避免和 linenoise prompt 竞争。
+        let _ = self.queue_display_event(DisplayEvent::SubAgentResult {
+            session_id: session_id.to_string(),
+            status: status.to_string(),
+            thinking: thinking.to_string(),
+            text: text.to_string(),
+            in_tokens,
+            out_tokens,
+        });
 
         // 7. 注入结果到 conversation 并触发 agent loop（忽略错误，与 bash/Go 对齐）
         let context = format!(
@@ -850,11 +1075,6 @@ impl Agent {
             text
         );
         let _ = self.agent_loop_with_kind(context, "sub_agent_result");
-
-        // 8. 交互模式下恢复提示符
-        if self.cfg.interactive {
-            let _ = write!(self.stderr.borrow_mut(), "\x1b[32m> \x1b[0m");
-        }
 
         Ok(())
     }
@@ -891,12 +1111,6 @@ impl Agent {
             self.increment_turn_count();
 
             let mut turn = 0;
-            let mut ds = DisplayState {
-                last_char: String::from("\n"),
-                prev_was_thinking: false,
-            };
-            let (display_tx, display_rx) = mpsc::channel::<DisplayEvent>();
-
             while turn < self.cfg.max_turns {
                 turn += 1;
 
@@ -960,15 +1174,15 @@ impl Agent {
                     }
                     match evt {
                         Event::Thinking(ThinkingEvent { content }) => {
-                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Thinking(content.clone()))?;
+                            self.queue_display_event(DisplayEvent::Thinking(content.clone()))?;
                             thinking.push_str(&content);
                         }
                         Event::Text(TextEvent { content }) => {
-                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Text(content.clone()))?;
+                            self.queue_display_event(DisplayEvent::Text(content.clone()))?;
                             text.push_str(&content);
                         }
                         Event::ToolCall(call) => {
-                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::ToolCall(call.clone()))?;
+                            self.queue_display_event(DisplayEvent::ToolCall(call.clone()))?;
                             calls.push(call.clone());
 
                             if self.is_interrupted() {
@@ -1039,21 +1253,21 @@ impl Agent {
                                 content: output.clone(),
                                 conv_content,
                             };
-                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::ToolResult(tool_result.clone()))?;
+                            self.queue_display_event(DisplayEvent::ToolResult(tool_result.clone()))?;
                             tool_results.push(tool_result);
                         }
                         Event::Usage(usage) => {
-                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Usage(usage))?;
+                            self.queue_display_event(DisplayEvent::Usage(usage))?;
                         }
                         Event::Stop(StopEvent { reason }) => {
                             stop = reason.clone();
-                            self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Stop(reason))?;
+                            self.queue_display_event(DisplayEvent::Stop(reason))?;
                             break;
                         }
                         Event::Error(ErrorEvent { message }) => {
                             loop_error = message.clone();
                             stop = "error".to_string();
-                            let _ = self.queue_display_event(&display_tx, &display_rx, &mut ds, DisplayEvent::Error(message));
+                            let _ = self.queue_display_event(DisplayEvent::Error(message));
                             break;
                         }
                         Event::Retry(RetryEvent {}) => {
@@ -1101,18 +1315,8 @@ impl Agent {
                         return Ok(());
                     }
                 } else {
-                    // Match bash: write stop interrupted event to events.jsonl (always)
-                    // and to stdout if stream-json mode
-                    let _ =
-                        self.emit_and_append_event(json!({"type":"stop","reason":"interrupted"}));
-                    if self.is_stream_json_mode() {
-                        // In stream-json mode the JSON was already printed by emit_and_append_event
-                    } else {
-                        if ds.last_char != "\n" {
-                            self.write_human("\n")?;
-                        }
-                        self.info("Interrupted.");
-                    }
+                    // Match bash: write stop interrupted event and render through display queue.
+                    let _ = self.queue_display_event(DisplayEvent::Stop("interrupted".to_string()));
                     CTRLC_FLAG.store(false, Ordering::SeqCst);
                     return Ok(());
                 }
@@ -1141,75 +1345,21 @@ impl Agent {
         self.append_event(value)
     }
 
-    fn queue_display_event(
-        &mut self,
-        tx: &mpsc::Sender<DisplayEvent>,
-        rx: &mpsc::Receiver<DisplayEvent>,
-        ds: &mut DisplayState,
-        evt: DisplayEvent,
-    ) -> Result<()> {
-        tx.send(evt).map_err(|e| anyhow!(e.to_string()))?;
-        while let Ok(queued) = rx.try_recv() {
-            self.display_event(ds, queued)?;
-        }
-        Ok(())
-    }
-
-    fn display_event(&mut self, ds: &mut DisplayState, evt: DisplayEvent) -> Result<()> {
-        match evt {
+    fn queue_display_event(&mut self, evt: DisplayEvent) -> Result<()> {
+        match &evt {
             DisplayEvent::Thinking(content) => {
-                // Always write to events.jsonl, and to stdout if stream-json mode
                 self.emit_and_append_event(json!({"type":"thinking","content":content.clone()}))?;
-                if !self.is_stream_json_mode() {
-                    // Gray color for thinking output
-                    self.write_human(&format!("\x1b[90m{}\x1b[0m", content))?;
-                    let display_content = normalize_display_text(&content, self.cfg.interactive);
-                    if display_content.ends_with('\n') {
-                        ds.last_char = "\n".to_string();
-                    } else if let Some(c) = display_content.chars().last() {
-                        ds.last_char = c.to_string();
-                    }
-                }
-                ds.prev_was_thinking = true;
             }
             DisplayEvent::Text(content) => {
-                // Always write to events.jsonl, and to stdout if stream-json mode
                 self.emit_and_append_event(json!({"type":"text","content":content.clone()}))?;
-                if !self.is_stream_json_mode() {
-                    // Insert newline when transitioning from thinking to text
-                    if ds.prev_was_thinking && ds.last_char != "\n" {
-                        self.write_human("\n")?;
-                        ds.last_char = "\n".to_string();
-                    }
-                    self.write_human(&content)?;
-                    let display_content = normalize_display_text(&content, self.cfg.interactive);
-                    if display_content.ends_with('\n') {
-                        ds.last_char = "\n".to_string();
-                    } else if let Some(c) = display_content.chars().last() {
-                        ds.last_char = c.to_string();
-                    }
-                }
-                ds.prev_was_thinking = false;
             }
             DisplayEvent::ToolCall(call) => {
-                // Always write to events.jsonl, and to stdout if stream-json mode
                 self.emit_and_append_event(json!({
                     "type":"tool_call",
                     "name": call.name,
                     "id": call.id,
                     "input": call.input_json,
                 }))?;
-                if !self.is_stream_json_mode() {
-                    // display_ensure_newline (match bash)
-                    if ds.last_char != "\n" {
-                        self.write_human("\n")?;
-                    }
-                    ds.last_char = "\n".to_string();
-                    self.write_human(&format!(
-                        "\x1b[33m[tool] {}\x1b[0m\n",
-                        build_tool_call_summary(&call.name, &call.fields)
-                    ))?;
-                }
             }
             DisplayEvent::Usage(UsageEvent {
                 input_tokens,
@@ -1217,7 +1367,6 @@ impl Agent {
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
             }) => {
-                // Always write to events.jsonl, and to stdout if stream-json mode
                 self.emit_and_append_event(json!({
                     "type":"usage",
                     "input_tokens":input_tokens,
@@ -1226,75 +1375,38 @@ impl Agent {
                     "cache_creation_input_tokens":cache_creation_input_tokens,
                     "kind":"agent"
                 }))?;
-                // No human display for usage events
-                // context = input + output + cache_read + cache_creation
-                self.last_context_tokens = (input_tokens
-                    + output_tokens
-                    + cache_read_input_tokens
-                    + cache_creation_input_tokens)
+                self.last_context_tokens = (*input_tokens
+                    + *output_tokens
+                    + *cache_read_input_tokens
+                    + *cache_creation_input_tokens)
                     as usize;
-                self.last_input_tokens = input_tokens as usize;
-                self.last_output_tokens = output_tokens as usize;
-                self.last_cache_read_tokens = cache_read_input_tokens as usize;
-                self.last_cache_creation_tokens = cache_creation_input_tokens as usize;
+                self.last_input_tokens = *input_tokens as usize;
+                self.last_output_tokens = *output_tokens as usize;
+                self.last_cache_read_tokens = *cache_read_input_tokens as usize;
+                self.last_cache_creation_tokens = *cache_creation_input_tokens as usize;
             }
             DisplayEvent::Stop(reason) => {
-                // Always write to events.jsonl, and to stdout if stream-json mode
                 self.emit_and_append_event(json!({"type":"stop","reason":&reason}))?;
-                if !self.is_stream_json_mode() && ds.last_char != "\n" {
-                    self.write_human("\n")?;
-                    ds.last_char = "\n".to_string();
-                }
             }
             DisplayEvent::Error(message) => {
-                // Always write to events.jsonl, and to stdout if stream-json mode
                 let _ = self.emit_and_append_event(json!({"type":"error","message":&message}));
-                return Err(anyhow!(message));
+                return Err(anyhow!("{}", message));
             }
             DisplayEvent::ToolResult(result) => {
-                // Always write to events.jsonl, and to stdout if stream-json mode
                 self.emit_and_append_event(json!({
-                    "type":"tool_result",
+                    "type": "tool_result",
                     "tool_use_id": result.tool_use_id,
                     "name": result.tool_name,
                     "content": result.content,
                 }))?;
-                if !self.is_stream_json_mode() && !result.content.is_empty() {
-                    // Match bash display_event TOOL_RESULT exactly:
-                    // Content already finalized at stream layer — just use as-is
-                    let tr_text = if result.tool_name == "Edit" {
-                        // Content = summary_line + "\n" + colorized_diff + "\n" (from tool layer)
-                        let mut out = normalize_display_text(&result.content, self.cfg.interactive);
-                        if !out.ends_with('\n') {
-                            out.push('\n');
-                        }
-                        out
-                    } else if result.tool_name == "Read" || result.tool_name == "Write" {
-                        // Summary already prepended; use first line for display
-                        first_line(&result.content).to_string() + "\n"
-                    } else {
-                        normalize_display_text(&result.content, self.cfg.interactive) + "\n"
-                    };
-                    // Insert newline when transitioning from thinking to text
-                    if ds.prev_was_thinking && ds.last_char != "\n" {
-                        self.write_human("\n")?;
-                        ds.last_char = "\n".to_string();
-                    }
-                    ds.prev_was_thinking = false;
-                    if !tr_text.is_empty() {
-                        self.write_human(&tr_text)?;
-                        if tr_text.ends_with('\n') {
-                            ds.last_char = "\n".to_string();
-                        } else {
-                            ds.last_char = tr_text
-                                .chars()
-                                .last()
-                                .map(|c| c.to_string())
-                                .unwrap_or_else(|| "\n".to_string());
-                        }
-                    }
-                }
             }
+            DisplayEvent::UserMessage(_) => {}
+            DisplayEvent::ContextUpdate(_) => {}
+            DisplayEvent::SubAgentResult { .. } => {}
+        }
+        if let Some(tx) = &self.display_tx {
+            tx.send(DisplayCommand::Event(evt))
+                .map_err(|e| anyhow!(e.to_string()))?;
         }
         Ok(())
     }
@@ -1686,19 +1798,13 @@ impl Agent {
         let evt = json!({"type":"context_update","kind":"compact","trigger":trigger});
         self.append_event(evt)?;
         if !self.is_stream_json_mode() {
-            self.info(&format!("Context compacted ({}).", trigger));
+            self.queue_display_only(DisplayEvent::ContextUpdate(trigger.to_string()));
         }
         Ok(())
     }
 
     fn emit_stream(&self, value: Value) -> Result<()> {
         writeln!(self.stdout.borrow_mut(), "{}", serde_json::to_string(&value)?)?;
-        Ok(())
-    }
-
-    fn write_human(&self, s: &str) -> Result<()> {
-        write!(self.stdout.borrow_mut(), "{}", normalize_display_text(s, self.cfg.interactive))?;
-        self.stdout.borrow_mut().flush()?;
         Ok(())
     }
 
@@ -1711,169 +1817,54 @@ impl Agent {
         }
     }
 
-    /// display_replay_event mirrors bash's display_event exactly for replay purposes.
+    /// Replay maps stored events into the same display queue used by live execution.
+    /// It must not append events again; events.jsonl is already the source of truth.
     fn display_replay_event(
         &self,
-        ds: &mut DisplayState,
+        _ds: &mut DisplayState,
         evt_type: &str,
         fields: &std::collections::HashMap<&str, &str>,
     ) {
-        match evt_type {
-            "TEXT" => {
-                let content = fields.get("content").copied().unwrap_or("");
-                // Insert newline when transitioning from thinking to text
-                if ds.prev_was_thinking && ds.last_char != "\n" {
-                    self.write_human("\n").ok();
-                    ds.last_char = "\n".to_string();
-                }
-                ds.prev_was_thinking = false;
-                if !content.is_empty() {
-                    self.write_human(content).ok();
-                    if content.ends_with('\n') {
-                        ds.last_char = "\n".to_string();
-                    } else {
-                        ds.last_char = content
-                            .chars()
-                            .last()
-                            .map(|c| c.to_string())
-                            .unwrap_or("\n".to_string());
-                    }
-                }
-            }
-            "THINKING" => {
-                let content = fields.get("content").copied().unwrap_or("");
-                if !content.is_empty() {
-                    self.write_human(&format!("\x1b[90m{}\x1b[0m", content))
-                        .ok();
-                    if content.ends_with('\n') {
-                        ds.last_char = "\n".to_string();
-                    } else {
-                        ds.last_char = content
-                            .chars()
-                            .last()
-                            .map(|c| c.to_string())
-                            .unwrap_or("\n".to_string());
-                    }
-                }
-                ds.prev_was_thinking = true;
-            }
+        let evt = match evt_type {
+            "TEXT" => DisplayEvent::Text(fields.get("content").copied().unwrap_or("").to_string()),
+            "THINKING" => DisplayEvent::Thinking(fields.get("content").copied().unwrap_or("").to_string()),
             "TOOL_CALL" => {
-                // display_ensure_newline
-                if ds.last_char != "\n" {
-                    self.write_human("\n").ok();
-                }
-                let name = fields.get("name").copied().unwrap_or("");
+                let name = fields.get("name").copied().unwrap_or("").to_string();
                 let mut summary_fields = std::collections::BTreeMap::new();
                 for (k, v) in fields {
                     if *k != "name" {
                         summary_fields.insert(k.to_string(), v.to_string());
                     }
                 }
-                let summary = build_tool_call_summary(name, &summary_fields);
-                self.write_human(&format!("\x1b[33m[tool] {}\x1b[0m\n", summary))
-                    .ok();
-                ds.last_char = "\n".to_string();
-                ds.prev_was_thinking = false;
+                DisplayEvent::ToolCall(ToolCallEvent {
+                    name,
+                    id: String::new(),
+                    input_json: json!({}),
+                    fields: summary_fields,
+                    order: Vec::new(),
+                })
             }
-            "TOOL_RESULT" => {
-                let name = fields.get("name").copied().unwrap_or("");
-                let content = fields.get("content").copied().unwrap_or("");
-                // Content already has colorized diff from tool layer — use as-is
-                let tr_text = if name == "Edit" {
-                    content.to_string() + "\n"
-                } else if name == "Read" || name == "Write" {
-                    // Summary already prepended; use first line
-                    content.lines().next().unwrap_or("").to_string() + "\n"
-                } else {
-                    truncate_for_replay(content, 200) + "\n"
-                };
-                // Insert newline when transitioning from thinking to text
-                if ds.prev_was_thinking && ds.last_char != "\n" {
-                    self.write_human("\n").ok();
-                    ds.last_char = "\n".to_string();
-                }
-                ds.prev_was_thinking = false;
-                if !tr_text.is_empty() {
-                    self.write_human(&tr_text).ok();
-                    if tr_text.ends_with('\n') {
-                        ds.last_char = "\n".to_string();
-                    } else {
-                        ds.last_char = tr_text
-                            .chars()
-                            .last()
-                            .map(|c| c.to_string())
-                            .unwrap_or("\n".to_string());
-                    }
-                }
-            }
-            "USER_MESSAGE" => {
-                // display_ensure_newline
-                if ds.last_char != "\n" {
-                    self.write_human("\n").ok();
-                }
-                let content = truncate_for_replay(fields.get("content").copied().unwrap_or(""), 77);
-                let display = content;
-                self.write_human(&format!("\x1b[32m> {}\x1b[0m\n", display))
-                    .ok();
-                ds.last_char = "\n".to_string();
-                ds.prev_was_thinking = false;
-            }
-            "SUB_AGENT_RESULT" => {
-                let session_id = fields.get("session_id").copied().unwrap_or("");
-                let status = fields.get("status").copied().unwrap_or("");
-                let in_tokens = fields.get("input_tokens").copied().unwrap_or("0");
-                let out_tokens = fields.get("output_tokens").copied().unwrap_or("0");
-                let thinking = fields.get("thinking").copied().unwrap_or("");
-                let text = fields.get("text").copied().unwrap_or("");
-
-                if ds.last_char != "\n" {
-                    self.write_human("\n").ok();
-                    ds.last_char = "\n".to_string();
-                }
-
-                if status == "ok" {
-                    self.write_human(&format!(
-                        "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m\n",
-                        session_id, in_tokens, out_tokens
-                    ))
-                    .ok();
-                } else {
-                    self.write_human(&format!(
-                        "\x1b[31m[sub-agent {}] failed\x1b[0m\n",
-                        session_id
-                    ))
-                    .ok();
-                }
-
-                if !thinking.is_empty() {
-                    self.write_human(&format!(
-                        "\x1b[90m{}\x1b[0m\n",
-                        truncate_for_replay(thinking, 120)
-                    ))
-                    .ok();
-                }
-                if !text.is_empty() {
-                    self.write_human(&format!("{}\n", truncate_for_replay(text, 120)))
-                        .ok();
-                }
-                ds.last_char = "\n".to_string();
-                ds.prev_was_thinking = false;
-            }
-            "STOP" => {
-                if ds.last_char != "\n" {
-                    self.write_human("\n").ok();
-                    ds.last_char = "\n".to_string();
-                }
-            }
-            "ERROR" => {
-                if ds.last_char != "\n" {
-                    self.write_human("\n").ok();
-                }
-                let msg = fields.get("message").copied().unwrap_or("");
-                let _ = writeln!(self.stderr.borrow_mut(), "\x1b[31mError: {}\x1b[0m", msg);
-            }
-            _ => {}
-        }
+            "TOOL_RESULT" => DisplayEvent::ToolResult(ToolResult {
+                tool_use_id: String::new(),
+                tool_name: fields.get("name").copied().unwrap_or("").to_string(),
+                tool_args: std::collections::BTreeMap::new(),
+                content: fields.get("content").copied().unwrap_or("").to_string(),
+                conv_content: String::new(),
+            }),
+            "USER_MESSAGE" => DisplayEvent::UserMessage(fields.get("content").copied().unwrap_or("").to_string()),
+            "SUB_AGENT_RESULT" => DisplayEvent::SubAgentResult {
+                session_id: fields.get("session_id").copied().unwrap_or("").to_string(),
+                status: fields.get("status").copied().unwrap_or("").to_string(),
+                thinking: fields.get("thinking").copied().unwrap_or("").to_string(),
+                text: fields.get("text").copied().unwrap_or("").to_string(),
+                in_tokens: fields.get("input_tokens").and_then(|s| s.parse().ok()).unwrap_or(0),
+                out_tokens: fields.get("output_tokens").and_then(|s| s.parse().ok()).unwrap_or(0),
+            },
+            "STOP" => DisplayEvent::Stop(fields.get("reason").copied().unwrap_or("").to_string()),
+            "ERROR" => DisplayEvent::Error(fields.get("message").copied().unwrap_or("").to_string()),
+            _ => return,
+        };
+        self.queue_display_only(evt);
     }
 
     fn replay_last_turns(&self) {
@@ -2033,7 +2024,8 @@ impl Agent {
         }
         Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
         if had_turns {
-            self.write_human("\n").ok();
+            self.queue_display_only(DisplayEvent::Text("\n".to_string()));
+            self.flush_display();
         }
     }
 
