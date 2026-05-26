@@ -37,6 +37,7 @@ func NewReadline(home string) *Readline {
 
 // Start launches the background readline goroutine.
 func (r *Readline) Start() {
+	linenoise.SetMultiLine(true)
 	linenoise.HistorySetMaxLen(4096)
 	linenoise.HistoryLoad(r.histPath)
 

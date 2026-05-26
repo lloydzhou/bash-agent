@@ -136,6 +136,25 @@ HttpResponse http_post(const char *url, const char **headers, int header_count,
 static void emit_simple_event(sse_callback_fn callback, void *ctx,
                               SseEventType type, const char *content);
 
+static int openai_cached_tokens(JsonVal usage) {
+    int cached = json_get_int(usage, "cached_tokens");
+    if (cached > 0) return cached;
+    JsonVal details = json_get(usage, "prompt_tokens_details");
+    if (details.type != JSON_NULL) cached = json_get_int(details, "cached_tokens");
+    return cached;
+}
+
+static void fill_openai_usage_event(SseEvent *evt, JsonVal usage) {
+    int prompt = json_get_int(usage, "prompt_tokens");
+    int cached = openai_cached_tokens(usage);
+    evt->out_tokens = json_get_int(usage, "completion_tokens");
+    evt->cache_read_tokens = cached;
+    if (prompt > 0) {
+        evt->in_tokens = prompt - cached;
+        if (evt->in_tokens < 0) evt->in_tokens = 0;
+    }
+}
+
 int http_post_sse(const char *url, const char **headers, int header_count,
                   const char *body, size_t body_len,
                   const char *provider,
@@ -257,8 +276,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
                         SseEvent evt;
                         memset(&evt, 0, sizeof(evt));
                         evt.type = SSE_USAGE;
-                        evt.in_tokens = json_get_int(usage, "prompt_tokens");
-                        evt.out_tokens = json_get_int(usage, "completion_tokens");
+                        fill_openai_usage_event(&evt, usage);
                         callback(ctx, &evt);
                     }
                 }
@@ -438,8 +456,7 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                 SseEvent evt;
                 memset(&evt, 0, sizeof(evt));
                 evt.type = SSE_USAGE;
-                evt.in_tokens = json_get_int(usage, "prompt_tokens");
-                evt.out_tokens = json_get_int(usage, "completion_tokens");
+                fill_openai_usage_event(&evt, usage);
                 callback(ctx, &evt);
             }
         }

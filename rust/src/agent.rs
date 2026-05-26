@@ -348,7 +348,11 @@ impl Agent {
         let paths = session::paths_for(&home, &cwd, &sid);
         session::ensure_dir(&paths.base_dir)?;
         session::ensure_dir(&paths.session_dir)?;
-        let new_session = !paths.events.exists();
+        let new_session = paths
+            .events
+            .metadata()
+            .map(|m| m.len() == 0)
+            .unwrap_or(true);
         for f in [
             &paths.conversation,
             &paths.events,
@@ -621,12 +625,13 @@ impl Agent {
         let msg_tx_arc = self.msg_tx.clone();
         let history_path_clone = history_path.to_string_lossy().to_string();
         let readline_handle = std::thread::spawn(move || {
+            ffi::set_multiline(true);
             ffi::history_load(&history_path_clone);
             ffi::history_set_max_len(1000);
             // 借鉴 bash 版本：线程退出时主动 drop 发送端，让 main_loop 收到 Disconnected
             let result = (|| {
                 loop {
-                    let line = match ffi::line("> ") {
+                    let line = match ffi::line("\x1b[32m> \x1b[0m") {
                         Ok(s) => s.trim_end().to_string(),
                         Err(ffi::LineError::Interrupted) => {
                             // Ctrl+C 重新输入当前行（与 Go 版本一致）
@@ -714,10 +719,6 @@ impl Agent {
                         if !is_interrupt {
                             self.error(&msg);
                         }
-                    }
-                    if self.cfg.interactive {
-                        // agent 执行完成后重新显示提示符
-                        let _ = write!(self.stderr.borrow_mut(), "\x1b[32m> \x1b[0m");
                     }
                     // 通知 readline 线程处理完成
                     let _ = done.send(());
