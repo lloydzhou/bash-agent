@@ -220,10 +220,11 @@ Agent *agent_create(const char *provider, const char *model,
     a->paths = store_session_paths_for(home, cwd, sid);
     free(sid);
 
-    /* 判断是否新会话 */
+    /* 判断是否新会话：与 bash 版一致，以 events.jsonl 是否为空为准。
+     * 只看 conversation.jsonl 是否存在会把已有空会话当作旧会话，也可能在跨版本切换时误判。 */
     int is_new = 1;
-    FILE *f = fopen(a->paths.conversation, "r");
-    if (f) { is_new = 0; fclose(f); }
+    struct stat st;
+    if (stat(a->paths.events, &st) == 0 && st.st_size > 0) is_new = 0;
 
     store_session_init(&a->paths, is_new);
 
@@ -2311,6 +2312,31 @@ int agent_compact_context(Agent *agent, const char *trigger) {
  * 终端标题更新
  * ============================================================ */
 
+static void format_int_commas(int n, char *out, size_t out_size) {
+    char raw[32];
+    snprintf(raw, sizeof(raw), "%d", n);
+    size_t len = strlen(raw);
+    size_t commas = (len > 0) ? (len - 1) / 3 : 0;
+    size_t need = len + commas + 1;
+    if (out_size < need) {
+        snprintf(out, out_size, "%d", n);
+        return;
+    }
+
+    out[need - 1] = '\0';
+    int ri = (int)len - 1;
+    int oi = (int)need - 2;
+    int group = 0;
+    while (ri >= 0) {
+        if (group == 3) {
+            out[oi--] = ',';
+            group = 0;
+        }
+        out[oi--] = raw[ri--];
+        group++;
+    }
+}
+
 void agent_update_title(Agent *agent) {
     if (!agent->interactive) return;
     char *stats_content = store_stats_read(agent->paths.stats);
@@ -2329,8 +2355,15 @@ void agent_update_title(Agent *agent) {
     int total_i = ai + cr;
     int pct = (total_i > 0) ? (cr * 100 / total_i) : 0;
 
-    fprintf(stderr, "\x1b]0;%s T:%d R:%d I:%d(%d%%) O:%d C:%d\x07",
-            agent->model, tc, ar, total_i, pct, ao, ct);
+    char tc_s[32], ar_s[32], total_i_s[32], ao_s[32], ct_s[32];
+    format_int_commas(tc, tc_s, sizeof(tc_s));
+    format_int_commas(ar, ar_s, sizeof(ar_s));
+    format_int_commas(total_i, total_i_s, sizeof(total_i_s));
+    format_int_commas(ao, ao_s, sizeof(ao_s));
+    format_int_commas(ct, ct_s, sizeof(ct_s));
+
+    fprintf(stderr, "\x1b]0;%s T:%s R:%s I:%s(%d%%) O:%s C:%s\x07",
+            agent->model, tc_s, ar_s, total_i_s, pct, ao_s, ct_s);
     fflush(stderr);
 
     free(stats_content);

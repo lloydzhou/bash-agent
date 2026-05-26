@@ -394,6 +394,34 @@ char *store_stats_read(const char *path) {
     return util_read_file(path);
 }
 
+static void stats_write_canonical(const char *path,
+                                  int current_turn_count,
+                                  int agent_request_count,
+                                  int compact_request_count,
+                                  int sub_agent_request_count,
+                                  int total_input_tokens,
+                                  int total_output_tokens,
+                                  int total_cache_read_tokens,
+                                  int total_cache_creation_tokens,
+                                  int current_context_tokens,
+                                  const char *last_updated) {
+    StrBuf buf;
+    sb_init(&buf);
+    sb_appendf(&buf, "{\"current_turn_count\":%d,\"agent_request_count\":%d,"
+               "\"compact_request_count\":%d,\"sub_agent_request_count\":%d,"
+               "\"total_input_tokens\":%d,\"total_output_tokens\":%d,"
+               "\"total_cache_read_tokens\":%d,\"total_cache_creation_tokens\":%d,"
+               "\"current_context_tokens\":%d,\"last_updated\":",
+               current_turn_count, agent_request_count, compact_request_count,
+               sub_agent_request_count, total_input_tokens, total_output_tokens,
+               total_cache_read_tokens, total_cache_creation_tokens,
+               current_context_tokens);
+    sb_append_json_string(&buf, last_updated ? last_updated : "");
+    sb_append(&buf, "}\n");
+    util_write_file(path, buf.data);
+    sb_free(&buf);
+}
+
 void store_stats_add_int(JsonVal obj, const char *key, int delta) {
     int cur = store_stats_get_int(obj, key);
     store_stats_set_int(obj, key, cur + delta);
@@ -441,88 +469,55 @@ int store_stats_get_file_int(const char *path, const char *key) {
     return val;
 }
 
-/* 简易文件级操作：设置 stats 文件中的整数字段（原地修改 JSON 数字值） */
 /* 设置 stats 文件中的整数字段。
- * 由于原地覆盖在值变长时会失败（如 0→13），改用解析→修改→重建策略。
- * 同时更新 last_updated 字段 — 对齐 bash 版 stats.awk _now() */
+ * 读取已有字段；缺失/无效字段按 0 处理；写回标准 stats JSON。
+ * 这样旧版本缺字段时，下一次正常写入会自然补齐，不做历史回算。 */
 void store_stats_set_int_file(const char *path, const char *key, int value) {
-    char *content = store_stats_read(path);
-    if (!content) return;
-    JsonParse jp = json_parse_root(content);
-    if (!jp.error) {
-        /* 先更新 last_updated */
-        {
-            time_t now = time(NULL);
-            struct tm tm_buf;
-            gmtime_r(&now, &tm_buf);
-            char ts[32];
-            strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
-            /* 查找并替换 last_updated 值 */
-            const char *lu_search = "\"last_updated\":\"";
-            char *lu_pos = strstr((char*)content, lu_search);
-            if (lu_pos) {
-                char *val_start = lu_pos + strlen(lu_search);
-                char *val_end = strchr(val_start, '"');
-                if (val_end) {
-                    size_t old_len = val_end - val_start;
-                    size_t new_len = strlen(ts);
-                    if (new_len == old_len) {
-                        memcpy(val_start, ts, new_len);
-                    } else {
-                        /* 长度不同，重建 */
-                        StrBuf rebuilt;
-                        sb_init(&rebuilt);
-                        sb_appendn(&rebuilt, content, val_start - content);
-                        sb_append(&rebuilt, ts);
-                        sb_append(&rebuilt, val_end);
-                        util_write_file(path, rebuilt.data);
-                        sb_free(&rebuilt);
-                        free(content);
-                        /* 重新读取以更新 key */
-                        content = store_stats_read(path);
-                        if (!content) return;
-                        jp = json_parse_root(content);
-                        if (jp.error) { free(content); return; }
-                    }
-                }
-            }
-        }
-        /* 再更新目标 key */
-        {
-            char search[128];
-            snprintf(search, sizeof(search), "\"%s\"", key);
-            char *p = strstr((char*)jp.val.src, search);
-            if (p) {
-                p += strlen(search);
-                while (*p == ' ' || *p == ':') p++;
-                char *vs = p;
-                while (*p && *p != ',' && *p != '}' && *p != ' ' && *p != '\n' && *p != '\r') p++;
-                int old_len = (int)(p - vs);
-                char nv[32];
-                snprintf(nv, sizeof(nv), "%d", value);
-                int nl = (int)strlen(nv);
+    int current_turn_count = 0, agent_request_count = 0;
+    int compact_request_count = 0, sub_agent_request_count = 0;
+    int total_input_tokens = 0, total_output_tokens = 0;
+    int total_cache_read_tokens = 0, total_cache_creation_tokens = 0;
+    int current_context_tokens = 0;
 
-                if (nl <= old_len) {
-                    /* 原地覆盖，用空格填充多余空间 */
-                    memcpy(vs, nv, nl);
-                    for (int i = nl; i < old_len; i++) vs[i] = ' ';
-                    util_write_file(path, content);
-                } else {
-                    /* 值变长：切分拼接，重建 JSON 文件 */
-                    int prefix_len = (int)(vs - content);
-                    int suffix_start = (int)(p - content);
-                    StrBuf rebuilt;
-                    sb_init(&rebuilt);
-                    sb_appendn(&rebuilt, content, prefix_len);
-                    sb_append(&rebuilt, nv);
-                    sb_append(&rebuilt, content + suffix_start);
-                    util_write_file(path, rebuilt.data);
-                    sb_free(&rebuilt);
-                }
-            }
+    char *content = store_stats_read(path);
+    if (content && content[0]) {
+        JsonParse jp = json_parse_root(content);
+        if (!jp.error) {
+            current_turn_count = json_get_int(jp.val, "current_turn_count");
+            agent_request_count = json_get_int(jp.val, "agent_request_count");
+            compact_request_count = json_get_int(jp.val, "compact_request_count");
+            sub_agent_request_count = json_get_int(jp.val, "sub_agent_request_count");
+            total_input_tokens = json_get_int(jp.val, "total_input_tokens");
+            total_output_tokens = json_get_int(jp.val, "total_output_tokens");
+            total_cache_read_tokens = json_get_int(jp.val, "total_cache_read_tokens");
+            total_cache_creation_tokens = json_get_int(jp.val, "total_cache_creation_tokens");
+            current_context_tokens = json_get_int(jp.val, "current_context_tokens");
         }
     }
-    free(content);
+
+    if (strcmp(key, "current_turn_count") == 0) current_turn_count = value;
+    else if (strcmp(key, "agent_request_count") == 0) agent_request_count = value;
+    else if (strcmp(key, "compact_request_count") == 0) compact_request_count = value;
+    else if (strcmp(key, "sub_agent_request_count") == 0) sub_agent_request_count = value;
+    else if (strcmp(key, "total_input_tokens") == 0) total_input_tokens = value;
+    else if (strcmp(key, "total_output_tokens") == 0) total_output_tokens = value;
+    else if (strcmp(key, "total_cache_read_tokens") == 0) total_cache_read_tokens = value;
+    else if (strcmp(key, "total_cache_creation_tokens") == 0) total_cache_creation_tokens = value;
+    else if (strcmp(key, "current_context_tokens") == 0) current_context_tokens = value;
+
+    time_t now = time(NULL);
+    struct tm tm_buf;
+    gmtime_r(&now, &tm_buf);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
+    stats_write_canonical(path, current_turn_count, agent_request_count,
+                          compact_request_count, sub_agent_request_count,
+                          total_input_tokens, total_output_tokens,
+                          total_cache_read_tokens, total_cache_creation_tokens,
+                          current_context_tokens, ts);
+    if (content) {
+        free(content);
+    }
 }
 
 /* 通用 stats 更新：读取→修改→写回 */
