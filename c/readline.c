@@ -1,0 +1,236 @@
+#include "readline.h"
+#include "linenoise.h"
+#include "util.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <signal.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+
+/* ============================================================
+ * 全局 SIGINT 状态
+ *
+ * 模仿 Rust 版的 CTRLC_FLAG 设计：
+ * - 全局标志由 SIGINT handler 设置
+ * - readline 线程用它区分 Ctrl+C（重新提示）和 Ctrl+D（退出）
+ * - agent_loop 的 SSE 层检查它来中断 HTTP 请求
+ * ============================================================ */
+
+static volatile sig_atomic_t g_sigint_received = 0;
+
+/* agent 的 interrupted 指针— 在 readline_thread_start 之前由 cagent.c 设置 */
+static volatile int *g_agent_interrupted = NULL;
+
+int readline_sigint_consumed(void) {
+    if (g_sigint_received) {
+        g_sigint_received = 0;
+        return 1;
+    }
+    return 0;
+}
+
+void readline_set_agent_interrupted(volatile int *flag) {
+    g_agent_interrupted = flag;
+}
+
+static void sigint_handler(int sig) {
+    (void)sig;
+    g_sigint_received = 1;
+    /* 同时设置 agent 的 interrupted 标志，让 http_post_sse 中的 curl 被中断 */
+    if (g_agent_interrupted) {
+        *(g_agent_interrupted) = 1;
+    }
+}
+
+/* ============================================================
+ * History 文件路径构建
+ *
+ * 与 Bash/Rust/Go 版一致：~/.bash-agent/history
+ * 使用 linenoise 内置的 linenoiseHistoryLoad/Save 管理。
+ * ============================================================ */
+
+#define MAX_LINE 65536
+
+static char *build_history_path(const char *home) {
+    StrBuf path;
+    sb_init(&path);
+    sb_appendf(&path, "%s/.bash-agent/history", home ? home : "/");
+    return path.data; /* 调用者负责 free */
+}
+
+/* ============================================================
+ * readline 线程
+ *
+ * 使用 linenoise 非阻塞 API（linenoiseEditStart/Feed/Stop）：
+ *   - linenoise 管理 raw mode、UTF-8 编辑、history 导航
+ *   - SIGINT handler 设置 g_sigint_received 标志
+ *   - Ctrl+C 时 linenoiseEditFeed 返回 NULL + errno=EAGAIN
+ *   - Ctrl+D 时返回 NULL + errno=ENOENT
+ *   - Enter 时返回堆分配的字符串
+ *
+ * 输出到 stderr（不污染 stdout 管道）。
+ * ============================================================ */
+
+static void *readline_thread_fn(void *arg) {
+    ReadlineConfig *cfg = (ReadlineConfig *)arg;
+    char linebuf[MAX_LINE];
+
+    if (cfg->interactive) {
+        /* 构建 history 路径，确保目录存在 */
+        char *hist_path = build_history_path(cfg->home);
+        {
+            char *last_slash = strrchr(hist_path, '/');
+            if (last_slash) {
+                *last_slash = '\0';
+                mkdir(hist_path, 0755);
+                *last_slash = '/';
+            }
+        }
+        linenoiseHistorySetMaxLen(4096);
+        linenoiseHistoryLoad(hist_path);
+
+        /* 安装 SIGINT handler */
+        struct sigaction sa, old_sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = sigint_handler;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGINT, &sa, &old_sa);
+
+        while (1) {
+            /* 重置 SIGINT 标志 */
+            g_sigint_received = 0;
+
+            /* 使用 linenoise 非阻塞 API
+             * 传入 STDERR_FILENO 作为输出 fd，避免提示符污染 stdout */
+            struct linenoiseState ls;
+            if (linenoiseEditStart(&ls, STDIN_FILENO, STDERR_FILENO,
+                                   linebuf, sizeof(linebuf),
+                                   "\x1b[32m> \x1b[0m") == -1) {
+                break;
+            }
+
+            /* 循环读取输入 */
+            char *result;
+            while ((result = linenoiseEditFeed(&ls)) == linenoiseEditMore) {
+                /* linenoiseEditFeed 内部 read() 会被 SIGINT 打断
+                 * 但 linenoise 自己处理 Ctrl+C（返回 NULL + EAGAIN）
+                 * 这里只是继续等待 */
+            }
+
+            linenoiseEditStop(&ls);
+
+            if (result == NULL) {
+                if (errno == EAGAIN) {
+                    /* Ctrl+C — linenoise 已显示 ^C 并换行，继续循环 */
+                    continue;
+                }
+                /* Ctrl+D 或 I/O 错误 — 退出 */
+                fprintf(stderr, "\n");
+                break;
+            }
+
+            /* result 是堆分配的字符串，linenoiseEditStop 不释放 buf，
+             * 但 result 指向的是 ls.buf（linebuf），不是 malloc 的。
+             * 实际上 linenoiseEditFeed 在 Enter 时返回 strdup(buf)。*/
+            strncpy(linebuf, result, sizeof(linebuf) - 1);
+            linebuf[sizeof(linebuf) - 1] = '\0';
+            linenoiseFree(result);
+
+            /* 去除尾部空白 */
+            util_rtrim(linebuf);
+
+            /* 空行跳过 */
+            if (linebuf[0] == '\0') continue;
+
+            /* exit / quit */
+            if (strcmp(linebuf, "exit") == 0 || strcmp(linebuf, "quit") == 0) {
+                break;
+            }
+
+            /* 添加到 history */
+            linenoiseHistoryAdd(linebuf);
+            linenoiseHistorySave(hist_path);
+
+            /* 构造 InputMessage 并推送到队列。
+             * 使用 done 同步机制（模仿 Rust 版 done channel）：
+             * readline 线程发送消息后阻塞等待 agent_main_loop 处理完成。
+             * 这确保 agent 运行期间不会显示提示符或读取下一行。 */
+            pthread_mutex_t done_mutex;
+            pthread_cond_t done_cond;
+            int done_flag = 0;
+            pthread_mutex_init(&done_mutex, NULL);
+            pthread_cond_init(&done_cond, NULL);
+
+            InputMessage *msg = malloc(sizeof(InputMessage));
+            if (!msg) { pthread_mutex_destroy(&done_mutex); pthread_cond_destroy(&done_cond); break; }
+            memset(msg, 0, sizeof(*msg));
+            msg->type = MSG_USER_INPUT;
+            msg->data.user_input.text = util_strdup(linebuf);
+            msg->data.user_input.done_mutex = &done_mutex;
+            msg->data.user_input.done_cond = &done_cond;
+            msg->data.user_input.done_flag = &done_flag;
+
+            if (mq_push(cfg->input_queue, msg) != 0) {
+                input_message_free(msg);
+                free(msg);
+                pthread_mutex_destroy(&done_mutex);
+                pthread_cond_destroy(&done_cond);
+                break; /* 队列已关闭 */
+            }
+
+            /* 等待 agent_main_loop 处理完成 */
+            pthread_mutex_lock(&done_mutex);
+            while (!done_flag) {
+                pthread_cond_wait(&done_cond, &done_mutex);
+            }
+            pthread_mutex_unlock(&done_mutex);
+
+            pthread_mutex_destroy(&done_mutex);
+            pthread_cond_destroy(&done_cond);
+        }
+
+        /* 恢复原始 SIGINT handler */
+        sigaction(SIGINT, &old_sa, NULL);
+        g_agent_interrupted = NULL;
+
+        free(hist_path);
+    } else {
+        /* 非交互模式：简单行读取（用 fgets，不需要处理信号） */
+        while (1) {
+            if (!fgets(linebuf, sizeof(linebuf), stdin)) {
+                break;
+            }
+            util_rtrim(linebuf);
+            if (linebuf[0] == '\0') continue;
+
+            InputMessage *msg = malloc(sizeof(InputMessage));
+            if (!msg) break;
+            memset(msg, 0, sizeof(*msg));
+            msg->type = MSG_USER_INPUT;
+            msg->data.user_input.text = util_strdup(linebuf);
+
+            if (mq_push(cfg->input_queue, msg) != 0) {
+                input_message_free(msg);
+                free(msg);
+                break;
+            }
+        }
+    }
+
+    /* 退出时关闭 input_queue（让 agent_main_loop 的 mq_pop 不再阻塞） */
+    mq_close(cfg->input_queue);
+
+    free(cfg);
+    return NULL;
+}
+
+int readline_thread_start(pthread_t *thread, const ReadlineConfig *cfg) {
+    ReadlineConfig *heap_cfg = malloc(sizeof(ReadlineConfig));
+    if (!heap_cfg) return -1;
+    *heap_cfg = *cfg;
+    return pthread_create(thread, NULL, readline_thread_fn, heap_cfg);
+}

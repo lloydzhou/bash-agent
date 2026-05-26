@@ -1,18 +1,19 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode test test-bash test-go test-rust test-go-e2e test-rust-e2e clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e clean
 
-build: build-bash build-go build-rust build-tcode
+build: build-bash build-go build-rust build-tcode build-c
 
 build-bash:
 	bash scripts/build.sh dist/agent.sh
 
-build-go:
+build-go: go/tools.json
 	mkdir -p go/.gocache go/.gomodcache dist
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go mod download
-	@# Patch go-prompt: remove multiline continuation prefix to match Rust rustyline behavior
-	bash scripts/patch-go-prompt.sh go/.gomodcache
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go build -ldflags="-s -w" -trimpath -o ../dist/goagent ./cmd/goagent
+
+go/tools.json: src/tools.json
+	cp src/tools.json go/tools.json
 
 build-rust:
 	cd rust && cargo build --release -j 10
@@ -28,7 +29,10 @@ build-tcode:
 	cp scripts/tcode dist/tcode
 	chmod +x dist/tcode
 
-test: test-bash test-go test-rust
+build-c:
+	$(MAKE) -C c
+
+test: test-bash test-go test-rust test-c-e2e
 
 test-bash:
 	bash tests/test.sh
@@ -36,7 +40,6 @@ test-bash:
 test-go:
 	mkdir -p go/.gocache go/.gomodcache
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go mod download
-	bash scripts/patch-go-prompt.sh go/.gomodcache
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go test ./...
 
 test-go-e2e: build-go
@@ -48,5 +51,9 @@ test-rust:
 test-rust-e2e: build-rust
 	AGENT=./dist/rustagent bash tests/test.sh
 
+test-c-e2e: build-c
+	AGENT=./dist/cagent bash tests/test.sh
+
 clean:
-	rm -rf go/dist rust/target
+	rm -rf go/dist rust/target dist/cagent
+	$(MAKE) -C c clean

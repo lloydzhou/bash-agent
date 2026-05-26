@@ -520,19 +520,23 @@ use std::path::{Path, PathBuf};
     pub fn project_key(cwd: &std::path::Path) -> String {
         let s = cwd.to_string_lossy();
         let stripped = s.strip_prefix(std::path::MAIN_SEPARATOR).unwrap_or(&s);
-        let mut clean = stripped.replace(std::path::MAIN_SEPARATOR, "-");
-        while clean.contains("--") {
-            clean = clean.replace("--", "-");
-        }
-        let mut out = String::from("-");
-        for ch in clean.chars() {
-            if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
-                out.push(ch);
+        let mut clean = String::new();
+        let mut prev_dash = false;
+        for ch in stripped.chars() {
+            let mapped = if ch == std::path::MAIN_SEPARATOR {
+                '-'
+            } else if ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-' {
+                ch
             } else {
-                out.push('-');
+                '-'
+            };
+            if mapped == '-' && prev_dash {
+                continue;
             }
+            clean.push(mapped);
+            prev_dash = mapped == '-';
         }
-        out.trim_end_matches('-').to_string()
+        format!("-{}", clean.trim_matches('-'))
     }
 
     pub fn paths_for(home: &std::path::Path, cwd: &std::path::Path, session_id: &str) -> Paths {

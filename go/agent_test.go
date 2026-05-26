@@ -70,6 +70,19 @@ func TestUtilParseSize(t *testing.T) {
 	}
 }
 
+func TestPathToProjectKeyMatchesBash(t *testing.T) {
+	tests := map[string]string{
+		"/Users/lloyd/claude-code/bash-agent": "-Users-lloyd-claude-code-bash-agent",
+		"/tmp/a b/c:d":                        "-tmp-a-b-c-d",
+		"///tmp///a--b///":                    "-tmp-a-b",
+	}
+	for input, want := range tests {
+		if got := pathToProjectKey(input); got != want {
+			t.Errorf("pathToProjectKey(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestToolDenyBashReason(t *testing.T) {
 	blocked := []string{
 		"sudo rm -rf /",
@@ -187,6 +200,35 @@ func TestFileStoreConversation(t *testing.T) {
 	}
 }
 
+func TestFileStoreToolResultConvOutput(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.AddAssistantMessage("", "", []ToolCallInfo{{Name: "Read", ID: "toolu_1", Input: `{"path":"a.txt"}`}}); err != nil {
+		t.Fatalf("AddAssistantMessage: %v", err)
+	}
+	if err := store.AddToolResults([]ToolResultInfo{{
+		ToolID:     "toolu_1",
+		ToolName:   "Read",
+		Output:     "Read(a.txt) [1 lines, 4 bytes]\nbody",
+		ConvOutput: "body",
+	}}); err != nil {
+		t.Fatalf("AddToolResults: %v", err)
+	}
+	raw, err := os.ReadFile(store.convFile)
+	if err != nil {
+		t.Fatalf("read conversation: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("conversation lines = %d, want 2: %s", len(lines), raw)
+	}
+	if !strings.Contains(lines[0], `"tool_use"`) {
+		t.Fatalf("assistant tool_use should precede tool_result, got: %s", lines[0])
+	}
+	if strings.Contains(lines[1], "Read(a.txt)") || !strings.Contains(lines[1], `"content":"body"`) {
+		t.Fatalf("tool_result conversation content not trimmed to ConvOutput: %s", lines[1])
+	}
+}
+
 func TestFileStoreSummary(t *testing.T) {
 	store := newTestStore(t)
 
@@ -285,6 +327,24 @@ func TestFileStoreStats(t *testing.T) {
 	}
 	if stats.OutputTokens != 50 {
 		t.Errorf("OutputTokens = %d, want 50", stats.OutputTokens)
+	}
+}
+
+func TestFileStoreCompactStats(t *testing.T) {
+	store := newTestStore(t)
+	usage := Usage{InputTokens: 10, OutputTokens: 5, CacheRead: 3, CacheWrite: 2}
+	if err := store.UpdateCompactStats(usage); err != nil {
+		t.Fatalf("UpdateCompactStats: %v", err)
+	}
+	stats := store.GetStats()
+	if stats.TotalCompact != 1 {
+		t.Errorf("TotalCompact = %d, want 1", stats.TotalCompact)
+	}
+	if stats.TotalRequests != 0 {
+		t.Errorf("TotalRequests = %d, want 0", stats.TotalRequests)
+	}
+	if stats.InputTokens != 10 || stats.OutputTokens != 5 || stats.CacheRead != 3 || stats.CacheWrite != 2 {
+		t.Errorf("compact token totals mismatch: %+v", stats)
 	}
 }
 

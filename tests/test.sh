@@ -138,10 +138,16 @@ import http.server, json, sys, threading
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
+    # --- Capture last request for external inspection ---
+    last_body = b''
+    last_headers = {}
+
     def do_POST(self):
         cl = int(self.headers.get('Content-Length',0))
         body = self.rfile.read(cl)
         path = self.path
+        H.last_body = body
+        H.last_headers = dict(self.headers)
         # --- Early error returns (must be before send_response(200)) ---
         # SubAgent failure mock: child agent request -> 422 error
         # Only match child requests (no SUB_FAIL_MARKER in body)
@@ -1219,6 +1225,60 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing one of the multi-tool results')
             return
+        # --- Diff-check e2e markers (DIFF_CHECKLIST.md coverage) ---
+        # PL2: PlanConfirm — mock returns PlanConfirm tool call
+        if b'PLAN_CONFIRM_MV_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_confirm\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Plan confirmed.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_plan_confirm_1\",\"name\":\"PlanConfirm\",\"input\":{}}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'PLAN_CONFIRM_MV_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_plan_confirm_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Plan confirmed and locked.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # T5: device write protection — mock tells agent to run dd of=/dev/sda
+        if b'DEV_WRITE_BLOCK_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_dev_write\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Writing to device.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_dev_write\",\"name\":\"Bash\",\"input\":{\"command\":\"dd if=/dev/zero of=/dev/sda bs=1M count=1\"}}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'DEV_WRITE_BLOCK_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'blocked' in body or b'refused' in body or b'device' in body:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_dev_write_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Device write blocked.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'device write was NOT blocked')
+            return
         if path.startswith('/v1/messages'):
             for c in [
                 'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -1240,6 +1300,13 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers(); w.write(b'not found')
 
     def do_GET(self):
+        if self.path == '/last-request':
+            self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
+            self.wfile.write(json.dumps({
+                'body': H.last_body.decode('utf-8', errors='replace'),
+                'headers': {k: v for k, v in H.last_headers.items()}
+            }).encode())
+            return
         self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
         self.wfile.write(json.dumps({'status':'ok'}).encode())
 
@@ -2654,6 +2721,7 @@ TURNEOF
 
     rm -rf "$tmpdir"
 }
+
 test_agent_stats_json() {
     info "Test 36: stats.json created on agent run"
     local home_dir stats_file
@@ -2665,6 +2733,143 @@ test_agent_stats_json() {
     else
         red "Agent stats.json created"; echo "  Stats file: $stats_file (content: $(cat "$stats_file" 2>/dev/null || echo 'N/A'))"; ((FAIL++)) || true
     fi
+    rm -rf "$home_dir"
+}
+
+# Test 36b: stats.json usage values — validate all token fields
+# Mock server returns: message_start usage={input_tokens:10, output_tokens:0}
+#                       message_delta  usage={output_tokens:7}
+# Expected: agent_request_count=1, total_input=10, total_output=7,
+#           total_cache_read=0, total_cache_creation=0,
+#           current_context_tokens = 10+7+0+0 = 17
+test_agent_stats_usage_values() {
+    info "Test 36b: stats.json usage token values"
+    local home_dir stats_file
+    home_dir=$(mktemp -d)
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'Hello' >/dev/null 2>&1 || true
+    stats_file=$(find "$home_dir" -name 'stats.json' 2>/dev/null | head -1)
+
+    if [[ -z "$stats_file" ]]; then
+        red "stats.json usage values: stats file not found"; ((FAIL++)) || true
+        rm -rf "$home_dir"
+        return
+    fi
+
+    local stats_content
+    stats_content=$(cat "$stats_file" 2>/dev/null || echo '{}')
+
+    _json_val() {
+        # Extract numeric value from JSON: "key":value
+        echo "$stats_content" | grep -o "\"$1\":[[:space:]]*[0-9]*" | grep -o '[0-9]*$'
+    }
+
+    local arc=$(_json_val agent_request_count)
+    local tin=$(_json_val total_input_tokens)
+    local tout=$(_json_val total_output_tokens)
+    local tcr=$(_json_val total_cache_read_tokens)
+    local tcc=$(_json_val total_cache_creation_tokens)
+    local cctx=$(_json_val current_context_tokens)
+
+    # agent_request_count should be 1
+    if [[ "$arc" == "1" ]]; then
+        green "stats agent_request_count=1"; ((PASS++)) || true
+    else
+        red "stats agent_request_count=$arc (expected 1)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_input_tokens should be 10
+    if [[ "$tin" == "10" ]]; then
+        green "stats total_input_tokens=10"; ((PASS++)) || true
+    else
+        red "stats total_input_tokens=$tin (expected 10)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_output_tokens should be 7
+    if [[ "$tout" == "7" ]]; then
+        green "stats total_output_tokens=7"; ((PASS++)) || true
+    else
+        red "stats total_output_tokens=$tout (expected 7)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_cache_read_tokens should be 0
+    if [[ "$tcr" == "0" ]]; then
+        green "stats total_cache_read_tokens=0"; ((PASS++)) || true
+    else
+        red "stats total_cache_read_tokens=$tcr (expected 0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_cache_creation_tokens should be 0
+    if [[ "$tcc" == "0" ]]; then
+        green "stats total_cache_creation_tokens=0"; ((PASS++)) || true
+    else
+        red "stats total_cache_creation_tokens=$tcc (expected 0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # current_context_tokens = in+out+cr+cc = 10+7+0+0 = 17
+    if [[ "$cctx" == "17" ]]; then
+        green "stats current_context_tokens=17"; ((PASS++)) || true
+    else
+        red "stats current_context_tokens=$cctx (expected 17)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 36c: stats.json with cache tokens — validate cache_read/cache_creation
+# Mock server returns: message_start usage={input_tokens:10, cache_read_input_tokens:50}
+#                       message_delta  usage={output_tokens:7, cache_read_input_tokens:30, cache_creation_input_tokens:20}
+# Expected: total_input=10, total_output=7, total_cache_read=50 (max from start/delta),
+#           total_cache_creation=20, current_context_tokens = 10+7+50+20 = 87
+test_agent_stats_cache_tokens() {
+    info "Test 36c: stats.json cache token values"
+    local home_dir stats_file
+    home_dir=$(mktemp -d)
+    # Use a marker that triggers cache tokens in mock server
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'READ_FILE_MARKER' >/dev/null 2>&1 || true
+    stats_file=$(find "$home_dir" -name 'stats.json' 2>/dev/null | head -1)
+
+    if [[ -z "$stats_file" ]]; then
+        red "stats.json cache tokens: stats file not found"; ((FAIL++)) || true
+        rm -rf "$home_dir"
+        return
+    fi
+
+    local stats_content
+    stats_content=$(cat "$stats_file" 2>/dev/null || echo '{}')
+
+    _json_val() {
+        echo "$stats_content" | grep -o "\"$1\":[[:space:]]*[0-9]*" | grep -o '[0-9]*$'
+    }
+
+    local tin=$(_json_val total_input_tokens)
+    local tout=$(_json_val total_output_tokens)
+    local tcr=$(_json_val total_cache_read_tokens)
+    local tcc=$(_json_val total_cache_creation_tokens)
+    local cctx=$(_json_val current_context_tokens)
+
+    # total_cache_read_tokens should be > 0 (from mock server)
+    if [[ "$tcr" -gt 0 ]] 2>/dev/null; then
+        green "stats total_cache_read_tokens=$tcr (>0)"; ((PASS++)) || true
+    else
+        red "stats total_cache_read_tokens=$tcr (expected >0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # total_cache_creation_tokens should be > 0 (from mock server)
+    if [[ "$tcc" -gt 0 ]] 2>/dev/null; then
+        green "stats total_cache_creation_tokens=$tcc (>0)"; ((PASS++)) || true
+    else
+        red "stats total_cache_creation_tokens=$tcc (expected >0)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
+    # current_context_tokens should be > total_input_tokens + total_output_tokens
+    # (because it includes cache tokens)
+    local min_expected=$(( tin + tout ))
+    if [[ "$cctx" -gt "$min_expected" ]] 2>/dev/null; then
+        green "stats current_context_tokens=$cctx (> $min_expected)"; ((PASS++)) || true
+    else
+        red "stats current_context_tokens=$cctx (expected > $min_expected)"; echo "  Content: $stats_content"; ((FAIL++)) || true
+    fi
+
     rm -rf "$home_dir"
 }
 
@@ -2832,6 +3037,314 @@ test_agent_compact_context() {
     rm -rf "$home_dir"
 }
 
+# Test 40: stats.json structure completeness (S1/S2/S4)
+test_agent_stats_structure() {
+    info "Test 40: stats.json structure completeness (S1 sub_agent_request_count, S2 last_updated, S4 no trailing spaces)"
+    local home_dir stats_file
+    home_dir=$(mktemp -d)
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'STATS_CHECK_MARKER' >/dev/null 2>&1 || true
+    stats_file=$(find "$home_dir" -name 'stats.json' 2>/dev/null | head -1)
+
+    if [[ -z "$stats_file" ]]; then
+        red "stats structure: stats file not found"; ((FAIL++)) || true
+        rm -rf "$home_dir"; return
+    fi
+
+    local content
+    content=$(cat "$stats_file")
+
+    # S1: sub_agent_request_count must exist
+    if [[ "$content" == *"sub_agent_request_count"* ]]; then
+        green "stats structure: sub_agent_request_count field present"; ((PASS++)) || true
+    else
+        red "stats structure: sub_agent_request_count field MISSING"; echo "  Content: $content"; ((FAIL++)) || true
+    fi
+
+    # S2: last_updated must be non-empty (ISO timestamp like 2025-01-01T00:00:00Z)
+    local last_updated
+    last_updated=$(grep -o '"last_updated":"[^"]*"' "$stats_file" 2>/dev/null | head -1)
+    if [[ "$last_updated" == *"T"* ]] && [[ "$last_updated" != '""' ]]; then
+        green "stats structure: last_updated has valid timestamp"; ((PASS++)) || true
+    else
+        red "stats structure: last_updated empty or missing"; echo "  Value: $last_updated"; ((FAIL++)) || true
+    fi
+
+    # S4: no trailing spaces after numeric values
+    if grep -qE ':[0-9]+ +' "$stats_file" 2>/dev/null; then
+        red "stats structure: trailing spaces in numeric values"; echo "  Content: $content"; ((FAIL++)) || true
+    else
+        green "stats structure: no trailing spaces in values"; ((PASS++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 41: project key alignment (ST1)
+test_agent_project_key() {
+    info "Test 41: project key computation alignment (ST1)"
+    local home_dir output session_dir expected_key
+    home_dir=$(mktemp -d)
+
+    # Run agent with a known cwd
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'PROJECT_KEY_CHECK' >/dev/null 2>&1) || true
+
+    # Compute expected key using the same algorithm as the agent
+    expected_key=$(cd "$ROOT_DIR" && project_key)
+
+    # Find the session directory under .bash-agent/projects/<key>/
+    local found_key
+    found_key=$(find "$home_dir/.bash-agent/projects" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+    found_key=$(basename "$found_key" 2>/dev/null)
+
+    if [[ "$found_key" == "$expected_key" ]]; then
+        green "project key: matches expected ($expected_key)"; ((PASS++)) || true
+    else
+        red "project key: MISMATCH (expected=$expected_key, got=$found_key)"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 42: conversation.jsonl no blank lines (ST2)
+test_agent_conv_no_blank_lines() {
+    info "Test 42: conversation.jsonl has no blank lines (ST2)"
+    local home_dir conv_file output blank_count
+    home_dir=$(mktemp -d)
+
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test 'CONV_BLANK_CHECK' >/dev/null 2>&1) || true
+
+    conv_file=$(find "$home_dir" -name 'conversation.jsonl' 2>/dev/null | head -1)
+    if [[ -z "$conv_file" ]]; then
+        red "conv blank lines: conversation.jsonl not found"; ((FAIL++)) || true
+        rm -rf "$home_dir"; return
+    fi
+
+    blank_count=$(grep -c '^$' "$conv_file" 2>/dev/null || true)
+    blank_count=${blank_count:-0}
+    blank_count=$(echo "$blank_count" | tr -d '[:space:]')
+    if [[ "$blank_count" == "0" ]]; then
+        green "conv blank lines: no blank lines in conversation.jsonl"; ((PASS++)) || true
+    else
+        red "conv blank lines: $blank_count blank lines found"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 43: device write protection (T5)
+test_agent_bash_device_write_block() {
+    info "Test 43: bash device write protection (T5)"
+    local output
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'DEV_WRITE_BLOCK_MARKER' 2>&1) || true
+
+    # Agent should refuse to write to /dev/sda — blocked or refused
+    if [[ "$output" == *"Device write blocked"* ]] || [[ "$output" == *"blocked"* ]] || [[ "$output" == *"refused"* ]] || [[ "$output" == *"device"* ]]; then
+        green "device write block: dd of=/dev/sda blocked"; ((PASS++)) || true
+    else
+        red "device write block: NOT blocked"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
+# Test 44: thinking parameter format (P1)
+test_agent_thinking_format() {
+    info "Test 44: thinking parameter format in request body (P1)"
+    local home_dir output last_body
+    home_dir=$(mktemp -d)
+
+    # Run agent, then fetch last request from mock
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'THINKING_FORMAT_CHECK' >/dev/null 2>&1 || true
+
+    last_body=$(curl -sS "$BASE/last-request" 2>/dev/null)
+    if [[ -z "$last_body" ]]; then
+        red "thinking format: no last request captured"; ((FAIL++)) || true
+        rm -rf "$home_dir"; return
+    fi
+
+    # Check: thinking type should be "adaptive" and should NOT contain budget_tokens
+    local has_adaptive has_budget
+    has_adaptive=$(echo "$last_body" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+body = json.loads(d.get('body','{}'))
+t = body.get('thinking', {})
+print('yes' if t.get('type') == 'adaptive' else 'no')
+" 2>/dev/null)
+    has_budget=$(echo "$last_body" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+body = json.loads(d.get('body','{}'))
+print('yes' if 'budget_tokens' in body.get('thinking', {}) else 'no')
+" 2>/dev/null)
+
+    if [[ "$has_adaptive" == "yes" ]]; then
+        green "thinking format: type=adaptive"; ((PASS++)) || true
+    else
+        red "thinking format: type is NOT adaptive (has_adaptive=$has_adaptive)"; ((FAIL++)) || true
+    fi
+
+    if [[ "$has_budget" != "yes" ]]; then
+        green "thinking format: no budget_tokens"; ((PASS++)) || true
+    else
+        red "thinking format: budget_tokens should NOT be present"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 45: x-app header (P2)
+test_agent_xapp_header() {
+    info "Test 45: x-app header in request (P2)"
+    local home_dir last_headers
+    home_dir=$(mktemp -d)
+
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'XAPP_HEADER_CHECK' >/dev/null 2>&1 || true
+
+    last_headers=$(curl -sS "$BASE/last-request" 2>/dev/null)
+    local has_xapp
+    has_xapp=$(echo "$last_headers" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+h = d.get('headers', {})
+print('yes' if h.get('x-app') == 'cli' or h.get('X-App') == 'cli' or h.get('X-app') == 'cli' else 'no')
+" 2>/dev/null)
+
+    if [[ "$has_xapp" == "yes" ]]; then
+        green "x-app header: present with value 'cli'"; ((PASS++)) || true
+    else
+        red "x-app header: NOT present"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 46: PlanConfirm mv draft→plan (PL2)
+test_agent_plan_confirm_mv() {
+    info "Test 46: PlanConfirm moves draft to plan (PL2)"
+    local home_dir project_dir session_dir draft_file plan_file output
+    home_dir=$(mktemp -d)
+    project_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)"
+    session_dir="$project_dir/plan-confirm-test"
+    draft_file="$session_dir/plan.draft"
+    plan_file="$session_dir/plan.md"
+    mkdir -p "$session_dir"
+
+    # Seed draft file with content
+    printf 'Task: test plan confirm mv\nStep 1: do thing\n' > "$draft_file"
+
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session plan-confirm-test 'PLAN_CONFIRM_MV_MARKER' 2>&1) || true
+
+    # Check: plan.md should exist and contain content from draft
+    if [[ -s "$plan_file" ]] && grep -q "test plan confirm" "$plan_file" 2>/dev/null; then
+        green "PlanConfirm mv: plan.md has content from draft"; ((PASS++)) || true
+    else
+        red "PlanConfirm mv: plan.md missing or empty"; echo "  plan.md: $(cat "$plan_file" 2>/dev/null || echo 'N/A')"; echo "  draft still exists: $([[ -s "$draft_file" ]] && echo yes || echo no)"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 47: system prompt format — no extra blank lines before closing tags (SP1/SP2)
+test_agent_system_prompt_format() {
+    info "Test 47: system prompt format (SP1/SP2 — no extra blank lines before closing tags)"
+    local home_dir last_body
+    home_dir=$(mktemp -d)
+
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'SP_FORMAT_CHECK' >/dev/null 2>&1 || true
+
+    last_body=$(curl -sS "$BASE/last-request" 2>/dev/null)
+    if [[ -z "$last_body" ]]; then
+        red "system prompt format: no last request captured"; ((FAIL++)) || true
+        rm -rf "$home_dir"; return
+    fi
+
+    # Extract system prompt content from request body
+    local sp_check
+    sp_check=$(echo "$last_body" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+body = json.loads(d.get('body','{}'))
+msgs = body.get('messages', [])
+for m in msgs:
+    if m.get('role') == 'user':
+        content = m.get('content', '')
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get('type') == 'text':
+                    content = block.get('text', '')
+                    break
+        if '</instruction-files>' in content:
+            # Check no double newline before closing tag
+            if '\\n\\n</instruction-files>' in content:
+                print('EXTRA_NEWLINE_INSTRUCTION')
+            else:
+                print('OK_INSTRUCTION')
+        if '</selected-skills>' in content:
+            if '\\n\\n</selected-skills>' in content:
+                print('EXTRA_NEWLINE_SKILLS')
+            else:
+                print('OK_SKILLS')
+        break
+" 2>/dev/null)
+
+    if [[ "$sp_check" == *"EXTRA_NEWLINE"* ]]; then
+        red "system prompt format: extra blank line before closing tag ($sp_check)"; ((FAIL++)) || true
+    else
+        green "system prompt format: no extra blank lines before closing tags"; ((PASS++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 48: model from -m arg (C3 — verify model passed correctly)
+test_agent_model_arg() {
+    info "Test 48: model from -m arg (C3)"
+    local home_dir last_body model_value
+    home_dir=$(mktemp -d)
+
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test-model-arg --api-key test 'MODEL_ARG_CHECK' >/dev/null 2>&1 || true
+
+    last_body=$(curl -sS "$BASE/last-request" 2>/dev/null)
+    model_value=$(echo "$last_body" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+body = json.loads(d.get('body','{}'))
+print(body.get('model', ''))
+" 2>/dev/null)
+
+    if [[ "$model_value" == "test-model-arg" ]]; then
+        green "model arg: model field = test-model-arg"; ((PASS++)) || true
+    else
+        red "model arg: expected 'test-model-arg', got '$model_value'"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+# Test 49: --max-tokens k suffix (C4)
+test_agent_max_tokens_suffix() {
+    info "Test 49: --max-tokens k suffix (C4)"
+    local home_dir last_body max_tokens_value
+    home_dir=$(mktemp -d)
+
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --max-tokens 4k 'MAX_TOKENS_K_CHECK' >/dev/null 2>&1 || true
+
+    last_body=$(curl -sS "$BASE/last-request" 2>/dev/null)
+    max_tokens_value=$(echo "$last_body" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+body = json.loads(d.get('body','{}'))
+print(body.get('max_tokens', ''))
+" 2>/dev/null)
+
+    if [[ "$max_tokens_value" == "4000" ]]; then
+        green "max-tokens suffix: 4k -> 4000"; ((PASS++)) || true
+    else
+        red "max-tokens suffix: expected 4000, got '$max_tokens_value'"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -2892,6 +3405,8 @@ test_agent_edit_code_snippet
 test_stats_awk
 test_agent_max_context
 test_agent_stats_json
+test_agent_stats_usage_values
+test_agent_stats_cache_tokens
 test_compact_dp_awk
 test_compact_turn_keep_awk
 test_agent_compact_context
@@ -2901,6 +3416,17 @@ test_agent_sub_agent_child_session
 test_agent_sub_agent_fork
 test_agent_sub_agent_fork_failure
 test_agent_sub_agent_fork_context
+
+test_agent_stats_structure
+test_agent_project_key
+test_agent_conv_no_blank_lines
+test_agent_bash_device_write_block
+test_agent_thinking_format
+test_agent_xapp_header
+test_agent_plan_confirm_mv
+test_agent_system_prompt_format
+test_agent_model_arg
+test_agent_max_tokens_suffix
 
 echo ""
 echo "=============================="

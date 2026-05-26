@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod ffi;
 pub mod sse;
 pub mod util;
 pub mod store;
@@ -1162,7 +1163,7 @@ pub mod prompt {
             ));
             sections.push(wrap_section(
                 "sub-agent-guidance",
-                "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.\n- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.",
+                "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.",
                 None,
             ));
             sections.push(wrap_section(
@@ -1309,7 +1310,7 @@ pub mod prompt {
                 };
                 let content = fs::read_to_string(&skill_file)?;
                 let full = format!(
-                    "Base directory for this skill: {}\n\n{}",
+                    "Base directory: {}\n\n{}",
                     skill_file.parent().unwrap_or(Path::new("")).display(),
                     content.replace(
                         "${BASH_AGENT_SKILL_DIR}",
@@ -1327,7 +1328,7 @@ pub mod prompt {
     }
 
     fn wrap_section(tag: &str, content: &str, name: Option<&str>) -> String {
-        if content.trim().is_empty() {
+        if content.is_empty() {
             return String::new();
         }
         match name {
@@ -1337,10 +1338,20 @@ pub mod prompt {
     }
 
     fn escape_attr(s: &str) -> String {
-        s.replace('&', "&amp;")
-            .replace('"', "&quot;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
+        let mut out = String::new();
+        for ch in s.chars() {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                '\u{08}' => out.push_str("\\b"),
+                '\u{0c}' => out.push_str("\\f"),
+                _ => out.push(ch),
+            }
+        }
+        out
     }
 
     fn read_optional_file(path: &Path) -> Result<Option<String>> {
