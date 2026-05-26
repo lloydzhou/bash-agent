@@ -23,6 +23,53 @@
 static void push_display(MsgQueue *dq, DisplayMessage *msg);
 static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayMessage *msg);
 
+static char *agent_tool_display_summary(const char *name, JsonVal input, const char *input_json) {
+    char *field = NULL;
+    if (strcmp(name, "Read") == 0 || strcmp(name, "Write") == 0 || strcmp(name, "Edit") == 0) {
+        field = json_get_string(input, "path");
+    } else if (strcmp(name, "Glob") == 0 || strcmp(name, "Grep") == 0) {
+        field = json_get_string(input, "pattern");
+    } else if (strcmp(name, "Bash") == 0) {
+        field = json_get_string(input, "command");
+    } else if (strcmp(name, "Skill") == 0) {
+        field = json_get_string(input, "name");
+    } else if (strcmp(name, "SubAgent") == 0) {
+        field = json_get_string(input, "description");
+    } else if (strcmp(name, "WebSearch") == 0) {
+        field = json_get_string(input, "query");
+    } else if (strcmp(name, "WebFetch") == 0 || strcmp(name, "WebReader") == 0) {
+        field = json_get_string(input, "url");
+    } else if (strcmp(name, "TodoWrite") == 0) {
+        JsonVal todos_arr = json_get(input, "todos");
+        if (todos_arr.type == JSON_ARRAY) {
+            int total = json_array_len(todos_arr);
+            int comp = 0;
+            for (int ti = 0; ti < total; ti++) {
+                JsonVal ti_item = json_array_get(todos_arr, ti);
+                char *ti_status = json_get_string(ti_item, "status");
+                if (ti_status && strcmp(ti_status, "completed") == 0) comp++;
+                free(ti_status);
+            }
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%d/%d", comp, total);
+            field = util_strdup(buf);
+        }
+    }
+    if (field) return field;
+
+    if (input_json && input_json[0]) {
+        size_t len = strlen(input_json);
+        if (len > 80) {
+            char *summary = malloc(84);
+            memcpy(summary, input_json, 80);
+            strcpy(summary + 80, "...");
+            return summary;
+        }
+        return util_strdup(input_json);
+    }
+    return util_strdup("");
+}
+
 typedef struct {
     SseAccumulator accum;
     MsgQueue *display_queue;
@@ -493,22 +540,22 @@ void agent_replay_events(Agent *agent, int max_turns) {
             }
             char *name = json_get_string(jp.val, "name");
             char *id = json_get_string(jp.val, "id");
-            /* 从 input 提取摘要（截断） */
-            char summary[84] = "";
             JsonVal input_val = json_get(jp.val, "input");
+            char *input_str = NULL;
+            char *summary = NULL;
             if (input_val.type != JSON_NULL) {
-                char *input_str = json_as_string(input_val);
-                if (input_str) {
-                    strncpy(summary, input_str, sizeof(summary) - 1);
-                    summary[sizeof(summary) - 1] = '\0';
-                    util_truncate_str(summary, 80);
-                    free(input_str);
-                }
+                input_str = json_as_string(input_val);
+                summary = agent_tool_display_summary(name ? name : "", input_val, input_str);
             }
+            if (!input_str) input_str = util_strdup("{}");
+            if (!summary) summary = util_strdup("");
+
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_tool_call(id ? id : "", name ? name : "", summary);
+            free(dm->tool_input);
+            dm->tool_input = util_strdup(input_str);
             push_display(agent->display_queue, dm);
-            free(name); free(id);
+            free(input_str); free(summary); free(name); free(id);
         }
         else if (strcmp(type, "tool_result") == 0) {
             /* flush 累积 */
@@ -767,55 +814,11 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         /* ---- 显示工具调用 ---- */
         for (int i = 0; i < accum->tool_count; i++) {
             ToolCallAccum *tc = &accum->tools[i];
-            /* 从 input_json 提取摘要 */
             char *summary = NULL;
             if (tc->input_json.len > 0) {
                 JsonParse jp2 = json_parse_root(tc->input_json.data);
                 if (!jp2.error) {
-                    char *field = NULL;
-                    if (strcmp(tc->name, "Read") == 0 || strcmp(tc->name, "Write") == 0 || strcmp(tc->name, "Edit") == 0) {
-                        field = json_get_string(jp2.val, "path");
-                    } else if (strcmp(tc->name, "Glob") == 0 || strcmp(tc->name, "Grep") == 0) {
-                        field = json_get_string(jp2.val, "pattern");
-                    } else if (strcmp(tc->name, "Bash") == 0) {
-                        field = json_get_string(jp2.val, "command");
-                    } else if (strcmp(tc->name, "Skill") == 0) {
-                        field = json_get_string(jp2.val, "name");
-                    } else if (strcmp(tc->name, "SubAgent") == 0) {
-                        field = json_get_string(jp2.val, "description");
-                    } else if (strcmp(tc->name, "WebSearch") == 0) {
-                        field = json_get_string(jp2.val, "query");
-                    } else if (strcmp(tc->name, "WebFetch") == 0 || strcmp(tc->name, "WebReader") == 0) {
-                        field = json_get_string(jp2.val, "url");
-                    } else if (strcmp(tc->name, "TodoWrite") == 0) {
-                        /* 计算 completed/total */
-                        JsonVal todos_arr = json_get(jp2.val, "todos");
-                        if (todos_arr.type == JSON_ARRAY) {
-                            int total = json_array_len(todos_arr);
-                            int comp = 0;
-                            for (int ti = 0; ti < total; ti++) {
-                                JsonVal ti_item = json_array_get(todos_arr, ti);
-                                char *ti_status = json_get_string(ti_item, "status");
-                                if (ti_status && strcmp(ti_status, "completed") == 0) comp++;
-                                free(ti_status);
-                            }
-                            char buf[32];
-                            snprintf(buf, sizeof(buf), "%d/%d", comp, total);
-                            field = util_strdup(buf);
-                        }
-                    }
-                    if (field) {
-                        summary = field;
-                    } else {
-                        /* 使用整个 input_json（截断） */
-                        if (tc->input_json.len > 80) {
-                            summary = malloc(84);
-                            memcpy(summary, tc->input_json.data, 80);
-                            strcpy(summary + 80, "...");
-                        } else {
-                            summary = util_strdup(tc->input_json.data);
-                        }
-                    }
+                    summary = agent_tool_display_summary(tc->name, jp2.val, tc->input_json.data);
                 }
             }
             if (!summary) summary = util_strdup("");
