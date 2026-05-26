@@ -1590,14 +1590,14 @@ impl Agent {
                 self.last_cache_creation_tokens,
             );
             // context = input + output + cache_read + cache_creation
-            Self::set_stat_usize(
-                stats,
-                "current_context_tokens",
-                self.last_input_tokens
-                    + self.last_output_tokens
-                    + self.last_cache_read_tokens
-                    + self.last_cache_creation_tokens,
-            );
+            // 仅在 > 0 时写入（与 bash/c 版一致，避免零值覆盖）
+            let ctx = self.last_input_tokens
+                + self.last_output_tokens
+                + self.last_cache_read_tokens
+                + self.last_cache_creation_tokens;
+            if ctx > 0 {
+                Self::set_stat_usize(stats, "current_context_tokens", ctx);
+            }
             stats.insert(
                 "last_updated".to_string(),
                 Value::String(chrono_now_rfc3339()),
