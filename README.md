@@ -37,7 +37,7 @@ export DEEPSEEK_API_KEY="sk-..."
 # 运行
 bash-agent "scan this repo and summarize"
 bash-agent -i                    # 交互模式
-bash-agent --print "inspect"     # stream-json 输出
+bash-agent --output-format stream-json "inspect"
 ```
 
 ### DeepSeek 兼容（Anthropic 协议）
@@ -112,7 +112,7 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 | `--continue` | 继续最近 session | - |
 | `--list-sessions` | 列出当前项目 session | - |
 | `-i` | 交互模式 | - |
-| `--print` | stream-json 输出 | - |
+| `--output-format FMT` | 输出格式：`human` 或 `stream-json` | `human` |
 | `-v` | 详细日志 | - |
 
 ## tcode — tmux Chat UI 包装器

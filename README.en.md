@@ -37,7 +37,7 @@ export DEEPSEEK_API_KEY="sk-..."
 # Run
 bash-agent "scan this repo and summarize"
 bash-agent -i                    # interactive mode
-bash-agent --print "inspect"     # stream-json output
+bash-agent --output-format stream-json "inspect"
 ```
 
 ### DeepSeek (Anthropic-compatible)
@@ -112,7 +112,7 @@ Pre-built binaries (Go / Rust) are available on [Releases](https://github.com/ll
 | `--continue` | continue the latest session | - |
 | `--list-sessions` | list sessions for the current project | - |
 | `-i` | interactive mode | - |
-| `--print` | stream-json output | - |
+| `--output-format FMT` | output format: `human` or `stream-json` | `human` |
 | `-v` | verbose logging | - |
 
 ## tcode — tmux Chat UI Wrapper
