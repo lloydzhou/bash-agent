@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="bash-agent logo" width="96" height="96">
+</p>
+
 # bash-agent
 
 [🌐 Website](https://lloydzhou.github.io/bash-agent/) · [中文说明](README.md)
