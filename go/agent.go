@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -129,6 +130,7 @@ func (a *Agent) BuildPrompt() string {
 
 	var sections []string
 	appendSection := func(tag, content string, name string) {
+		content = strings.TrimRight(content, "\r\n")
 		if content == "" {
 			return
 		}
@@ -351,7 +353,8 @@ func (a *Agent) loadSkillContent(name string) (string, error) {
 			continue
 		}
 		skillDir := base + "/" + name
-		content := strings.ReplaceAll(string(data), "${BASH_AGENT_SKILL_DIR}", skillDir)
+		content := strings.TrimRight(string(data), "\r\n")
+		content = strings.ReplaceAll(content, "${BASH_AGENT_SKILL_DIR}", skillDir)
 		return "Base directory: " + skillDir + "\n\n" + content, nil
 	}
 	return "", fmt.Errorf("skill not found: %s", name)
@@ -375,7 +378,7 @@ func findInstructionFile(dir string) string {
 
 // buildInstructionsSection 查找全局和项目级 instruction 文件
 func (a *Agent) buildInstructionsSection() string {
-	var sections []string
+	var sections strings.Builder
 	home := os.Getenv("HOME")
 
 	// 全局: ~/.bash-agent/AGENTS.md 等
@@ -383,7 +386,7 @@ func (a *Agent) buildInstructionsSection() string {
 		if f := findInstructionFile(home + "/.bash-agent"); f != "" {
 			data, err := os.ReadFile(f)
 			if err == nil {
-				sections = append(sections, "<instruction-file name=\"global\">\n"+string(data)+"\n</instruction-file>")
+				UtilAppendSection(&sections, "instruction-file", string(data), "global")
 			}
 		}
 	}
@@ -392,11 +395,11 @@ func (a *Agent) buildInstructionsSection() string {
 	if f := findInstructionFile(mustGetwd()); f != "" {
 		data, err := os.ReadFile(f)
 		if err == nil {
-			sections = append(sections, "<instruction-file name=\"project\">\n"+string(data)+"\n</instruction-file>")
+			UtilAppendSection(&sections, "instruction-file", string(data), "project")
 		}
 	}
 
-	return strings.Join(sections, "\n")
+	return sections.String()
 }
 
 // ─── agent_compact_context: 上下文压缩 ───
@@ -541,17 +544,22 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	_ = a.store.IncrementTurn()
 
 	// 中断处理：用 context.WithCancel 包装，Ctrl+C 同时取消 context（取消 HTTP 请求）
-	interrupted := false
+	var interrupted atomic.Bool
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
+	sigDone := make(chan struct{})
 	signal.Notify(sigCh, syscall.SIGINT)
 	defer signal.Stop(sigCh)
+	defer close(sigDone)
 
 	go func() {
-		<-sigCh
-		interrupted = true
-		cancel()
+		select {
+		case <-sigCh:
+			interrupted.Store(true)
+			cancel()
+		case <-sigDone:
+		}
 	}()
 
 	for turn := 0; turn < a.cfg.MaxTurns; turn++ {
@@ -582,7 +590,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		var loopErr string
 
 		for ev := range ch {
-			if interrupted {
+			if interrupted.Load() {
 				stopReason = "interrupted"
 				break
 			}
@@ -689,7 +697,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		// 更新终端标题（与 bash 版 store_stats_update 后调 display_term_title 一致）
 		a.display.SetTitle(a.store.FormatTitle(a.cfg.Model))
 
-		if interrupted {
+		if interrupted.Load() {
 			a.EmitDisplay(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
 			a.emitJSON(map[string]interface{}{"type": "stop", "reason": "interrupted"})
 			return nil

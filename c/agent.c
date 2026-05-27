@@ -433,38 +433,50 @@ static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayM
  * 核心逻辑：累积 per-token 的 text/thinking 事件为完整块，然后推送 DisplayMessage。
  * ============================================================ */
 
-/* 最近 N 轮事件的起始行号 */
-static int find_recent_turn_start(const SessionPaths *paths, int max_turns) {
-    char **lines = NULL;
-    int count = 0;
-    if (store_event_lines(paths, &lines, &count) != 0 || count == 0) return -1;
+/* 最近 N 轮事件的起始文件偏移。只记录 user_input 偏移，避免启动 replay 全量读 events.jsonl。 */
+static long find_recent_turn_start_offset(const SessionPaths *paths, int max_turns) {
+    FILE *f = fopen(paths->events, "r");
+    if (!f) return -1;
 
-    int user_input_count = 0;
-    int start_line = -1;
-    for (int i = count - 1; i >= 0; i--) {
-        if (strstr(lines[i], "\"type\":\"user_input\"")) {
-            user_input_count++;
-            start_line = i;
-            if (user_input_count >= max_turns) break;
+    if (max_turns <= 0) max_turns = 10;
+    long *offsets = calloc((size_t)max_turns, sizeof(long));
+    if (!offsets) {
+        fclose(f);
+        return -1;
+    }
+
+    char *line = NULL;
+    size_t cap = 0;
+    int seen = 0;
+    for (;;) {
+        long pos = ftell(f);
+        ssize_t n = getline(&line, &cap, f);
+        if (n < 0) break;
+        if (strstr(line, "\"type\":\"user_input\"")) {
+            offsets[seen % max_turns] = pos;
+            seen++;
         }
     }
 
-    /* 释放 */
-    for (int i = 0; i < count; i++) free(lines[i]);
-    free(lines);
+    long start = 0;
+    if (seen > 0) {
+        start = (seen >= max_turns) ? offsets[seen % max_turns] : offsets[0];
+    }
 
-    return start_line;
+    free(line);
+    free(offsets);
+    fclose(f);
+    return start;
 }
 
 void agent_replay_events(Agent *agent, int max_turns) {
-    char **lines = NULL;
-    int count = 0;
-    if (store_event_lines(&agent->paths, &lines, &count) != 0 || count == 0) return;
+    long start = find_recent_turn_start_offset(&agent->paths, max_turns);
+    if (start < 0) return;
 
-    int start = find_recent_turn_start(&agent->paths, max_turns);
-    if (start < 0) {
-        for (int i = 0; i < count; i++) free(lines[i]);
-        free(lines);
+    FILE *f = fopen(agent->paths.events, "r");
+    if (!f) return;
+    if (fseek(f, start, SEEK_SET) != 0) {
+        fclose(f);
         return;
     }
 
@@ -473,8 +485,15 @@ void agent_replay_events(Agent *agent, int max_turns) {
     sb_init(&acc_text);
     sb_init(&acc_thinking);
 
-    for (int i = start; i < count; i++) {
-        const char *line = lines[i];
+    char *line = NULL;
+    size_t line_cap = 0;
+    while (getline(&line, &line_cap, f) >= 0) {
+        size_t line_len = strlen(line);
+        while (line_len > 0 && (line[line_len - 1] == '\n' || line[line_len - 1] == '\r')) {
+            line[--line_len] = '\0';
+        }
+        if (line_len == 0) continue;
+
         JsonParse jp = json_parse_root(line);
         if (jp.error) {  continue; }
 
@@ -671,8 +690,8 @@ void agent_replay_events(Agent *agent, int max_turns) {
 
     sb_free(&acc_text);
     sb_free(&acc_thinking);
-    for (int i = 0; i < count; i++) free(lines[i]);
-    free(lines);
+    free(line);
+    fclose(f);
 }
 
 /* ============================================================
@@ -1504,12 +1523,22 @@ static void prompt_append_attr_escaped(StrBuf *buf, const char *src) {
 static void prompt_append_section(StrBuf *buf, const char *tag,
                                    const char *content, const char *name) {
     if (!content || !content[0]) return;
+    size_t content_len = strlen(content);
+    while (content_len > 0 &&
+           (content[content_len - 1] == '\n' || content[content_len - 1] == '\r')) {
+        content_len--;
+    }
+    if (content_len == 0) return;
     if (name && name[0]) {
         sb_appendf(buf, "<%s name=\"", tag);
         prompt_append_attr_escaped(buf, name);
-        sb_appendf(buf, "\">\n%s\n</%s>\n", content, tag);
+        sb_append(buf, "\">\n");
+        sb_appendn(buf, content, content_len);
+        sb_appendf(buf, "\n</%s>\n", tag);
     } else {
-        sb_appendf(buf, "<%s>\n%s\n</%s>\n", tag, content, tag);
+        sb_appendf(buf, "<%s>\n", tag);
+        sb_appendn(buf, content, content_len);
+        sb_appendf(buf, "\n</%s>\n", tag);
     }
 }
 

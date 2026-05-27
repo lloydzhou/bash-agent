@@ -133,6 +133,7 @@ func NewHTTPTransport(cfg Config) *HTTPTransport {
 func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 	var stopEmitted bool
 	defer resp.Body.Close()
+	defer close(ch)
 	defer func() {
 		if !stopEmitted {
 			// No message_stop received — stream was interrupted (connection reset,
@@ -141,7 +142,6 @@ func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 			ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
 		}
 	}()
-	defer close(ch)
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

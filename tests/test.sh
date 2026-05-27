@@ -3243,54 +3243,134 @@ test_agent_plan_confirm_mv() {
     rm -rf "$home_dir"
 }
 
-# Test 47: system prompt format — no extra blank lines before closing tags (SP1/SP2)
+# Test 47: system prompt golden — current AGENT must produce the byte-exact expected prompt
 test_agent_system_prompt_format() {
-    info "Test 47: system prompt format (SP1/SP2 — no extra blank lines before closing tags)"
-    local home_dir last_body
+    info "Test 47: system prompt byte-exact golden"
+    local home_dir project_dir session_id project_key_value project_storage candidate_agent
+    local expected_prompt actual_prompt candidate_err diff_file platform prompt_shell
     home_dir=$(mktemp -d)
+    project_dir="$home_dir/project"
+    session_id="system-prompt-parity"
+    case "$AGENT" in
+        /*) candidate_agent="$AGENT" ;;
+        *) candidate_agent="$ROOT_DIR/${AGENT#./}" ;;
+    esac
 
-    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'SP_FORMAT_CHECK' >/dev/null 2>&1 || true
+    mkdir -p "$project_dir" "$home_dir/.bash-agent"
+    project_dir="$(cd "$project_dir" && pwd -P)"
+    mkdir -p "$project_dir/skills/parity-skill"
+    cat > "$project_dir/AGENTS.md" <<'EOF'
+Project instruction fixture.
+Keep this text stable for system prompt parity checks.
+EOF
+    cat > "$project_dir/skills/parity-skill/SKILL.md" <<'EOF'
+# Parity Skill
 
-    last_body=$(curl -sS "$BASE/last-request" 2>/dev/null)
-    if [[ -z "$last_body" ]]; then
-        red "system prompt format: no last request captured"; ((FAIL++)) || true
-        rm -rf "$home_dir"; return
-    fi
+Use this fixture skill only for system prompt parity tests.
+Base path token: ${BASH_AGENT_SKILL_DIR}
+EOF
 
-    # Extract system prompt content from request body
-    local sp_check
-    sp_check=$(echo "$last_body" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-body = json.loads(d.get('body','{}'))
-msgs = body.get('messages', [])
-for m in msgs:
-    if m.get('role') == 'user':
-        content = m.get('content', '')
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get('type') == 'text':
-                    content = block.get('text', '')
-                    break
-        if '</instruction-files>' in content:
-            # Check no double newline before closing tag
-            if '\\n\\n</instruction-files>' in content:
-                print('EXTRA_NEWLINE_INSTRUCTION')
-            else:
-                print('OK_INSTRUCTION')
-        if '</selected-skills>' in content:
-            if '\\n\\n</selected-skills>' in content:
-                print('EXTRA_NEWLINE_SKILLS')
-            else:
-                print('OK_SKILLS')
-        break
-" 2>/dev/null)
+    project_key_value="$(cd "$project_dir" && project_key)"
+    project_storage="$home_dir/.bash-agent/projects/$project_key_value/$session_id"
+    mkdir -p "$project_storage"
+    cat > "$project_storage/plan.md" <<'EOF'
+1. Keep the fixture plan stable.
+2. Compare generated system prompts exactly.
+EOF
+    cat > "$project_storage/summary.txt" <<'EOF'
+Task focus: system prompt parity fixture.
+Latest request: compare prompt construction across runtimes.
+Progress: fixture seeded before agent execution.
+Tool evidence: none.
+Reflections: exact prompt drift must fail this test.
+EOF
+    : > "$project_storage/conversation.jsonl"
+    : > "$project_storage/events.jsonl"
+    : > "$project_storage/plan.draft"
+    : > "$project_storage/stats.json"
 
-    if [[ "$sp_check" == *"EXTRA_NEWLINE"* ]]; then
-        red "system prompt format: extra blank line before closing tag ($sp_check)"; ((FAIL++)) || true
-    else
-        green "system prompt format: no extra blank lines before closing tags"; ((PASS++)) || true
-    fi
+    expected_prompt="$home_dir/expected.system"
+    actual_prompt="$home_dir/actual.system"
+    candidate_err="$home_dir/candidate.err"
+    diff_file="$home_dir/system.diff"
+    platform="$(uname -s 2>/dev/null || printf unknown)"
+    prompt_shell="${SHELL:-/bin/sh}"
+
+    extract_system_prompt() {
+        local marker="$1"
+        curl -sS "$BASE/last-request" 2>/dev/null | EXPECTED_MARKER="$marker" python3 -c '
+import json, os, sys
+try:
+    captured = json.load(sys.stdin)
+    body = json.loads(captured.get("body", "{}"))
+except Exception as exc:
+    print(f"failed to parse captured request: {exc}", file=sys.stderr)
+    sys.exit(2)
+marker = os.environ["EXPECTED_MARKER"]
+if marker not in json.dumps(body.get("messages", []), ensure_ascii=False):
+    print("captured request did not contain expected marker", file=sys.stderr)
+    sys.exit(3)
+system = body.get("system")
+if not isinstance(system, str) or not system:
+    print("captured request has no top-level system prompt", file=sys.stderr)
+    sys.exit(4)
+sys.stdout.write(system)
+'
+    }
+
+    render_expected_system_prompt() {
+        local template_file="$1"
+        EXPECTED_HOME="$home_dir" \
+        EXPECTED_PROJECT="$project_dir" \
+        EXPECTED_PROJECT_KEY="$project_key_value" \
+        EXPECTED_PLATFORM="$platform" \
+        EXPECTED_SHELL="$prompt_shell" \
+        python3 - "$template_file" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+template = Path(sys.argv[1]).read_text()
+template = template.replace("__HOME__", os.environ["EXPECTED_HOME"])
+template = template.replace("__PROJECT__", os.environ["EXPECTED_PROJECT"])
+template = template.replace("__PROJECT_KEY__", os.environ["EXPECTED_PROJECT_KEY"])
+template = template.replace("__PLATFORM__", os.environ["EXPECTED_PLATFORM"])
+template = template.replace("__SHELL__", os.environ["EXPECTED_SHELL"])
+if template.endswith("\n"):
+    template = template[:-1]
+sys.stdout.write(template)
+PY
+    }
+
+    check_system_prompt_locale() {
+        local locale_name="$1" locale_value="$2" template_file="$3" marker="$4"
+        render_expected_system_prompt "$template_file" > "$expected_prompt"
+
+        (
+            cd "$project_dir" &&
+            BASH_AGENT_HOME="$home_dir" HOME="$home_dir" SHELL="$prompt_shell" \
+            LANG="$locale_value" LC_ALL="$locale_value" \
+            "$candidate_agent" -p claude --base-url "$BASE/v1" -m test --api-key test \
+                --session "$session_id" --skill parity-skill "$marker" \
+                >/dev/null 2>"$candidate_err"
+        ) || true
+        if ! extract_system_prompt "$marker" > "$actual_prompt"; then
+            red "system prompt golden ($locale_name): failed to capture candidate prompt"; cat "$candidate_err" 2>/dev/null; ((FAIL++)) || true
+            return
+        fi
+
+        if cmp -s "$expected_prompt" "$actual_prompt"; then
+            green "system prompt golden ($locale_name): byte-exact match"; ((PASS++)) || true
+        else
+            red "system prompt golden ($locale_name): differs from expected bytes"
+            diff -u "$expected_prompt" "$actual_prompt" > "$diff_file" || true
+            sed -n '1,160p' "$diff_file"
+            ((FAIL++)) || true
+        fi
+    }
+
+    check_system_prompt_locale "en_US" "en_US.UTF-8" "$ROOT_DIR/tests/fixtures/system_prompt_expected.txt" "SYSTEM_PROMPT_GOLDEN_EN"
+    check_system_prompt_locale "zh_CN" "zh_CN.UTF-8" "$ROOT_DIR/tests/fixtures/system_prompt_expected_zh_CN.txt" "SYSTEM_PROMPT_GOLDEN_ZH"
 
     rm -rf "$home_dir"
 }

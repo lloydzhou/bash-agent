@@ -1182,17 +1182,19 @@ pub mod prompt {
                 self.plan_draft_file.display().to_string()
             };
             let plan_lifecycle_guidance = format!(
-                "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n\
-                 - **Files**: PLAN_DRAFT_FILE: {} | PLAN_FILE: {}\n\
-                 - **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n\
-                 - **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n\
-                   Every user reply MUST be classified as exactly ONE of:\n\
-                   ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n\
-                   ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n\
-                   ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n\
-                   ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n\
-                 - **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n\
-                 - **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.",
+                concat!(
+                    "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n",
+                    "- **Files**: PLAN_DRAFT_FILE: {} | PLAN_FILE: {}\n",
+                    "- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n",
+                    "- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n",
+                    "  Every user reply MUST be classified as exactly ONE of:\n",
+                    "  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n",
+                    "  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n",
+                    "  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n",
+                    "  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n",
+                    "- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n",
+                    "- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix."
+                ),
                 plan_draft_file_display, plan_file_display
             );
             sections.push(wrap_section(
@@ -1238,14 +1240,14 @@ pub mod prompt {
             if let Some(f) = global_file {
                 out.push(wrap_section(
                     "instruction-file",
-                    &fs::read_to_string(f)?,
+                    &trim_trailing_newlines(fs::read_to_string(f)?),
                     Some("global"),
                 ));
             }
             if let Some(f) = project_file {
                 out.push(wrap_section(
                     "instruction-file",
-                    &fs::read_to_string(f)?,
+                    &trim_trailing_newlines(fs::read_to_string(f)?),
                     Some("project"),
                 ));
             }
@@ -1308,7 +1310,7 @@ pub mod prompt {
                         "skill not found: {skill} (expected .claude/skills/{skill}/SKILL.md or ~/.claude/skills/{skill}/SKILL.md)"
                     ));
                 };
-                let content = fs::read_to_string(&skill_file)?;
+                let content = trim_trailing_newlines(fs::read_to_string(&skill_file)?);
                 let full = format!(
                     "Base directory: {}\n\n{}",
                     skill_file.parent().unwrap_or(Path::new("")).display(),
@@ -1328,6 +1330,7 @@ pub mod prompt {
     }
 
     fn wrap_section(tag: &str, content: &str, name: Option<&str>) -> String {
+        let content = content.trim_end_matches(['\r', '\n']);
         if content.is_empty() {
             return String::new();
         }
@@ -1358,12 +1361,19 @@ pub mod prompt {
         if !path.exists() {
             return Ok(None);
         }
-        let s = fs::read_to_string(path)?;
+        let s = trim_trailing_newlines(fs::read_to_string(path)?);
         if s.trim().is_empty() {
             Ok(None)
         } else {
             Ok(Some(s))
         }
+    }
+
+    fn trim_trailing_newlines(mut s: String) -> String {
+        while s.ends_with('\n') || s.ends_with('\r') {
+            s.pop();
+        }
+        s
     }
 
     fn find_skill_base_dirs(cwd: &Path, home: &Path) -> Vec<PathBuf> {
@@ -1464,8 +1474,6 @@ pub mod traits {
         fn get_messages(&self) -> Result<Vec<Message>>;
         fn append_event(&self, event: &str) -> Result<()>;
     }
-
-
     pub trait Transport: Send + Sync {
         fn convert_body(&self, claude_body: &[u8]) -> Result<Vec<u8>>;
         fn parse_sse(
