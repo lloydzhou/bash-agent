@@ -125,6 +125,7 @@ func UtilIsStreamJSON(format string) bool {
 
 // UtilAppendSection 构建标签包裹的段落（对应 bash 的 util_append_section）
 func UtilAppendSection(out *strings.Builder, tag, content, name string) {
+	content = strings.TrimRight(content, "\r\n")
 	if content == "" {
 		return
 	}
@@ -196,7 +197,7 @@ func UtilReadOptional(path string) (string, error) {
 	if err != nil || len(data) == 0 {
 		return "", nil
 	}
-	return string(data), nil
+	return strings.TrimRight(string(data), "\r\n"), nil
 }
 
 // UtilFindSkillDirs 查找 skill 目录列表

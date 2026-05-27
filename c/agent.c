@@ -1523,12 +1523,22 @@ static void prompt_append_attr_escaped(StrBuf *buf, const char *src) {
 static void prompt_append_section(StrBuf *buf, const char *tag,
                                    const char *content, const char *name) {
     if (!content || !content[0]) return;
+    size_t content_len = strlen(content);
+    while (content_len > 0 &&
+           (content[content_len - 1] == '\n' || content[content_len - 1] == '\r')) {
+        content_len--;
+    }
+    if (content_len == 0) return;
     if (name && name[0]) {
         sb_appendf(buf, "<%s name=\"", tag);
         prompt_append_attr_escaped(buf, name);
-        sb_appendf(buf, "\">\n%s\n</%s>\n", content, tag);
+        sb_append(buf, "\">\n");
+        sb_appendn(buf, content, content_len);
+        sb_appendf(buf, "\n</%s>\n", tag);
     } else {
-        sb_appendf(buf, "<%s>\n%s\n</%s>\n", tag, content, tag);
+        sb_appendf(buf, "<%s>\n", tag);
+        sb_appendn(buf, content, content_len);
+        sb_appendf(buf, "\n</%s>\n", tag);
     }
 }
 
