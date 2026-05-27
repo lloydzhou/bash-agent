@@ -24,7 +24,7 @@ use crate::ffi;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fs;
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::io::IntoRawFd;
 use std::path::PathBuf;
@@ -1868,34 +1868,46 @@ impl Agent {
     }
 
     fn replay_last_turns(&self) {
-        let events = match store::store_event_lines(&self.paths) {
-            Ok(events) => events,
+        let max_turns = 10usize;
+        let mut file = match fs::File::open(&self.paths.events) {
+            Ok(file) => file,
             Err(_) => return,
         };
-        if events.is_empty() {
-            return;
-        }
 
-        // Find boundaries of "turns" — each user_input event starts a turn
-        let mut turn_starts: Vec<usize> = Vec::new();
-        for (i, evt) in events.iter().enumerate() {
-            let t = evt.get("type").and_then(Value::as_str).unwrap_or("");
-            if t == "user_input" || t == "user_message" {
-                turn_starts.push(i);
+        let mut offsets = vec![0u64; max_turns];
+        let mut seen = 0usize;
+        let mut reader = BufReader::new(file);
+        let mut pos = 0u64;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = match reader.read_line(&mut line) {
+                Ok(n) => n,
+                Err(_) => return,
+            };
+            if n == 0 {
+                break;
             }
+            if line.contains("\"type\":\"user_input\"") || line.contains("\"type\":\"user_message\"") {
+                offsets[seen % max_turns] = pos;
+                seen += 1;
+            }
+            pos += n as u64;
         }
-        if turn_starts.is_empty() {
+        if seen == 0 {
             return;
         }
 
-        // Keep last 10 turns (match bash)
-        let keep = turn_starts.len().saturating_sub(10);
-        let start_idx = if keep < turn_starts.len() {
-            turn_starts[keep]
+        let start_offset = if seen >= max_turns {
+            offsets[seen % max_turns]
         } else {
-            0
+            offsets[0]
         };
-        let had_turns = turn_starts.len().saturating_sub(keep) > 0;
+
+        file = reader.into_inner();
+        if file.seek(SeekFrom::Start(start_offset)).is_err() {
+            return;
+        }
 
         let mut ds = DisplayState {
             last_char: "\n".to_string(),
@@ -1904,7 +1916,15 @@ impl Agent {
         let mut acc_text = String::new();
         let mut acc_thinking = String::new();
 
-        for evt in &events[start_idx..] {
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            let Ok(line) = line else { continue };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(evt) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             let evt_type = evt.get("type").and_then(Value::as_str).unwrap_or("");
             match evt_type {
                 "session_start" | "usage" | "stop" | "retry" => continue,
@@ -2023,10 +2043,8 @@ impl Agent {
             }
         }
         Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
-        if had_turns {
-            self.queue_display_only(DisplayEvent::Text("\n".to_string()));
-            self.flush_display();
-        }
+        self.queue_display_only(DisplayEvent::Text("\n".to_string()));
+        self.flush_display();
     }
 
     /// Flush accumulated text/thinking through display_replay_event.

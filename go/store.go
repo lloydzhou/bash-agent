@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,35 +274,64 @@ func (s *FileStore) GetRecentEvents(maxUserTurns int) []string {
 	if file == "" {
 		return nil
 	}
-
-	data, err := os.ReadFile(file)
-	if err != nil || len(data) == 0 {
-		return nil
+	if maxUserTurns <= 0 {
+		maxUserTurns = 10
 	}
 
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	f, err := os.Open(file)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
 
-	// 找所有包含 "type":"user_input" 的行号
-	var userInputLines []int
-	for i, line := range lines {
-		if strings.Contains(line, `"type":"user_input"`) || strings.Contains(line, `"type":"user_input"`) {
-			userInputLines = append(userInputLines, i)
+	offsets := make([]int64, maxUserTurns)
+	reader := bufio.NewReader(f)
+	var pos int64
+	seen := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if line != "" {
+			if strings.Contains(line, `"type":"user_input"`) {
+				offsets[seen%maxUserTurns] = pos
+				seen++
+			}
+			pos += int64(len(line))
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil
 		}
 	}
-
-	// 没有用户输入事件 → 不 replay
-	if len(userInputLines) == 0 {
+	if seen == 0 {
 		return nil
 	}
 
-	// 取最后 maxUserTurns 个 user_input 的第一个
-	start := len(userInputLines) - maxUserTurns
-	if start < 0 {
-		start = 0
+	startOffset := offsets[0]
+	if seen >= maxUserTurns {
+		startOffset = offsets[seen%maxUserTurns]
 	}
-	fromLine := userInputLines[start]
+	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		return nil
+	}
 
-	return lines[fromLine:]
+	reader = bufio.NewReader(f)
+	var lines []string
+	for {
+		line, err := reader.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if line != "" {
+			lines = append(lines, line)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil
+		}
+	}
+	return lines
 }
 
 // ─── Conversation ───
