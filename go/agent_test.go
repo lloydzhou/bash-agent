@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -516,6 +518,31 @@ func TestSSEParser(t *testing.T) {
 	bt, tn, tid = tr.handleBlockStart(`{"type":"content_block_start","content_block":{"type":"tool_use","name":"Read","id":"toolu_123"}}`)
 	if bt != "tool" || tn != "Read" || tid != "toolu_123" {
 		t.Errorf("handleBlockStart tool: bt=%q tn=%q tid=%q", bt, tn, tid)
+	}
+}
+
+func TestSSEParserInterruptedStreamClosesAfterFallbackEvents(t *testing.T) {
+	cfg := DefaultConfig()
+	tr := NewHTTPTransport(cfg)
+	resp := &http.Response{
+		Body: io.NopCloser(strings.NewReader("")),
+	}
+	ch := make(chan Event, 2)
+
+	tr.parseSSEStream(resp, ch)
+
+	var events []Event
+	for ev := range ch {
+		events = append(events, ev)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(events))
+	}
+	if events[0].Type != EventError {
+		t.Fatalf("first event = %v, want EventError", events[0].Type)
+	}
+	if events[1].Type != EventStop || len(events[1].Fields) < 2 || events[1].Fields[1] != "error" {
+		t.Fatalf("second event = %#v, want STOP error", events[1])
 	}
 }
 

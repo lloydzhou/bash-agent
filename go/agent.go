@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -543,17 +544,22 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	_ = a.store.IncrementTurn()
 
 	// 中断处理：用 context.WithCancel 包装，Ctrl+C 同时取消 context（取消 HTTP 请求）
-	interrupted := false
+	var interrupted atomic.Bool
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
+	sigDone := make(chan struct{})
 	signal.Notify(sigCh, syscall.SIGINT)
 	defer signal.Stop(sigCh)
+	defer close(sigDone)
 
 	go func() {
-		<-sigCh
-		interrupted = true
-		cancel()
+		select {
+		case <-sigCh:
+			interrupted.Store(true)
+			cancel()
+		case <-sigDone:
+		}
 	}()
 
 	for turn := 0; turn < a.cfg.MaxTurns; turn++ {
@@ -584,7 +590,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		var loopErr string
 
 		for ev := range ch {
-			if interrupted {
+			if interrupted.Load() {
 				stopReason = "interrupted"
 				break
 			}
@@ -691,7 +697,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		// 更新终端标题（与 bash 版 store_stats_update 后调 display_term_title 一致）
 		a.display.SetTitle(a.store.FormatTitle(a.cfg.Model))
 
-		if interrupted {
+		if interrupted.Load() {
 			a.EmitDisplay(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
 			a.emitJSON(map[string]interface{}{"type": "stop", "reason": "interrupted"})
 			return nil
