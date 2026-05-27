@@ -8,6 +8,28 @@
 
 ---
 
+## [4.0.2] - 2026-05-27
+
+> **Bugfix 版本**：降低长 session replay 内存占用，补齐 system prompt 字节级一致性测试，并修复 Go 版 Ctrl+C 中断时的 channel panic。
+
+### Fixed
+
+- C/Go/Rust replay 改为从最近事件 offset 按行流式读取，避免进入长 session 时把完整 `events.jsonl` 加载到内存
+- Go SSE stream 中断兜底事件发送顺序修复，避免 Ctrl+C 或连接提前结束时出现 `panic: send on closed channel`
+- Go SIGINT 处理改为 `atomic.Bool` + 退出信号，避免交互多轮后遗留信号 goroutine 和数据竞争
+- C/Go/Rust section append/wrap 统一裁剪尾部 CR/LF，避免 instruction file / selected skill 末尾多余空行导致 system prompt 漂移
+- Rust `plan-lifecycle-guidance` 缩进修复，与 Bash/C/Go 逐字一致
+- Go instruction file section 构造改为复用 `UtilAppendSection`，与其它 prompt section 使用同一格式化路径
+
+### Tests
+
+- 新增 system prompt byte-exact golden 测试，直接比较请求体 top-level `system`
+- 覆盖 `en_US` 和 `zh_CN` 两种 locale，验证多语言 system prompt 构造一致性
+- golden 中的 home、project path、project key、platform、shell 均参数化，避免机器相关路径导致误报
+- 新增 Go SSE 中断流回归测试，覆盖无 `message_stop` 的提前结束路径
+
+---
+
 ## [4.0.1] - 2026-05-27
 
 > **Bugfix 版本**：修复 cagent 统计/缓存/显示相关问题，并统一 C/Go/Rust display queue 层级。
@@ -760,7 +782,9 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.2...HEAD
+[4.0.2]: https://github.com/lloydzhou/bash-agent/compare/v4.0.1...v4.0.2
+[4.0.1]: https://github.com/lloydzhou/bash-agent/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/lloydzhou/bash-agent/compare/v3.0.7...v4.0.0
 [3.0.7]: https://github.com/lloydzhou/bash-agent/compare/v3.0.6...v3.0.7
 [3.0.4]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...v3.0.4
