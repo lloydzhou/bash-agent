@@ -844,7 +844,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'BASH_BLOCK_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'command blocked by bash safety policy' in body and b'dangerous command prefix' in body:
+                if b'command blocked by bash safety policy' in body and b'required=' in body and b'allowed=' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_bash_block_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -872,7 +872,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'BASH_DELETE_BLOCK_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'system path write' in body:
+                if b'command blocked by bash safety policy' in body and b'required=' in body and b'allowed=' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_bash_delete_block_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -1999,7 +1999,8 @@ test_agent_bash_blocked_command() {
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_BLOCK_MARKER' 2>&1) || true
     if [[ "$output" == *"[tool] Bash(sudo echo blocked)"* ]] && \
        [[ "$output" == *"Error: command blocked by bash safety policy"* ]] && \
-       [[ "$output" == *"dangerous command prefix"* ]]; then
+       [[ "$output" == *"required="* ]] && \
+       [[ "$output" == *"allowed="* ]]; then
         green "Agent bash safety policy"; ((PASS++)) || true
     else
         red "Agent bash safety policy"; echo "  Output: $output"; ((FAIL++)) || true
@@ -2011,7 +2012,8 @@ test_agent_bash_blocked_delete_command() {
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_DELETE_BLOCK_MARKER' 2>&1) || true
     if [[ "$output" == *"[tool] Bash(find /etc -name example -delete)"* ]] && \
-       [[ "$output" == *"system path write"* ]]; then
+       [[ "$output" == *"required="* ]] && \
+       [[ "$output" == *"allowed="* ]]; then
         green "Agent bash blocks system writes"; ((PASS++)) || true
     else
         red "Agent bash blocks system writes"; echo "  Output: $output"; ((FAIL++)) || true

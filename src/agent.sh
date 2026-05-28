@@ -726,13 +726,6 @@ tool_bash_mode_normalize() {
     [[ "$mode" =~ ^[0-7][0-7][0-7][0-7]$ ]] && printf '%s' "$mode" || printf '0000'
 }
 
-tool_bash_note() {
-    local reason="$1"
-    [[ -n "$reason" ]] || return 0
-    [[ -n "${TOOL_BASH_POLICY_REASONS:-}" ]] && TOOL_BASH_POLICY_REASONS+="; "
-    TOOL_BASH_POLICY_REASONS+="$reason"
-}
-
 TOOL_BASH_RE_ROOT_DELETE='(^|[[:space:];|&])rm[[:space:]]+-[^[:space:]]*[rf][^[:space:]]*[[:space:]]+/([[:space:]]|$)'
 TOOL_BASH_RE_SYSTEM_PATH='(^|[[:space:]"'\''])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[[:space:]"'\'']|$)'
 TOOL_BASH_RE_SENSITIVE_PATH='(^|[[:space:]"'\''])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])([^[:space:]"'\'']*\.(env|pem|key)|[^[:space:]"'\'']*(token|credential|secret)[^[:space:]"'\'']*)'
@@ -740,75 +733,62 @@ TOOL_BASH_RE_EXTERNAL_PATH='(^|[[:space:]"'\''])(~|\$home)(/|[[:space:]"'\'']|$)
 TOOL_BASH_RE_DEVICE_WRITE='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
 
 tool_bash_add_mode() {
-    local scopes="$1" perms="$2" reason="${3:-command}"
+    local scopes="$1" perms="$2"
     TOOL_BASH_REQUIRED_MASK=$(( TOOL_BASH_REQUIRED_MASK | ((scopes & 8 ? perms << 9 : 0)) | ((scopes & 4 ? perms << 6 : 0)) | ((scopes & 2 ? perms << 3 : 0)) | ((scopes & 1 ? perms : 0)) ))
-    (( perms & 4 )) && tool_bash_note "$reason read"
-    (( perms & 2 )) && tool_bash_note "$reason write"
-    (( perms & 1 )) && tool_bash_note "$reason execute"
-}
-
-tool_bash_scope_path() {
-    local p="$1"
-    p="${p#\"}"; p="${p%\"}"; p="${p#\'}"; p="${p%\'}"
-    p="${p#of=}"; p="${p%;}"; p="${p%,}"; p="${p%)}"
-    TOOL_BASH_PATH_SCOPE=1
-    TOOL_BASH_PATH_REASON="workspace"
-    [[ -z "$p" || "$p" == /tmp || "$p" == /tmp/* || "$p" == /dev/null || "$p" == '&'* ]] && { TOOL_BASH_PATH_SCOPE=0; return; }
-    if [[ "$p" == /dev/tcp* ]]; then
-        TOOL_BASH_PATH_SCOPE=2; TOOL_BASH_PATH_REASON="network"
-    elif [[ "$p" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]]; then
-        TOOL_BASH_PATH_SCOPE=8; TOOL_BASH_PATH_REASON="sensitive path"
-    elif [[ "$p" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
-        TOOL_BASH_PATH_SCOPE=8; TOOL_BASH_PATH_REASON="system path"
-    elif [[ "$p" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$p" == *..* ]]; then
-        TOOL_BASH_PATH_SCOPE=4; TOOL_BASH_PATH_REASON="external path"
-    fi
 }
 
 tool_bash_add_path() {
-    local path="$1" perms="$2"
-    tool_bash_scope_path "$path"
-    (( TOOL_BASH_PATH_SCOPE == 0 )) || tool_bash_add_mode "$TOOL_BASH_PATH_SCOPE" "$perms" "$TOOL_BASH_PATH_REASON"
+    local path="$1" perms="$2" scope=1
+    path="${path#\"}"; path="${path%\"}"; path="${path#\'}"; path="${path%\'}"
+    path="${path#of=}"; path="${path%;}"; path="${path%,}"; path="${path%)}"
+    [[ -z "$path" || "$path" == /tmp || "$path" == /tmp/* || "$path" == /dev/null || "$path" == '&'* ]] && return 0
+    if [[ "$path" == /dev/tcp* ]]; then
+        scope=2
+    elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
+        scope=8
+    elif [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
+        scope=4
+    fi
+    tool_bash_add_mode "$scope" "$perms"
 }
 
 tool_bash_scan_segment() {
-    local seg="$1" tok prev="" path_bits=4 saw_write=false saw_path=false
-
+    local seg="$1" tok redir=0 path_bits=4 flags=0
     case "$seg" in
-        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 'dangerous command prefix' ;;
-        mkfs*|fdisk*|diskutil*|mount\ *|umount\ *) tool_bash_add_mode 8 2 'system' ;;
-        *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*) tool_bash_add_mode 2 4 'network' ;;
+        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 ;;
+        mkfs*|fdisk*|diskutil*|mount\ *|umount\ *) tool_bash_add_mode 8 2 ;;
+        *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*) tool_bash_add_mode 2 4 ;;
     esac
     case "$seg" in
-        git\ push*|*'scp '*|*'curl -d '*|*'curl --data'*|*'curl -f '*|*'curl -t '*) tool_bash_add_mode 2 2 'network' ;;
-        *'| bash'*|*'| sh'*|*'eval '*|*'source <('*|*'bash -c $('*|*'sh -c $('*) [[ "$seg" == *'curl '* || "$seg" == *'wget '* || "$seg" == *'http://'* || "$seg" == *'https://'* ]] && tool_bash_add_mode 2 1 'network' ;;
+        git\ push*|*'scp '*|*'curl -d '*|*'curl --data'*|*'curl -f '*|*'curl -t '*) tool_bash_add_mode 2 2 ;;
+        *'| bash'*|*'| sh'*|*'eval '*|*'source <('*|*'bash -c $('*|*'sh -c $('*) [[ "$seg" == *'curl '* || "$seg" == *'wget '* || "$seg" == *'http://'* || "$seg" == *'https://'* ]] && tool_bash_add_mode 2 1 ;;
     esac
-    [[ "$seg" =~ $TOOL_BASH_RE_ROOT_DELETE || "$seg" =~ $TOOL_BASH_RE_DEVICE_WRITE ]] && tool_bash_add_mode 8 2 'system'
+    [[ "$seg" =~ $TOOL_BASH_RE_ROOT_DELETE || "$seg" =~ $TOOL_BASH_RE_DEVICE_WRITE ]] && tool_bash_add_mode 8 2
     case "$seg" in
-        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 'workspace' ;;
+        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 ;;
     esac
     case "$seg" in
-        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) path_bits=6; saw_write=true ;;
+        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) path_bits=6; flags=1 ;;
     esac
-
     for tok in $seg; do
-        case "$prev" in '>'|'>>'|'1>'|'1>>') tool_bash_add_path "$tok" 2; saw_path=true ;; '<>') tool_bash_add_path "$tok" 6; saw_path=true ;; esac
-        prev=""
-        case "$tok" in '>'|'>>'|'1>'|'1>>'|'<>') prev="$tok"; continue ;; esac
-        [[ "$tok" == '2>'* || "$tok" == '2>>'* ]] && continue
-        [[ "$tok" == '>'* || "$tok" == '>>'* ]] && { tool_bash_add_path "${tok#*>}" 2; saw_path=true; continue; }
-        [[ "$tok" == '<>'* ]] && { tool_bash_add_path "${tok#<>}" 6; saw_path=true; continue; }
-        if [[ "$tok" == /* || "$tok" == ./* || "$tok" == ../* || "$tok" == ~/* || "$tok" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]]; then
-            tool_bash_add_path "$tok" "$path_bits"; saw_path=true
-        fi
+        (( redir )) && { tool_bash_add_path "$tok" "$redir"; flags=3; redir=0; continue; }
+        case "$tok" in
+            '>'|'>>'|'1>'|'1>>') redir=2; continue ;;
+            '<>') redir=6; continue ;;
+            '2>'*|'2>>'*) continue ;;
+            '>'*|'>>'*) tool_bash_add_path "${tok#*>}" 2; flags=3; continue ;;
+            '<>'*) tool_bash_add_path "${tok#<>}" 6; flags=3; continue ;;
+            /*|./*|../*|~/*) tool_bash_add_path "$tok" "$path_bits"; flags=3 ;;
+            *) [[ "$tok" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]] && { tool_bash_add_path "$tok" "$path_bits"; flags=3; } ;;
+        esac
     done
-    [[ "$saw_write" == true && "$saw_path" == false && "$seg" != *'/tmp/'* ]] && tool_bash_add_mode 1 2 'workspace'
+    (( flags == 1 )) && [[ "$seg" != *'/tmp/'* ]] && tool_bash_add_mode 1 2
 }
 
 tool_bash_scan_script() {
     local script="$1" normalized segment
     script=${script//$'\\\n'/ }
-    [[ "$script" == *'/dev/tcp'* ]] && tool_bash_add_mode 2 6 'network'
+    [[ "$script" == *'/dev/tcp'* ]] && tool_bash_add_mode 2 6
     normalized=${script//&&/$'\n'}
     normalized=${normalized//||/$'\n'}
     normalized=${normalized//;/$'\n'}
@@ -823,17 +803,10 @@ tool_bash_scan_script() {
 tool_classify_bash_required_mode() {
     local cmd="$1" lowered
     TOOL_BASH_REQUIRED_MASK=0
-    TOOL_BASH_POLICY_REASONS=""
-
     [[ -z "$cmd" ]] && { TOOL_BASH_REQUIRED_MODE="0000"; printf '%s' "$TOOL_BASH_REQUIRED_MODE"; return 0; }
     lowered=$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')
-
     tool_bash_scan_script "$lowered"
-
-    if (( TOOL_BASH_REQUIRED_MASK == 0 )); then
-        tool_bash_add_mode 1 4 'workspace'
-    fi
-
+    (( TOOL_BASH_REQUIRED_MASK == 0 )) && tool_bash_add_mode 1 4
     printf -v TOOL_BASH_REQUIRED_MODE '%04o' "$TOOL_BASH_REQUIRED_MASK"
     printf '%s' "$TOOL_BASH_REQUIRED_MODE"
 }
@@ -888,14 +861,13 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" allowed_mode required_mode reason output tool_rc tmpout
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" allowed_mode required_mode tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
     allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0447}")
     tool_classify_bash_required_mode "$cmd" >/dev/null
     required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
-    reason="${TOOL_BASH_POLICY_REASONS:-requires $required_mode}"
     if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
-        echo "Error: command blocked by bash safety policy ($reason; required=$required_mode allowed=$allowed_mode)"
+        echo "Error: command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
         return 1
     fi
     tmpout=$(mktemp)
