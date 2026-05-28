@@ -189,6 +189,8 @@ fn print_usage() {
     println!("  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)");
     println!("  ANTHROPIC_BASE_URL      Claude API base URL");
     println!("  OPENAI_BASE_URL         OpenAI API base URL");
+    println!("  BASH_AGENT_HOME         Override base directory for session storage");
+    println!("  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0447)");
     println!("  MODEL                   Default model name");
 }
 

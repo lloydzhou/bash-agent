@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -41,14 +43,11 @@ type ToolDispatcher struct {
 	planConfirmFn   func() (string, error)
 	planClearFn     func() (string, error)
 	skillLoader     func(name string) (string, error)
-	bashSafetyCheck func(cmd string) string
 }
 
 // NewToolDispatcher 创建工具调度器
 func NewToolDispatcher(cfg Config) *ToolDispatcher {
-	td := &ToolDispatcher{cfg: cfg}
-	td.bashSafetyCheck = ToolDenyBashReason
-	return td
+	return &ToolDispatcher{cfg: cfg}
 }
 
 // SetSubAgentLauncher 设置子 agent 启动回调
@@ -281,17 +280,166 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 	return fmt.Sprintf("Edit(%s) [+%d -%d lines]", p, added, removed), nil
 }
 
+var (
+	toolBashReRootDelete   = regexp.MustCompile(`(^|[\s;|&])rm\s+-[^\s]*[rf][^\s]*\s+/(\s|$)`)
+	toolBashReSystemPath   = regexp.MustCompile(`(^|[\s"'` + "`" + `])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[\s"'` + "`" + `]|$)`)
+	toolBashReSensitive    = regexp.MustCompile(`(^|[\s"'` + "`" + `])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[\s"'` + "`" + `]|$)|(^|[\s"'` + "`" + `])([^\s"'` + "`" + `]*\.(env|pem|key)|[^\s"'` + "`" + `]*(token|credential|secret)[^\s"'` + "`" + `]*)`)
+	toolBashReExternalPath = regexp.MustCompile(`(^|[\s"'` + "`" + `])(~|\$home)(/|[\s"'` + "`" + `]|$)|(^|[\s"'` + "`" + `])/[A-Za-z0-9._-]`)
+	toolBashReDeviceWrite  = regexp.MustCompile(`(^|[\s])(of=|>|1>|>>|1>>)\s*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([\s]|$)`)
+)
+
+func toolBashModeNormalize(mode string) string {
+	if mode == "" {
+		mode = "0447"
+	}
+	if len(mode) != 4 {
+		return "0000"
+	}
+	for _, ch := range mode {
+		if ch < '0' || ch > '7' {
+			return "0000"
+		}
+	}
+	return mode
+}
+
+func toolBashAddMode(mask *int, scopes, perms int) {
+	if scopes&8 != 0 {
+		*mask |= perms << 9
+	}
+	if scopes&4 != 0 {
+		*mask |= perms << 6
+	}
+	if scopes&2 != 0 {
+		*mask |= perms << 3
+	}
+	if scopes&1 != 0 {
+		*mask |= perms
+	}
+}
+
+func toolBashAddPath(mask *int, path string, perms int) {
+	scope := 1
+	path = strings.Trim(path, `"'`)
+	path = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(path, ";"), ","), ")")
+	path = strings.TrimPrefix(path, "of=")
+	if path == "" || path == "/tmp" || strings.HasPrefix(path, "/tmp/") || path == "/dev/null" || strings.HasPrefix(path, "&") {
+		return
+	}
+	if strings.HasPrefix(path, "/dev/tcp") {
+		scope = 2
+	} else if toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path) {
+		scope = 8
+	} else if toolBashReExternalPath.MatchString(path) || strings.Contains(path, "..") {
+		scope = 4
+	}
+	toolBashAddMode(mask, scope, perms)
+}
+
+func toolBashScanSegment(mask *int, seg string) {
+	flags, pathBits, redir := 0, 4, 0
+	switch {
+	case strings.HasPrefix(seg, "sudo "), strings.HasPrefix(seg, "su "), strings.HasPrefix(seg, "doas "), strings.HasPrefix(seg, "shutdown"), strings.HasPrefix(seg, "reboot"), strings.HasPrefix(seg, "halt"), strings.HasPrefix(seg, "poweroff"):
+		toolBashAddMode(mask, 8, 1)
+	case strings.HasPrefix(seg, "mkfs"), strings.HasPrefix(seg, "fdisk"), strings.HasPrefix(seg, "diskutil"), strings.HasPrefix(seg, "mount "), strings.HasPrefix(seg, "umount "):
+		toolBashAddMode(mask, 8, 2)
+	}
+	switch {
+	case strings.Contains(seg, "curl "), strings.Contains(seg, "wget "), strings.Contains(seg, "http "), strings.Contains(seg, "https://"), strings.Contains(seg, "http://"), strings.HasPrefix(seg, "git clone"), strings.HasPrefix(seg, "git fetch"), strings.HasPrefix(seg, "git pull"), strings.HasPrefix(seg, "git ls-remote"):
+		toolBashAddMode(mask, 2, 4)
+	}
+	switch {
+	case strings.HasPrefix(seg, "git push"), strings.Contains(seg, "scp "), strings.Contains(seg, "curl -d "), strings.Contains(seg, "curl --data"), strings.Contains(seg, "curl -f "), strings.Contains(seg, "curl -t "):
+		toolBashAddMode(mask, 2, 2)
+	case (strings.Contains(seg, "| bash") || strings.Contains(seg, "| sh") || strings.Contains(seg, "eval ") || strings.Contains(seg, "source <(") || strings.Contains(seg, "bash -c $(") || strings.Contains(seg, "sh -c $(")) &&
+		(strings.Contains(seg, "curl ") || strings.Contains(seg, "wget ") || strings.Contains(seg, "http://") || strings.Contains(seg, "https://")):
+		toolBashAddMode(mask, 2, 1)
+	}
+	if toolBashReRootDelete.MatchString(seg) || toolBashReDeviceWrite.MatchString(seg) {
+		toolBashAddMode(mask, 8, 2)
+	}
+	switch {
+	case strings.HasPrefix(seg, "./"), strings.HasPrefix(seg, "bash "), strings.HasPrefix(seg, "sh "), strings.HasPrefix(seg, "zsh "), strings.HasPrefix(seg, "python"), strings.HasPrefix(seg, "node "), strings.HasPrefix(seg, "ruby "), strings.HasPrefix(seg, "perl "), strings.HasPrefix(seg, "npm test"), strings.HasPrefix(seg, "npm run"), strings.HasPrefix(seg, "make"), strings.HasPrefix(seg, "cargo test"), strings.HasPrefix(seg, "cargo build"), strings.HasPrefix(seg, "go test"), strings.Contains(seg, "function "), strings.Contains(seg, "()"), strings.Contains(seg, "{"), strings.Contains(seg, " if "), strings.HasPrefix(seg, "if "), strings.Contains(seg, " for "), strings.HasPrefix(seg, "for "), strings.Contains(seg, " while "), strings.HasPrefix(seg, "while "), strings.Contains(seg, " case "), strings.HasPrefix(seg, "case "), strings.Contains(seg, ":(){:|:&};:"):
+		toolBashAddMode(mask, 1, 1)
+	}
+	switch {
+	case strings.Contains(seg, ">"), strings.Contains(seg, "tee "), strings.HasPrefix(seg, "mkdir "), strings.HasPrefix(seg, "touch "), strings.HasPrefix(seg, "cp "), strings.HasPrefix(seg, "mv "), strings.HasPrefix(seg, "rm "), strings.Contains(seg, " rm "), strings.Contains(seg, "sed -i"), strings.Contains(seg, " -delete"), strings.HasPrefix(seg, "git fetch"), strings.HasPrefix(seg, "git pull"), strings.HasPrefix(seg, "git clone"), strings.HasPrefix(seg, "npm install"), strings.HasPrefix(seg, "pnpm install"), strings.HasPrefix(seg, "yarn install"), strings.HasPrefix(seg, "cargo build"), strings.HasPrefix(seg, "go test"), strings.HasPrefix(seg, "npm test"):
+		pathBits, flags = 6, 1
+	}
+	for _, tok := range strings.Fields(seg) {
+		if redir != 0 {
+			toolBashAddPath(mask, tok, redir)
+			flags, redir = 3, 0
+			continue
+		}
+		switch {
+		case tok == ">" || tok == ">>" || tok == "1>" || tok == "1>>":
+			redir = 2
+		case tok == "<>":
+			redir = 6
+		case strings.HasPrefix(tok, "2>"):
+		case strings.HasPrefix(tok, ">") || strings.HasPrefix(tok, ">>"):
+			toolBashAddPath(mask, strings.TrimLeft(tok, ">"), 2)
+			flags = 3
+		case strings.HasPrefix(tok, "<>"):
+			toolBashAddPath(mask, strings.TrimPrefix(tok, "<>"), 6)
+			flags = 3
+		case strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "../") || strings.HasPrefix(tok, "~/"):
+			toolBashAddPath(mask, tok, pathBits)
+			flags = 3
+		case toolBashReSensitive.MatchString(tok):
+			toolBashAddPath(mask, tok, pathBits)
+			flags = 3
+		}
+	}
+	if flags == 1 && !strings.Contains(seg, "/tmp/") {
+		toolBashAddMode(mask, 1, 2)
+	}
+}
+
+func toolBashScanScript(script string) int {
+	mask := 0
+	script = strings.ReplaceAll(script, "\\\n", " ")
+	if strings.Contains(script, "/dev/tcp") {
+		toolBashAddMode(&mask, 2, 6)
+	}
+	replacer := strings.NewReplacer("&&", "\n", "||", "\n", ";", "\n")
+	for _, segment := range strings.Split(replacer.Replace(script), "\n") {
+		segment = strings.TrimSpace(segment)
+		if segment != "" {
+			toolBashScanSegment(&mask, segment)
+		}
+	}
+	return mask
+}
+
+func ToolClassifyBashRequiredMode(cmd string) string {
+	mask := 0
+	if cmd == "" {
+		return "0000"
+	}
+	mask = toolBashScanScript(strings.ToLower(cmd))
+	if mask == 0 {
+		toolBashAddMode(&mask, 1, 4)
+	}
+	return fmt.Sprintf("%04o", mask)
+}
+
+func ToolBashModeAllows(allowed, required string) bool {
+	allowedVal, _ := strconv.ParseInt(toolBashModeNormalize(allowed), 8, 32)
+	requiredVal, _ := strconv.ParseInt(toolBashModeNormalize(required), 8, 32)
+	return requiredVal&(4095^allowedVal) == 0
+}
+
 // toolBash 执行 shell 命令
 func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr string) (string, error) {
 	if cmd == "" {
 		return "", fmt.Errorf("no command provided")
 	}
-
-	// 安全检查
-	if td.bashSafetyCheck != nil {
-		if reason := td.bashSafetyCheck(cmd); reason != "" {
-			return "", fmt.Errorf("command blocked by bash safety policy (%s)", reason)
-		}
+	allowedMode := toolBashModeNormalize(os.Getenv("BASH_AGENT_BASH_MODE"))
+	requiredMode := ToolClassifyBashRequiredMode(cmd)
+	if !ToolBashModeAllows(allowedMode, requiredMode) {
+		return "", fmt.Errorf("Error: command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)", requiredMode, allowedMode)
 	}
 
 	timeoutSecs := td.cfg.ToolTimeoutSecs
@@ -605,4 +753,3 @@ func ExtractToolParams(name string, raw json.RawMessage) map[string]string {
 	}
 	return params
 }
-
