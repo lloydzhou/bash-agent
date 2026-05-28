@@ -252,10 +252,36 @@ jobs:
       - name: Show artifacts
         run: ls -lh dist
 
+      - name: Generate checksums
+        env:
+          ARCHIVE_URL: https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz
+        run: |
+          curl -fsSL "$ARCHIVE_URL" -o "dist/${{ github.ref_name }}.tar.gz"
+          (
+            cd dist
+            shasum -a 256 \
+              "${{ github.ref_name }}.tar.gz" \
+              agent.sh \
+              goagent-linux-amd64 \
+              goagent-linux-arm64 \
+              goagent-darwin-amd64 \
+              goagent-darwin-arm64 \
+              rustagent-linux-amd64 \
+              rustagent-linux-arm64 \
+              rustagent-darwin-amd64 \
+              rustagent-darwin-arm64 \
+              cagent-linux-amd64 \
+              cagent-linux-arm64 \
+              cagent-darwin-amd64 \
+              cagent-darwin-arm64 \
+              tcode > checksums.txt
+          )
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/checksums.txt
             dist/agent.sh
             dist/goagent-linux-amd64
             dist/goagent-linux-arm64
