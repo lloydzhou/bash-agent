@@ -864,7 +864,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Running blocked delete command.\"}}\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                     'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_bash_delete_block_1\",\"name\":\"Bash\",\"input\":{}}}\n\n',
-                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'find /tmp -name example -delete'})}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'find /etc -name example -delete'})}}) + '\n\n',
                     'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
@@ -872,7 +872,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         if b'BASH_DELETE_BLOCK_MARKER' in body and b'"tool_result"' in body:
             if path.startswith('/v1/messages'):
-                if b'blocked destructive find -delete pattern' in body:
+                if b'system path write' in body:
                     for c in [
                         'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_bash_delete_block_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
                         'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
@@ -2007,14 +2007,14 @@ test_agent_bash_blocked_command() {
 }
 
 test_agent_bash_blocked_delete_command() {
-    info "Test 25aa: Agent.sh bash blocks find -delete"
+    info "Test 25aa: Agent.sh bash blocks system writes"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_DELETE_BLOCK_MARKER' 2>&1) || true
-    if [[ "$output" == *"[tool] Bash(find /tmp -name example -delete)"* ]] && \
-       [[ "$output" == *"blocked destructive find -delete pattern"* ]]; then
-        green "Agent bash blocks find -delete"; ((PASS++)) || true
+    if [[ "$output" == *"[tool] Bash(find /etc -name example -delete)"* ]] && \
+       [[ "$output" == *"system path write"* ]]; then
+        green "Agent bash blocks system writes"; ((PASS++)) || true
     else
-        red "Agent bash blocks find -delete"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent bash blocks system writes"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 }
 

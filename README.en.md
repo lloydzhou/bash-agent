@@ -151,6 +151,7 @@ Supports readline input, resume info on exit, Ctrl+C to interrupt, Ctrl+D to cle
 | `OPENAI_BASE_URL` | OpenAI API base URL |
 | `JINA_API_KEY` | Jina AI API key (required for WebSearch/WebFetch tools) |
 | `BASH_AGENT_HOME` | Override session storage directory (default: `$HOME`) |
+| `BASH_AGENT_BASH_MODE` | Bash tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0447`) |
 | `THINKING_BUDGET` | Thinking token budget (default: `2048`) |
 
 DP algorithm environment variables:

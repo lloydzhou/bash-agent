@@ -18,6 +18,7 @@ TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
 VERBOSE=false
 : "${TOOL_RESULT_MAX_BYTES:=100000}"
+: "${BASH_AGENT_BASH_MODE:=0447}"  # system external network workspace; octal rwx bits per scope
 : "${EFFORT:=high}"           # thinking effort: low|medium|high|xhigh|max
 : "${THINKING:=adaptive}"     # thinking mode: adaptive|enabled|disabled
 
@@ -720,34 +721,114 @@ tool_emit_result() {
     util_write_msg "${_tr_args[@]}"
 }
 
-tool_deny_bash_reason() {
-    local cmd="$1" device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
+tool_bash_mode_normalize() {
+    local mode="${1:-0447}"
+    [[ "$mode" =~ ^[0-7][0-7][0-7][0-7]$ ]] && printf '%s' "$mode" || printf '0000'
+}
 
-    [[ -z "$cmd" ]] && return 1
+tool_bash_note() {
+    local reason="$1"
+    [[ -n "$reason" ]] || return 0
+    [[ -n "${TOOL_BASH_POLICY_REASONS:-}" ]] && TOOL_BASH_POLICY_REASONS+="; "
+    TOOL_BASH_POLICY_REASONS+="$reason"
+}
+
+TOOL_BASH_RE_ROOT_DELETE='(^|[[:space:];|&])rm[[:space:]]+-[^[:space:]]*[rf][^[:space:]]*[[:space:]]+/([[:space:]]|$)'
+TOOL_BASH_RE_SYSTEM_PATH='(^|[[:space:]"'\''])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[[:space:]"'\'']|$)'
+TOOL_BASH_RE_SENSITIVE_PATH='(^|[[:space:]"'\''])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])([^[:space:]"'\'']*\.(env|pem|key)|[^[:space:]"'\'']*(token|credential|secret)[^[:space:]"'\'']*)'
+TOOL_BASH_RE_EXTERNAL_PATH='(^|[[:space:]"'\''])(~|\$home)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])/[A-Za-z0-9._-]'
+TOOL_BASH_RE_DEVICE_WRITE='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
+
+tool_bash_add_mode() {
+    local scopes="$1" perms="$2" reason="${3:-command}"
+    TOOL_BASH_REQUIRED_MASK=$(( TOOL_BASH_REQUIRED_MASK | ((scopes & 8 ? perms << 9 : 0)) | ((scopes & 4 ? perms << 6 : 0)) | ((scopes & 2 ? perms << 3 : 0)) | ((scopes & 1 ? perms : 0)) ))
+    (( perms & 4 )) && tool_bash_note "$reason read"
+    (( perms & 2 )) && tool_bash_note "$reason write"
+    (( perms & 1 )) && tool_bash_note "$reason execute"
+}
+
+tool_bash_segment_scope_bits() {
+    local cmd="$1"
+    TOOL_BASH_SCOPE_BITS=0
+    TOOL_BASH_SCOPE_REASON="workspace"
+
     case "$cmd" in
-        sudo\ *|shutdown*|reboot*|halt*|poweroff*|mkfs*|fdisk*)
-            printf 'blocked dangerous command prefix'
-            return 0
-            ;;
+        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="dangerous command prefix" ;;
+        mkfs*|fdisk*|diskutil*|mount\ *|umount\ *|*':(){:|:&};:'*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="system" ;;
     esac
-    [[ "$cmd" == *'rm -rf /'* || "$cmd" == *'rm -fr /'* ]] && {
-        printf 'blocked destructive root deletion pattern'
-        return 0
-    }
-    [[ "$cmd" =~ $device_write_re ]] && {
-        printf 'blocked device write pattern'
-        return 0
-    }
-    [[ "$cmd" == *'find '* && "$cmd" == *' -delete'* ]] && {
-        printf 'blocked destructive find -delete pattern'
-        return 0
-    }
-    [[ "$cmd" == *':(){:|:&};:'* ]] && {
-        printf 'blocked fork bomb pattern'
-        return 0
-    }
+    if [[ "$cmd" =~ $TOOL_BASH_RE_ROOT_DELETE || "$cmd" =~ $TOOL_BASH_RE_DEVICE_WRITE ]]; then
+        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="system"
+    elif [[ "$cmd" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]]; then
+        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="sensitive path"
+    elif [[ "$cmd" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
+        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="system path"
+    elif [[ "$cmd" =~ $TOOL_BASH_RE_EXTERNAL_PATH && "$cmd" != *'/tmp/'* && "$cmd" != *"${tmpdir:-/tmp}"* ]]; then
+        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 4 )); TOOL_BASH_SCOPE_REASON="external path"
+    fi
 
-    return 1
+    case "$cmd" in
+        *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*|git\ push*|*'scp '*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 2 )); TOOL_BASH_SCOPE_REASON="network" ;;
+    esac
+    case "$cmd" in
+        git\ clone*|git\ fetch*|git\ pull*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 1 )) ;;
+    esac
+    (( TOOL_BASH_SCOPE_BITS == 0 )) && TOOL_BASH_SCOPE_BITS=1
+}
+
+tool_bash_segment_perm_bits() {
+    local cmd="$1"
+    TOOL_BASH_PERM_BITS=4
+    case "$cmd" in
+        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*|git\ push*|*'curl -d '*|*'curl --data'*|*'curl -f '*|*'curl -t '*|*'scp '*|mkfs*|fdisk*|diskutil*|mount\ *|umount\ *)
+            [[ "$cmd" == *'>/dev/null'* || "$cmd" == *'> /dev/null'* || "$cmd" == *'2>/dev/null'* || "$cmd" == *'2> /dev/null'* || "$cmd" == *'/tmp/'* ]] || TOOL_BASH_PERM_BITS=$(( TOOL_BASH_PERM_BITS | 2 )) ;;
+    esac
+    if [[ "$cmd" =~ $TOOL_BASH_RE_ROOT_DELETE || "$cmd" =~ $TOOL_BASH_RE_DEVICE_WRITE ]]; then
+        TOOL_BASH_PERM_BITS=$(( TOOL_BASH_PERM_BITS | 2 ))
+    fi
+    case "$cmd" in
+        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*|*'| bash'*|*'| sh'*|*'eval '*|*'source <('*|*'bash -c $('*|*'sh -c $('*|*':(){:|:&};:'*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *)
+            TOOL_BASH_PERM_BITS=$(( TOOL_BASH_PERM_BITS | 1 )) ;;
+    esac
+}
+
+tool_bash_classify_segments() {
+    local cmd="$1" normalized segment
+    normalized=${cmd//&&/$'\n'}
+    normalized=${normalized//||/$'\n'}
+    normalized=${normalized//;/$'\n'}
+    while IFS= read -r segment; do
+        segment="${segment#"${segment%%[![:space:]]*}"}"
+        segment="${segment%"${segment##*[![:space:]]}"}"
+        [[ -z "$segment" ]] && continue
+        tool_bash_segment_scope_bits "$segment"
+        tool_bash_segment_perm_bits "$segment"
+        tool_bash_add_mode "$TOOL_BASH_SCOPE_BITS" "$TOOL_BASH_PERM_BITS" "$TOOL_BASH_SCOPE_REASON"
+    done <<< "$normalized"
+}
+
+tool_classify_bash_required_mode() {
+    local cmd="$1" lowered
+    TOOL_BASH_REQUIRED_MASK=0
+    TOOL_BASH_POLICY_REASONS=""
+
+    [[ -z "$cmd" ]] && { TOOL_BASH_REQUIRED_MODE="0000"; printf '%s' "$TOOL_BASH_REQUIRED_MODE"; return 0; }
+    lowered=$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')
+
+    tool_bash_classify_segments "$lowered"
+
+    if (( TOOL_BASH_REQUIRED_MASK == 0 )); then
+        tool_bash_add_mode 1 4 'workspace'
+    fi
+
+    printf -v TOOL_BASH_REQUIRED_MODE '%04o' "$TOOL_BASH_REQUIRED_MASK"
+    printf '%s' "$TOOL_BASH_REQUIRED_MODE"
+}
+
+tool_bash_mode_allows() {
+    local allowed required
+    allowed=$(tool_bash_mode_normalize "$1")
+    required=$(tool_bash_mode_normalize "$2")
+    (( (8#$required & (4095 ^ 8#$allowed)) == 0 ))
 }
 
 tool_read() {
@@ -793,11 +874,14 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" reason output tool_rc tmpout
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" allowed_mode required_mode reason output tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
-    reason=$(tool_deny_bash_reason "$cmd") || reason=""
-    if [[ -n "$reason" ]]; then
-        echo "Error: command blocked by bash safety policy ($reason)"
+    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0447}")
+    tool_classify_bash_required_mode "$cmd" >/dev/null
+    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
+    reason="${TOOL_BASH_POLICY_REASONS:-requires $required_mode}"
+    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
+        echo "Error: command blocked by bash safety policy ($reason; required=$required_mode allowed=$allowed_mode)"
         return 1
     fi
     tmpout=$(mktemp)
@@ -1333,6 +1417,7 @@ Environment:
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
+  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0447)
   EFFORT                  Default thinking effort (default: high)
   THINKING                Default thinking mode (default: adaptive)
   MODEL                   Default model name
