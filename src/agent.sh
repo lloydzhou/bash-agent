@@ -747,62 +747,76 @@ tool_bash_add_mode() {
     (( perms & 1 )) && tool_bash_note "$reason execute"
 }
 
-tool_bash_segment_scope_bits() {
-    local cmd="$1"
-    TOOL_BASH_SCOPE_BITS=0
-    TOOL_BASH_SCOPE_REASON="workspace"
-
-    case "$cmd" in
-        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="dangerous command prefix" ;;
-        mkfs*|fdisk*|diskutil*|mount\ *|umount\ *|*':(){:|:&};:'*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="system" ;;
-    esac
-    if [[ "$cmd" =~ $TOOL_BASH_RE_ROOT_DELETE || "$cmd" =~ $TOOL_BASH_RE_DEVICE_WRITE ]]; then
-        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="system"
-    elif [[ "$cmd" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]]; then
-        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="sensitive path"
-    elif [[ "$cmd" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
-        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 8 )); TOOL_BASH_SCOPE_REASON="system path"
-    elif [[ "$cmd" =~ $TOOL_BASH_RE_EXTERNAL_PATH && "$cmd" != *'/tmp/'* && "$cmd" != *"${tmpdir:-/tmp}"* ]]; then
-        TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 4 )); TOOL_BASH_SCOPE_REASON="external path"
+tool_bash_scope_path() {
+    local p="$1"
+    p="${p#\"}"; p="${p%\"}"; p="${p#\'}"; p="${p%\'}"
+    p="${p#of=}"; p="${p%;}"; p="${p%,}"; p="${p%)}"
+    TOOL_BASH_PATH_SCOPE=1
+    TOOL_BASH_PATH_REASON="workspace"
+    [[ -z "$p" || "$p" == /tmp || "$p" == /tmp/* || "$p" == /dev/null || "$p" == '&'* ]] && { TOOL_BASH_PATH_SCOPE=0; return; }
+    if [[ "$p" == /dev/tcp* ]]; then
+        TOOL_BASH_PATH_SCOPE=2; TOOL_BASH_PATH_REASON="network"
+    elif [[ "$p" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]]; then
+        TOOL_BASH_PATH_SCOPE=8; TOOL_BASH_PATH_REASON="sensitive path"
+    elif [[ "$p" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
+        TOOL_BASH_PATH_SCOPE=8; TOOL_BASH_PATH_REASON="system path"
+    elif [[ "$p" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$p" == *..* ]]; then
+        TOOL_BASH_PATH_SCOPE=4; TOOL_BASH_PATH_REASON="external path"
     fi
-
-    case "$cmd" in
-        *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*|git\ push*|*'scp '*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 2 )); TOOL_BASH_SCOPE_REASON="network" ;;
-    esac
-    case "$cmd" in
-        git\ clone*|git\ fetch*|git\ pull*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) TOOL_BASH_SCOPE_BITS=$(( TOOL_BASH_SCOPE_BITS | 1 )) ;;
-    esac
-    (( TOOL_BASH_SCOPE_BITS == 0 )) && TOOL_BASH_SCOPE_BITS=1
 }
 
-tool_bash_segment_perm_bits() {
-    local cmd="$1"
-    TOOL_BASH_PERM_BITS=4
-    case "$cmd" in
-        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*|git\ push*|*'curl -d '*|*'curl --data'*|*'curl -f '*|*'curl -t '*|*'scp '*|mkfs*|fdisk*|diskutil*|mount\ *|umount\ *)
-            [[ "$cmd" == *'>/dev/null'* || "$cmd" == *'> /dev/null'* || "$cmd" == *'2>/dev/null'* || "$cmd" == *'2> /dev/null'* || "$cmd" == *'/tmp/'* ]] || TOOL_BASH_PERM_BITS=$(( TOOL_BASH_PERM_BITS | 2 )) ;;
-    esac
-    if [[ "$cmd" =~ $TOOL_BASH_RE_ROOT_DELETE || "$cmd" =~ $TOOL_BASH_RE_DEVICE_WRITE ]]; then
-        TOOL_BASH_PERM_BITS=$(( TOOL_BASH_PERM_BITS | 2 ))
-    fi
-    case "$cmd" in
-        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*|*'| bash'*|*'| sh'*|*'eval '*|*'source <('*|*'bash -c $('*|*'sh -c $('*|*':(){:|:&};:'*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *)
-            TOOL_BASH_PERM_BITS=$(( TOOL_BASH_PERM_BITS | 1 )) ;;
-    esac
+tool_bash_add_path() {
+    local path="$1" perms="$2"
+    tool_bash_scope_path "$path"
+    (( TOOL_BASH_PATH_SCOPE == 0 )) || tool_bash_add_mode "$TOOL_BASH_PATH_SCOPE" "$perms" "$TOOL_BASH_PATH_REASON"
 }
 
-tool_bash_classify_segments() {
-    local cmd="$1" normalized segment
-    normalized=${cmd//&&/$'\n'}
+tool_bash_scan_segment() {
+    local seg="$1" tok prev="" path_bits=4 saw_write=false saw_path=false
+
+    case "$seg" in
+        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 'dangerous command prefix' ;;
+        mkfs*|fdisk*|diskutil*|mount\ *|umount\ *) tool_bash_add_mode 8 2 'system' ;;
+        *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*) tool_bash_add_mode 2 4 'network' ;;
+    esac
+    case "$seg" in
+        git\ push*|*'scp '*|*'curl -d '*|*'curl --data'*|*'curl -f '*|*'curl -t '*) tool_bash_add_mode 2 2 'network' ;;
+        *'| bash'*|*'| sh'*|*'eval '*|*'source <('*|*'bash -c $('*|*'sh -c $('*) [[ "$seg" == *'curl '* || "$seg" == *'wget '* || "$seg" == *'http://'* || "$seg" == *'https://'* ]] && tool_bash_add_mode 2 1 'network' ;;
+    esac
+    [[ "$seg" =~ $TOOL_BASH_RE_ROOT_DELETE || "$seg" =~ $TOOL_BASH_RE_DEVICE_WRITE ]] && tool_bash_add_mode 8 2 'system'
+    case "$seg" in
+        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 'workspace' ;;
+    esac
+    case "$seg" in
+        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) path_bits=6; saw_write=true ;;
+    esac
+
+    for tok in $seg; do
+        case "$prev" in '>'|'>>'|'1>'|'1>>') tool_bash_add_path "$tok" 2; saw_path=true ;; '<>') tool_bash_add_path "$tok" 6; saw_path=true ;; esac
+        prev=""
+        case "$tok" in '>'|'>>'|'1>'|'1>>'|'<>') prev="$tok"; continue ;; esac
+        [[ "$tok" == '2>'* || "$tok" == '2>>'* ]] && continue
+        [[ "$tok" == '>'* || "$tok" == '>>'* ]] && { tool_bash_add_path "${tok#*>}" 2; saw_path=true; continue; }
+        [[ "$tok" == '<>'* ]] && { tool_bash_add_path "${tok#<>}" 6; saw_path=true; continue; }
+        if [[ "$tok" == /* || "$tok" == ./* || "$tok" == ../* || "$tok" == ~/* || "$tok" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]]; then
+            tool_bash_add_path "$tok" "$path_bits"; saw_path=true
+        fi
+    done
+    [[ "$saw_write" == true && "$saw_path" == false && "$seg" != *'/tmp/'* ]] && tool_bash_add_mode 1 2 'workspace'
+}
+
+tool_bash_scan_script() {
+    local script="$1" normalized segment
+    script=${script//$'\\\n'/ }
+    [[ "$script" == *'/dev/tcp'* ]] && tool_bash_add_mode 2 6 'network'
+    normalized=${script//&&/$'\n'}
     normalized=${normalized//||/$'\n'}
     normalized=${normalized//;/$'\n'}
     while IFS= read -r segment; do
         segment="${segment#"${segment%%[![:space:]]*}"}"
         segment="${segment%"${segment##*[![:space:]]}"}"
         [[ -z "$segment" ]] && continue
-        tool_bash_segment_scope_bits "$segment"
-        tool_bash_segment_perm_bits "$segment"
-        tool_bash_add_mode "$TOOL_BASH_SCOPE_BITS" "$TOOL_BASH_PERM_BITS" "$TOOL_BASH_SCOPE_REASON"
+        tool_bash_scan_segment "$segment"
     done <<< "$normalized"
 }
 
@@ -814,7 +828,7 @@ tool_classify_bash_required_mode() {
     [[ -z "$cmd" ]] && { TOOL_BASH_REQUIRED_MODE="0000"; printf '%s' "$TOOL_BASH_REQUIRED_MODE"; return 0; }
     lowered=$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')
 
-    tool_bash_classify_segments "$lowered"
+    tool_bash_scan_script "$lowered"
 
     if (( TOOL_BASH_REQUIRED_MASK == 0 )); then
         tool_bash_add_mode 1 4 'workspace'
