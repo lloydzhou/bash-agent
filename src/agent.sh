@@ -127,9 +127,8 @@ util_json_escape() {
 util_is_stream_json() { [[ "$OUTPUT_FORMAT" == "stream-json" ]]; }
 
 util_append_section() {
-    local __outvar="$1" tag="$2" content="$3" name="${4:-}"
+    local __outvar="$1" tag="$2" content="$3" name="${4:-}" wrapped
     [[ -n "$content" ]] || return 0
-    local wrapped
     if [[ -n "$name" ]]; then
         wrapped=$(printf '<%s name="%s">\n%s\n</%s>' "$tag" "$(util_json_escape "$name")" "$content" "$tag")
     else
@@ -294,13 +293,11 @@ util_build_assistant_json() {
     local text="$1" thinking="$2" calls="$3" content="[" name id input
     content+="{\"type\":\"thinking\",\"thinking\":\"$(util_json_escape "$thinking")\"}"
     content+=",{\"type\":\"text\",\"text\":\"$(util_json_escape "$text")\"}"
-
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         IFS=$'\t' read -r name id input _ <<< "$tc"
         content+=",$(util_build_tool_call_json "$name" "$id" "$input")"
     done <<< "$calls"
-
     content+="]"
     printf '%s' "$content"
 }
@@ -345,12 +342,7 @@ store_session_init() {
     PLAN_DRAFT_FILE="${session_dir}/plan.draft"
     STATS_FILE="${session_dir}/stats.json"
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
-    touch "$CONV_FILE"
-    touch "$SESSION_EVENT_FILE"
-    touch "$CONTEXT_SUMMARY_FILE"
-    touch "$PLAN_FILE"
-    touch "$PLAN_DRAFT_FILE"
-    touch "$STATS_FILE"
+    touch "$CONV_FILE" "$SESSION_EVENT_FILE" "$CONTEXT_SUMMARY_FILE" "$PLAN_FILE" "$PLAN_DRAFT_FILE" "$STATS_FILE"
     if [[ "$new_session" == true ]]; then
         store_event_append "{\"type\":\"session_start\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\"}"
     fi
