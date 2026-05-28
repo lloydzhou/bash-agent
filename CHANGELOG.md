@@ -8,6 +8,35 @@
 
 ---
 
+## [4.0.3] - 2026-05-29
+
+> **Feature + Bugfix 版本**：为 Bash 工具引入 `BASH_AGENT_BASH_MODE` 权限模式，并同步对齐 C/Go/Rust；同时将测试 mock server 提取为独立 Python 文件，修复 CI 中 `Argument list too long`。
+
+### Added
+
+- 新增 `BASH_AGENT_BASH_MODE` 环境变量，使用 4 位八进制描述 `system/external/network/workspace` 的 `read/write/execute` 权限
+- README / README.en 与 Go/C/Rust CLI help 补充 `BASH_AGENT_BASH_MODE` 说明
+- Go/Rust 新增 Bash mode classifier / allows 单测
+- e2e 新增更细粒度的 12-bit 权限覆盖，直接断言 `required=` / `allowed=` 组合
+
+### Changed
+
+- Bash 主版本将 Bash 工具安全策略从旧的 deny-reason 规则切换为 mode-based 判定
+- C/Go/Rust Bash 工具安全策略同步切换为与 Bash 主版本一致的 mode classifier / allows 逻辑
+- 测试中的 mock server 从 `tests/test.sh` 内嵌 Python 改为独立文件 `tests/fixtures/mock_server.py`
+
+### Fixed
+
+- 无效 `BASH_AGENT_BASH_MODE` 统一 fail-closed 为 `0000`
+- C/Go/Rust 的 Bash 工具阻断报错文案统一为 `required=... allowed=...`
+- 修复 CI 中 `python3 -c "<超长 mock server>"` 触发的 `Argument list too long`
+
+### Tests
+
+- 覆盖 `system read`、`network execute`、`external write`、invalid mode fail-closed、custom mode allow system read
+- 主 Bash 版 e2e 回归验证通过：`124 passed, 0 failed`
+- Go e2e / C e2e 均通过：`124 passed, 0 failed`
+
 ## [4.0.2] - 2026-05-27
 
 > **Bugfix 版本**：降低长 session replay 内存占用，补齐 system prompt 字节级一致性测试，并修复 Go 版 Ctrl+C 中断时的 channel panic。
@@ -782,7 +811,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.2...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.3...HEAD
+[4.0.3]: https://github.com/lloydzhou/bash-agent/compare/v4.0.2...v4.0.3
 [4.0.2]: https://github.com/lloydzhou/bash-agent/compare/v4.0.1...v4.0.2
 [4.0.1]: https://github.com/lloydzhou/bash-agent/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/lloydzhou/bash-agent/compare/v3.0.7...v4.0.0
