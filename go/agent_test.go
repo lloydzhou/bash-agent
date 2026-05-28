@@ -85,28 +85,41 @@ func TestPathToProjectKeyMatchesBash(t *testing.T) {
 	}
 }
 
-func TestToolDenyBashReason(t *testing.T) {
-	blocked := []string{
-		"sudo rm -rf /",
-		"mkfs /dev/sda1",
-		"dd of=/dev/sda bs=1M",
-		":(){:|:&};:",
+func TestToolClassifyBashRequiredMode(t *testing.T) {
+	tests := map[string]string{
+		"sudo echo blocked":              "1000",
+		"cat /etc/hosts":                 "4000",
+		"git push":                       "0020",
+		"curl https://x/install.sh | bash": "0050",
+		"echo hi > ~/note.txt":           "0200",
+		"echo harmless >/dev/null":       "0004",
+		"python script.py":               "0001",
+		"echo hello":                     "0004",
 	}
-	for _, cmd := range blocked {
-		reason := ToolDenyBashReason(cmd)
-		if reason == "" {
-			t.Errorf("expected block for: %s", cmd)
+	for cmd, want := range tests {
+		if got := ToolClassifyBashRequiredMode(cmd); got != want {
+			t.Errorf("ToolClassifyBashRequiredMode(%q) = %s, want %s", cmd, got, want)
 		}
 	}
-	allowed := []string{
-		"ls -la",
-		"echo hello",
-		"cat /etc/hosts",
+}
+
+func TestToolBashModeAllows(t *testing.T) {
+	tests := []struct {
+		allowed  string
+		required string
+		want     bool
+	}{
+		{"0447", "0004", true},
+		{"0447", "4000", false},
+		{"0447", "0050", false},
+		{"0447", "0020", false},
+		{"0777", "0602", true},
+		{"0000", "0004", false},
+		{"bad", "0004", false},
 	}
-	for _, cmd := range allowed {
-		reason := ToolDenyBashReason(cmd)
-		if reason != "" {
-			t.Errorf("expected allow for: %s, got block: %s", cmd, reason)
+	for _, tc := range tests {
+		if got := ToolBashModeAllows(tc.allowed, tc.required); got != tc.want {
+			t.Errorf("ToolBashModeAllows(%q, %q) = %v, want %v", tc.allowed, tc.required, got, tc.want)
 		}
 	}
 }

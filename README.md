@@ -151,6 +151,7 @@ tcode goagent -p openai -m gpt-4o
 | `OPENAI_BASE_URL` | OpenAI API base URL |
 | `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
 | `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
+| `BASH_AGENT_BASH_MODE` | Bash 工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0447`） |
 
 DP 算法相关环境变量：
 

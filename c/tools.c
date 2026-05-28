@@ -266,60 +266,190 @@ static ToolResult tool_edit(const char *input_json) {
     return r;
 }
 
-static const char *bash_deny_reason(const char *cmd) {
-    if (!cmd || !*cmd) return NULL;
-    /* 危险命令前缀 */
-    if (strncmp(cmd, "sudo ", 5) == 0) return "blocked dangerous command prefix";
-    if (strncmp(cmd, "shutdown", 8) == 0) return "blocked dangerous command prefix";
-    if (strncmp(cmd, "reboot", 6) == 0) return "blocked dangerous command prefix";
-    if (strncmp(cmd, "halt", 4) == 0) return "blocked dangerous command prefix";
-    if (strncmp(cmd, "poweroff", 8) == 0) return "blocked dangerous command prefix";
-    if (strncmp(cmd, "mkfs", 4) == 0) return "blocked dangerous command prefix";
-    if (strncmp(cmd, "fdisk", 5) == 0) return "blocked dangerous command prefix";
-    /* rm -rf / */
-    if (strstr(cmd, "rm -rf /") || strstr(cmd, "rm -fr /"))
-        return "blocked destructive root deletion pattern";
-    /* find ... -delete */
-    if (strstr(cmd, "find ") && strstr(cmd, " -delete"))
-        return "blocked destructive find -delete pattern";
-    /* fork bomb */
-    if (strstr(cmd, ":(){:|:&};:"))
-        return "blocked fork bomb pattern";
-    /* 设备写入保护 — 对齐 bash 版 device_write_re:
-     * 检测 > /dev/sdX, >> /dev/diskN, of=/dev/nvme... 等 */
-    {
-        /* 简化匹配：查找 > 或 >> 或 of= 后跟 /dev/(sd|disk|rdisk|nvme|vd|xvd|hd) */
-        const char *p = cmd;
-        while ((p = strstr(p, "/dev/")) != NULL) {
-            const char *dev = p + 5;
-            /* 检查是否是块设备名 */
-            int is_block = 0;
-            if (strncmp(dev, "sd", 2) == 0 || strncmp(dev, "vd", 2) == 0 ||
-                strncmp(dev, "hd", 2) == 0 || strncmp(dev, "xvd", 3) == 0) is_block = 1;
-            else if (strncmp(dev, "disk", 4) == 0 || strncmp(dev, "rdisk", 5) == 0) is_block = 1;
-            else if (strncmp(dev, "nvme", 4) == 0) is_block = 1;
-            if (is_block) {
-                /* 检查前面是否有重定向（> 或 >>）或 of= */
-                const char *before = p;
-                /* 向前跳过空白 */
-                while (before > cmd && (before[-1] == ' ' || before[-1] == '\t')) before--;
-                if (before > cmd) {
-                    if (before[-1] == '>' || before[-1] == '=') {
-                        /* 前面是 > 或 >> 或 of= */
-                        /* 再检查是否是 of= 前缀 */
-                        if (before[-1] == '=') {
-                            if (before - 2 >= cmd && before[-2] == 'f' && before[-3] == 'o')
-                                return "blocked device write pattern";
-                        } else {
-                            return "blocked device write pattern";
-                        }
-                    }
-                }
-            }
-            p += 5;
+static int bash_starts_with(const char *s, const char *prefix) {
+    return s && prefix && strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+static int bash_contains(const char *s, const char *needle) {
+    return s && needle && strstr(s, needle) != NULL;
+}
+
+static void bash_mode_normalize(const char *mode, char out[5]) {
+    int i;
+    const char *src = (mode && *mode) ? mode : "0447";
+    for (i = 0; i < 4 && src[i]; i++) {
+        if (src[i] < '0' || src[i] > '7') break;
+        out[i] = src[i];
+    }
+    if (i == 4 && src[4] == '\0') {
+        out[4] = '\0';
+        return;
+    }
+    memcpy(out, "0000", 5);
+}
+
+static void bash_add_mode(unsigned short *mask, int scopes, int perms) {
+    if (scopes & 8) *mask |= (unsigned short)(perms << 9);
+    if (scopes & 4) *mask |= (unsigned short)(perms << 6);
+    if (scopes & 2) *mask |= (unsigned short)(perms << 3);
+    if (scopes & 1) *mask |= (unsigned short)perms;
+}
+
+static int bash_is_system_path(const char *path) {
+    const char *sys[] = {"/etc", "/usr", "/bin", "/sbin", "/var", "/library", "/system", "/dev", NULL};
+    for (int i = 0; sys[i]; i++) {
+        size_t n = strlen(sys[i]);
+        if (strncmp(path, sys[i], n) == 0 && (path[n] == '\0' || path[n] == '/')) return 1;
+    }
+    return 0;
+}
+
+static int bash_is_sensitive_path(const char *path) {
+    size_t len = strlen(path);
+    return strstr(path, "/.ssh") || strstr(path, "/.gnupg") || strstr(path, "/.aws") ||
+           strstr(path, "/.docker") || (len >= 4 && strcmp(path + len - 4, ".env") == 0) ||
+           (len >= 4 && strcmp(path + len - 4, ".pem") == 0) || (len >= 4 && strcmp(path + len - 4, ".key") == 0) ||
+           strstr(path, "token") || strstr(path, "credential") || strstr(path, "secret");
+}
+
+static void bash_add_path(unsigned short *mask, const char *path, int perms) {
+    char buf[1024];
+    size_t len;
+    int scope = 1;
+    if (!path || !*path) return;
+    snprintf(buf, sizeof(buf), "%s", path);
+    if (buf[0] == '"' || buf[0] == '\'') memmove(buf, buf + 1, strlen(buf));
+    len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '"' || buf[len - 1] == '\'' || buf[len - 1] == ';' || buf[len - 1] == ',' || buf[len - 1] == ')')) buf[--len] = '\0';
+    if (strncmp(buf, "of=", 3) == 0) memmove(buf, buf + 3, strlen(buf + 3) + 1);
+    if (!buf[0] || strcmp(buf, "/tmp") == 0 || strncmp(buf, "/tmp/", 5) == 0 || strcmp(buf, "/dev/null") == 0 || buf[0] == '&') return;
+    if (strncmp(buf, "/dev/tcp", 8) == 0) scope = 2;
+    else if (bash_is_sensitive_path(buf) || bash_is_system_path(buf)) scope = 8;
+    else if ((buf[0] == '/' && buf[1]) || strncmp(buf, "~/", 2) == 0 || strncmp(buf, "$home", 5) == 0 || strstr(buf, "..")) scope = 4;
+    bash_add_mode(mask, scope, perms);
+}
+
+static int bash_is_block_device_path(const char *path) {
+    const char *dev = strstr(path, "/dev/");
+    if (!dev) return 0;
+    dev += 5;
+    return strncmp(dev, "sd", 2) == 0 || strncmp(dev, "vd", 2) == 0 || strncmp(dev, "hd", 2) == 0 ||
+           strncmp(dev, "xvd", 3) == 0 || strncmp(dev, "disk", 4) == 0 || strncmp(dev, "rdisk", 5) == 0 ||
+           strncmp(dev, "nvme", 4) == 0;
+}
+
+static void bash_scan_segment(unsigned short *mask, const char *seg) {
+    char *copy, *save = NULL, *tok;
+    int redir = 0, path_bits = 4, flags = 0;
+    if (bash_starts_with(seg, "sudo ") || bash_starts_with(seg, "su ") || bash_starts_with(seg, "doas ") ||
+        bash_starts_with(seg, "shutdown") || bash_starts_with(seg, "reboot") || bash_starts_with(seg, "halt") ||
+        bash_starts_with(seg, "poweroff")) bash_add_mode(mask, 8, 1);
+    else if (bash_starts_with(seg, "mkfs") || bash_starts_with(seg, "fdisk") || bash_starts_with(seg, "diskutil") ||
+             bash_starts_with(seg, "mount ") || bash_starts_with(seg, "umount ")) bash_add_mode(mask, 8, 2);
+    if (bash_contains(seg, "curl ") || bash_contains(seg, "wget ") || bash_contains(seg, "http ") ||
+        bash_contains(seg, "https://") || bash_contains(seg, "http://") || bash_starts_with(seg, "git clone") ||
+        bash_starts_with(seg, "git fetch") || bash_starts_with(seg, "git pull") || bash_starts_with(seg, "git ls-remote"))
+        bash_add_mode(mask, 2, 4);
+    if (bash_starts_with(seg, "git push") || bash_contains(seg, "scp ") || bash_contains(seg, "curl -d ") ||
+        bash_contains(seg, "curl --data") || bash_contains(seg, "curl -f ") || bash_contains(seg, "curl -t "))
+        bash_add_mode(mask, 2, 2);
+    else if ((bash_contains(seg, "| bash") || bash_contains(seg, "| sh") || bash_contains(seg, "eval ") ||
+              bash_contains(seg, "source <(") || bash_contains(seg, "bash -c $(") || bash_contains(seg, "sh -c $(")) &&
+             (bash_contains(seg, "curl ") || bash_contains(seg, "wget ") || bash_contains(seg, "http://") || bash_contains(seg, "https://")))
+        bash_add_mode(mask, 2, 1);
+    if (bash_contains(seg, "rm -rf /") || bash_contains(seg, "rm -fr /")) bash_add_mode(mask, 8, 2);
+    if (bash_is_block_device_path(seg) && (bash_contains(seg, "of=/dev/") || bash_contains(seg, "> /dev/") || bash_contains(seg, ">/dev/")))
+        bash_add_mode(mask, 8, 2);
+    if (bash_starts_with(seg, "./") || bash_starts_with(seg, "bash ") || bash_starts_with(seg, "sh ") || bash_starts_with(seg, "zsh ") ||
+        bash_starts_with(seg, "python") || bash_starts_with(seg, "node ") || bash_starts_with(seg, "ruby ") || bash_starts_with(seg, "perl ") ||
+        bash_starts_with(seg, "npm test") || bash_starts_with(seg, "npm run") || bash_starts_with(seg, "make") ||
+        bash_starts_with(seg, "cargo test") || bash_starts_with(seg, "cargo build") || bash_starts_with(seg, "go test") ||
+        bash_contains(seg, "function ") || bash_contains(seg, "()") || bash_contains(seg, "{") || bash_contains(seg, " if ") ||
+        bash_starts_with(seg, "if ") || bash_contains(seg, " for ") || bash_starts_with(seg, "for ") || bash_contains(seg, " while ") ||
+        bash_starts_with(seg, "while ") || bash_contains(seg, " case ") || bash_starts_with(seg, "case ") || bash_contains(seg, ":(){:|:&};:"))
+        bash_add_mode(mask, 1, 1);
+    if (bash_contains(seg, ">") || bash_contains(seg, "tee ") || bash_starts_with(seg, "mkdir ") || bash_starts_with(seg, "touch ") ||
+        bash_starts_with(seg, "cp ") || bash_starts_with(seg, "mv ") || bash_starts_with(seg, "rm ") || bash_contains(seg, " rm ") ||
+        bash_contains(seg, "sed -i") || bash_contains(seg, " -delete") || bash_starts_with(seg, "git fetch") ||
+        bash_starts_with(seg, "git pull") || bash_starts_with(seg, "git clone") || bash_starts_with(seg, "npm install") ||
+        bash_starts_with(seg, "pnpm install") || bash_starts_with(seg, "yarn install") || bash_starts_with(seg, "cargo build") ||
+        bash_starts_with(seg, "go test") || bash_starts_with(seg, "npm test")) {
+        path_bits = 6;
+        flags = 1;
+    }
+    copy = util_strdup(seg);
+    for (tok = strtok_r(copy, " \t\r\n", &save); tok; tok = strtok_r(NULL, " \t\r\n", &save)) {
+        if (redir) {
+            bash_add_path(mask, tok, redir);
+            flags = 3;
+            redir = 0;
+            continue;
+        }
+        if (!strcmp(tok, ">") || !strcmp(tok, ">>") || !strcmp(tok, "1>") || !strcmp(tok, "1>>")) {
+            redir = 2;
+        } else if (!strcmp(tok, "<>")) {
+            redir = 6;
+        } else if (!strncmp(tok, "2>", 2)) {
+        } else if (tok[0] == '>') {
+            while (*tok == '>') tok++;
+            bash_add_path(mask, tok, 2);
+            flags = 3;
+        } else if (!strncmp(tok, "<>", 2)) {
+            bash_add_path(mask, tok + 2, 6);
+            flags = 3;
+        } else if (tok[0] == '/' || !strncmp(tok, "./", 2) || !strncmp(tok, "../", 3) || !strncmp(tok, "~/", 2)) {
+            bash_add_path(mask, tok, path_bits);
+            flags = 3;
+        } else if (bash_is_sensitive_path(tok)) {
+            bash_add_path(mask, tok, path_bits);
+            flags = 3;
         }
     }
-    return NULL;
+    free(copy);
+    if (flags == 1 && !bash_contains(seg, "/tmp/")) bash_add_mode(mask, 1, 2);
+}
+
+static void bash_classify_required_mode(const char *cmd, char out[5]) {
+    char *lower, *cursor, *segment, *save = NULL;
+    unsigned short mask = 0;
+    size_t n;
+    if (!cmd || !*cmd) {
+        memcpy(out, "0000", 5);
+        return;
+    }
+    lower = util_strdup(cmd);
+    for (cursor = lower; *cursor; cursor++) *cursor = (char)tolower((unsigned char)*cursor);
+    for (cursor = lower; *cursor; cursor++) {
+        if (cursor[0] == '\\' && cursor[1] == '\n') { cursor[0] = ' '; cursor[1] = ' '; }
+    }
+    if (strstr(lower, "/dev/tcp")) bash_add_mode(&mask, 2, 6);
+    for (cursor = lower; *cursor; cursor++) {
+        if ((*cursor == '&' && cursor[1] == '&') || (*cursor == '|' && cursor[1] == '|')) {
+            *cursor = '\n';
+            cursor[1] = '\n';
+        } else if (*cursor == ';') {
+            *cursor = '\n';
+        }
+    }
+    for (segment = strtok_r(lower, "\n", &save); segment; segment = strtok_r(NULL, "\n", &save)) {
+        while (*segment && isspace((unsigned char)*segment)) segment++;
+        n = strlen(segment);
+        while (n > 0 && isspace((unsigned char)segment[n - 1])) segment[--n] = '\0';
+        if (*segment) bash_scan_segment(&mask, segment);
+    }
+    free(lower);
+    if (!mask) bash_add_mode(&mask, 1, 4);
+    snprintf(out, 5, "%04o", mask);
+}
+
+static int bash_mode_allows(const char *allowed_mode, const char *required_mode) {
+    char allowed[5], required[5];
+    long allowed_val, required_val;
+    bash_mode_normalize(allowed_mode, allowed);
+    bash_mode_normalize(required_mode, required);
+    allowed_val = strtol(allowed, NULL, 8);
+    required_val = strtol(required, NULL, 8);
+    return (required_val & (4095 ^ allowed_val)) == 0;
 }
 
 static ToolResult tool_bash(const char *input_json, int timeout_secs) {
@@ -339,17 +469,20 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
     }
 
     /* 安全策略检查 */
-    const char *deny = bash_deny_reason(cmd);
-    if (deny) {
-        StrBuf deny_buf;
-        sb_init(&deny_buf);
-        sb_append(&deny_buf, "Error: command blocked by bash safety policy (");
-        sb_append(&deny_buf, deny);
-        sb_append(&deny_buf, ")");
-        r.output = deny_buf.data;
-        r.exit_code = 1;
-        free(cmd);
-        return r;
+    {
+        char allowed_mode[5], required_mode[5];
+        bash_mode_normalize(util_env("BASH_AGENT_BASH_MODE", "0447"), allowed_mode);
+        bash_classify_required_mode(cmd, required_mode);
+        if (!bash_mode_allows(allowed_mode, required_mode)) {
+            StrBuf deny_buf;
+            sb_init(&deny_buf);
+            sb_appendf(&deny_buf, "Error: command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)",
+                       required_mode, allowed_mode);
+            r.output = deny_buf.data;
+            r.exit_code = 1;
+            free(cmd);
+            return r;
+        }
     }
 
     /* 从工具参数中获取 per-call timeout（可选） */

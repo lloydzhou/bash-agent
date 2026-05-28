@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -404,42 +403,3 @@ func extractJSONString(m map[string]json.RawMessage, key string) (string, bool) 
 
 // osStderr 可被测试替换
 var osStderr = os.Stderr
-
-// ToolDenyBashReason 检查 bash 命令是否被安全策略阻止
-// 返回阻止原因；空字符串表示允许执行
-func ToolDenyBashReason(cmd string) string {
-	if cmd == "" {
-		return ""
-	}
-
-	// 危险命令前缀
-	dangerous := []string{"sudo ", "shutdown", "reboot", "halt", "poweroff", "mkfs", "fdisk"}
-	for _, d := range dangerous {
-		if strings.HasPrefix(cmd, d) {
-			return "blocked dangerous command prefix"
-		}
-	}
-
-	// 根目录删除
-	if strings.Contains(cmd, "rm -rf /") || strings.Contains(cmd, "rm -fr /") {
-		return "blocked destructive root deletion pattern"
-	}
-
-	// 设备写入
-	deviceRe := regexp.MustCompile(`(^|\s)(of=|>|1>|>>|1>>)\s*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)(\s|$)`)
-	if deviceRe.MatchString(cmd) {
-		return "blocked device write pattern"
-	}
-
-	// find -delete
-	if strings.Contains(cmd, "find ") && strings.Contains(cmd, " -delete") {
-		return "blocked destructive find -delete pattern"
-	}
-
-	// fork bomb
-	if strings.Contains(cmd, ":(){:|:&};:") {
-		return "blocked fork bomb pattern"
-	}
-
-	return ""
-}

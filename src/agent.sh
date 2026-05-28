@@ -18,6 +18,7 @@ TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
 VERBOSE=false
 : "${TOOL_RESULT_MAX_BYTES:=100000}"
+: "${BASH_AGENT_BASH_MODE:=0447}"  # system external network workspace; octal rwx bits per scope
 : "${EFFORT:=high}"           # thinking effort: low|medium|high|xhigh|max
 : "${THINKING:=adaptive}"     # thinking mode: adaptive|enabled|disabled
 
@@ -126,9 +127,8 @@ util_json_escape() {
 util_is_stream_json() { [[ "$OUTPUT_FORMAT" == "stream-json" ]]; }
 
 util_append_section() {
-    local __outvar="$1" tag="$2" content="$3" name="${4:-}"
+    local __outvar="$1" tag="$2" content="$3" name="${4:-}" wrapped
     [[ -n "$content" ]] || return 0
-    local wrapped
     if [[ -n "$name" ]]; then
         wrapped=$(printf '<%s name="%s">\n%s\n</%s>' "$tag" "$(util_json_escape "$name")" "$content" "$tag")
     else
@@ -293,13 +293,11 @@ util_build_assistant_json() {
     local text="$1" thinking="$2" calls="$3" content="[" name id input
     content+="{\"type\":\"thinking\",\"thinking\":\"$(util_json_escape "$thinking")\"}"
     content+=",{\"type\":\"text\",\"text\":\"$(util_json_escape "$text")\"}"
-
     while IFS= read -r tc; do
         [[ -z "$tc" ]] && continue
         IFS=$'\t' read -r name id input _ <<< "$tc"
         content+=",$(util_build_tool_call_json "$name" "$id" "$input")"
     done <<< "$calls"
-
     content+="]"
     printf '%s' "$content"
 }
@@ -344,12 +342,7 @@ store_session_init() {
     PLAN_DRAFT_FILE="${session_dir}/plan.draft"
     STATS_FILE="${session_dir}/stats.json"
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
-    touch "$CONV_FILE"
-    touch "$SESSION_EVENT_FILE"
-    touch "$CONTEXT_SUMMARY_FILE"
-    touch "$PLAN_FILE"
-    touch "$PLAN_DRAFT_FILE"
-    touch "$STATS_FILE"
+    touch "$CONV_FILE" "$SESSION_EVENT_FILE" "$CONTEXT_SUMMARY_FILE" "$PLAN_FILE" "$PLAN_DRAFT_FILE" "$STATS_FILE"
     if [[ "$new_session" == true ]]; then
         store_event_append "{\"type\":\"session_start\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\"}"
     fi
@@ -720,34 +713,101 @@ tool_emit_result() {
     util_write_msg "${_tr_args[@]}"
 }
 
-tool_deny_bash_reason() {
-    local cmd="$1" device_write_re='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
+tool_bash_mode_normalize() {
+    local mode="${1:-0447}"
+    [[ "$mode" =~ ^[0-7][0-7][0-7][0-7]$ ]] && printf '%s' "$mode" || printf '0000'
+}
 
-    [[ -z "$cmd" ]] && return 1
-    case "$cmd" in
-        sudo\ *|shutdown*|reboot*|halt*|poweroff*|mkfs*|fdisk*)
-            printf 'blocked dangerous command prefix'
-            return 0
-            ;;
+TOOL_BASH_RE_ROOT_DELETE='(^|[[:space:];|&])rm[[:space:]]+-[^[:space:]]*[rf][^[:space:]]*[[:space:]]+/([[:space:]]|$)'
+TOOL_BASH_RE_SYSTEM_PATH='(^|[[:space:]"'\''])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[[:space:]"'\'']|$)'
+TOOL_BASH_RE_SENSITIVE_PATH='(^|[[:space:]"'\''])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])([^[:space:]"'\'']*\.(env|pem|key)|[^[:space:]"'\'']*(token|credential|secret)[^[:space:]"'\'']*)'
+TOOL_BASH_RE_EXTERNAL_PATH='(^|[[:space:]"'\''])(~|\$home)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])/[A-Za-z0-9._-]'
+TOOL_BASH_RE_DEVICE_WRITE='(^|[[:space:]])(of=|>|1>|>>|1>>)[[:space:]]*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([[:space:]]|$)'
+
+tool_bash_add_mode() {
+    local scopes="$1" perms="$2"
+    TOOL_BASH_REQUIRED_MASK=$(( TOOL_BASH_REQUIRED_MASK | ((scopes & 8 ? perms << 9 : 0)) | ((scopes & 4 ? perms << 6 : 0)) | ((scopes & 2 ? perms << 3 : 0)) | ((scopes & 1 ? perms : 0)) ))
+}
+
+tool_bash_add_path() {
+    local path="$1" perms="$2" scope=1
+    path="${path#\"}"; path="${path%\"}"; path="${path#\'}"; path="${path%\'}"
+    path="${path#of=}"; path="${path%;}"; path="${path%,}"; path="${path%)}"
+    [[ -z "$path" || "$path" == /tmp || "$path" == /tmp/* || "$path" == /dev/null || "$path" == '&'* ]] && return 0
+    if [[ "$path" == /dev/tcp* ]]; then
+        scope=2
+    elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
+        scope=8
+    elif [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
+        scope=4
+    fi
+    tool_bash_add_mode "$scope" "$perms"
+}
+
+tool_bash_scan_segment() {
+    local seg="$1" tok redir=0 path_bits=4 flags=0
+    case "$seg" in
+        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 ;;
+        mkfs*|fdisk*|diskutil*|mount\ *|umount\ *) tool_bash_add_mode 8 2 ;;
+        *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*) tool_bash_add_mode 2 4 ;;
     esac
-    [[ "$cmd" == *'rm -rf /'* || "$cmd" == *'rm -fr /'* ]] && {
-        printf 'blocked destructive root deletion pattern'
-        return 0
-    }
-    [[ "$cmd" =~ $device_write_re ]] && {
-        printf 'blocked device write pattern'
-        return 0
-    }
-    [[ "$cmd" == *'find '* && "$cmd" == *' -delete'* ]] && {
-        printf 'blocked destructive find -delete pattern'
-        return 0
-    }
-    [[ "$cmd" == *':(){:|:&};:'* ]] && {
-        printf 'blocked fork bomb pattern'
-        return 0
-    }
+    case "$seg" in
+        git\ push*|*'scp '*|*'curl -d '*|*'curl --data'*|*'curl -f '*|*'curl -t '*) tool_bash_add_mode 2 2 ;;
+        *'| bash'*|*'| sh'*|*'eval '*|*'source <('*|*'bash -c $('*|*'sh -c $('*) [[ "$seg" == *'curl '* || "$seg" == *'wget '* || "$seg" == *'http://'* || "$seg" == *'https://'* ]] && tool_bash_add_mode 2 1 ;;
+    esac
+    [[ "$seg" =~ $TOOL_BASH_RE_ROOT_DELETE || "$seg" =~ $TOOL_BASH_RE_DEVICE_WRITE ]] && tool_bash_add_mode 8 2
+    case "$seg" in
+        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 ;;
+    esac
+    case "$seg" in
+        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) path_bits=6; flags=1 ;;
+    esac
+    for tok in $seg; do
+        (( redir )) && { tool_bash_add_path "$tok" "$redir"; flags=3; redir=0; continue; }
+        case "$tok" in
+            '>'|'>>'|'1>'|'1>>') redir=2; continue ;;
+            '<>') redir=6; continue ;;
+            '2>'*|'2>>'*) continue ;;
+            '>'*|'>>'*) tool_bash_add_path "${tok#*>}" 2; flags=3; continue ;;
+            '<>'*) tool_bash_add_path "${tok#<>}" 6; flags=3; continue ;;
+            /*|./*|../*|~/*) tool_bash_add_path "$tok" "$path_bits"; flags=3 ;;
+            *) [[ "$tok" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]] && { tool_bash_add_path "$tok" "$path_bits"; flags=3; } ;;
+        esac
+    done
+    (( flags == 1 )) && [[ "$seg" != *'/tmp/'* ]] && tool_bash_add_mode 1 2
+}
 
-    return 1
+tool_bash_scan_script() {
+    local script="$1" normalized segment
+    script=${script//$'\\\n'/ }
+    [[ "$script" == *'/dev/tcp'* ]] && tool_bash_add_mode 2 6
+    normalized=${script//&&/$'\n'}
+    normalized=${normalized//||/$'\n'}
+    normalized=${normalized//;/$'\n'}
+    while IFS= read -r segment; do
+        segment="${segment#"${segment%%[![:space:]]*}"}"
+        segment="${segment%"${segment##*[![:space:]]}"}"
+        [[ -z "$segment" ]] && continue
+        tool_bash_scan_segment "$segment"
+    done <<< "$normalized"
+}
+
+tool_classify_bash_required_mode() {
+    local cmd="$1" lowered
+    TOOL_BASH_REQUIRED_MASK=0
+    [[ -z "$cmd" ]] && { TOOL_BASH_REQUIRED_MODE="0000"; printf '%s' "$TOOL_BASH_REQUIRED_MODE"; return 0; }
+    lowered=$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')
+    tool_bash_scan_script "$lowered"
+    (( TOOL_BASH_REQUIRED_MASK == 0 )) && tool_bash_add_mode 1 4
+    printf -v TOOL_BASH_REQUIRED_MODE '%04o' "$TOOL_BASH_REQUIRED_MASK"
+    printf '%s' "$TOOL_BASH_REQUIRED_MODE"
+}
+
+tool_bash_mode_allows() {
+    local allowed required
+    allowed=$(tool_bash_mode_normalize "$1")
+    required=$(tool_bash_mode_normalize "$2")
+    (( (8#$required & (4095 ^ 8#$allowed)) == 0 ))
 }
 
 tool_read() {
@@ -793,11 +853,13 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" reason output tool_rc tmpout
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" allowed_mode required_mode tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
-    reason=$(tool_deny_bash_reason "$cmd") || reason=""
-    if [[ -n "$reason" ]]; then
-        echo "Error: command blocked by bash safety policy ($reason)"
+    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0447}")
+    tool_classify_bash_required_mode "$cmd" >/dev/null
+    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
+    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
+        echo "Error: command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
         return 1
     fi
     tmpout=$(mktemp)
@@ -1333,6 +1395,7 @@ Environment:
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
+  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0447)
   EFFORT                  Default thinking effort (default: high)
   THINKING                Default thinking mode (default: adaptive)
   MODEL                   Default model name
