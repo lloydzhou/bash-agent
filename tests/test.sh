@@ -459,21 +459,27 @@ test_agent_e2e_openai() {
 test_agent_openai_request_body() {
     info "Test 11a: Agent OpenAI request body carries converted tools"
     "$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' >/dev/null 2>&1 || true
-    local req body
+    local req check_output
     req=$(curl -fsS "$BASE/last-request")
-    body=$(printf '%s' "$req" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
-    if printf '%s' "$body" | /usr/bin/python3 -c '
+    check_output=$(printf '%s' "$req" | /usr/bin/python3 -c '
 import json, sys
-obj = json.loads(sys.stdin.read())
-assert obj["messages"][0]["role"] == "system"
-assert len(obj.get("tools", [])) > 0
-assert obj["tools"][0]["type"] == "function"
-assert "parameters" in obj["tools"][0]["function"]
-' 2>/dev/null && \
-       ! echo "$body" | grep -Fq '"input_schema"'; then
+req = json.load(sys.stdin)
+obj = json.loads(req["body"])
+assert obj["messages"][0]["role"] == "system", "first message role is not system"
+tools = obj.get("tools", [])
+assert tools, "tools array is empty"
+assert tools[0]["type"] == "function", "first tool type is not function"
+assert "parameters" in tools[0]["function"], "first tool missing function.parameters"
+for i, tool in enumerate(tools):
+    assert "input_schema" not in tool, f"tool[{i}] still has top-level input_schema"
+    fn = tool.get("function", {})
+    assert "input_schema" not in fn, f"tool[{i}].function still has input_schema"
+print("ok")
+' 2>&1)
+    if [[ "$check_output" == "ok" ]]; then
         green "Agent OpenAI request body carries converted tools"; ((PASS++)) || true
     else
-        red "Agent OpenAI request body carries converted tools"; echo "  Body: $body"; ((FAIL++)) || true
+        red "Agent OpenAI request body carries converted tools"; echo "  Check: $check_output"; ((FAIL++)) || true
     fi
 }
 

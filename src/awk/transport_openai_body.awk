@@ -190,7 +190,7 @@ function convert_tools(tools_json,    n, tdefs, result, i, td, name, desc, param
         if (params == "") params = extract_value(td, "parameters")
         if (params == "") params = "{}"
         if (i > 1) result = result ","
-        result = result "{\"type\":\"function\",\"function\":{\"name\":\"" name "\",\"description\":\"" desc "\",\"parameters\":" params "}}"
+        result = result "{\"type\":\"function\",\"function\":{\"name\":\"" escape_json_string(name) "\",\"description\":\"" escape_json_string(desc) "\",\"parameters\":" params "}}"
     }
     result = result "]"
     return result
