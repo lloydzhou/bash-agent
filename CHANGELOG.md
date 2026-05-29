@@ -8,6 +8,33 @@
 
 ---
 
+## [4.0.4] - 2026-05-29
+
+> **Bugfix + Docs 版本**：修复 C 版本在 OpenAI Chat Completions 接口下的请求体转换问题，补齐工具调用语义；同时同步更新主文档、wiki 与 gh-pages 中的 Bash 权限模型说明。
+
+### Fixed
+
+- 修复 C 版本在 `--provider openai` 下仍向 `/chat/completions` 发送 Claude 风格请求体的问题
+- C 版本 OpenAI body conversion 现正确转换 `system`、`messages`、`tools`、assistant `tool_use`、user `tool_result`
+- 修复 C 版本长会话 compact / summary 请求在 OpenAI 模式下未走 body conversion 的问题
+- 对齐 C 版本 OpenAI 请求头，不再额外发送仅 Claude 路径使用的 `x-app` header
+
+### Added
+
+- 新增 C 版 OpenAI request body 回归测试，直接检查 mock `/last-request` 中的 `tools[].type=function` / `parameters`
+- 新增 `docs/bash-tool-policy.md`，集中说明 Bash 工具权限模型、scope 分类与推荐配置
+- wiki 新增中英文 Bash 工具权限模式设计页，并在首页加入入口
+
+### Changed
+
+- README / README.en 同步更新为四运行时描述（bash/c/go/rust）、5 个安装命令说明与 13 个内置工具列表
+- `docs/tools.md` 补充 Bash 工具权限模式说明与统一阻断报错格式
+- gh-pages 工具区将 Bash 单独拆成一张卡片，并改为以 4 个 scope + 3 个权限位解释权限模型
+
+### Tests
+
+- C 版 e2e 回归验证通过：`125 passed, 0 failed`
+
 ## [4.0.3] - 2026-05-29
 
 > **Feature + Bugfix 版本**：为 Bash 工具引入 `BASH_AGENT_BASH_MODE` 权限模式，并同步对齐 C/Go/Rust；同时将测试 mock server 提取为独立 Python 文件，修复 CI 中 `Argument list too long`。
