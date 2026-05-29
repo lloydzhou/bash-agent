@@ -8,6 +8,33 @@
 
 ---
 
+## [4.0.5] - 2026-05-29
+
+> **Bugfix 版本**：修复 C 版本 OpenAI 工具调用链、工具结果处理与交互首屏显示问题；同时修复 Bash 版本 OpenAI tools 描述的 JSON 转义错误。
+
+### Fixed
+
+- 修复 C 版本 OpenAI Chat Completions 路径下的工具调用兼容链，补齐 `tool_calls` 聚合与统一事件转换
+- 修复 C 版本 OpenAI body conversion 中的 JSON 构造错误，避免真实兼容端下工具调用失效
+- 修复 C 版本 `Glob` / `Grep` 空结果时的空指针解引用崩溃
+- 修复 C 版本 `Edit` 写回失败后仍返回成功的问题，写文件失败时现在直接报错
+- 修复 C 版本交互模式 fresh session 首屏多余空行，仅在真正 replay 历史内容后追加分隔换行
+- 修复 C 版本 `Glob` / `Grep` 的 shell 参数 quoting，避免 `popen()` 路径下参数展开与注入风险
+- 修复 Bash 版本 OpenAI tool request body 中 `description` 未正确 JSON 转义的问题
+
+### Changed
+
+- C 版本 `assistant(tool_use)` 与 `tool_result` 的 conversation 持久化顺序对齐 Bash / Go / Rust
+- Go 版本 OpenAI 多 tool call 分片聚合改为按 `index` 处理，与 Rust / C 保持一致
+- `Glob` / `Grep` no-match 结果统一对齐为返回空字符串，不再使用额外占位文案
+- `Test 11a` 改为结构化检查 OpenAI request body，失败时不再打印超长原始请求体
+
+### Tests
+
+- mock server 补强 OpenAI `delta.tool_calls` 分片与多工具同轮调用场景
+- 新增 OpenAI tool-call e2e、`Glob/Grep` no-match、tool_result 持久化顺序等回归测试
+- C / Go / Rust e2e 回归验证通过：`130 passed, 0 failed`
+
 ## [4.0.4] - 2026-05-29
 
 > **Bugfix + Docs 版本**：修复 C 版本在 OpenAI Chat Completions 接口下的请求体转换问题，补齐工具调用语义；同时同步更新主文档、wiki 与 gh-pages 中的 Bash 权限模型说明。
