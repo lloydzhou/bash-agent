@@ -456,6 +456,22 @@ test_agent_e2e_openai() {
     check "Agent e2e OpenAI" "$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1 || true)" "Hello from" "mock"
 }
 
+test_agent_openai_request_body() {
+    info "Test 11a: Agent OpenAI request body carries converted tools"
+    "$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' >/dev/null 2>&1 || true
+    local req body
+    req=$(curl -fsS "$BASE/last-request")
+    body=$(printf '%s' "$req" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
+    if echo "$body" | grep -Fq '"role":"system"' && \
+       echo "$body" | grep -Fq '"type":"function"' && \
+       echo "$body" | grep -Fq '"parameters":' && \
+       ! echo "$body" | grep -Fq '"input_schema"'; then
+        green "Agent OpenAI request body carries converted tools"; ((PASS++)) || true
+    else
+        red "Agent OpenAI request body carries converted tools"; echo "  Body: $body"; ((FAIL++)) || true
+    fi
+}
+
 # Test 13: Skill injection
 test_agent_skill_injection() {
     local skill_dir skill_file
@@ -2330,6 +2346,7 @@ test_transport_body
 test_transport_body_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
+test_agent_openai_request_body
 test_agent_skill_injection
 test_agent_skill_injection_from_repo_skills_dir
 test_agent_skill_index

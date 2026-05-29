@@ -634,8 +634,251 @@ char *build_claude_request(const char *model, const char *system_prompt,
     return result;
 }
 
+static void sb_append_json_val(StrBuf *sb, JsonVal v) {
+    if (v.type == JSON_NULL || !v.src) {
+        sb_append(sb, "null");
+        return;
+    }
+    sb_appendn(sb, v.src + v.start, v.end - v.start);
+}
+
+static void openai_convert_tools(StrBuf *out, JsonVal tools_val) {
+    if (tools_val.type != JSON_ARRAY) {
+        sb_append(out, "[]");
+        return;
+    }
+    sb_append_char(out, '[');
+    int n = json_array_len(tools_val);
+    for (int i = 0; i < n; i++) {
+        JsonVal td = json_array_get(tools_val, i);
+        if (i > 0) sb_append_char(out, ',');
+        char *type = json_get_string(td, "type");
+        if (type && strcmp(type, "function") == 0) {
+            sb_append_json_val(out, td);
+            FREE_PTR(type);
+            continue;
+        }
+        FREE_PTR(type);
+        char *name = json_get_string(td, "name");
+        char *desc = json_get_string(td, "description");
+        JsonVal params = json_get(td, "input_schema");
+        if (params.type == JSON_NULL) params = json_get(td, "parameters");
+        sb_append(out, "{\"type\":\"function\",\"function\":{\"name\":");
+        sb_append_json_string(out, name ? name : "");
+        sb_append(out, ",\"description\":");
+        sb_append_json_string(out, desc ? desc : "");
+        sb_append(out, ",\"parameters\":");
+        if (params.type == JSON_NULL) sb_append(out, "{}");
+        else sb_append_json_val(out, params);
+        sb_append(out, "}}");
+        FREE_PTR(name);
+        FREE_PTR(desc);
+    }
+    sb_append_char(out, ']');
+}
+
+static void openai_convert_assistant_message(StrBuf *out, JsonVal content_val) {
+    StrBuf text, reasoning, tool_calls;
+    sb_init(&text);
+    sb_init(&reasoning);
+    sb_init(&tool_calls);
+
+    int n = json_array_len(content_val);
+    for (int i = 0; i < n; i++) {
+        JsonVal block = json_array_get(content_val, i);
+        char *btype = json_get_string(block, "type");
+        if (!btype) continue;
+        if (strcmp(btype, "thinking") == 0) {
+            char *t = json_get_string(block, "thinking");
+            if (t) { sb_append(&reasoning, t); FREE_PTR(t); }
+        } else if (strcmp(btype, "text") == 0) {
+            char *t = json_get_string(block, "text");
+            if (t) { sb_append(&text, t); FREE_PTR(t); }
+        } else if (strcmp(btype, "tool_use") == 0) {
+            char *id = json_get_string(block, "id");
+            char *name = json_get_string(block, "name");
+            JsonVal input = json_get(block, "input");
+            if (tool_calls.len > 0) sb_append_char(&tool_calls, ',');
+            sb_append(&tool_calls, "{\"id\":");
+            sb_append_json_string(&tool_calls, id ? id : "");
+            sb_append(&tool_calls, ",\"type\":\"function\",\"function\":{\"name\":");
+            sb_append_json_string(&tool_calls, name ? name : "");
+            sb_append(&tool_calls, ",\"arguments\":");
+            if (input.type == JSON_NULL) sb_append_json_string(&tool_calls, "{}");
+            else {
+                StrBuf arg;
+                sb_init(&arg);
+                sb_append_json_val(&arg, input);
+                sb_append_json_string(&tool_calls, arg.data ? arg.data : "{}");
+                sb_free(&arg);
+            }
+            sb_append(&tool_calls, "}}");
+            FREE_PTR(id);
+            FREE_PTR(name);
+        }
+        FREE_PTR(btype);
+    }
+
+    sb_append(out, "{\"role\":\"assistant\",\"reasoning_content\":");
+    sb_append_json_string(out, reasoning.data ? reasoning.data : "");
+    sb_append(out, ",\"content\":");
+    sb_append_json_string(out, text.data ? text.data : "");
+    if (tool_calls.len > 0) {
+        sb_append(out, ",\"tool_calls\":[");
+        sb_append(out, tool_calls.data);
+        sb_append_char(out, ']');
+    }
+    sb_append_char(out, '}');
+
+    sb_free(&text);
+    sb_free(&reasoning);
+    sb_free(&tool_calls);
+}
+
+static int openai_convert_tool_results(StrBuf *out, JsonVal content_val) {
+    int written = 0;
+    int n = json_array_len(content_val);
+    for (int i = 0; i < n; i++) {
+        JsonVal block = json_array_get(content_val, i);
+        char *btype = json_get_string(block, "type");
+        if (!btype || strcmp(btype, "tool_result") != 0) {
+            FREE_PTR(btype);
+            continue;
+        }
+        char *tool_use_id = json_get_string(block, "tool_use_id");
+        char *content = json_get_string(block, "content");
+        if (written > 0) sb_append_char(out, ',');
+        sb_append(out, "{\"role\":\"tool\",\"tool_call_id\":");
+        sb_append_json_string(out, tool_use_id ? tool_use_id : "");
+        sb_append(out, ",\"content\":");
+        sb_append_json_string(out, content ? content : "");
+        sb_append_char(out, '}');
+        written++;
+        FREE_PTR(tool_use_id);
+        FREE_PTR(content);
+        FREE_PTR(btype);
+    }
+    return written;
+}
+
+static void openai_convert_messages(StrBuf *out, JsonVal messages_val) {
+    sb_append_char(out, '[');
+    int wrote = 0;
+    int n = json_array_len(messages_val);
+    for (int i = 0; i < n; i++) {
+        JsonVal msg = json_array_get(messages_val, i);
+        char *role = json_get_string(msg, "role");
+        JsonVal content = json_get(msg, "content");
+        if (role && strcmp(role, "assistant") == 0 && content.type == JSON_ARRAY) {
+            if (wrote > 0) sb_append_char(out, ',');
+            openai_convert_assistant_message(out, content);
+            wrote++;
+        } else if (role && strcmp(role, "user") == 0 && content.type == JSON_ARRAY) {
+            int before = wrote;
+            if (wrote > 0 && json_array_len(content) > 0) {
+                /* openai_convert_tool_results handles commas after the first item */
+            }
+            if (wrote > 0) {
+                StrBuf tmp;
+                sb_init(&tmp);
+                int tool_written = openai_convert_tool_results(&tmp, content);
+                if (tool_written > 0) {
+                    sb_append_char(out, ',');
+                    sb_append(out, tmp.data);
+                    wrote += tool_written;
+                } else {
+                    if (wrote > 0) sb_append_char(out, ',');
+                    sb_append_json_val(out, msg);
+                    wrote++;
+                }
+                sb_free(&tmp);
+            } else {
+                int tool_written = openai_convert_tool_results(out, content);
+                if (tool_written > 0) wrote += tool_written;
+                else {
+                    sb_append_json_val(out, msg);
+                    wrote++;
+                }
+            }
+            (void)before;
+        } else {
+            if (wrote > 0) sb_append_char(out, ',');
+            sb_append_json_val(out, msg);
+            wrote++;
+        }
+        FREE_PTR(role);
+    }
+    sb_append_char(out, ']');
+}
+
 char *convert_to_openai(const char *claude_body) {
-    /* 简化的 Claude → OpenAI 转换 */
-    /* 对于完整的转换需要解析并重组 JSON，这里先返回原样 */
-    return util_strdup(claude_body);
+    JsonParse jp = json_parse_root(claude_body);
+    if (jp.error) return util_strdup(claude_body);
+
+    char *model = json_get_string(jp.val, "model");
+    int max_tokens = json_get_int(jp.val, "max_tokens");
+    JsonVal system_val = json_get(jp.val, "system");
+    JsonVal thinking_val = json_get(jp.val, "thinking");
+    JsonVal output_config_val = json_get(jp.val, "output_config");
+    JsonVal messages_val = json_get(jp.val, "messages");
+    JsonVal tools_val = json_get(jp.val, "tools");
+
+    StrBuf messages, tools, result;
+    sb_init(&messages);
+    sb_init(&tools);
+    sb_init(&result);
+
+    openai_convert_messages(&messages, messages_val);
+    if (tools_val.type == JSON_ARRAY && json_array_len(tools_val) > 0) {
+        openai_convert_tools(&tools, tools_val);
+    }
+
+    sb_append(&result, "{\"model\":");
+    sb_append_json_string(&result, model ? model : "");
+    sb_append(&result, ",\"max_tokens\":");
+    sb_appendf(&result, "%d", max_tokens);
+    sb_append(&result, ",\"stream\":true");
+
+    if (system_val.type != JSON_NULL) {
+        char *sys = json_as_string(system_val);
+        if (sys && sys[0]) {
+            StrBuf with_system;
+            sb_init(&with_system);
+            sb_append(&with_system, "[{\"role\":\"system\",\"content\":");
+            sb_append_json_string(&with_system, sys);
+            if (messages.len > 2) {
+                sb_append_char(&with_system, ',');
+                sb_appendn(&with_system, messages.data + 1, messages.len - 2);
+            }
+            sb_append_char(&with_system, ']');
+            sb_free(&messages);
+            messages = with_system;
+        }
+        FREE_PTR(sys);
+    }
+
+    char *thinking_type = json_get_string(thinking_val, "type");
+    if (thinking_type &&
+        (strcmp(thinking_type, "adaptive") == 0 || strcmp(thinking_type, "enabled") == 0)) {
+        sb_append(&result, ",\"thinking\":{\"type\":\"enabled\"}");
+        char *effort = json_get_string(output_config_val, "effort");
+        sb_append(&result, ",\"reasoning_effort\":");
+        sb_append_json_string(&result, (effort && effort[0]) ? effort : "high");
+        FREE_PTR(effort);
+    }
+    FREE_PTR(thinking_type);
+
+    if (tools.len > 0 && strcmp(tools.data, "[]") != 0) {
+        sb_append(&result, ",\"tools\":");
+        sb_append(&result, tools.data);
+    }
+
+    sb_append(&result, ",\"messages\":");
+    sb_append(&result, messages.data ? messages.data : "[]");
+    sb_append_char(&result, '}');
+
+    FREE_PTR(model);
+    sb_free(&messages);
+    sb_free(&tools);
+    return result.data;
 }
