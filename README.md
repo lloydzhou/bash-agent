@@ -8,12 +8,12 @@
 
 极简 AI coding agent runtime。纯 `bash + awk`，零运行时依赖。
 
-同时提供 Go (`goagent`) 和 Rust (`rustagent`) 原生 port，保持相同语义。
+同时提供 C (`cagent`)、Go (`goagent`) 和 Rust (`rustagent`) 原生 port，保持相同语义。
 
 ## 特点
 
 - **零依赖** — 只需要 bash、awk、curl、rg
-- **三 port 对齐** — bash/go/rust 保持相同的 agent loop、tool、session 语义
+- **四运行时对齐** — bash/c/go/rust 保持相同的 agent loop、tool、session 语义
 - **异步子 Agent** — 内建 `SubAgent` 工具，委托子任务给独立会话并行执行，结果自动回注主对话。支持 `fork` 模式继承上下文、会话隔离、故障传播
 - **缓存感知压缩** — 基于经济学的 DP 算法自动决策是否压缩、保留多少
 - **Session 持久化** — 按项目隔离，支持恢复、续接、compact
@@ -23,7 +23,7 @@
 ## 快速开始
 
 ```bash
-# macOS — 通过 Homebrew 安装（包含 bash/go/rust 三个版本）
+# macOS — 通过 Homebrew 安装（包含 bash/c/go/rust 四个版本）
 brew install lloydzhou/tap/bash-agent
 
 # 或手动安装 Bash 版（单文件）
@@ -66,7 +66,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 bash-agent -p openai -m llama3 "hello"
 ```bash
 brew install lloydzhou/tap/bash-agent
 ```
-安装后包含 `bash-agent`、`goagent`、`rustagent` 三个二进制。
+安装后包含 `bash-agent`、`cagent`、`ccagent`、`goagent`、`rustagent` 五个命令。
 
 ### Arch Linux（AUR）
 ```bash
@@ -93,7 +93,7 @@ go -C go build -o ~/.local/bin/goagent ./cmd/goagent
 cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rustagent
 ```
 
-预构建产物下载（Go / Rust）见 [Releases](https://github.com/lloydzhou/bash-agent/releases)。
+预构建产物下载（C / Go / Rust）见 [Releases](https://github.com/lloydzhou/bash-agent/releases)。
 
 ## CLI
 
@@ -152,6 +152,40 @@ tcode goagent -p openai -m gpt-4o
 | `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
 | `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
 | `BASH_AGENT_BASH_MODE` | Bash 工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0447`） |
+
+## Bash 工具权限模式
+
+`BASH_AGENT_BASH_MODE` 控制 `Bash` 工具允许访问的范围。它是一个 4 位八进制字符串：
+
+```text
+system external network workspace
+```
+
+每一位使用 `4=read`、`2=write`、`1=execute`。
+
+默认值：
+
+```text
+0447
+```
+
+表示：
+
+- `system=0`：默认不允许系统范围读写执行
+- `external=4`：允许读取工作区外普通路径
+- `network=4`：允许网络读取
+- `workspace=7`：允许工作区内读写执行
+
+常见示例：
+
+```bash
+export BASH_AGENT_BASH_MODE=0447  # 默认
+export BASH_AGENT_BASH_MODE=4447  # 允许 system read
+export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
+export BASH_AGENT_BASH_MODE=7777  # 全开，仅建议受信环境
+```
+
+如果值非法，会 fail-closed 为 `0000`。这个模型的表达方式类似 Linux 文件权限的 `rwx` 位。更完整的分类规则、推荐配置和错误文案见 [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md)。
 
 DP 算法相关环境变量：
 
@@ -212,9 +246,9 @@ $$
 
 ## 内置工具
 
-`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
+`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `PlanConfirm` · `PlanClear` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
 
-> 详细说明见 [`docs/tools.md`](docs/tools.md)。
+> 详细说明见 [`docs/tools.md`](docs/tools.md)。`Bash` 工具的权限模型见 [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md)。
 
 ## Skills
 
@@ -239,7 +273,8 @@ $$
 | 文档 | 说明 |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | 架构设计、分层、协议 |
-| [`docs/tools.md`](docs/tools.md) | 11 个内置工具详细说明 |
+| [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash 工具权限模式、分类规则、推荐配置 |
+| [`docs/tools.md`](docs/tools.md) | 13 个内置工具详细说明 |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | 压缩算法完整推导 |
 | [`docs/sessions.md`](docs/sessions.md) | Session 文件结构与恢复 |
 

@@ -8,12 +8,12 @@
 
 A minimal AI coding agent runtime. Pure `bash + awk`, zero runtime dependencies.
 
-Go (`goagent`) and Rust (`rustagent`) ports maintain the same semantics.
+C (`cagent`), Go (`goagent`), and Rust (`rustagent`) ports maintain the same semantics.
 
 ## Highlights
 
 - **Zero dependencies** — only bash, awk, curl, rg
-- **Three aligned ports** — bash/go/rust share the same agent loop, tool, and session semantics
+- **Four aligned runtimes** — bash/c/go/rust share the same agent loop, tool, and session semantics
 - **Async SubAgent** — built-in `SubAgent` tool delegates subtasks to independent sessions running in parallel, results auto-injected back. Supports `fork` mode for context inheritance, session isolation, and failure propagation
 - **Cache-aware compaction** — DP economics algorithm decides whether and how much to compact
 - **Session persistence** — project-scoped, resumable, compactable
@@ -23,7 +23,7 @@ Go (`goagent`) and Rust (`rustagent`) ports maintain the same semantics.
 ## Quick Start
 
 ```bash
-# macOS — install via Homebrew (all three editions: bash/go/rust)
+# macOS — install via Homebrew (all four editions: bash/c/go/rust)
 brew install lloydzhou/tap/bash-agent
 
 # Or install bash-only manually (single file)
@@ -66,7 +66,7 @@ OPENAI_BASE_URL=http://localhost:11434/v1 bash-agent -p openai -m llama3 "hello"
 ```bash
 brew install lloydzhou/tap/bash-agent
 ```
-Installs three binaries: `bash-agent`, `goagent`, `rustagent`.
+Installs five commands: `bash-agent`, `cagent`, `ccagent`, `goagent`, `rustagent`.
 
 ### Arch Linux (AUR)
 ```bash
@@ -93,7 +93,7 @@ go -C go build -o ~/.local/bin/goagent ./cmd/goagent
 cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rustagent
 ```
 
-Pre-built binaries (Go / Rust) are available on [Releases](https://github.com/lloydzhou/bash-agent/releases).
+Pre-built binaries (C / Go / Rust) are available on [Releases](https://github.com/lloydzhou/bash-agent/releases).
 
 ## CLI
 
@@ -154,6 +154,40 @@ Supports readline input, resume info on exit, Ctrl+C to interrupt, Ctrl+D to cle
 | `BASH_AGENT_BASH_MODE` | Bash tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0447`) |
 | `THINKING_BUDGET` | Thinking token budget (default: `2048`) |
 
+## Bash Tool Permission Mode
+
+`BASH_AGENT_BASH_MODE` controls what the `Bash` tool is allowed to touch. It is a 4-digit octal string:
+
+```text
+system external network workspace
+```
+
+Each digit uses `4=read`, `2=write`, `1=execute`.
+
+Default:
+
+```text
+0447
+```
+
+That means:
+
+- `system=0`: no system-scope read/write/execute by default
+- `external=4`: allow read access outside the workspace
+- `network=4`: allow network read
+- `workspace=7`: allow read/write/execute inside the workspace
+
+Typical examples:
+
+```bash
+export BASH_AGENT_BASH_MODE=0447  # default
+export BASH_AGENT_BASH_MODE=4447  # allow system read
+export BASH_AGENT_BASH_MODE=0457  # allow network execute
+export BASH_AGENT_BASH_MODE=7777  # fully open, trusted environments only
+```
+
+Invalid values fail closed to `0000`. The model is expressed like Linux-style `rwx` permission bits. Full classification rules, recommended settings, and the shared block message are documented in [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md).
+
 DP algorithm environment variables:
 
 | Variable | Default | Description |
@@ -213,9 +247,9 @@ With Claude Sonnet 4 (compacting 45K tokens of history):
 
 ## Built-in Tools
 
-`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
+`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `PlanConfirm` · `PlanClear` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
 
-> See [`docs/tools.md`](docs/tools.md) for details.
+> See [`docs/tools.md`](docs/tools.md) for details. The `Bash` tool permission model is documented in [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md).
 
 ## Skills
 
@@ -240,7 +274,8 @@ Scopes: global (`~/.bash-agent/`) and project (current directory).
 | Document | Description |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, layering, protocols |
-| [`docs/tools.md`](docs/tools.md) | 11 built-in tool references |
+| [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash tool permission mode, classification rules, recommended settings |
+| [`docs/tools.md`](docs/tools.md) | 13 built-in tool references |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | Compaction algorithm derivation |
 | [`docs/sessions.md`](docs/sessions.md) | Session files and recovery |
 

@@ -54,6 +54,23 @@
 - 默认超时 600s（可通过 `--tool-timeout` 全局设置）
 - 大输出自动截断
 - 返回 stdout + stderr
+- 受 `BASH_AGENT_BASH_MODE` 控制，按 `system/external/network/workspace` 4 位八进制权限检查
+- 非法 `BASH_AGENT_BASH_MODE` 会 fail-closed 为 `0000`
+- 阻止时四个运行时统一返回：
+
+```text
+Error: command blocked by bash safety policy (required=.... allowed=....; mode=system/external/network/workspace bits=4:read,2:write,1:execute)
+```
+
+常见模式：
+
+```bash
+export BASH_AGENT_BASH_MODE=0447  # 默认：workspace rwx，external/network 只读，system 全禁
+export BASH_AGENT_BASH_MODE=4447  # 允许 system read
+export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
+```
+
+更完整的分类规则和推荐配置见 [`bash-tool-policy.md`](bash-tool-policy.md)。
 
 ## `Glob`
 
