@@ -201,7 +201,16 @@ static ToolResult tool_edit(const char *input_json) {
     memcpy(new_content + prefix_len, new_str, new_len);
     memcpy(new_content + prefix_len + new_len, pos + old_len, suffix_len + 1);
 
-    util_write_file(path, new_content);
+    if (util_write_file(path, new_content) != 0) {
+        r.output = util_strdup("Error: cannot write file");
+        r.exit_code = 1;
+        free(content);
+        free(new_content);
+        free(path);
+        free(old_str);
+        free(new_str);
+        return r;
+    }
 
     /* 生成 diff 摘要 — 对齐 bash 版: diff -u --label a/$label --label b/$label */
     int added = 0, removed = 0;
@@ -573,6 +582,12 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
     return r;
 }
 
+static char *tool_take_buf_or(StrBuf *buf, const char *fallback) {
+    if (buf->data && buf->data[0]) return buf->data;
+    sb_free(buf);
+    return util_strdup(fallback);
+}
+
 static ToolResult tool_glob(const char *input_json, const char *cwd) {
     ToolResult r = {NULL, 0};
     JsonParse jp = json_parse_root(input_json);
@@ -616,8 +631,7 @@ static ToolResult tool_glob(const char *input_json, const char *cwd) {
         buf.data[--buf.len] = '\0';
     }
 
-    r.output = buf.data[0] ? buf.data : util_strdup("(no matches)");
-    if (r.output != buf.data) sb_free(&buf);
+    r.output = tool_take_buf_or(&buf, "");
 
     sb_free(&cmd);
     free(pattern);
@@ -650,7 +664,11 @@ static ToolResult tool_grep(const char *input_json, const char *cwd) {
     sb_init(&cmd);
     sb_append(&cmd, "rg -n --color never --heading ");
     if (context > 0) sb_appendf(&cmd, "-C %d ", context);
-    if (glob_pat && glob_pat[0]) sb_appendf(&cmd, "-g '%s' ", glob_pat);
+    if (glob_pat && glob_pat[0]) {
+        sb_append(&cmd, "-g ");
+        sb_append_json_string(&cmd, glob_pat);
+        sb_append_char(&cmd, ' ');
+    }
     sb_append(&cmd, "-- ");
     sb_append_json_string(&cmd, pattern);
     sb_append(&cmd, " ");
@@ -668,8 +686,7 @@ static ToolResult tool_grep(const char *input_json, const char *cwd) {
         }
         pclose(pipe);
     }
-    r.output = buf.data[0] ? buf.data : util_strdup("(no matches)");
-    if (r.output != buf.data) sb_free(&buf);
+    r.output = tool_take_buf_or(&buf, "");
 
     sb_free(&cmd);
     free(pattern);

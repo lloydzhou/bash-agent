@@ -137,9 +137,9 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         }
         ToolCallAccum *tc = &acc->tools[acc->tool_count];
         memset(tc, 0, sizeof(*tc));
+        sb_init(&tc->input_json);
         tc->id = util_strdup(evt->tool_id);
         tc->name = util_strdup(evt->tool_name);
-        sb_init(&tc->input_json);
         acc->tool_count++;
         break;
     }
@@ -778,6 +778,12 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             body = convert_to_openai(claude_body);
             free(claude_body);
         }
+        if (agent->verbose && body) {
+            int body_len = (int)strlen(body);
+            int preview_len = body_len > 200 ? 200 : body_len;
+            fprintf(stderr, "[verbose] Request body (%dKB): %.*s%s\n",
+                    body_len / 1024, preview_len, body, body_len > 200 ? "..." : "");
+        }
 
         /* 构建 HTTP headers */
         const char *headers[8];
@@ -909,32 +915,15 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             agent_update_title(agent);
         }
 
-        /* ---- 保存 assistant 消息到 conversation ---- */
-        const char **tc_ids = NULL, **tc_names = NULL, **tc_inputs = NULL;
-        if (accum->tool_count > 0) {
-            tc_ids = malloc(accum->tool_count * sizeof(char*));
-            tc_names = malloc(accum->tool_count * sizeof(char*));
-            tc_inputs = malloc(accum->tool_count * sizeof(char*));
-            for (int i = 0; i < accum->tool_count; i++) {
-                tc_ids[i] = accum->tools[i].id;
-                tc_names[i] = accum->tools[i].name;
-                tc_inputs[i] = accum->tools[i].input_json.data;
-            }
-        }
-        store_conv_add_assistant(agent->paths.conversation,
-                          accum->thinking.data, accum->text.data,
-                          accum->tool_count, tc_ids, tc_names, tc_inputs);
-        free(tc_ids);
-        free(tc_names);
-        free(tc_inputs);
-
         /* ---- 执行工具调用 ---- */
+        const char **result_ids = NULL;
+        const char **result_contents = NULL;
         if (accum->tool_count > 0 && accum->stop_reason &&
             (strcmp(accum->stop_reason, "tool_use") == 0 ||
              strcmp(accum->stop_reason, "tool_calls") == 0)) {
 
-            const char **result_ids = malloc(accum->tool_count * sizeof(char*));
-            const char **result_contents = malloc(accum->tool_count * sizeof(char*));
+            result_ids = malloc(accum->tool_count * sizeof(char*));
+            result_contents = malloc(accum->tool_count * sizeof(char*));
 
             for (int i = 0; i < accum->tool_count; i++) {
                 ToolCallAccum *tc = &accum->tools[i];
@@ -1040,11 +1029,6 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 }
 
             }
-
-            /* 保存 tool_results */
-            store_conv_add_tool_results(agent->paths.conversation, accum->tool_count,
-                                  result_ids, result_contents);
-
             /* PlanClear / PlanConfirm 触发 compact（在 tool_result 写入之后）
              * 对齐 bash 版: PlanConfirm→先 compact 再 mv draft→plan; PlanClear→compact+clear */
             for (int i = 0; i < accum->tool_count; i++) {
@@ -1066,10 +1050,31 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 }
             }
 
-            /* 释放 tool result 输出 */
+        }
+
+        /* ---- 保存 assistant / tool_results 到 conversation ---- */
+        const char **tc_ids = NULL, **tc_names = NULL, **tc_inputs = NULL;
+        if (accum->tool_count > 0) {
+            tc_ids = malloc(accum->tool_count * sizeof(char*));
+            tc_names = malloc(accum->tool_count * sizeof(char*));
+            tc_inputs = malloc(accum->tool_count * sizeof(char*));
             for (int i = 0; i < accum->tool_count; i++) {
-                free((void*)result_contents[i]);
+                tc_ids[i] = accum->tools[i].id;
+                tc_names[i] = accum->tools[i].name;
+                tc_inputs[i] = accum->tools[i].input_json.data;
             }
+        }
+        store_conv_add_assistant(agent->paths.conversation,
+                          accum->thinking.data, accum->text.data,
+                          accum->tool_count, tc_ids, tc_names, tc_inputs);
+        free(tc_ids);
+        free(tc_names);
+        free(tc_inputs);
+
+        if (result_ids && result_contents) {
+            store_conv_add_tool_results(agent->paths.conversation, accum->tool_count,
+                                  result_ids, result_contents);
+            for (int i = 0; i < accum->tool_count; i++) free((void *)result_contents[i]);
             free(result_ids);
             free(result_contents);
         }
@@ -2301,7 +2306,6 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         free(summary_body);
         summary_body = openai_body;
     }
-
     /* 发送 summary 请求 */
     const char *headers[8];
     char auth_header[512];
