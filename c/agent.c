@@ -769,10 +769,15 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         const char *tools_json = embedded_tools_json;
 
         /* 构建请求体 */
-        char *body = build_claude_request(agent->model, system_prompt,
-                                          tools_json, lines, line_count,
-                                          agent->max_tokens,
-                                          agent->thinking, agent->effort);
+        char *claude_body = build_claude_request(agent->model, system_prompt,
+                                                 tools_json, lines, line_count,
+                                                 agent->max_tokens,
+                                                 agent->thinking, agent->effort);
+        char *body = claude_body;
+        if (strcmp(agent->provider, "openai") == 0) {
+            body = convert_to_openai(claude_body);
+            free(claude_body);
+        }
 
         /* 构建 HTTP headers */
         const char *headers[8];
@@ -780,9 +785,9 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         int hdr_count = 0;
         headers[hdr_count++] = "Content-Type: application/json";
         headers[hdr_count++] = "User-Agent: claude-cli/1.0.33 (max, cli)";
-        headers[hdr_count++] = "x-app: cli";
 
         if (strcmp(agent->provider, "claude") == 0) {
+            headers[hdr_count++] = "x-app: cli";
             snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", agent->api_key);
             headers[hdr_count++] = auth_header;
             headers[hdr_count++] = "anthropic-version: 2023-06-01";
@@ -2291,6 +2296,11 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     sb_append(&req_body, "}]}");
 
     char *summary_body = req_body.data;
+    if (strcmp(agent->provider, "openai") == 0) {
+        char *openai_body = convert_to_openai(summary_body);
+        free(summary_body);
+        summary_body = openai_body;
+    }
 
     /* 发送 summary 请求 */
     const char *headers[8];
@@ -2298,8 +2308,8 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     int hdr_count = 0;
     headers[hdr_count++] = "Content-Type: application/json";
     headers[hdr_count++] = "User-Agent: claude-cli/1.0.33 (max, cli)";
-    headers[hdr_count++] = "x-app: cli";
     if (strcmp(agent->provider, "claude") == 0) {
+        headers[hdr_count++] = "x-app: cli";
         snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", agent->api_key);
         headers[hdr_count++] = auth_header;
         headers[hdr_count++] = "anthropic-version: 2023-06-01";
