@@ -290,9 +290,10 @@ int main(int argc, char *argv[]) {
         display_thread_start(&display_thread, &dcfg);
 
         /* Replay 最近 10 轮事件（复用 display 线程渲染） */
-        if (!agent->output_format) agent_replay_events(agent, 10);
+        int replayed = 0;
+        if (!agent->output_format) replayed = agent_replay_events(agent, 10);
         /* replay 后输出换行 */
-        if (!agent->output_format) {
+        if (!agent->output_format && replayed) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_text("\n");
             mq_push(&display_queue, dm);

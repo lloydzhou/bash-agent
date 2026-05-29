@@ -611,9 +611,9 @@ static ToolResult tool_glob(const char *input_json, const char *cwd) {
     StrBuf cmd;
     sb_init(&cmd);
     sb_append(&cmd, "rg --files ");
-    sb_append_json_string(&cmd, base);
+    sb_append_shell_arg(&cmd, base);
     sb_append(&cmd, " -g ");
-    sb_append_json_string(&cmd, pattern);
+    sb_append_shell_arg(&cmd, pattern);
     sb_append(&cmd, " 2>/dev/null || true");
 
     FILE *pipe = popen(cmd.data, "r");
@@ -666,13 +666,13 @@ static ToolResult tool_grep(const char *input_json, const char *cwd) {
     if (context > 0) sb_appendf(&cmd, "-C %d ", context);
     if (glob_pat && glob_pat[0]) {
         sb_append(&cmd, "-g ");
-        sb_append_json_string(&cmd, glob_pat);
+        sb_append_shell_arg(&cmd, glob_pat);
         sb_append_char(&cmd, ' ');
     }
     sb_append(&cmd, "-- ");
-    sb_append_json_string(&cmd, pattern);
+    sb_append_shell_arg(&cmd, pattern);
     sb_append(&cmd, " ");
-    sb_append_json_string(&cmd, base);
+    sb_append_shell_arg(&cmd, base);
     sb_append(&cmd, " 2>/dev/null || true");
 
     /* 执行 */

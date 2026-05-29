@@ -27,6 +27,8 @@ void sb_truncate(StrBuf *sb, size_t len);
 
 /* JSON 字符串转义：将 src 转义后追加到 sb */
 void sb_append_json_string(StrBuf *sb, const char *src);
+/* shell 参数转义：将 src 作为单个 shell 参数安全追加到 sb */
+void sb_append_shell_arg(StrBuf *sb, const char *src);
 
 /* 生成 session id: YYYYMMDD-HHMMSS-XXXX */
 char *util_new_session_id(void);
