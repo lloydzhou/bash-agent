@@ -459,16 +459,69 @@ test_agent_e2e_openai() {
 test_agent_openai_request_body() {
     info "Test 11a: Agent OpenAI request body carries converted tools"
     "$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' >/dev/null 2>&1 || true
-    local req body
+    local req check_output
     req=$(curl -fsS "$BASE/last-request")
-    body=$(printf '%s' "$req" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])')
-    if echo "$body" | grep -Fq '"role":"system"' && \
-       echo "$body" | grep -Fq '"type":"function"' && \
-       echo "$body" | grep -Fq '"parameters":' && \
-       ! echo "$body" | grep -Fq '"input_schema"'; then
+    check_output=$(printf '%s' "$req" | /usr/bin/python3 -c '
+import json, sys
+req = json.load(sys.stdin)
+obj = json.loads(req["body"])
+assert obj["messages"][0]["role"] == "system", "first message role is not system"
+tools = obj.get("tools", [])
+assert tools, "tools array is empty"
+assert tools[0]["type"] == "function", "first tool type is not function"
+assert "parameters" in tools[0]["function"], "first tool missing function.parameters"
+for i, tool in enumerate(tools):
+    assert "input_schema" not in tool, f"tool[{i}] still has top-level input_schema"
+    fn = tool.get("function", {})
+    assert "input_schema" not in fn, f"tool[{i}].function still has input_schema"
+print("ok")
+' 2>&1)
+    if [[ "$check_output" == "ok" ]]; then
         green "Agent OpenAI request body carries converted tools"; ((PASS++)) || true
     else
-        red "Agent OpenAI request body carries converted tools"; echo "  Body: $body"; ((FAIL++)) || true
+        red "Agent OpenAI request body carries converted tools"; echo "  Check: $check_output"; ((FAIL++)) || true
+    fi
+}
+
+test_agent_openai_tool_write() {
+    info "Test 11b: Agent e2e OpenAI tool call"
+    local output target_file plain_output
+    target_file="/tmp/bash-agent-write-test.txt"
+    rm -f "$target_file"
+    output=$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test -v 'WRITE_FILE_MARKER' 2>&1) || true
+    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if [[ -f "$target_file" ]] && \
+       grep -q $'line1\nline2\nline3' "$target_file" && \
+       echo "$plain_output" | grep -Fq 'Write(/tmp/bash-agent-write-test.txt) [' && \
+       echo "$plain_output" | grep -Fq 'Done.'; then
+        green "Agent e2e OpenAI tool call"; ((PASS++)) || true
+    else
+        red "Agent e2e OpenAI tool call"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
+test_agent_tool_result_persist_order() {
+    info "Test 11c: assistant tool_use persisted before following tool_result"
+    local output session_id conv_file
+    session_id="persist-order-openai"
+    conv_file="$BASH_AGENT_HOME/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)/$session_id/conversation.jsonl"
+    rm -rf "$(dirname "$conv_file")/$session_id"
+    output=$("$AGENT" --session "$session_id" -p openai --base-url "$BASE/v1" -m test --api-key test 'WRITE_FILE_MARKER' 2>&1) || true
+    if [[ -f "$conv_file" ]] && /usr/bin/python3 - "$conv_file" <<'PY' >/dev/null 2>&1
+import json, sys
+lines = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+for i in range(len(lines) - 1):
+    cur, nxt = lines[i], lines[i + 1]
+    if cur.get("role") == "assistant" and any(b.get("type") == "tool_use" for b in cur.get("content", [])):
+        if nxt.get("role") == "user" and nxt.get("content") and all(b.get("type") == "tool_result" for b in nxt["content"]):
+            sys.exit(0)
+sys.exit(1)
+PY
+    then
+        green "assistant tool_use persisted before following tool_result"; ((PASS++)) || true
+    else
+        red "assistant tool_use persisted before following tool_result"; echo "  Output: $output"; echo "  Conversation: $(cat "$conv_file" 2>/dev/null || true)"; ((FAIL++)) || true
     fi
 }
 
@@ -721,9 +774,41 @@ test_agent_grep() {
     rm -rf "$target_dir"
 }
 
-# Test 20a: Read with offset/limit
+test_agent_glob_no_match() {
+    info "Test 20: Agent.sh glob no-match"
+    local output target_dir
+    target_dir="/tmp/bash-agent-glob-nomatch-test"
+    rm -rf "$target_dir"
+    mkdir -p "$target_dir"
+    printf 'a\n' > "$target_dir/alpha.txt"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'GLOB_NO_MATCH_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "Glob no-match complete."; then
+        green "Agent glob no-match"; ((PASS++)) || true
+    else
+        red "Agent glob no-match"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+    rm -rf "$target_dir"
+}
+
+test_agent_grep_no_match() {
+    info "Test 20a: Agent.sh grep no-match"
+    local output target_dir
+    target_dir="/tmp/bash-agent-grep-nomatch-test"
+    rm -rf "$target_dir"
+    mkdir -p "$target_dir"
+    printf 'other line\n' > "$target_dir/alpha.txt"
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'GREP_NO_MATCH_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "Grep no-match complete."; then
+        green "Agent grep no-match"; ((PASS++)) || true
+    else
+        red "Agent grep no-match"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+    rm -rf "$target_dir"
+}
+
+# Test 20b: Read with offset/limit
 test_agent_read_offset_limit() {
-    info "Test 20a: Agent.sh Read with offset/limit"
+    info "Test 20b: Agent.sh Read with offset/limit"
     local output target_file
     target_file="/tmp/bash-agent-read-offset-limit.txt"
     rm -f "$target_file"
@@ -737,9 +822,9 @@ test_agent_read_offset_limit() {
     rm -f "$target_file"
 }
 
-# Test 20b: Bash with per-call timeout
+# Test 20c: Bash with per-call timeout
 test_agent_bash_timeout() {
-    info "Test 20b: Agent.sh Bash with timeout parameter"
+    info "Test 20c: Agent.sh Bash with timeout parameter"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_TIMEOUT_MARKER' 2>&1) || true
     if echo "$output" | grep -q "Bash timeout complete."; then
@@ -749,9 +834,9 @@ test_agent_bash_timeout() {
     fi
 }
 
-# Test 20c: Grep with context parameter
+# Test 20d: Grep with context parameter
 test_agent_grep_context() {
-    info "Test 20c: Agent.sh Grep with context parameter"
+    info "Test 20d: Agent.sh Grep with context parameter"
     local output target_dir
     target_dir="/tmp/bash-agent-grep-context-test"
     rm -rf "$target_dir"
@@ -993,6 +1078,20 @@ test_agent_multiple_tool_calls() {
         green "Agent multiple tool calls"; ((PASS++)) || true
     else
         red "Agent multiple tool calls"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
+test_agent_multiple_tool_calls_openai() {
+    info "Test 27a: Agent.sh multiple tool calls in one turn (OpenAI)"
+    local output target_file
+    target_file="/tmp/bash-agent-multi-read.txt"
+    printf 'multi-read-content\n' > "$target_file"
+    output=$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'MULTI_TOOL_MARKER' 2>&1) || true
+    if echo "$output" | grep -q "Multi-tool complete."; then
+        green "Agent multiple tool calls (OpenAI)"; ((PASS++)) || true
+    else
+        red "Agent multiple tool calls (OpenAI)"; echo "  Output: $output"; ((FAIL++)) || true
     fi
     rm -f "$target_file"
 }
@@ -2347,6 +2446,8 @@ test_transport_body_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_openai_request_body
+test_agent_openai_tool_write
+test_agent_tool_result_persist_order
 test_agent_skill_injection
 test_agent_skill_injection_from_repo_skills_dir
 test_agent_skill_index
@@ -2359,6 +2460,8 @@ test_agent_read_tool_arg_parsing
 test_agent_read_file_long_result
 test_agent_glob
 test_agent_grep
+test_agent_glob_no_match
+test_agent_grep_no_match
 test_agent_read_offset_limit
 test_agent_bash_timeout
 test_agent_grep_context
@@ -2380,6 +2483,7 @@ test_agent_stream_tool_call
 test_agent_stream_usage_event
 test_agent_tool_result_multiline_url
 test_agent_multiple_tool_calls
+test_agent_multiple_tool_calls_openai
 test_agent_write_file_unicode
 test_json_escape_unicode_multiline
 test_json_extract_top_level_member

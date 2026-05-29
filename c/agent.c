@@ -137,9 +137,9 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         }
         ToolCallAccum *tc = &acc->tools[acc->tool_count];
         memset(tc, 0, sizeof(*tc));
+        sb_init(&tc->input_json);
         tc->id = util_strdup(evt->tool_id);
         tc->name = util_strdup(evt->tool_name);
-        sb_init(&tc->input_json);
         acc->tool_count++;
         break;
     }
@@ -469,18 +469,18 @@ static long find_recent_turn_start_offset(const SessionPaths *paths, int max_tur
     return start;
 }
 
-void agent_replay_events(Agent *agent, int max_turns) {
+int agent_replay_events(Agent *agent, int max_turns) {
     long start = find_recent_turn_start_offset(&agent->paths, max_turns);
-    if (start < 0) return;
+    int replayed = 0;
+    if (start < 0) return 0;
 
     FILE *f = fopen(agent->paths.events, "r");
-    if (!f) return;
+    if (!f) return 0;
     if (fseek(f, start, SEEK_SET) != 0) {
         fclose(f);
-        return;
+        return 0;
     }
 
-    /* 累积缓冲 */
     StrBuf acc_text, acc_thinking;
     sb_init(&acc_text);
     sb_init(&acc_thinking);
@@ -495,31 +495,29 @@ void agent_replay_events(Agent *agent, int max_turns) {
         if (line_len == 0) continue;
 
         JsonParse jp = json_parse_root(line);
-        if (jp.error) {  continue; }
+        if (jp.error) continue;
 
         char *type = json_get_string(jp.val, "type");
-        if (!type) {  continue; }
+        if (!type) continue;
 
         if (strcmp(type, "user_input") == 0) {
-            /* flush 累积 */
             if (acc_thinking.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_thinking(acc_thinking.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_thinking, 0);
             }
             if (acc_text.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_text(acc_text.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_text, 0);
             }
-            /* 显示 user_input（与 Rust 版 display_replay_event USER_MESSAGE 对齐） */
             char *content = json_get_string(jp.val, "content");
             if (content && content[0]) {
-                /* 截断到 80 字节（含 "..."），UTF-8 安全 */
                 util_truncate_str(content, 80);
-                /* 取第一行 */
                 char *nl = strchr(content, '\n');
                 if (nl) *nl = '\0';
 
@@ -529,46 +527,45 @@ void agent_replay_events(Agent *agent, int max_turns) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_text(user_display.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_free(&user_display);
             }
             free(content);
-        }
-        else if (strcmp(type, "text") == 0) {
-            /* flush thinking */
+        } else if (strcmp(type, "text") == 0) {
             if (acc_thinking.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_thinking(acc_thinking.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_thinking, 0);
             }
             char *content = json_get_string(jp.val, "content");
             if (content && *content) sb_append(&acc_text, content);
             free(content);
-        }
-        else if (strcmp(type, "thinking") == 0) {
-            /* flush text */
+        } else if (strcmp(type, "thinking") == 0) {
             if (acc_text.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_text(acc_text.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_text, 0);
             }
             char *content = json_get_string(jp.val, "content");
             if (content && *content) sb_append(&acc_thinking, content);
             free(content);
-        }
-        else if (strcmp(type, "tool_call") == 0) {
-            /* flush 累积 */
+        } else if (strcmp(type, "tool_call") == 0) {
             if (acc_thinking.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_thinking(acc_thinking.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_thinking, 0);
             }
             if (acc_text.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_text(acc_text.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_text, 0);
             }
             char *name = json_get_string(jp.val, "name");
@@ -588,46 +585,48 @@ void agent_replay_events(Agent *agent, int max_turns) {
             free(dm->tool_input);
             dm->tool_input = util_strdup(input_str);
             push_display(agent->display_queue, dm);
-            free(input_str); free(summary); free(name); free(id);
-        }
-        else if (strcmp(type, "tool_result") == 0) {
-            /* flush 累积 */
+            replayed = 1;
+            free(input_str);
+            free(summary);
+            free(name);
+            free(id);
+        } else if (strcmp(type, "tool_result") == 0) {
             if (acc_thinking.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_thinking(acc_thinking.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_thinking, 0);
             }
             if (acc_text.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_text(acc_text.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_text, 0);
             }
             char *content = json_get_string(jp.val, "content");
-            /* 截断到 200 字节（含 "..."，UTF-8 安全） */
-            if (content) {
-                util_truncate_str(content, 200);
-            }
+            if (content) util_truncate_str(content, 200);
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_tool_result(content ? content : "", 0);
             dm->tool_id = json_get_string(jp.val, "tool_use_id");
             dm->tool_name = json_get_string(jp.val, "name");
             push_display(agent->display_queue, dm);
+            replayed = 1;
             free(content);
-        }
-        else if (strcmp(type, "sub_agent_result") == 0) {
-            /* flush 累积 */
+        } else if (strcmp(type, "sub_agent_result") == 0) {
             if (acc_thinking.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_thinking(acc_thinking.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_thinking, 0);
             }
             if (acc_text.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_text(acc_text.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_text, 0);
             }
             char *sid = json_get_string(jp.val, "session_id");
@@ -636,62 +635,61 @@ void agent_replay_events(Agent *agent, int max_turns) {
             char *text = json_get_string(jp.val, "text");
             int in_tok = json_get_int(jp.val, "input_tokens");
             int out_tok = json_get_int(jp.val, "output_tokens");
-            /* 截断 thinking（无省略号，UTF-8 安全） */
-            if (thinking) {
-                thinking[util_utf8_truncate_len(thinking, 120)] = '\0';
-            }
-            /* 截断 text（UTF-8 安全） */
-            if (text) {
-                util_truncate_str(text, 200);
-            }
+            if (thinking) thinking[util_utf8_truncate_len(thinking, 120)] = '\0';
+            if (text) util_truncate_str(text, 200);
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_sub_agent_result(sid ? sid : "", status ? status : "ok",
-                                                thinking, text ? text : "", in_tok, out_tok);
+                                               thinking, text ? text : "", in_tok, out_tok);
             push_display(agent->display_queue, dm);
-            free(sid); free(status); free(thinking); free(text);
-        }
-        else if (strcmp(type, "error") == 0) {
-            /* flush 累积 */
+            replayed = 1;
+            free(sid);
+            free(status);
+            free(thinking);
+            free(text);
+        } else if (strcmp(type, "error") == 0) {
             if (acc_thinking.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_thinking(acc_thinking.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_thinking, 0);
             }
             if (acc_text.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                 *dm = display_msg_text(acc_text.data);
                 push_display(agent->display_queue, dm);
+                replayed = 1;
                 sb_truncate(&acc_text, 0);
             }
             char *message = json_get_string(jp.val, "message");
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_error(message ? message : "unknown");
             push_display(agent->display_queue, dm);
+            replayed = 1;
             free(message);
         }
-        /* stop, usage, session_start, retry, sub_agent_start, sub_agent_end 等跳过 */
 
         free(type);
-        
     }
 
-    /* flush 最后的累积 */
     if (acc_thinking.len > 0) {
         DisplayMessage *dm = malloc(sizeof(DisplayMessage));
         *dm = display_msg_thinking(acc_thinking.data);
         push_display(agent->display_queue, dm);
+        replayed = 1;
     }
     if (acc_text.len > 0) {
         DisplayMessage *dm = malloc(sizeof(DisplayMessage));
         *dm = display_msg_text(acc_text.data);
         push_display(agent->display_queue, dm);
+        replayed = 1;
     }
 
     sb_free(&acc_text);
     sb_free(&acc_thinking);
     free(line);
     fclose(f);
+    return replayed;
 }
 
 /* ============================================================
@@ -777,6 +775,12 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         if (strcmp(agent->provider, "openai") == 0) {
             body = convert_to_openai(claude_body);
             free(claude_body);
+        }
+        if (agent->verbose && body) {
+            int body_len = (int)strlen(body);
+            int preview_len = body_len > 200 ? 200 : body_len;
+            fprintf(stderr, "[verbose] Request body (%dKB): %.*s%s\n",
+                    body_len / 1024, preview_len, body, body_len > 200 ? "..." : "");
         }
 
         /* 构建 HTTP headers */
@@ -909,32 +913,15 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             agent_update_title(agent);
         }
 
-        /* ---- 保存 assistant 消息到 conversation ---- */
-        const char **tc_ids = NULL, **tc_names = NULL, **tc_inputs = NULL;
-        if (accum->tool_count > 0) {
-            tc_ids = malloc(accum->tool_count * sizeof(char*));
-            tc_names = malloc(accum->tool_count * sizeof(char*));
-            tc_inputs = malloc(accum->tool_count * sizeof(char*));
-            for (int i = 0; i < accum->tool_count; i++) {
-                tc_ids[i] = accum->tools[i].id;
-                tc_names[i] = accum->tools[i].name;
-                tc_inputs[i] = accum->tools[i].input_json.data;
-            }
-        }
-        store_conv_add_assistant(agent->paths.conversation,
-                          accum->thinking.data, accum->text.data,
-                          accum->tool_count, tc_ids, tc_names, tc_inputs);
-        free(tc_ids);
-        free(tc_names);
-        free(tc_inputs);
-
         /* ---- 执行工具调用 ---- */
+        const char **result_ids = NULL;
+        const char **result_contents = NULL;
         if (accum->tool_count > 0 && accum->stop_reason &&
             (strcmp(accum->stop_reason, "tool_use") == 0 ||
              strcmp(accum->stop_reason, "tool_calls") == 0)) {
 
-            const char **result_ids = malloc(accum->tool_count * sizeof(char*));
-            const char **result_contents = malloc(accum->tool_count * sizeof(char*));
+            result_ids = malloc(accum->tool_count * sizeof(char*));
+            result_contents = malloc(accum->tool_count * sizeof(char*));
 
             for (int i = 0; i < accum->tool_count; i++) {
                 ToolCallAccum *tc = &accum->tools[i];
@@ -1040,11 +1027,6 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 }
 
             }
-
-            /* 保存 tool_results */
-            store_conv_add_tool_results(agent->paths.conversation, accum->tool_count,
-                                  result_ids, result_contents);
-
             /* PlanClear / PlanConfirm 触发 compact（在 tool_result 写入之后）
              * 对齐 bash 版: PlanConfirm→先 compact 再 mv draft→plan; PlanClear→compact+clear */
             for (int i = 0; i < accum->tool_count; i++) {
@@ -1066,10 +1048,31 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 }
             }
 
-            /* 释放 tool result 输出 */
+        }
+
+        /* ---- 保存 assistant / tool_results 到 conversation ---- */
+        const char **tc_ids = NULL, **tc_names = NULL, **tc_inputs = NULL;
+        if (accum->tool_count > 0) {
+            tc_ids = malloc(accum->tool_count * sizeof(char*));
+            tc_names = malloc(accum->tool_count * sizeof(char*));
+            tc_inputs = malloc(accum->tool_count * sizeof(char*));
             for (int i = 0; i < accum->tool_count; i++) {
-                free((void*)result_contents[i]);
+                tc_ids[i] = accum->tools[i].id;
+                tc_names[i] = accum->tools[i].name;
+                tc_inputs[i] = accum->tools[i].input_json.data;
             }
+        }
+        store_conv_add_assistant(agent->paths.conversation,
+                          accum->thinking.data, accum->text.data,
+                          accum->tool_count, tc_ids, tc_names, tc_inputs);
+        free(tc_ids);
+        free(tc_names);
+        free(tc_inputs);
+
+        if (result_ids && result_contents) {
+            store_conv_add_tool_results(agent->paths.conversation, accum->tool_count,
+                                  result_ids, result_contents);
+            for (int i = 0; i < accum->tool_count; i++) free((void *)result_contents[i]);
             free(result_ids);
             free(result_contents);
         }
@@ -2301,7 +2304,6 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         free(summary_body);
         summary_body = openai_body;
     }
-
     /* 发送 summary 请求 */
     const char *headers[8];
     char auth_header[512];

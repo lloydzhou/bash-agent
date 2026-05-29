@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -151,8 +152,8 @@ func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 	var inputTokens, outputTokens, cacheRead, cacheCreate int
 
 	// OpenAI 流状态
-	var openaiToolName, openaiToolID, openaiPartialArgs string
 	var openaiTextStarted bool // 是否已收到过非空前导换行的文本
+	openaiPendingCalls := map[int]*openAIPendingCall{}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -171,7 +172,7 @@ func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 			// ─── OpenAI 格式检测：如果有 choices 字段，按 OpenAI 格式处理 ───
 			if strings.Contains(data, `"choices"`) || data == "[DONE]" {
 				t.handleOpenAIChunk(data, ch,
-					&openaiToolName, &openaiToolID, &openaiPartialArgs,
+					openaiPendingCalls,
 					&openaiTextStarted,
 					&stopReason,
 					&inputTokens, &outputTokens, &cacheRead, &cacheCreate)
@@ -239,19 +240,39 @@ func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 	}
 }
 
+type openAIPendingCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+func emitOpenAIPendingCalls(ch chan<- Event, pending map[int]*openAIPendingCall) {
+	keys := make([]int, 0, len(pending))
+	for idx := range pending {
+		keys = append(keys, idx)
+	}
+	sort.Ints(keys)
+	for _, idx := range keys {
+		call := pending[idx]
+		if call == nil || call.Arguments == "" {
+			continue
+		}
+		ch <- Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", call.Name, call.ID, call.Arguments}}
+	}
+	for k := range pending {
+		delete(pending, k)
+	}
+}
+
 // handleOpenAIChunk 处理 OpenAI chat.completion.chunk 格式的 SSE 数据
 func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
-	toolName, toolID, partialArgs *string,
+	pending map[int]*openAIPendingCall,
 	textStarted *bool,
 	stopReason *string,
 	inputTokens, outputTokens, cacheRead, cacheCreate *int) {
 
 	if data == "[DONE]" {
-		// 发送 tool_calls 结束（如果有未完成的）
-		if *partialArgs != "" {
-			ch <- Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", *toolName, *toolID, *partialArgs}}
-			*partialArgs = ""
-		}
+		emitOpenAIPendingCalls(ch, pending)
 		// 映射 stop reason
 		sr := *stopReason
 		switch sr {
@@ -342,17 +363,23 @@ func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
 
 	// tool_calls
 	for _, tc := range choice.Delta.ToolCalls {
-		if tc.ID != "" {
-			// 新 tool call 开始 — 如果之前有未完成的，先发送
-			if *partialArgs != "" {
-				ch <- Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", *toolName, *toolID, *partialArgs}}
-			}
-			*toolName = tc.Function.Name
-			*toolID = tc.ID
-			*partialArgs = tc.Function.Arguments
-		} else if tc.Function.Arguments != "" {
-			*partialArgs += tc.Function.Arguments
+		call := pending[tc.Index]
+		if call == nil {
+			call = &openAIPendingCall{}
+			pending[tc.Index] = call
 		}
+		if tc.ID != "" {
+			call.ID = tc.ID
+		}
+		if tc.Function.Name != "" {
+			call.Name = tc.Function.Name
+		}
+		if tc.Function.Arguments != "" {
+			call.Arguments += tc.Function.Arguments
+		}
+	}
+	if choice.FinishReason != nil && *choice.FinishReason == "tool_calls" {
+		emitOpenAIPendingCalls(ch, pending)
 	}
 }
 

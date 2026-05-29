@@ -102,6 +102,19 @@ void sb_append_json_string(StrBuf *sb, const char *src) {
     sb_append_char(sb, '"');
 }
 
+void sb_append_shell_arg(StrBuf *sb, const char *src) {
+    if (!src) {
+        sb_append(sb, "''");
+        return;
+    }
+    sb_append_char(sb, '\'');
+    for (; *src; src++) {
+        if (*src == '\'') sb_append(sb, "'\\''");
+        else sb_append_char(sb, *src);
+    }
+    sb_append_char(sb, '\'');
+}
+
 /* ============================================================
  * 工具函数
  * ============================================================ */

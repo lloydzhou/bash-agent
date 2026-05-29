@@ -15,6 +15,13 @@ typedef struct {
     size_t cap;
 } CurlBuffer;
 
+typedef struct {
+    int index;
+    char *id;
+    char *name;
+    StrBuf arguments;
+} OpenAIToolAccum;
+
 static size_t write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     CurlBuffer *buf = (CurlBuffer *)userdata;
     size_t total = size * nmemb;
@@ -37,7 +44,147 @@ typedef struct {
     StrBuf line_buf;        /* 累积 SSE 行 */
     char *provider;         /* "claude" 或 "openai" */
     volatile int *cancelled;
+    OpenAIToolAccum *openai_tools;
+    int openai_tool_count;
+    int openai_tool_cap;
 } StreamCtx;
+
+static void emit_simple_event(sse_callback_fn callback, void *ctx,
+                              SseEventType type, const char *content);
+static void fill_openai_usage_event(SseEvent *evt, JsonVal usage);
+
+static void streamctx_free_openai_tools(StreamCtx *sctx) {
+    for (int i = 0; i < sctx->openai_tool_count; i++) {
+        FREE_PTR(sctx->openai_tools[i].id);
+        FREE_PTR(sctx->openai_tools[i].name);
+        sb_free(&sctx->openai_tools[i].arguments);
+    }
+    FREE_PTR(sctx->openai_tools);
+    sctx->openai_tool_count = 0;
+    sctx->openai_tool_cap = 0;
+}
+
+static void streamctx_reset_openai_tool(OpenAIToolAccum *tool) {
+    FREE_PTR(tool->id);
+    FREE_PTR(tool->name);
+    sb_free(&tool->arguments);
+    memset(tool, 0, sizeof(*tool));
+}
+
+static OpenAIToolAccum *streamctx_ensure_openai_tool(StreamCtx *sctx, int idx) {
+    for (int i = 0; i < sctx->openai_tool_count; i++) {
+        if (sctx->openai_tools[i].index == idx) return &sctx->openai_tools[i];
+    }
+    if (sctx->openai_tool_count >= sctx->openai_tool_cap) {
+        int old_cap = sctx->openai_tool_cap;
+        sctx->openai_tool_cap = sctx->openai_tool_cap ? sctx->openai_tool_cap * 2 : 4;
+        sctx->openai_tools = realloc(sctx->openai_tools,
+            (size_t)sctx->openai_tool_cap * sizeof(*sctx->openai_tools));
+        memset(sctx->openai_tools + old_cap, 0,
+            (size_t)(sctx->openai_tool_cap - old_cap) * sizeof(*sctx->openai_tools));
+    }
+    OpenAIToolAccum *tool = &sctx->openai_tools[sctx->openai_tool_count++];
+    tool->index = idx;
+    sb_init(&tool->arguments);
+    return tool;
+}
+
+static void streamctx_emit_openai_tool_calls(StreamCtx *sctx) {
+    for (int i = 0; i < sctx->openai_tool_count; i++) {
+        OpenAIToolAccum *tool = &sctx->openai_tools[i];
+        if (tool->arguments.len == 0) continue;
+        SseEvent evt;
+        memset(&evt, 0, sizeof(evt));
+        evt.type = SSE_TOOL_CALL;
+        evt.tool_id = tool->id ? tool->id : "";
+        evt.tool_name = tool->name ? tool->name : "";
+        evt.tool_input = tool->arguments.data ? tool->arguments.data : "{}";
+        sctx->callback(sctx->ctx, &evt);
+        streamctx_reset_openai_tool(tool);
+    }
+    sctx->openai_tool_count = 0;
+}
+
+static void parse_openai_sse_event(StreamCtx *sctx, const char *data, size_t data_len) {
+    if (data_len == 0) return;
+    if (strcmp(data, "[DONE]") == 0) return;
+
+    size_t pos = 0;
+    JsonParse jp = json_parse(data, &pos);
+    if (jp.error) return;
+
+    char *obj_type = json_get_string(jp.val, "object");
+    if (!obj_type || strcmp(obj_type, "chat.completion.chunk") != 0) {
+        FREE_PTR(obj_type);
+        return;
+    }
+    FREE_PTR(obj_type);
+
+    JsonVal choices = json_get(jp.val, "choices");
+    if (choices.type == JSON_ARRAY) {
+        JsonVal choice = json_array_get(choices, 0);
+        JsonVal delta = json_get(choice, "delta");
+        char *content = json_get_string(delta, "content");
+        if (content) {
+            emit_simple_event(sctx->callback, sctx->ctx, SSE_TEXT, content);
+            FREE_PTR(content);
+        }
+        char *reasoning = json_get_string(delta, "reasoning_content");
+        if (!reasoning) reasoning = json_get_string(delta, "reasoning");
+        if (reasoning) {
+            emit_simple_event(sctx->callback, sctx->ctx, SSE_THINKING, reasoning);
+            FREE_PTR(reasoning);
+        }
+        JsonVal tool_calls = json_get(delta, "tool_calls");
+        if (tool_calls.type == JSON_ARRAY) {
+            int tc_len = json_array_len(tool_calls);
+            for (int i = 0; i < tc_len; i++) {
+                JsonVal tc = json_array_get(tool_calls, i);
+                int idx = json_get_int(tc, "index");
+                JsonVal fn = json_get(tc, "function");
+                OpenAIToolAccum *tool = streamctx_ensure_openai_tool(sctx, idx);
+                char *id = json_get_string(tc, "id");
+                char *name = json_get_string(fn, "name");
+                char *arguments = json_get_string(fn, "arguments");
+                if (id) {
+                    FREE_PTR(tool->id);
+                    tool->id = id;
+                }
+                if (name) {
+                    FREE_PTR(tool->name);
+                    tool->name = name;
+                }
+                if (arguments) {
+                    sb_append(&tool->arguments, arguments);
+                    FREE_PTR(arguments);
+                }
+            }
+        }
+        char *finish = json_get_string(choice, "finish_reason");
+        if (finish) {
+            if (strcmp(finish, "tool_calls") == 0) {
+                streamctx_emit_openai_tool_calls(sctx);
+                emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "tool_use");
+            } else if (strcmp(finish, "stop") == 0) {
+                emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "end_turn");
+            } else if (strcmp(finish, "length") == 0) {
+                emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "max_tokens");
+            } else {
+                emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, finish);
+            }
+            FREE_PTR(finish);
+        }
+    }
+
+    JsonVal usage = json_get(jp.val, "usage");
+    if (usage.type != JSON_NULL) {
+        SseEvent evt;
+        memset(&evt, 0, sizeof(evt));
+        evt.type = SSE_USAGE;
+        fill_openai_usage_event(&evt, usage);
+        sctx->callback(sctx->ctx, &evt);
+    }
+}
 
 static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     StreamCtx *sctx = (StreamCtx *)userdata;
@@ -65,13 +212,13 @@ static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
 
             if (strncmp(line, "data: ", 6) == 0) {
                 const char *data = line + 6;
-                sse_parse_event(sctx->provider, data, strlen(data),
-                               sctx->callback, sctx->ctx);
+                if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
+                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx);
             } else if (strncmp(line, "data:", 5) == 0) {
                 const char *data = line + 5;
                 while (*data == ' ') data++;
-                sse_parse_event(sctx->provider, data, strlen(data),
-                               sctx->callback, sctx->ctx);
+                if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
+                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx);
             }
             /* 重置行缓冲 */
             sb_truncate(&sctx->line_buf, 0);
@@ -182,6 +329,9 @@ int http_post_sse(const char *url, const char **headers, int header_count,
     sb_init(&sctx.line_buf);
     sctx.cancelled = cancelled;
     sctx.provider = (char *)provider;
+    sctx.openai_tools = NULL;
+    sctx.openai_tool_count = 0;
+    sctx.openai_tool_cap = 0;
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sctx);
@@ -265,9 +415,38 @@ int http_post_sse(const char *url, const char **headers, int header_count,
                             emit_simple_event(callback, ctx, SSE_TEXT, content);
                             free(content);
                         }
+                        char *reasoning = json_get_string(msg, "reasoning_content");
+                        if (!reasoning) reasoning = json_get_string(msg, "reasoning");
+                        if (reasoning) {
+                            emit_simple_event(callback, ctx, SSE_THINKING, reasoning);
+                            free(reasoning);
+                        }
+                        JsonVal tool_calls = json_get(msg, "tool_calls");
+                        if (tool_calls.type == JSON_ARRAY) {
+                            int tc_len = json_array_len(tool_calls);
+                            for (int i = 0; i < tc_len; i++) {
+                                JsonVal tc = json_array_get(tool_calls, i);
+                                JsonVal fn = json_get(tc, "function");
+                                char *id = json_get_string(tc, "id");
+                                char *name = json_get_string(fn, "name");
+                                char *arguments = json_get_string(fn, "arguments");
+                                SseEvent evt;
+                                memset(&evt, 0, sizeof(evt));
+                                evt.type = SSE_TOOL_CALL;
+                                evt.tool_id = id;
+                                evt.tool_name = name;
+                                evt.tool_input = arguments ? arguments : (char *)"{}";
+                                callback(ctx, &evt);
+                                free(id);
+                                free(name);
+                                free(arguments);
+                            }
+                        }
                         char *finish = json_get_string(choice, "finish_reason");
                         if (finish) {
-                            emit_simple_event(callback, ctx, SSE_STOP, finish);
+                            if (strcmp(finish, "tool_calls") == 0) emit_simple_event(callback, ctx, SSE_STOP, "tool_use");
+                            else if (strcmp(finish, "stop") == 0) emit_simple_event(callback, ctx, SSE_STOP, "end_turn");
+                            else emit_simple_event(callback, ctx, SSE_STOP, finish);
                             free(finish);
                         }
                     }
@@ -285,6 +464,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
     }
 
     sb_free(&sctx.line_buf);
+    streamctx_free_openai_tools(&sctx);
     curl_slist_free_all(hdrs);
     curl_easy_cleanup(curl);
 
@@ -324,7 +504,7 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                     sse_callback_fn callback, void *ctx) {
     if (data_len == 0) return 0;
     if (strcmp(data, "[DONE]") == 0) {
-        emit_simple_event(callback, ctx, SSE_STOP, "end_turn");
+        if (strcmp(provider, "claude") == 0) emit_simple_event(callback, ctx, SSE_STOP, "end_turn");
         return 0;
     }
 
@@ -339,7 +519,6 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
         if (!type) return 0;
 
         if (strcmp(type, "content_block_delta") == 0) {
-            int idx = json_get_int(jp.val, "index");
             JsonVal delta = json_get(jp.val, "delta");
             char *dtype = json_get_string(delta, "type");
             if (dtype && strcmp(dtype, "text_delta") == 0) {
@@ -361,10 +540,8 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                     free(partial);
                 }
             }
-            (void)idx;
             free(dtype);
         } else if (strcmp(type, "content_block_start") == 0) {
-            int idx = json_get_int(jp.val, "index");
             JsonVal cb = json_get(jp.val, "content_block");
             char *cb_type = json_get_string(cb, "type");
             if (cb_type && strcmp(cb_type, "tool_use") == 0) {
@@ -380,7 +557,6 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                 free(id);
                 free(name);
             }
-            (void)idx;
             free(cb_type);
         } else if (strcmp(type, "content_block_stop") == 0) {
             /* 工具调用完成 — 由累积器在收到 stop 后统一处理 */
@@ -441,10 +617,49 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                     emit_simple_event(callback, ctx, SSE_TEXT, content);
                     free(content);
                 }
+                char *reasoning = json_get_string(delta, "reasoning_content");
+                if (!reasoning) reasoning = json_get_string(delta, "reasoning");
+                if (reasoning) {
+                    emit_simple_event(callback, ctx, SSE_THINKING, reasoning);
+                    free(reasoning);
+                }
+                JsonVal tool_calls = json_get(delta, "tool_calls");
+                if (tool_calls.type == JSON_ARRAY) {
+                            int tc_len = json_array_len(tool_calls);
+                            for (int i = 0; i < tc_len; i++) {
+                                JsonVal tc = json_array_get(tool_calls, i);
+                                JsonVal fn = json_get(tc, "function");
+                                char *id = json_get_string(tc, "id");
+                                char *name = json_get_string(fn, "name");
+                        char *arguments = json_get_string(fn, "arguments");
+                        if (id || name) {
+                            SseEvent evt;
+                            memset(&evt, 0, sizeof(evt));
+                            evt.type = SSE_TOOL_CALL_START;
+                            evt.tool_id = id;
+                            evt.tool_name = name;
+                            callback(ctx, &evt);
+                        }
+                        if (arguments) {
+                            SseEvent evt;
+                            memset(&evt, 0, sizeof(evt));
+                            evt.type = SSE_TOOL_INPUT_DELTA;
+                            evt.content = arguments;
+                            callback(ctx, &evt);
+                        }
+                        free(id);
+                        free(name);
+                        free(arguments);
+                    }
+                }
                 char *finish = json_get_string(choice, "finish_reason");
                 if (finish) {
                     if (strcmp(finish, "tool_calls") == 0) {
                         emit_simple_event(callback, ctx, SSE_STOP, "tool_use");
+                    } else if (strcmp(finish, "stop") == 0) {
+                        emit_simple_event(callback, ctx, SSE_STOP, "end_turn");
+                    } else if (strcmp(finish, "length") == 0) {
+                        emit_simple_event(callback, ctx, SSE_STOP, "max_tokens");
                     } else {
                         emit_simple_event(callback, ctx, SSE_STOP, finish);
                     }
@@ -508,22 +723,20 @@ void sse_accum_callback(void *ctx, const SseEvent *evt) {
         break;
 
     case SSE_TOOL_CALL_START: {
-        /* 新工具调用开始 */
         if (acc->tool_count >= acc->tool_cap) {
             acc->tool_cap *= 2;
             acc->tools = realloc(acc->tools, acc->tool_cap * sizeof(ToolCallAccum));
         }
         ToolCallAccum *tc = &acc->tools[acc->tool_count];
         memset(tc, 0, sizeof(*tc));
+        sb_init(&tc->input_json);
         tc->id = util_strdup(evt->tool_id);
         tc->name = util_strdup(evt->tool_name);
-        sb_init(&tc->input_json);
         acc->tool_count++;
         break;
     }
 
     case SSE_TOOL_INPUT_DELTA: {
-        /* 追加到当前最后一个工具调用的 input_json */
         if (acc->tool_count > 0 && evt->content) {
             sb_append(&acc->tools[acc->tool_count - 1].input_json, evt->content);
         }
@@ -846,6 +1059,7 @@ char *convert_to_openai(const char *claude_body) {
             sb_init(&with_system);
             sb_append(&with_system, "[{\"role\":\"system\",\"content\":");
             sb_append_json_string(&with_system, sys);
+            sb_append_char(&with_system, '}');
             if (messages.len > 2) {
                 sb_append_char(&with_system, ',');
                 sb_appendn(&with_system, messages.data + 1, messages.len - 2);

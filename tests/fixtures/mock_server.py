@@ -327,6 +327,31 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing Glob tool_result content')
             return
+        if b'GLOB_NO_MATCH_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_glob_none\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will search for matching files.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_glob_none_1\",\"name\":\"Glob\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'pattern':'*.missing','path':'/tmp/bash-agent-glob-nomatch-test'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'GLOB_NO_MATCH_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_glob_none_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Glob no-match complete.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         if b'GREP_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
@@ -354,6 +379,31 @@ class H(http.server.BaseHTTPRequestHandler):
                     ]: w.write(c.encode()); w.flush()
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing Grep tool_result content')
+            return
+        if b'GREP_NO_MATCH_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_grep_none\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I will search file contents.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_grep_none_1\",\"name\":\"Grep\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'pattern':'needle','path':'/tmp/bash-agent-grep-nomatch-test','glob':'*.txt'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'GREP_NO_MATCH_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_grep_none_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Grep no-match complete.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
             return
         if b'READ_OFFSET_LIMIT_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -612,7 +662,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing code snippet edit tool_result content')
             return
-        if b'WRITE_FILE_MARKER' in body and b'"tool_result"' not in body:
+        if b'WRITE_FILE_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_write\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -628,6 +678,8 @@ class H(http.server.BaseHTTPRequestHandler):
             elif path.startswith('/v1/chat/completions'):
                 for c in [
                     'data: {\"id\":\"chatcmpl-write\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"I will write the file now.\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-write\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_write_1\",\"type\":\"function\",\"function\":{\"name\":\"Write\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/bash-agent-write-test.txt\\\"\"}}]},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-write\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\",\\\"content\\\":\\\"line1\\\\nline2\\\\nline3\\\"}\"}}]},\"finish_reason\":null}]}\n\n',
                     'data: {\"id\":\"chatcmpl-write\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
@@ -657,7 +709,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
-        if b'WRITE_FILE_MARKER' in body and b'"tool_result"' in body:
+        if b'WRITE_FILE_MARKER' in body and (b'"tool_result"' in body or b'"role":"tool"' in body):
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_write_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -1200,7 +1252,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 ]: w.write(c.encode()); w.flush()
             return
         # --- End SubAgent mock ---
-        if b'MULTI_TOOL_MARKER' in body and b'"tool_result"' not in body:
+        if b'MULTI_TOOL_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_multi_tool\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -1216,8 +1268,16 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/v1/chat/completions'):
+                for c in [
+                    'data: {\"id\":\"chatcmpl-multi\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Running two tools.\"},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-multi\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_multi_read\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/bash-agent-multi-read.txt\\\"}\"}},{\"index\":1,\"id\":\"call_multi_bash\",\"type\":\"function\",\"function\":{\"name\":\"Bash\",\"arguments\":\"{\\\"command\\\":\\\"echo \"}}]},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-multi\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"multi-bash-ok\\\"}\"}}]},\"finish_reason\":null}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-multi\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":20}}\n\n',
+                    'data: [DONE]\n\n',
+                ]: w.write(c.encode()); w.flush()
             return
-        if b'MULTI_TOOL_MARKER' in body and b'"tool_result"' in body:
+        if b'MULTI_TOOL_MARKER' in body and (b'"tool_result"' in body or b'"role":"tool"' in body):
             if path.startswith('/v1/messages'):
                 if b'multi-read-content' in body and b'multi-bash-ok' in body:
                     for c in [
@@ -1227,6 +1287,15 @@ class H(http.server.BaseHTTPRequestHandler):
                         'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
                         'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
                         'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing one of the multi-tool results')
+            elif path.startswith('/v1/chat/completions'):
+                if b'multi-read-content' in body and b'multi-bash-ok' in body:
+                    for c in [
+                        'data: {\"id\":\"chatcmpl-multi-done\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Multi-tool complete.\"},\"finish_reason\":null}]}\n\n',
+                        'data: {\"id\":\"chatcmpl-multi-done\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n',
+                        'data: [DONE]\n\n',
                     ]: w.write(c.encode()); w.flush()
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing one of the multi-tool results')
