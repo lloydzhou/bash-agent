@@ -293,7 +293,7 @@ static int bash_contains(const char *s, const char *needle) {
 
 static void bash_mode_normalize(const char *mode, char out[5]) {
     int i;
-    const char *src = (mode && *mode) ? mode : "0447";
+    const char *src = (mode && *mode) ? mode : "0467";
     for (i = 0; i < 4 && src[i]; i++) {
         if (src[i] < '0' || src[i] > '7') break;
         out[i] = src[i];
@@ -488,7 +488,7 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
     /* 安全策略检查 */
     {
         char allowed_mode[5], required_mode[5];
-        bash_mode_normalize(util_env("BASH_AGENT_BASH_MODE", "0447"), allowed_mode);
+        bash_mode_normalize(util_env("BASH_AGENT_BASH_MODE", "0467"), allowed_mode);
         bash_classify_required_mode(cmd, required_mode);
         if (!bash_mode_allows(allowed_mode, required_mode)) {
             StrBuf deny_buf;

@@ -65,7 +65,7 @@ Error: command blocked by bash safety policy (required=.... allowed=....; mode=s
 常见模式：
 
 ```bash
-export BASH_AGENT_BASH_MODE=0447  # 默认：workspace rwx，external/network 只读，system 全禁
+export BASH_AGENT_BASH_MODE=0467  # 默认：workspace rwx，external 只读、network 读写，system 全禁
 export BASH_AGENT_BASH_MODE=4447  # 允许 system read
 export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
 ```

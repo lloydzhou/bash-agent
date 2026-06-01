@@ -266,7 +266,7 @@ use crate::config::Config;
                 bail!("Error: no command provided");
             }
             let allowed_mode = bash_mode_normalize(
-                &std::env::var("BASH_AGENT_BASH_MODE").unwrap_or_else(|_| "0447".to_string()),
+                &std::env::var("BASH_AGENT_BASH_MODE").unwrap_or_else(|_| "0467".to_string()),
             );
             let required_mode = classify_bash_required_mode(command);
             if !bash_mode_allows(&allowed_mode, &required_mode) {

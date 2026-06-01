@@ -10,7 +10,7 @@
 
 ## [4.0.6] - 2026-06-02
 
-> **Bugfix 版本**：修复 C 版本 Edit 工具 diff 行数统计、对齐三版本 DP compact 实现、修复 Go 版本统计计算 bug、修复 compact 后 current_turn_count 被错误重置的问题。
+> **Bugfix 版本**：修复 C 版本 Edit 工具 diff 行数统计、对齐三版本 DP compact 实现、修复 Go 版本统计计算 bug、修复 compact 后 current_turn_count 被错误重置的问题。同时更新默认 Bash 工具网络权限为读写模式。
 
 ### Fixed
 
@@ -25,6 +25,9 @@
 - C/Go/Rust 三版本 `isRealUserLine` 统一使用 JSON 解析识别真实用户行
 - C/Go/Rust 三版本 `compact_turn_keep` 统一使用 turn 比例保留策略，避免截断 tool_result
 - C/Go/Rust 三版本 DP 参数对齐（V=5000, S=500, R=0.8, Beta=0.03, L calculated）
+- **默认 BASH_AGENT_BASH_MODE 从 0447 更新为 0467**（network 权限从 read-only 改为 read+write），四版本默认值同步更新（`src/agent.sh` / `rust/src/tools.rs` / `go/tools.go` / `c/tools.c`）
+- 更新四版本 CLI 帮助文本与文档（README/README.en/docs/bash-tool-policy.md/docs/tools.md）中的默认权限说明
+- 测试 fixture 保持 0447 以验证旧模式兼容性
 
 ### Tests
 

@@ -151,7 +151,7 @@ Supports readline input, resume info on exit, Ctrl+C to interrupt, Ctrl+D to cle
 | `OPENAI_BASE_URL` | OpenAI API base URL |
 | `JINA_API_KEY` | Jina AI API key (required for WebSearch/WebFetch tools) |
 | `BASH_AGENT_HOME` | Override session storage directory (default: `$HOME`) |
-| `BASH_AGENT_BASH_MODE` | Bash tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0447`) |
+| `BASH_AGENT_BASH_MODE` | Bash tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0467`) |
 | `THINKING_BUDGET` | Thinking token budget (default: `2048`) |
 
 ## Bash Tool Permission Mode
@@ -167,20 +167,20 @@ Each digit uses `4=read`, `2=write`, `1=execute`.
 Default:
 
 ```text
-0447
+0467
 ```
 
 That means:
 
 - `system=0`: no system-scope read/write/execute by default
 - `external=4`: allow read access outside the workspace
-- `network=4`: allow network read
+- `network=6`: allow network read/write
 - `workspace=7`: allow read/write/execute inside the workspace
 
 Typical examples:
 
 ```bash
-export BASH_AGENT_BASH_MODE=0447  # default
+export BASH_AGENT_BASH_MODE=0467  # default
 export BASH_AGENT_BASH_MODE=4447  # allow system read
 export BASH_AGENT_BASH_MODE=0457  # allow network execute
 export BASH_AGENT_BASH_MODE=7777  # fully open, trusted environments only

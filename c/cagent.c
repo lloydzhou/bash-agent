@@ -55,7 +55,7 @@ static void usage(const char *prog) {
     fprintf(stderr, "  ANTHROPIC_BASE_URL      Claude API base URL\n");
     fprintf(stderr, "  OPENAI_BASE_URL         OpenAI API base URL\n");
     fprintf(stderr, "  BASH_AGENT_HOME         Override base directory for session storage\n");
-    fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0447)\n");
+    fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)\n");
     fprintf(stderr, "  MODEL                   Default model name\n");
 }
 

@@ -25,14 +25,14 @@ system external network workspace
 例如默认值：
 
 ```text
-0447
+0467
 ```
 
 表示：
 
 - `system=0`：默认不允许系统范围读写执行
 - `external=4`：允许读取工作区外的普通路径
-- `network=4`：允许网络读取
+- `network=6`：允许网络读写
 - `workspace=7`：允许工作区内读写执行
 
 ## Scope Definitions
@@ -91,14 +91,14 @@ Error: command blocked by bash safety policy (required=.... allowed=....; mode=s
 常见配置示例：
 
 ```bash
-# 默认：允许工作区 rwx、外部只读、网络只读
-export BASH_AGENT_BASH_MODE=0447
+# 默认：允许工作区 rwx、外部只读、网络读写
+export BASH_AGENT_BASH_MODE=0467
 
 # 允许系统只读
-export BASH_AGENT_BASH_MODE=4447
+export BASH_AGENT_BASH_MODE=4467
 
 # 允许网络执行（例如 curl | bash 一类命令）
-export BASH_AGENT_BASH_MODE=0457
+export BASH_AGENT_BASH_MODE=0477
 
 # 几乎全开，仅用于受信环境
 export BASH_AGENT_BASH_MODE=7777
@@ -106,6 +106,6 @@ export BASH_AGENT_BASH_MODE=7777
 
 更稳妥的原则是：
 
-- 默认保持 `0447`
+- 默认保持 `0467`
 - 只在确实需要时临时放大权限
 - 不要把高权限模式做成长期 shell profile 默认值

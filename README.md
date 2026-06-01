@@ -151,7 +151,7 @@ tcode goagent -p openai -m gpt-4o
 | `OPENAI_BASE_URL` | OpenAI API base URL |
 | `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
 | `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
-| `BASH_AGENT_BASH_MODE` | Bash 工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0447`） |
+| `BASH_AGENT_BASH_MODE` | Bash 工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0467`） |
 
 ## Bash 工具权限模式
 
@@ -166,20 +166,20 @@ system external network workspace
 默认值：
 
 ```text
-0447
+0467
 ```
 
 表示：
 
 - `system=0`：默认不允许系统范围读写执行
 - `external=4`：允许读取工作区外普通路径
-- `network=4`：允许网络读取
+- `network=6`：允许网络读写
 - `workspace=7`：允许工作区内读写执行
 
 常见示例：
 
 ```bash
-export BASH_AGENT_BASH_MODE=0447  # 默认
+export BASH_AGENT_BASH_MODE=0467  # 默认
 export BASH_AGENT_BASH_MODE=4447  # 允许 system read
 export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
 export BASH_AGENT_BASH_MODE=7777  # 全开，仅建议受信环境

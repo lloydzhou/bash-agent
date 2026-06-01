@@ -290,7 +290,7 @@ var (
 
 func toolBashModeNormalize(mode string) string {
 	if mode == "" {
-		mode = "0447"
+		mode = "0467"
 	}
 	if len(mode) != 4 {
 		return "0000"

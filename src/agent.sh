@@ -18,7 +18,7 @@ TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
 VERBOSE=false
 : "${TOOL_RESULT_MAX_BYTES:=100000}"
-: "${BASH_AGENT_BASH_MODE:=0447}"  # system external network workspace; octal rwx bits per scope
+: "${BASH_AGENT_BASH_MODE:=0467}"  # system external network workspace; octal rwx bits per scope
 : "${EFFORT:=high}"           # thinking effort: low|medium|high|xhigh|max
 : "${THINKING:=adaptive}"     # thinking mode: adaptive|enabled|disabled
 
@@ -715,7 +715,7 @@ tool_emit_result() {
 }
 
 tool_bash_mode_normalize() {
-    local mode="${1:-0447}"
+    local mode="${1:-0467}"
     [[ "$mode" =~ ^[0-7][0-7][0-7][0-7]$ ]] && printf '%s' "$mode" || printf '0000'
 }
 
@@ -856,7 +856,7 @@ tool_edit() {
 tool_bash() {
     local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" allowed_mode required_mode tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
-    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0447}")
+    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
     tool_classify_bash_required_mode "$cmd" >/dev/null
     required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
     if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
@@ -1394,7 +1394,7 @@ Environment:
   ANTHROPIC_BASE_URL      Claude API base URL
   OPENAI_BASE_URL         OpenAI API base URL
   BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
-  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0447)
+  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)
   EFFORT                  Default thinking effort (default: high)
   THINKING                Default thinking mode (default: adaptive)
   MODEL                   Default model name
