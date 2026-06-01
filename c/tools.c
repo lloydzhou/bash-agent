@@ -201,34 +201,28 @@ static ToolResult tool_edit(const char *input_json) {
     memcpy(new_content + prefix_len, new_str, new_len);
     memcpy(new_content + prefix_len + new_len, pos + old_len, suffix_len + 1);
 
-    if (util_write_file(path, new_content) != 0) {
-        r.output = util_strdup("Error: cannot write file");
-        r.exit_code = 1;
-        free(content);
-        free(new_content);
-        free(path);
-        free(old_str);
-        free(new_str);
-        return r;
-    }
-
     /* 生成 diff 摘要 — 对齐 bash 版: diff -u --label a/$label --label b/$label */
     int added = 0, removed = 0;
     {
-        /* 用临时文件做 diff */
-        char tmppath[256];
-        snprintf(tmppath, sizeof(tmppath), "/tmp/edit_diff_%d.tmp", (int)getpid());
-        FILE *tmpf = fopen(tmppath, "w");
-        if (tmpf) {
-            fputs(new_content, tmpf);
-            fclose(tmpf);
+        /* 用临时文件做 diff - 先保存旧内容，再保存新内容 */
+        char tmppath_old[256], tmppath_new[256];
+        snprintf(tmppath_old, sizeof(tmppath_old), "/tmp/edit_diff_old_%d.tmp", (int)getpid());
+        snprintf(tmppath_new, sizeof(tmppath_new), "/tmp/edit_diff_new_%d.tmp", (int)getpid());
+        
+        FILE *tmpf_old = fopen(tmppath_old, "w");
+        FILE *tmpf_new = fopen(tmppath_new, "w");
+        if (tmpf_old && tmpf_new) {
+            fputs(content, tmpf_old);
+            fclose(tmpf_old);
+            fputs(new_content, tmpf_new);
+            fclose(tmpf_new);
 
             StrBuf diffcmd;
             sb_init(&diffcmd);
             const char *label = path;
             if (label[0] == '/') label++;
             sb_appendf(&diffcmd, "diff -u --label 'a/%s' --label 'b/%s' -- '%s' '%s' 2>/dev/null || true",
-                       label, label, path, tmppath);
+                       label, label, tmppath_old, tmppath_new);
             FILE *dp = popen(diffcmd.data, "r");
             if (dp) {
                 StrBuf diffout;
@@ -236,8 +230,8 @@ static ToolResult tool_edit(const char *input_json) {
                 char lbuf[65536];
                 while (fgets(lbuf, sizeof(lbuf), dp)) {
                     /* 计数 added/removed 行 */
-                    if (lbuf[0] == '+' && lbuf[1] != '+' && lbuf[1] != '\n') added++;
-                    else if (lbuf[0] == '-' && lbuf[1] != '-' && lbuf[1] != '\n') removed++;
+                    if (lbuf[0] == '+' && lbuf[1] != '+') added++;
+                    else if (lbuf[0] == '-' && lbuf[1] != '-') removed++;
                     sb_append(&diffout, lbuf);
                 }
                 pclose(dp);
@@ -258,13 +252,27 @@ static ToolResult tool_edit(const char *input_json) {
                 r.output = buf.data;
             }
             sb_free(&diffcmd);
-            remove(tmppath);
+            remove(tmppath_old);
+            remove(tmppath_new);
         } else {
+            if (tmpf_old) fclose(tmpf_old);
+            if (tmpf_new) fclose(tmpf_new);
             StrBuf buf;
             sb_init(&buf);
             sb_appendf(&buf, "Edit(%s) [diff unavailable]", path);
             r.output = buf.data;
         }
+    }
+
+    if (util_write_file(path, new_content) != 0) {
+        r.output = util_strdup("Error: cannot write file");
+        r.exit_code = 1;
+        free(content);
+        free(new_content);
+        free(path);
+        free(old_str);
+        free(new_str);
+        return r;
     }
 
     free(content);
