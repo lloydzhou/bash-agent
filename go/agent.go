@@ -471,9 +471,7 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 		_ = a.store.UpdateCompactStats(summaryUsage)
 	}
 
-	// 重置 turn count 为剩余 user turn 数（与 bash 版一致）
-	remainingTurns, _ := a.store.ConvUserTurnCount()
-	_ = a.store.SetTurnCount(remainingTurns)
+	// 注意：不再重置 current_turn_count — 它应始终保持 session 累计计数
 
 	return true, nil
 }

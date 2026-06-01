@@ -1533,10 +1533,10 @@ impl Agent {
         store::store_summary_set(&self.paths, &summary)?;
         self.conv.trim_keep_last(k)?;
 
-        // Recalculate turn count based on remaining conversation history
-        if let Ok(remaining_turns) = self.conv.count_user_inputs() {
+        // 注意：不再重置 current_turn_count — 它应始终保持 session 累计计数
+        // 只更新 last_updated 和 terminal title
+        if let Ok(_) = self.conv.count_user_inputs() {
             store::store_stats_update(&self.paths.stats, |stats| {
-                Self::set_stat_usize(stats, "current_turn_count", remaining_turns as usize);
                 stats.insert(
                     "last_updated".to_string(),
                     Value::String(chrono_now_rfc3339()),

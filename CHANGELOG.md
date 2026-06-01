@@ -8,6 +8,30 @@
 
 ---
 
+## [4.0.6] - 2026-05-30
+
+> **Bugfix 版本**：修复 C 版本 Edit 工具 diff 行数统计、对齐三版本 DP compact 实现、修复 Go 版本统计计算 bug。
+
+### Fixed
+
+- 修复 C 版本 Edit 工具先写文件再生成 diff 导致统计错误的问题（`c/tools.c`）
+- 对齐 C/Go/Rust 三版本 DP compact 实现（`isRealUserLine` / `compact_turn_keep` / DP 参数）
+- 修复 Go 版本 avg input tokens 计算使用 `TurnCount` 而非 `TotalRequests` 的 bug（`go/store.go`）
+- 统一 `tool_call_summary` 输出格式（无参数工具显示 `name()` 而非 `name`）
+
+### Changed
+
+- C/Go/Rust 三版本 `isRealUserLine` 统一使用 JSON 解析识别真实用户行
+- C/Go/Rust 三版本 `compact_turn_keep` 统一使用 turn 比例保留策略，避免截断 tool_result
+- C/Go/Rust 三版本 DP 参数对齐（V=5000, S=500, R=0.8, Beta=0.03, L calculated）
+
+### Tests
+
+- 新增测试验证压缩边界不对齐到 `tool_result` 数组行
+- C/Go/Rust e2e 回归验证通过：`130 passed, 0 failed`
+
+---
+
 ## [4.0.5] - 2026-05-29
 
 > **Bugfix 版本**：修复 C 版本 OpenAI 工具调用链、工具结果处理与交互首屏显示问题；同时修复 Bash 版本 OpenAI tools 描述的 JSON 转义错误。
@@ -865,7 +889,10 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.3...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.6...HEAD
+[4.0.6]: https://github.com/lloydzhou/bash-agent/compare/v4.0.5...v4.0.6
+[4.0.5]: https://github.com/lloydzhou/bash-agent/compare/v4.0.4...v4.0.5
+[4.0.4]: https://github.com/lloydzhou/bash-agent/compare/v4.0.3...v4.0.4
 [4.0.3]: https://github.com/lloydzhou/bash-agent/compare/v4.0.2...v4.0.3
 [4.0.2]: https://github.com/lloydzhou/bash-agent/compare/v4.0.1...v4.0.2
 [4.0.1]: https://github.com/lloydzhou/bash-agent/compare/v4.0.0...v4.0.1
