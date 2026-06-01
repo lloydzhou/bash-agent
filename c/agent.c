@@ -2154,6 +2154,30 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
     return result;
 }
 
+static int compact_turn_keep(char **lines, int line_count, double ratio) {
+    if (line_count <= 0) return 0;
+
+    int *user_idx = calloc((size_t)line_count, sizeof(int));
+    if (!user_idx) return 0;
+    int user_count = 0;
+    for (int i = 0; i < line_count; i++) {
+        if (compact_is_real_user_line(lines[i])) user_idx[user_count++] = i;
+    }
+    if (user_count == 0) {
+        free(user_idx);
+        return 0;
+    }
+
+    int keep_turns = (int)((double)user_count * ratio + 0.5);
+    if (keep_turns < 1) keep_turns = 1;
+    int start_turn = user_count - keep_turns;
+    if (start_turn < 0) start_turn = 0;
+    int cut_line = user_idx[start_turn];
+    int keep = line_count - cut_line;
+    free(user_idx);
+    return keep;
+}
+
 /* ============================================================
  * 上下文压缩
  * ============================================================ */
@@ -2252,9 +2276,10 @@ int agent_compact_context(Agent *agent, const char *trigger) {
                                     total_compact, total_input);
     /* DP 返回 0（不值得）或 >= line_count（全保留）→ fallback */
     if (keep <= 0 || keep >= line_count) {
-        /* plan_clear / plan_confirm 强制按比例截断 */
+        double ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.12);
+        /* plan_clear / plan_confirm 强制按 user turn 比例截断 */
         if (strcmp(trigger, "plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
-            keep = (int)((double)line_count * 0.12 + 0.5);
+            keep = compact_turn_keep(lines, line_count, ratio);
         } else {
             /* auto 模式：检查 context_tokens 是否接近上限 */
             int ct = 0;
@@ -2265,7 +2290,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
                 free(stats3);
             }
             if (ct > 0 && ct > agent->max_context_tokens * 90 / 100) {
-                keep = (int)((double)line_count * 0.12 + 0.5);
+                keep = compact_turn_keep(lines, line_count, ratio);
             } else {
                 for (int i = 0; i < line_count; i++) free(lines[i]);
                 free(lines);
@@ -2273,7 +2298,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
             }
         }
     }
-    if (keep < 4) keep = 4;
+    if (keep <= 0) keep = compact_turn_keep(lines, line_count, dp_env_d("DP_MIN_KEEP_RATIO", 0.12));
     /* 对齐 bash 版: plan_clear/plan_confirm 绕过 keep >= line_count 守卫 */
     if (keep >= line_count &&
         strcmp(trigger, "plan_clear") != 0 &&
