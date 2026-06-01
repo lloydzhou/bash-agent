@@ -421,11 +421,23 @@ func (s *FileStore) ConvUserTurnCount() (int, error) {
 	}
 	count := 0
 	for _, line := range splitNonEmpty(string(data)) {
-		if strings.Contains(line, `"role":"user"`) && !strings.Contains(line, `"content":[`) {
+		if isRealUserLine(line) {
 			count++
 		}
 	}
 	return count, nil
+}
+
+func isRealUserLine(line string) bool {
+	var msg struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(line), &msg); err == nil {
+		var content string
+		return msg.Role == "user" && json.Unmarshal(msg.Content, &content) == nil
+	}
+	return strings.Contains(line, `"role":"user"`) && !strings.Contains(line, `"content":[`)
 }
 
 // ─── Summary ───
@@ -505,7 +517,7 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 		sz := int((len(line)+3)/4) + 1
 		sizes[i] = sz
 		totalTokens += sz
-		if strings.Contains(line, `"role":"user"`) && !strings.Contains(line, `"content":[`) {
+		if isRealUserLine(line) {
 			roles[i] = "user"
 		} else {
 			roles[i] = "other"
@@ -550,7 +562,7 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 
 	// avg input tokens per LLM request
 	avg := 4000.0
-	if s.stats.TurnCount > 0 && s.stats.InputTokens > 0 {
+	if s.stats.TotalRequests > 0 && s.stats.InputTokens > 0 {
 		avg = float64(s.stats.InputTokens) / float64(s.stats.TotalRequests)
 	}
 
@@ -561,7 +573,7 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 	c := s.stats.TotalCompact
 	r := cfg.DPRetention
 	if r == 0 {
-		r = 0.85
+		r = 0.8
 	}
 	rT := 1.0
 	for i := 0; i <= c; i++ {
@@ -572,9 +584,12 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 	}
 
 	V := float64(cfg.DPVPrefix) // fixed prefix tokens
+	if V == 0 {
+		V = 5000
+	}
 	S := float64(cfg.DPSummaryLen)
 	if S == 0 {
-		S = 400
+		S = 500
 	}
 	pInput := cfg.DPPInput
 	if pInput == 0 {
@@ -594,7 +609,7 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 	}
 	beta := cfg.DPBeta
 	if beta == 0 {
-		beta = 0.15
+		beta = 0.03
 	}
 	lInstr := 70.0
 
@@ -682,7 +697,7 @@ func (s *FileStore) ConvTurnKeep(ratio float64) (int, error) {
 	// 找所有 user 行位置
 	var userIdx []int
 	for i, line := range lines {
-		if strings.Contains(line, `"role":"user"`) && !strings.Contains(line, `"content":[`) {
+		if isRealUserLine(line) {
 			userIdx = append(userIdx, i)
 		}
 	}
