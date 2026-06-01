@@ -1130,9 +1130,7 @@ agent_compact_context() {
         store_conv_trim_tail "$keep_lines"
     fi
     rm -f "$tmp_dropped"
-    local remaining_turns
-    remaining_turns=$(store_conv_user_turn_count)
-    store_stats_update current_turn_count=$remaining_turns
+    # 注意：不再重置 current_turn_count — 它应始终保持 session 累计计数
     return 0
 }
 

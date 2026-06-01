@@ -2384,13 +2384,11 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     /* 截断 conversation */
     store_conv_trim_tail(agent->paths.conversation, keep);
 
-    /* 更新 stats（与 bash 版一致：compact_request_count+1, current_turn_count=remaining,
-     * 累加 compact 的 token 消耗到 total_* — 对齐 agent_record_usage "compact"） */
+    /* 更新 stats（compact_request_count+1，累加 compact 的 token 消耗到 total_*）
+     * 注意：不再重置 current_turn_count — 它应始终保持 session 累计计数 */
     {
-        int remaining = store_conv_user_turn_count(agent->paths.conversation);
         store_stats_set_int_file(agent->paths.stats, "compact_request_count",
             store_stats_get_file_int(agent->paths.stats, "compact_request_count") + 1);
-        store_stats_set_int_file(agent->paths.stats, "current_turn_count", remaining);
         /* 累加 compact 的 token 消耗（对齐 bash 版 agent_record_usage） */
         store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
             store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + compact_in);
