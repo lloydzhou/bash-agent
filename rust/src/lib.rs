@@ -1130,7 +1130,7 @@ pub mod conversation {
             _ => {}
         }
         if label.is_empty() {
-            name.to_string()
+            format!("{name}()")
         } else {
             format!("{name}({label})")
         }

@@ -1022,7 +1022,7 @@ char *tool_call_summary(const char *name, JsonVal input) {
         }
         free(field);
     } else {
-        sb_append(&buf, name);
+        sb_appendf(&buf, "%s()", name);
     }
 
     return buf.data;

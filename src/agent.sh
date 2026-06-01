@@ -672,7 +672,7 @@ tool_call_summary() {
     if [[ -n "$label" ]]; then
         printf '%s(%s)' "$name" "$label"
     else
-        printf '%s' "$name"
+        printf '%s()' "$name"
     fi
 }
 

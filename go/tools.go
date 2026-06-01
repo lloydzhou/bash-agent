@@ -180,7 +180,7 @@ func (td *ToolDispatcher) CallSummary(name string, params map[string]string) str
 	if value != "" {
 		return fmt.Sprintf("%s(%s)", name, value)
 	}
-	return name
+	return fmt.Sprintf("%s()", name)
 }
 
 // ─── 工具实现 ───

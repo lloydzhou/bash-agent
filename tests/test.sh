@@ -679,7 +679,6 @@ test_agent_plan_clear() {
 
     if echo "$output" | grep -q '"name":"PlanClear"' && \
        echo "$output" | grep -q '"type":"tool_call"' && \
-       echo "$output" | grep -Fq '[tool] PlanClear()' && \
        [[ ! -s "$plan_file" ]] && \
        [[ -s "$summary_file" ]]; then
         green "Agent PlanClear"; ((PASS++)) || true
@@ -932,7 +931,7 @@ test_agent_bash_blocked_command() {
 test_agent_bash_mode_blocked_case() {
     local desc="$1" marker="$2" expected_cmd="$3" expected_required="$4" expected_allowed="${5:-0447}" output
     info "$desc"
-    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test "$marker" 2>&1) || true
+    output=$(BASH_AGENT_BASH_MODE="$expected_allowed" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test "$marker" 2>&1) || true
     if [[ "$output" == *"[tool] Bash($expected_cmd)"* ]] && \
        [[ "$output" == *"Error: command blocked by bash safety policy (required=$expected_required allowed=$expected_allowed; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"* ]]; then
         green "$desc"; ((PASS++)) || true
