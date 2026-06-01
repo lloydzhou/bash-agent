@@ -65,6 +65,16 @@ func DefaultConfig() Config {
 		ToolResultMaxBytes: 100000,
 		Thinking:           "adaptive",
 		Effort:             "high",
+		DPBaselineE:        8,
+		DPVPrefix:          5000,
+		DPSummaryLen:       500,
+		DPPInput:           3.0,
+		DPPCache:           0.30,
+		DPPOut:             15.0,
+		DPMinKeepRatio:     0.12,
+		DPRetention:        0.8,
+		DPBeta:             0.03,
+		DPQualityPenalty:   0.2,
 	}
 }
 

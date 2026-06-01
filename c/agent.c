@@ -1988,6 +1988,24 @@ static int dp_env_i(const char *name, int def) {
     return atoi(v);
 }
 
+static int compact_is_real_user_line(const char *line) {
+    JsonParse jp = json_parse_root(line);
+    if (!jp.error) {
+        char *role = json_get_string(jp.val, "role");
+        char *content = NULL;
+        int ok = 0;
+        if (role && strcmp(role, "user") == 0) {
+            content = json_get_string(jp.val, "content");
+            ok = (content != NULL);
+        }
+        free(content);
+        free(role);
+        return ok;
+    }
+    return (strstr(line, "\"role\":\"user\"") != NULL &&
+            strstr(line, "\"content\":[") == NULL) ? 1 : 0;
+}
+
 /*
  * DP 最优 compact 决策 — 移植自 compact_dp.awk
  *
@@ -2015,8 +2033,7 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
         sizes[i] = (int)((strlen(lines[i]) + 3) / 4) + 1;
         total_tokens += sizes[i];
         /* 标记 user 消息（非 tool_result） */
-        is_user[i] = (strstr(lines[i], "\"role\":\"user\"") != NULL &&
-                      strstr(lines[i], "\"content\":[") == NULL) ? 1 : 0;
+        is_user[i] = compact_is_real_user_line(lines[i]);
     }
 
     /* ── 参数（环境变量 / 默认值，对齐 bash 版）── */

@@ -79,11 +79,11 @@ pub mod config {
                 dp_p_out: 15.0,
                 dp_v: 5000,
                 dp_s: 500,
-                dp_l: 5.0,
+                dp_l: 0.0,
                 dp_baseline_e: 8,
                 dp_e_fixed: 0,
                 dp_r: 0.8,
-                dp_beta: 0.5,
+                dp_beta: 0.03,
                 dp_quality_penalty: 0.2,
                 dp_min_keep_ratio: 0.12,
                 skills: Vec::new(),
@@ -668,7 +668,7 @@ pub mod compact_dp {
         let mut role_user = Vec::with_capacity(n);
         for line in lines {
             let s = serde_json::to_string(line).unwrap_or_default();
-            sizes.push((s.len() + 3) / 4);
+            sizes.push((s.len() + 3) / 4 + 1);
             let is_user = line.get("role").and_then(Value::as_str) == Some("user")
                 && line.get("content").is_some_and(|c| c.is_string());
             role_user.push(is_user);
@@ -693,8 +693,7 @@ pub mod compact_dp {
         let l = if cfg.l_fixed > 0.0 {
             cfg.l_fixed
         } else if current_turn > 0 && total_requests > 0 {
-            let computed = total_requests as f64 / current_turn as f64;
-            if computed >= 1.0 { computed } else { 5.0 }
+            total_requests as f64 / current_turn as f64
         } else {
             5.0
         };
@@ -912,6 +911,38 @@ pub mod compact_dp {
                 "expected keep=3 (aligned to user 'step 2'), got keep={}",
                 n
             );
+        }
+
+        #[test]
+        fn test_formatted_tool_result_excluded_from_alignment() {
+            let lines = vec![
+                make_line("assistant", "intro"),
+                json!({"role": "user", "content": "step 1"}),
+                make_line("assistant", "response 1"),
+                json!({"role": "user", "content": [{"type":"tool_result","tool_use_id":"t1","content":"result 1"}]}),
+                make_line("assistant", "response 1b"),
+                make_line("user", "step 2"),
+                make_line("assistant", "response 2"),
+                make_line("user", "step 3"),
+            ];
+            let cfg = DPCompactConfig {
+                quality_penalty: 0.001,
+                e_fixed: 10,
+                l_fixed: 3.0,
+                v: 0,
+                s: 0,
+                beta: 0.001,
+                min_keep_ratio: 0.12,
+                max_context: 200000,
+                ..DPCompactConfig::default()
+            };
+            let n = compact_dp_decision(&lines, &cfg, 0, 1, 3, 12000)
+                .expect("formatted tool_result scenario should compact");
+            let cut = lines.len() - n;
+            if cut > 0 {
+                let content = &lines[cut]["content"];
+                assert!(content.is_string(), "cut must not align to tool_result array: {content:?}");
+            }
         }
     }
 }
