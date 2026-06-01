@@ -8,9 +8,9 @@
 
 ---
 
-## [4.0.6] - 2026-05-30
+## [4.0.6] - 2026-06-02
 
-> **Bugfix 版本**：修复 C 版本 Edit 工具 diff 行数统计、对齐三版本 DP compact 实现、修复 Go 版本统计计算 bug。
+> **Bugfix 版本**：修复 C 版本 Edit 工具 diff 行数统计、对齐三版本 DP compact 实现、修复 Go 版本统计计算 bug、修复 compact 后 current_turn_count 被错误重置的问题。
 
 ### Fixed
 
@@ -18,6 +18,7 @@
 - 对齐 C/Go/Rust 三版本 DP compact 实现（`isRealUserLine` / `compact_turn_keep` / DP 参数）
 - 修复 Go 版本 avg input tokens 计算使用 `TurnCount` 而非 `TotalRequests` 的 bug（`go/store.go`）
 - 统一 `tool_call_summary` 输出格式（无参数工具显示 `name()` 而非 `name`）
+- 修复 Bash/Go/Rust/C 四版本 compact 后 `current_turn_count` 被错误重置的问题（应为 session 全局累计计数）
 
 ### Changed
 
