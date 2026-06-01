@@ -679,6 +679,7 @@ test_agent_plan_clear() {
 
     if echo "$output" | grep -q '"name":"PlanClear"' && \
        echo "$output" | grep -q '"type":"tool_call"' && \
+       echo "$output" | grep -Fq '[tool] PlanClear()' && \
        [[ ! -s "$plan_file" ]] && \
        [[ -s "$summary_file" ]]; then
         green "Agent PlanClear"; ((PASS++)) || true

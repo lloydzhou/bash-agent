@@ -645,6 +645,7 @@ tool_call_summary() {
     local name="$1" label="" key="" i value="" _vi
     shift
     case "$name" in
+        PlanConfirm|PlanClear) printf '%s()' "$name"; return 0 ;;
         Read|Write|Edit) key="path" ;;
         Bash) key="command" ;;
         Glob|Grep) key="pattern" ;;
