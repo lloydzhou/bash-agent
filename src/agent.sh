@@ -169,6 +169,54 @@ util_msg_to_stream() {
 
 util_read_optional() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 
+store_session_image_dir() { printf '%s/%s/images' "$(store_session_get_dir)" "${SESSION_ID:-}"; }
+
+agent_image_clipboard_to_cache() {
+    local name path tmp
+    name="$(printf '%d.png' "$(( $(ls "$(store_session_image_dir)"/*.png 2>/dev/null | wc -l) + 1 ))")" || return 1
+    path="$(store_session_image_dir)/$name"
+    tmp="$path.tmp.$$"
+    trap 'rm -f "$tmp" 2>/dev/null || true; trap - RETURN' RETURN
+
+    pbpaste -Prefer png >"$tmp" 2>/dev/null \
+        || wl-paste --type image/png >"$tmp" 2>/dev/null \
+        || xclip -selection clipboard -t image/png -o >"$tmp" 2>/dev/null \
+        || return 1
+
+    [[ -s "$tmp" ]] || return 1
+    command -v oxipng >/dev/null 2>&1 && oxipng -o 4 --strip safe --quiet "$tmp" >/dev/null 2>&1
+    mv "$tmp" "$path" || return 1
+    printf '%s' "$name"
+}
+
+agent_image_insert_placeholder_readline() {
+    local p line point
+    [[ -n "${READLINE_LINE+x}" ]] || return 1
+    local image_name
+    image_name="$(agent_image_clipboard_to_cache)" || return 1
+    p="[Image #${image_name%.png}]"
+    line="$READLINE_LINE"
+    point=${READLINE_POINT:-${#line}}
+    [[ "$point" =~ ^[0-9]+$ ]] || point=${#line}
+    (( point > ${#line} )) && point=${#line}
+    READLINE_LINE="${line:0:point}${p}${line:point}"
+    READLINE_POINT=$((point + ${#p}))
+}
+
+agent_image_expand_placeholders_in_input() {
+    local input="$1" rest="$1" out="" token n path size
+    while [[ "$rest" =~ \[Image\ #([0-9]+)\] ]]; do
+        token="${BASH_REMATCH[0]}"; n="${BASH_REMATCH[1]}"
+        out+="${rest%%"$token"*}"$'[图片 Image #'"$n"$']\n来源：session 图片缓存\n文件：'
+        path="$(store_session_image_dir)/$n.png"
+        [[ -f "$path" ]] || return 1
+        size=$(wc -c < "$path" 2>/dev/null || printf '?'); size="${size//[[:space:]]/}"
+        out+="$path"$'\n文件名：'"$n.png"$'\n文件大小：'"$size"' bytes\n描述：这是一个 mock 图片描述。后续会替换为真实 image describe API 返回内容。'
+        rest="${rest#*"$token"}"
+    done
+    printf '%s' "$out$rest"
+}
+
 util_find_skill_dirs() {
     local cwd home
     cwd="${PWD:-$(pwd)}"
@@ -343,6 +391,7 @@ store_session_init() {
     STATS_FILE="${session_dir}/stats.json"
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
     touch "$CONV_FILE" "$SESSION_EVENT_FILE" "$CONTEXT_SUMMARY_FILE" "$PLAN_FILE" "$PLAN_DRAFT_FILE" "$STATS_FILE"
+    mkdir -p "${session_dir}/images" 2>/dev/null || true
     if [[ "$new_session" == true ]]; then
         store_event_append "{\"type\":\"session_start\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\"}"
     fi
@@ -1219,6 +1268,15 @@ agent_run_loop() {
     fi
 }
 
+agent_handle_user_input() {
+    local _input="$1" _expanded_input
+    if _expanded_input="$(agent_image_expand_placeholders_in_input "$_input")"; then
+        agent_run_loop "$_expanded_input"
+    else
+        return 1
+    fi
+}
+
 # 调用 agent_loop 并处理交互式终端提示符
 
 # 统一清理所有管道 FD（按源→宿的级联顺序关闭）
@@ -1242,7 +1300,7 @@ agent_main_loop() {
                 ;;
             USER_INPUT)
                 local _input="${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                agent_run_loop "$_input"
+                agent_handle_user_input "$_input" || true
                 ;;
             AGENT_RESULT)
                 if [[ "$INTERRUPT_REQUESTED" == true ]]; then
@@ -1552,6 +1610,8 @@ interactive_mode() {
         exec 5> "$INPUT_FIFO"
         while true; do
             stty echo 2>/dev/null || true
+            set -o emacs 2>/dev/null || true
+            bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>/dev/null || true
             if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
                 util_write_msg "SESSION_END" "0" >&5
                 break
