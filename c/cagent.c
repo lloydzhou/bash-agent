@@ -349,7 +349,10 @@ int main(int argc, char *argv[]) {
 
         /* 直接执行 agent_loop */
         if (prompt) {
-            agent_loop(agent, prompt, "user_input");
+            char *expanded = util_strdup(prompt);
+            agent_image_expand_placeholders(agent, &expanded);
+            agent_loop(agent, expanded, "user_input");
+            free(expanded);
         } else {
             /* 从 stdin 读取 */
             StrBuf input;
@@ -359,7 +362,11 @@ int main(int argc, char *argv[]) {
                 sb_append(&input, linebuf);
             }
             if (input.len > 0) {
-                agent_loop(agent, input.data, "user_input");
+                char *expanded = input.data;
+                agent_image_expand_placeholders(agent, &expanded);
+                agent_loop(agent, expanded, "user_input");
+                if (expanded != input.data) sb_free(&input);
+            }
             }
             sb_free(&input);
         }
