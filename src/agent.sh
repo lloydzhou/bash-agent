@@ -217,7 +217,7 @@ agent_image_describe() {
     [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && return 0
     tmp=$(mktemp) || return 1
     trap 'rm -f "$tmp"' RETURN
-    printf '{"model":"%s","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"Transcribe ALL visible text from each image. Output every line exactly as shown. Do not summarize or describe - just output the raw text content. If an image has no text, briefly describe what you see."}' "$model" > "$tmp"
+    printf '{"model":"%s","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"Output all visible text from each image, separated by a blank line between images. Transcribe every character including special symbols (arrows, prompts, dots, slashes). Preserve exact spacing and line breaks. Pay attention to date formats (month names, numbers). Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."}' "$model" > "$tmp"
     for p in "${paths[@]}"; do
         printf ',{"type":"image_url","image_url":{"url":"data:image/png;base64,' >> "$tmp"
         base64 < "$p" | tr -d '\n\r' >> "$tmp"
