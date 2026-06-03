@@ -218,14 +218,8 @@ agent_image_describe() {
     local paths=("$@")
     [[ ${#paths[@]} -eq 0 ]] && return 0
 
-    # 无 API key 时的 mock 回退
+    # 无 API key 时直接返回空
     if [[ -z "$api_key" ]]; then
-        local p desc="" num
-        for p in "${paths[@]}"; do
-            num="${p%.png}"; num="${num##*/}"
-            desc+="Image #${num}: This is a mock description for ${p}. (Set GLM_API_KEY to use GLM-4.6V-FlashX)\n"
-        done
-        printf '%b' "$desc"
         return 0
     fi
 

@@ -2440,13 +2440,11 @@ test_agent_image_placeholders() {
         printf "%s" "$expanded"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$output" == "开头 [Image #1] 中间文字 [Image #2] 结尾"* ]] && \
-       [[ "$output" == *"[Attached Images Description]"* ]] && \
-       [[ "$output" == *"Image #1: This is a mock description"* ]] && \
-       [[ "$output" == *"Image #2: This is a mock description"* ]]; then
-        green "Agent image placeholder appends descriptions at end"; ((PASS++)) || true
+    # 无 GLM_API_KEY 时返回原始输入（不附加描述）
+    if [[ "$output" == "开头 [Image #1] 中间文字 [Image #2] 结尾" ]]; then
+        green "Agent image placeholder returns input unchanged when no API key"; ((PASS++)) || true
     else
-        red "Agent image placeholder appends descriptions at end"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent image placeholder returns input unchanged when no API key"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 
     missing_output=$(BASH_AGENT_HOME="$tmp_dir/home2" bash -c '
@@ -2472,12 +2470,10 @@ test_agent_image_placeholders() {
         printf "%s" "$result"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$mixed_output" == "开头 [Image #1] 中间 [Image #999] 结尾"* && \
-         "$mixed_output" == *"[Attached Images Description]"* && \
-         "$mixed_output" == *"Image #1: This is a mock description"* ]]; then
-        green "Agent image placeholder mixed (some missing) works"; ((PASS++)) || true
+    if [[ "$mixed_output" == "开头 [Image #1] 中间 [Image #999] 结尾" ]]; then
+        green "Agent image placeholder mixed (no API key) returns input unchanged"; ((PASS++)) || true
     else
-        red "Agent image placeholder mixed (some missing) works"; echo "  Output: $mixed_output"; ((FAIL++)) || true
+        red "Agent image placeholder mixed (no API key) returns input unchanged"; echo "  Output: $mixed_output"; ((FAIL++)) || true
     fi
 
     output=$(BASH_AGENT_HOME="$tmp_dir/home5" bash -c '
