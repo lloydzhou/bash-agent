@@ -2440,11 +2440,10 @@ test_agent_image_placeholders() {
         printf "%s" "$expanded"
     ' _ "$script_file" 2>&1) || true
 
-    # 无 GLM_API_KEY 时返回原始输入（不附加描述）
-    if [[ "$output" == "开头 [Image #1] 中间文字 [Image #2] 结尾" ]]; then
-        green "Agent image placeholder returns input unchanged when no API key"; ((PASS++)) || true
+    if [[ "$output" == "开头 [Image #1] 中间文字 [Image #2] 结尾"*"<attached-images>"* ]]; then
+        green "Agent image placeholder appends attached-images tag"; ((PASS++)) || true
     else
-        red "Agent image placeholder returns input unchanged when no API key"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent image placeholder appends attached-images tag"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 
     missing_output=$(BASH_AGENT_HOME="$tmp_dir/home2" bash -c '
@@ -2455,10 +2454,10 @@ test_agent_image_placeholders() {
         printf "%s" "$result"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$missing_output" == "开始 [Image #1] 中间 [Image #999] 结尾" ]]; then
-        green "Agent image placeholder no images returns input unchanged"; ((PASS++)) || true
+    if [[ "$missing_output" == "开始 [Image #1] 中间 [Image #999] 结尾"*"<attached-images>"* ]]; then
+        green "Agent image placeholder no images appends tag anyway"; ((PASS++)) || true
     else
-        red "Agent image placeholder no images returns input unchanged"; echo "  Output: $missing_output"; ((FAIL++)) || true
+        red "Agent image placeholder no images appends tag anyway"; echo "  Output: $missing_output"; ((FAIL++)) || true
     fi
 
     mixed_output=$(BASH_AGENT_HOME="$tmp_dir/home3" bash -c '
@@ -2470,10 +2469,10 @@ test_agent_image_placeholders() {
         printf "%s" "$result"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$mixed_output" == "开头 [Image #1] 中间 [Image #999] 结尾" ]]; then
-        green "Agent image placeholder mixed (no API key) returns input unchanged"; ((PASS++)) || true
+    if [[ "$mixed_output" == "开头 [Image #1] 中间 [Image #999] 结尾"*"<attached-images>"* ]]; then
+        green "Agent image placeholder mixed (some missing) appends tag"; ((PASS++)) || true
     else
-        red "Agent image placeholder mixed (no API key) returns input unchanged"; echo "  Output: $mixed_output"; ((FAIL++)) || true
+        red "Agent image placeholder mixed (some missing) appends tag"; echo "  Output: $mixed_output"; ((FAIL++)) || true
     fi
 
     output=$(BASH_AGENT_HOME="$tmp_dir/home5" bash -c '

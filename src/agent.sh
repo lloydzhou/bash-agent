@@ -227,7 +227,7 @@ agent_image_describe() {
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT) desc+="${REPLY_MESSAGE[1]}" ;;
-            STOP|ERROR) break ;;
+            STOP) break ;;
         esac
     done < <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 \
         --connect-timeout 5 --speed-limit 1 --speed-time 60 \
@@ -248,11 +248,7 @@ agent_image_expand_placeholders_in_input() {
         rest="${rest#*"${BASH_REMATCH[0]}"}"
     done
     desc=$(agent_image_describe $paths)
-    if [[ -n "$desc" ]]; then
-        printf '%s\n\n<attached-images>\n%s\n</attached-images>' "$input" "$desc"
-    else
-        printf '%s' "$input"
-    fi
+    printf '%s\n\n<attached-images>\n%s\n</attached-images>' "$input" "$desc"
 }
 
 util_find_skill_dirs() {
