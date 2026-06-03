@@ -249,24 +249,23 @@ agent_image_describe() {
     # JSON 尾部
     printf ']}]}' >> "$tmp"
 
-    # 临时接管全局连接参数，通过流式 SSE 管道调用 GLM
-    local saved_header_args=("${HEADER_ARGS[@]}") saved_api_url="$API_URL"
-    HEADER_ARGS=(-H "Content-Type: application/json" -H "Authorization: Bearer $api_key")
-    API_URL="https://open.bigmodel.cn/api/paas/v4/chat/completions"
-
-    desc=$(cat "$tmp" | llm_stream_curl | sse_convert | sse_parse 2>/dev/null | util_awk_run '
-    BEGIN { RS="\r\n"; state=0 }
-    state == 0 && /^\*2\r?$/    { state=1; next }
-    state == 1 && /^\$4\r?$/    { state=2; next }
-    state == 2                  { t=$0; state=3; next }
-    state == 3 && /^\$[0-9]+\r?$/ { state=4; next }
-    state == 4                  { if (t == "TEXT") printf "%s", $0; state=0; next }
-    { state=0 }
-    ')
-
-    # 恢复全局连接参数
-    HEADER_ARGS=("${saved_header_args[@]}")
-    API_URL="$saved_api_url"
+    # 流式调用 GLM：curl → http_stream → transport_openai_sse → sse_parse → while util_read_msg
+    local desc=""
+    while util_read_msg; do
+        case "${REPLY_MESSAGE[0]}" in
+            TEXT) desc+="${REPLY_MESSAGE[1]}" ;;
+            STOP|ERROR) break ;;
+        esac
+    done < <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 \
+        --connect-timeout 5 --speed-limit 1 --speed-time 60 \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $api_key" \
+        -d "@$tmp" \
+        "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>&1 | \
+        util_awk_run -f "$AWK_DIR/http_stream.awk" | \
+        util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" | \
+        sse_parse
+    )
 
     if [[ -n "$desc" ]]; then
         printf '%s' "$desc"
