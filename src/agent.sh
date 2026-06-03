@@ -230,9 +230,26 @@ agent_image_describe() {
     fi
 
     # 用临时文件构建请求体，避免 base64 数据撑爆变量/args
-    local tmp response desc
+    local tmp awkscr response desc
     tmp=$(mktemp) || return 1
-    trap 'rm -f "$tmp"' RETURN
+    awkscr=$(mktemp) || { rm -f "$tmp"; return 1; }
+    trap 'rm -f "$tmp" "$awkscr"' RETURN
+
+    # 写入提取 content 的 awk 脚本到临时文件
+    cat > "$awkscr" << 'AWKEOF'
+{
+    json = json $0
+}
+END {
+    choices = extract_value(json, "choices", 0)
+    n = split_top_level_objects(choices, blocks)
+    if (n > 0) {
+        msg = extract_value(blocks[1], "message", 0)
+        content = extract_str(msg, "content", 0)
+        if (content != "") print content
+    }
+}
+AWKEOF
 
     # JSON 头部
     printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
@@ -255,22 +272,9 @@ agent_image_describe() {
         -d "@$tmp" \
         "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>/dev/null) || desc=""
 
-    # 提取 content 字段（OpenAI 兼容格式，用 json.awk 解析）
+    # 提取 content 字段（OpenAI 兼容格式，用 json.awk + 临时脚本解析）
     if [[ -z "$desc" ]]; then
-        desc=$(printf '%s' "$response" | util_awk_run -f "$AWK_DIR/json.awk" '
-{
-    json = json $0
-}
-END {
-    choices = extract_value(json, "choices", 0)
-    n = split_top_level_objects(choices, blocks)
-    if (n > 0) {
-        msg = extract_value(blocks[1], "message", 0)
-        content = extract_str(msg, "content", 0)
-        if (content != "") print content
-    }
-}
-') || desc=""
+        desc=$(printf '%s' "$response" | util_awk_run -f "$AWK_DIR/json.awk" -f "$awkscr") || desc=""
     fi
 
     if [[ -n "$desc" ]]; then
