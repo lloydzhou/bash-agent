@@ -44,6 +44,11 @@ func (r *Readline) Start() {
 	go r.loop()
 }
 
+// SetImagePasteCallback registers a function to be called when Ctrl+V is pressed.
+func (r *Readline) SetImagePasteCallback(fn func() string) {
+	linenoise.SetImagePasteCallback(fn)
+}
+
 // Input returns the channel on which user input lines are delivered.
 func (r *Readline) Input() <-chan string {
 	return r.inputCh

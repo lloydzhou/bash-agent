@@ -2416,6 +2416,34 @@ print(body.get('max_tokens', ''))
     rm -rf "$home_dir"
 }
 
+# Test 50: Image placeholder e2e test (all agent versions)
+
+test_agent_image_placeholders() {
+    info "Test 50: Image placeholder e2e test"
+    local home_dir conv_file session_id img_dir
+    home_dir=$(mktemp -d)
+    session_id="image-e2e-test-$$"
+
+    # Create an image file in session images directory
+    img_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)/$session_id/images"
+    mkdir -p "$img_dir"
+    printf 'fake-png-data' > "$img_dir/1.png"
+
+    # Run agent with [Image #1] marker; mock returns a simple text response
+    conv_file="$img_dir/../conversation.jsonl"
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session "$session_id" '[Image #1] what is this?' >/dev/null 2>&1 || true
+
+    # Without DESCRIBE_API_KEY, describe returns empty, but expand still appends <attached-images>
+    if [[ -f "$conv_file" ]] && grep -q '<attached-images>' "$conv_file" 2>/dev/null; then
+        green "Agent image placeholder appends attached-images in conversation"; ((PASS++)) || true
+    else
+        red "Agent image placeholder appends attached-images in conversation"; echo "  conv=$(cat "$conv_file" 2>/dev/null)"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$home_dir"
+}
+
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -2509,6 +2537,7 @@ test_agent_plan_confirm_mv
 test_agent_system_prompt_format
 test_agent_model_arg
 test_agent_max_tokens_suffix
+test_agent_image_placeholders
 
 echo ""
 echo "=============================="

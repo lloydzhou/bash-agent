@@ -100,6 +100,13 @@ void linenoiseSetHintsCallback(linenoiseHintsCallback *);
 void linenoiseSetFreeHintsCallback(linenoiseFreeHintsCallback *);
 void linenoiseAddCompletion(linenoiseCompletions *, const char *);
 
+/* Image paste callback — called when Ctrl+V is pressed.
+ * cb() should allocate a string and set *out / *outlen with the text
+ * to insert at cursor position. If no image/clipboard data is available,
+ * cb() should set *out=NULL. */
+typedef void (*linenoiseImagePasteCallback)(char **out, size_t *outlen);
+void linenoiseSetImagePasteCallback(linenoiseImagePasteCallback cb);
+
 /* History API. */
 int linenoiseHistoryAdd(const char *line);
 int linenoiseHistorySetMaxLen(int len);

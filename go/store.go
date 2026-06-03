@@ -29,6 +29,7 @@ type FileStore struct {
 	planFile      string
 	planDraftFile string
 	statsFile     string
+	sessionDir    string // 会话基础目录
 
 	// 内存缓存 stats（避免频繁 AWK）
 	stats Stats
@@ -141,8 +142,12 @@ func (s *FileStore) Init(sessionID string) error {
 	s.sessionID = sessionID
 
 	dir := filepath.Join(s.GetDir(), sessionID)
+	s.sessionDir = dir
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "images"), 0755); err != nil {
+		return fmt.Errorf("create image dir: %w", err)
 	}
 
 	s.convFile = filepath.Join(dir, "conversation.jsonl")
@@ -923,6 +928,15 @@ func (s *FileStore) PlanClear() error {
 	defer s.mu.Unlock()
 	os.WriteFile(s.planFile, []byte(""), 0644)
 	return nil
+}
+
+// ═══════════════════════════════════════════
+// ImageDir — 图像缓存目录
+// ═══════════════════════════════════════════
+
+// ImageDir 返回会话图像缓存目录路径
+func (s *FileStore) ImageDir() string {
+	return filepath.Join(s.sessionDir, "images")
 }
 
 // ═══════════════════════════════════════════

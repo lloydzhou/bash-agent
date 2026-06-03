@@ -19,6 +19,9 @@ static struct ln_result linenoise_safe(const char *prompt) {
 	r.errnum = errno;
 	return r;
 }
+
+// C wrapper that calls the Go export below.
+extern void goImagePasteCallback(char **out, size_t *outlen);
 */
 import "C"
 import (
@@ -30,6 +33,30 @@ var (
 	ErrInterrupted = errors.New("interrupted")
 	ErrEOF         = errors.New("EOF")
 )
+
+// imagePasteFn is set by SetImagePasteCallback.
+var imagePasteFn func() string
+
+//export goImagePasteCallback
+func goImagePasteCallback(cout **C.char, coutlen *C.size_t) {
+	if imagePasteFn == nil {
+		return
+	}
+	s := imagePasteFn()
+	if s == "" {
+		return
+	}
+	*cout = C.CString(s)
+	*coutlen = C.size_t(len(s))
+}
+
+// SetImagePasteCallback registers a function to be called when
+// Ctrl+V is pressed in linenoise. The function should return
+// a string (e.g. "[Image #N]") to insert at cursor, or "" to ignore.
+func SetImagePasteCallback(fn func() string) {
+	imagePasteFn = fn
+	C.linenoiseSetImagePasteCallback(C.linenoiseImagePasteCallback(C.goImagePasteCallback))
+}
 
 // Line reads a line of input using linenoise's blocking API.
 // Returns ErrInterrupted on Ctrl+C, ErrEOF on Ctrl+D or I/O error.

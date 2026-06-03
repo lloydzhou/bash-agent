@@ -161,6 +161,7 @@ type SessionStore interface {
 	Init(sessionID string) error
 	Fork(parentDir, childDir string) error
 	GetDir() string
+	ImageDir() string
 	GetLatestDir() (string, error)
 	ResolveContinue() (string, error)
 	SessionID() string

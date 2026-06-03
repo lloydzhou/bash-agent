@@ -20,6 +20,7 @@
 #include "display.h"
 #include "store.h"
 #include "util.h"
+#include "linenoise.h"
 #include <curl/curl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,11 @@ static void usage(const char *prog) {
     fprintf(stderr, "  BASH_AGENT_HOME         Override base directory for session storage\n");
     fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)\n");
     fprintf(stderr, "  MODEL                   Default model name\n");
+}
+
+static char *g_paste_session_dir = NULL;
+static void image_paste_wrapper(char **out, size_t *outlen) {
+    agent_image_clipboard_paste(g_paste_session_dir, out, outlen);
 }
 
 int main(int argc, char *argv[]) {
@@ -310,6 +316,11 @@ int main(int argc, char *argv[]) {
         rcfg.home = home;
         /* 设置 SIGINT handler 中要设置的 agent->interrupted 指针 */
         readline_set_agent_interrupted(&agent->interrupted);
+        /* 注册图像粘贴回调（Ctrl+V） */
+        
+        linenoiseSetImagePasteCallback(image_paste_wrapper);
+        g_paste_session_dir = agent->paths.session_dir;
+
         readline_thread_start(&readline_thread, &rcfg);
 
         /* 主循环 */
@@ -327,8 +338,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "\x1b[90mResume with: --session %s  or  --continue\x1b[0m\n",
                 effective_session ? effective_session : "?");
     } else {
-        /* 非交互模式 */
-        /* display 线程（仍然需要，用于输出） */
+        /* 非交互模式：通过 input_queue 走 agent_main_loop（与 bash 一致） */
         pthread_t display_thread;
         DisplayConfig dcfg;
         dcfg.queue = &display_queue;
@@ -336,22 +346,34 @@ int main(int argc, char *argv[]) {
         dcfg.interactive = 0;
         display_thread_start(&display_thread, &dcfg);
 
-        /* 直接执行 agent_loop */
         if (prompt) {
-            agent_loop(agent, prompt, "user_input");
+            InputMessage *msg = malloc(sizeof(InputMessage));
+            if (msg) {
+                memset(msg, 0, sizeof(*msg));
+                msg->type = MSG_USER_INPUT;
+                msg->data.user_input.text = util_strdup(prompt);
+                mq_push(&input_queue, msg);
+            }
         } else {
             /* 从 stdin 读取 */
-            StrBuf input;
-            sb_init(&input);
             char linebuf[65536];
             while (fgets(linebuf, sizeof(linebuf), stdin)) {
-                sb_append(&input, linebuf);
+                util_rtrim(linebuf);
+                if (linebuf[0] == '\0') continue;
+                InputMessage *msg = malloc(sizeof(InputMessage));
+                if (!msg) break;
+                memset(msg, 0, sizeof(*msg));
+                msg->type = MSG_USER_INPUT;
+                msg->data.user_input.text = util_strdup(linebuf);
+                if (mq_push(&input_queue, msg) != 0) {
+                    input_message_free(msg);
+                    free(msg);
+                    break;
+                }
             }
-            if (input.len > 0) {
-                agent_loop(agent, input.data, "user_input");
-            }
-            sb_free(&input);
         }
+
+        agent_main_loop(agent);
 
         /* 等待子 agent 完成 */
         while (agent->active_sub_count > 0) {

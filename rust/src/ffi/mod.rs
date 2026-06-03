@@ -2,6 +2,18 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+
+/// Global image directory path, set once during agent initialization.
+/// Used by the image paste callback to know where to save clipboard images.
+static IMAGE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Set the global image directory path for the paste callback.
+/// Should be called once during agent initialization.
+pub fn set_image_dir(dir: PathBuf) {
+    let _ = IMAGE_DIR.set(dir);
+}
 
 /// Error type for linenoise line reading.
 #[derive(Debug)]
@@ -34,6 +46,7 @@ unsafe extern "C" {
     fn linenoiseHistorySave(filename: *const c_char) -> libc::c_int;
     fn linenoiseHistoryLoad(filename: *const c_char) -> libc::c_int;
     fn linenoiseSetMultiLine(ml: libc::c_int);
+    fn linenoiseSetImagePasteCallback(cb: Option<unsafe extern "C" fn(*mut *mut libc::c_char, *mut libc::size_t)>);
 }
 
 /// Read a line from stdin with the given prompt.
@@ -113,4 +126,109 @@ pub fn history_load(path: &str) -> bool {
 /// Enable or disable multiline editing mode.
 pub fn set_multiline(ml: bool) {
     unsafe { linenoiseSetMultiLine(if ml { 1 } else { 0 }) }
+}
+
+/// Register the image paste callback with linenoise.
+/// Called once during agent initialization after setting the image directory.
+pub fn register_paste_callback() {
+    unsafe {
+        linenoiseSetImagePasteCallback(Some(image_paste_callback_impl));
+    }
+}
+
+/// Extern "C" function called by linenoise when the user presses Ctrl+V.
+/// Reads the clipboard (osascript → wl-paste → xclip), saves to image_dir/{n}.png,
+/// and returns "[Image #N]" as a heap-allocated C string (freed by linenoise).
+#[unsafe(no_mangle)]
+pub extern "C" fn image_paste_callback_impl(
+    out: *mut *mut libc::c_char,
+    outlen: *mut libc::size_t,
+) {
+    let img_dir = match IMAGE_DIR.get() {
+        Some(d) => d.clone(),
+        None => return,
+    };
+
+    let _ = std::fs::create_dir_all(&img_dir);
+
+    // Find next available image number
+    let next = match std::fs::read_dir(&img_dir) {
+        Ok(entries) => entries.filter_map(|e| e.ok()).count() + 1,
+        Err(_) => 1,
+    };
+
+    // Try clipboard tools in order: osascript (macOS), wl-paste (Wayland), xclip (X11)
+    let img_data = try_clipboard_image(next, &img_dir);
+
+    let img_data = match img_data {
+        Some(d) if !d.is_empty() => d,
+        _ => return,
+    };
+
+    let img_path = img_dir.join(format!("{next}.png"));
+    if std::fs::write(&img_path, &img_data).is_err() {
+        return;
+    }
+
+    let placeholder = format!("[Image #{next}]");
+    let c_str = match std::ffi::CString::new(placeholder) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    unsafe {
+        *out = c_str.into_raw();
+        *outlen = libc::strlen(*out);
+    }
+}
+
+/// Try each clipboard tool in order, returning the PNG data if successful.
+fn try_clipboard_image(next: usize, img_dir: &std::path::Path) -> Option<Vec<u8>> {
+    // macOS: osascript to write clipboard PNG to a temp file
+    let tmp_path = img_dir.join(format!("{next}.png.tmp"));
+    let tmp_str = tmp_path.to_string_lossy().to_string();
+    let osa_cmd = format!(
+        "set theImage to the clipboard as «class PNGf»
+set theFile to open for access POSIX file \"{tmp_str}\" with write permission
+write theImage to theFile
+close access theFile"
+    );
+    if std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&osa_cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        if let Ok(data) = std::fs::read(&tmp_path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            if !data.is_empty() {
+                return Some(data);
+            }
+        }
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    // Linux Wayland
+    if let Ok(output) = std::process::Command::new("wl-paste")
+        .arg("--type")
+        .arg("image/png")
+        .output()
+    {
+        if output.status.success() && !output.stdout.is_empty() {
+            return Some(output.stdout);
+        }
+    }
+
+    // Linux X11
+    if let Ok(output) = std::process::Command::new("xclip")
+        .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+        .output()
+    {
+        if output.status.success() && !output.stdout.is_empty() {
+            return Some(output.stdout);
+        }
+    }
+
+    None
 }

@@ -128,6 +128,7 @@ static char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
 static linenoiseCompletionCallback *completionCallback = NULL;
 static linenoiseHintsCallback *hintsCallback = NULL;
 static linenoiseFreeHintsCallback *freeHintsCallback = NULL;
+static linenoiseImagePasteCallback imagePasteCallback = NULL;
 static char *linenoiseReadLine(FILE *fp, int *err);
 static char *linenoiseNoTTY(void);
 static void refreshLineWithCompletion(struct linenoiseState *ls, linenoiseCompletions *lc, int flags);
@@ -500,6 +501,7 @@ enum KEY_ACTION{
 	CTRL_P = 16,        /* Ctrl-p */
 	CTRL_T = 20,        /* Ctrl-t */
 	CTRL_U = 21,        /* Ctrl+u */
+	CTRL_V = 22,        /* Ctrl+v */
 	CTRL_W = 23,        /* Ctrl+w */
 	ESC = 27,           /* Escape */
 	BACKSPACE =  127    /* Backspace */
@@ -819,6 +821,10 @@ void linenoiseSetCompletionCallback(linenoiseCompletionCallback *fn) {
  * right of the prompt. */
 void linenoiseSetHintsCallback(linenoiseHintsCallback *fn) {
     hintsCallback = fn;
+}
+
+void linenoiseSetImagePasteCallback(linenoiseImagePasteCallback cb) {
+    imagePasteCallback = cb;
 }
 
 /* Register a function to free the hints returned by the hints callback
@@ -2072,6 +2078,16 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         break;
     case CTRL_W: /* ctrl+w, delete previous word */
         linenoiseEditDeletePrevWord(l);
+        break;
+    case CTRL_V: /* ctrl+v, image paste */
+        if (imagePasteCallback) {
+            char *out = NULL; size_t outlen = 0;
+            imagePasteCallback(&out, &outlen);
+            if (out && outlen > 0) {
+                linenoiseEditInsert(l, out, outlen);
+                free(out);
+            }
+        }
         break;
     }
     return linenoiseEditMore;

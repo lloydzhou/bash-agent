@@ -139,6 +139,17 @@ tcode goagent -p openai -m gpt-4o
 
 </details>
 
+## 图片粘贴
+
+终端交互模式下 **Ctrl+V** 从剪贴板粘贴图片，自动插入 `[Image #N]` 占位符并缓存到 session。发送消息时自动收集所有图片，调用 GLM-4V-Flash（免费）转录文字并追加 `<attached-images>` 描述。
+
+支持平台：
+- **macOS**: `osascript`（内置）
+- **Linux Wayland**: `wl-paste`
+- **Linux X11**: `xclip`
+
+无需 API key 时仍可粘贴图片（生成 `[Image #N]`），仅跳过描述步骤。
+
 ## 环境变量
 
 | 变量 | 说明 |
@@ -152,6 +163,9 @@ tcode goagent -p openai -m gpt-4o
 | `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
 | `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
 | `BASH_AGENT_BASH_MODE` | Bash 工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0467`） |
+| `DESCRIBE_API_KEY` | 图片描述 API key（默认使用 GLM-4V-Flash，免费） |
+| `DESCRIBE_MODEL` | 图片描述模型名（默认 `glm-4v-flash`） |
+| `DESCRIBE_BASE_URL` | 图片描述 API 基础地址（默认 `https://open.bigmodel.cn/api/paas/v4`） |
 
 ## Bash 工具权限模式
 

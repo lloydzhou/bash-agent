@@ -860,6 +860,10 @@ impl Agent {
         let history_path_str = history_path.to_string_lossy().to_string();
         ffi::history_load(&history_path_str);
 
+        // 注册图片粘贴回调，使 linenoise Ctrl+V 支持图片粘贴
+        ffi::set_image_dir(self.paths.session_dir.join("images"));
+        ffi::register_paste_callback();
+
         // 启动 readline 线程，将用户输入发送到消息队列
         let msg_tx_arc = self.msg_tx.clone();
         let history_path_clone = history_path.to_string_lossy().to_string();
@@ -1105,6 +1109,7 @@ impl Agent {
         crate::tools::drain_fd(self.cancel_read_fd);
 
         let result = (|| -> Result<()> {
+            let user_input = expand_image_placeholders(&user_input, &self.paths);
             self.conv.add_user(&user_input)?;
             if turn_kind == "user_input" {
                 self.append_event(json!({"type":"user_input","content":user_input}))?;
@@ -2096,6 +2101,74 @@ impl Agent {
             let _ = writeln!(self.stderr.borrow_mut(), "[debug] {msg}");
         }
     }
+}
+
+/// Describe images using GLM API.
+fn image_describe(paths: &[std::path::PathBuf]) -> String {
+    let api_key = std::env::var("DESCRIBE_API_KEY").unwrap_or_default();
+    if api_key.is_empty() || paths.is_empty() {
+        return String::new();
+    }
+    let model = std::env::var("DESCRIBE_MODEL").unwrap_or_else(|_| "glm-4v-flash".into());
+    let base_url = std::env::var("DESCRIBE_BASE_URL")
+        .unwrap_or_else(|_| "https://open.bigmodel.cn/api/paas/v4".into());
+
+    use base64::Engine as _;
+    let mut content: Vec<serde_json::Value> = vec![
+        serde_json::json!({"type": "text", "text": "Output all visible text from each image. Transcribe every character including special symbols. Preserve exact spacing and line breaks. Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."})
+    ];
+    for p in paths {
+        if let Ok(data) = std::fs::read(p) {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+            content.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": {"url": format!("data:image/png;base64,{}", b64)}
+            }));
+        }
+    }
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": content}]
+    });
+
+    let rt = crate::agent::tokio_runtime();
+    rt.block_on(async move {
+        let client = reqwest::Client::new();
+        match client
+            .post(format!("{}/chat/completions", base_url))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(val) => val["choices"][0]["message"]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string(),
+                    Err(_) => String::new(),
+                }
+            }
+            Err(_) => String::new(),
+        }
+    })
+}
+
+/// Expand [Image #N] placeholders with described image content.
+fn expand_image_placeholders(input: &str, paths: &store::Paths) -> String {
+    let re = regex::Regex::new(r"\[Image #(\d+)\]").unwrap();
+    let mut img_paths = Vec::new();
+    for cap in re.captures_iter(input) {
+        let p = paths.session_dir.join("images").join(format!("{}.png", &cap[1]));
+        if p.exists() {
+            img_paths.push(p);
+        }
+    }
+    let desc = image_describe(&img_paths);
+    format!("{}\n\n<attached-images>\n{}\n</attached-images>", input, desc)
 }
 
 #[cfg(test)]
