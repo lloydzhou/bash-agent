@@ -213,7 +213,7 @@ agent_image_insert_placeholder_readline() {
 
 agent_image_describe() {
     # 接受多个图片路径，返回所有图片的组合描述
-    # 使用智谱 GLM-4V-Flash（免费）通过 curl 调用
+    # 使用智谱 GLM-4.6V-FlashX（免费）通过 curl 调用
     local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}"
     local paths=("$@")
     [[ ${#paths[@]} -eq 0 ]] && return 0
@@ -223,27 +223,36 @@ agent_image_describe() {
         local p desc="" num
         for p in "${paths[@]}"; do
             num="${p%.png}"; num="${num##*/}"
-            desc+="Image #${num}: This is a mock description for ${p}. (Set GLM_API_KEY to use GLM-4V-Flash)\n"
+            desc+="Image #${num}: This is a mock description for ${p}. (Set GLM_API_KEY to use GLM-4.6V-FlashX)\n"
         done
         printf '%b' "$desc"
         return 0
     fi
 
-    # 构建请求体：base64 编码所有图片
-    local content_parts='[{"type":"text","text":"Please describe these images in order, one paragraph per image."}'
-    local p b64
+    # 用临时文件构建请求体，避免 base64 数据撑爆变量/args
+    local tmp response desc
+    tmp=$(mktemp) || return 1
+    trap 'rm -f "$tmp"' RETURN
+
+    # JSON 头部
+    printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
+
+    # 逐个追加 base64 图片段（直接写到文件，不经过变量）
+    local p
     for p in "${paths[@]}"; do
         [[ -f "$p" ]] || continue
-        b64=$(base64 < "$p" | tr -d '\n\r')
-        content_parts+=",{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,${b64}\"}}"
+        printf ',{"type":"image_url","image_url":{"url":"data:image/png;base64,' >> "$tmp"
+        base64 < "$p" | tr -d '\n\r' >> "$tmp"
+        printf '"}}' >> "$tmp"
     done
-    content_parts+=']'
 
-    local response desc
+    # JSON 尾部
+    printf ']}]}' >> "$tmp"
+
     response=$(curl -sS -X POST \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $api_key" \
-        -d "{\"model\":\"glm-4.6v-flashx\",\"messages\":[{\"role\":\"user\",\"content\":${content_parts}}]}" \
+        -d "@$tmp" \
         "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>/dev/null) || desc=""
 
     # 提取 content 字段（OpenAI 兼容格式）
