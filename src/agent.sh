@@ -1640,22 +1640,18 @@ interactive_mode() {
     display_term_title
     {
         exec 5> "$INPUT_FIFO"
-        bound=false
+        set -o emacs 2>/dev/null || true
+        printf '\033[90m[debug] binding Ctrl+V...\033[0m\n' >&2
+        if bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>&1; then
+            printf '\033[90m[debug] Ctrl+V bound OK\033[0m\n' >&2
+        else
+            printf '\033[90m[debug] Ctrl+V bind FAILED\033[0m\n' >&2
+        fi
         while true; do
             stty echo 2>/dev/null || true
             if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
                 util_write_msg "SESSION_END" "0" >&5
                 break
-            fi
-            if ! $bound; then
-                set -o emacs 2>/dev/null || true
-                printf '\033[90m[debug] binding Ctrl+V...\033[0m\n' >&2
-                if bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>&1; then
-                    printf '\033[90m[debug] Ctrl+V bound OK\033[0m\n' >&2
-                else
-                    printf '\033[90m[debug] Ctrl+V bind FAILED\033[0m\n' >&2
-                fi
-                bound=true
             fi
             [[ "$line" == "exit" || "$line" == "quit" ]] && {
                 util_write_msg "SESSION_END" "0" >&5
