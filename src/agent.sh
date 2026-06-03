@@ -184,14 +184,19 @@ agent_image_clipboard_to_cache() {
     tmp="$path.tmp.$$"
     trap 'rm -f "$tmp" 2>/dev/null || true; trap - RETURN' RETURN
 
-    printf '\033[90m[debug] trying osascript...\033[0m\n' >&2
-    osascript -e 'set theImage to the clipboard as «class PNGf»' \
+    printf '\033[90m[debug] osascript tmp=%s dir_exists=%s\033[0m\n' "$tmp" "$([[ -d "$(store_session_image_dir)" ]] && echo yes || echo no)" >&2
+    if osascript -e 'set theImage to the clipboard as «class PNGf»' \
         -e "set theFile to open for access POSIX file \"$tmp\" with write permission" \
         -e 'write theImage to theFile' \
-        -e 'close access theFile' >/dev/null 2>&1 \
-    || wl-paste --type image/png >"$tmp" 2>/dev/null \
-    || xclip -selection clipboard -t image/png -o >"$tmp" 2>/dev/null \
-    || { printf '\033[90m[debug] all clipboard tools failed\033[0m\n' >&2; return 1; }
+        -e 'close access theFile' >/dev/null 2>&1; then
+        printf '\033[90m[debug] osascript OK\033[0m\n' >&2
+    else
+        rc=$?
+        printf '\033[90m[debug] osascript FAILED rc=%d\033[0m\n' "$rc" >&2
+        wl-paste --type image/png >"$tmp" 2>/dev/null && printf '\033[90m[debug] wl-paste OK\033[0m\n' >&2 \
+        || xclip -selection clipboard -t image/png -o >"$tmp" 2>/dev/null && printf '\033[90m[debug] xclip OK\033[0m\n' >&2 \
+        || { printf '\033[90m[debug] all clipboard tools failed\033[0m\n' >&2; return 1; }
+    fi
 
     [[ -s "$tmp" ]] || { printf '\033[90m[debug] tmp file empty after paste\033[0m\n' >&2; return 1; }
     command -v oxipng >/dev/null 2>&1 && oxipng -o 4 --strip safe --quiet "$tmp" >/dev/null 2>&1
