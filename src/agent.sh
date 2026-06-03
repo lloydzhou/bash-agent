@@ -213,7 +213,8 @@ agent_image_insert_placeholder_readline() {
 
 agent_image_describe() {
     local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}" paths=("$@") tmp desc="" p
-    [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && return 0
+    printf '\033[90m[describe] paths=%d key=%s\033[0m\n' "${#paths[@]}" "${api_key:0:8}..." >&2
+    [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && { printf '\033[90m[describe] skip (no paths or no key)\033[0m\n' >&2; return 0; }
     tmp=$(mktemp) || return 1
     trap 'rm -f "$tmp"' RETURN
     printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
@@ -235,6 +236,7 @@ agent_image_describe() {
         util_awk_run -f "$AWK_DIR/http_stream.awk" | \
         util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" | \
         sse_parse)
+    printf '\033[90m[describe] desc_len=%d preview=%.60s\033[0m\n' "${#desc}" "$desc" >&2
     printf '%s' "$desc"
 }
 
@@ -246,7 +248,9 @@ agent_image_expand_placeholders_in_input() {
         [[ -f "$p" ]] && paths="${paths:+$paths }$p"
         rest="${rest#*"${BASH_REMATCH[0]}"}"
     done
+    printf '\033[90m[expand] input=%.40s paths=%s\033[0m\n' "$input" "${paths:-<none>}" >&2
     desc=$(agent_image_describe $paths)
+    printf '\033[90m[expand] desc_len=%d\033[0m\n' "${#desc}" >&2
     if [[ -n "$desc" ]]; then
         printf '%s\n\n<attached-images>\n%s\n</attached-images>' "$input" "$desc"
     else
