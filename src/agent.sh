@@ -255,15 +255,22 @@ agent_image_describe() {
         -d "@$tmp" \
         "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>/dev/null) || desc=""
 
-    # 提取 content 字段（OpenAI 兼容格式）
+    # 提取 content 字段（OpenAI 兼容格式，用 json.awk 解析）
     if [[ -z "$desc" ]]; then
-        desc=$(printf '%s' "$response" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    print(data['choices'][0]['message']['content'])
-except: pass
-" 2>/dev/null) || desc=""
+        desc=$(printf '%s' "$response" | util_awk_run -f "$AWK_DIR/json.awk" '
+{
+    json = json $0
+}
+END {
+    choices = extract_value(json, "choices", 0)
+    n = split_top_level_objects(choices, blocks)
+    if (n > 0) {
+        msg = extract_value(blocks[1], "message", 0)
+        content = extract_str(msg, "content", 0)
+        if (content != "") print content
+    }
+}
+') || desc=""
     fi
 
     if [[ -n "$desc" ]]; then
