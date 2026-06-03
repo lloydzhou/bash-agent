@@ -139,6 +139,17 @@ Supports readline input, resume info on exit, Ctrl+C to interrupt, Ctrl+D to cle
 
 </details>
 
+## Image Paste
+
+Press **Ctrl+V** in interactive mode to paste an image from the clipboard. A `[Image #N]` placeholder is inserted and the image is cached in the session directory. When you send the message, all images are collected and sent to GLM-4V-Flash (free) for text transcription, appended as `<attached-images>`.
+
+Supported platforms:
+- **macOS**: `osascript` (built-in)
+- **Linux Wayland**: `wl-paste`
+- **Linux X11**: `xclip`
+
+Without an API key, images can still be pasted (generating `[Image #N]` placeholders) but the description step is skipped.
+
 ## Environment Variables
 
 | Variable | Description |
@@ -152,6 +163,9 @@ Supports readline input, resume info on exit, Ctrl+C to interrupt, Ctrl+D to cle
 | `JINA_API_KEY` | Jina AI API key (required for WebSearch/WebFetch tools) |
 | `BASH_AGENT_HOME` | Override session storage directory (default: `$HOME`) |
 | `BASH_AGENT_BASH_MODE` | Bash tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0467`) |
+| `DESCRIBE_API_KEY` | Image description API key (defaults to GLM-4V-Flash, free) |
+| `DESCRIBE_MODEL` | Image description model name (default: `glm-4v-flash`) |
+| `DESCRIBE_BASE_URL` | Image description API base URL (default: `https://open.bigmodel.cn/api/paas/v4`) |
 | `THINKING_BUDGET` | Thinking token budget (default: `2048`) |
 
 ## Bash Tool Permission Mode

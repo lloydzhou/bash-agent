@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+> **Feature 版本**：新增图片粘贴支持 — Ctrl+V 贴图，自动调用 GLM-4V-Flash 转录/描述，四版本同步实现。
+
+### Added
+
+- **图片粘贴支持**：终端交互模式下 **Ctrl+V** 从剪贴板粘贴图片，自动插入 `[Image #N]` 占位符并保存到 session 缓存。跨平台支持 macOS (osascript)、Wayland (wl-paste)、X11 (xclip)
+- **自动图片描述**：发送消息时收集所有 `[Image #N]` 图片，一次性调用 **GLM-4V-Flash**（免费视觉模型）获取文本转录/描述，以 `<attached-images>` XML 标签追加到用户输入末尾
+- **新增环境变量**：`DESCRIBE_API_KEY` / `DESCRIBE_MODEL`（默认 `glm-4v-flash`） / `DESCRIBE_BASE_URL`（默认 `https://open.bigmodel.cn/api/paas/v4`），统一前缀配置图片描述 API
+- **linenoise 新增 `linenoiseSetImagePasteCallback()` API**：三个版本共享同一份 `vendor/linenoise` 源码，支持 Ctrl+V 自定义回调解耦
+
+### Fixed
+
+- C 版本非交互模式（`prompt`/stdin）未调用 `agent_main_loop`，导致图片占位符未展开。重构为统一走 `agent_main_loop`，与 Bash 结构对齐
+
+### Tests
+
+- Test 50 重构为 e2e 测试：创建 session 图片 → 运行 agent → 检查 conversation.jsonl 中 `<attached-images>` 标签，所有代理版本均可覆盖
+- C/Go/Rust 三版本编译零警告通过
+
 ---
 
 ## [4.0.7] - 2026-06-03
