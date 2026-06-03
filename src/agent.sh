@@ -222,11 +222,14 @@ agent_image_expand_placeholders_in_input() {
     local input="$1" rest="$1" out="" token n path size
     while [[ "$rest" =~ \[Image\ #([0-9]+)\] ]]; do
         token="${BASH_REMATCH[0]}"; n="${BASH_REMATCH[1]}"
-        out+="${rest%%"$token"*}"$'[图片 Image #'"$n"$']\n来源：session 图片缓存\n文件：'
+        out+="${rest%%"$token"*}"
         path="$(store_session_image_dir)/$n.png"
-        [[ -f "$path" ]] || return 1
-        size=$(wc -c < "$path" 2>/dev/null || printf '?'); size="${size//[[:space:]]/}"
-        out+="$path"$'\n文件名：'"$n.png"$'\n文件大小：'"$size"' bytes\n描述：这是一个 mock 图片描述。后续会替换为真实 image describe API 返回内容。'
+        if [[ -f "$path" ]]; then
+            size=$(wc -c < "$path" 2>/dev/null || printf '?'); size="${size//[[:space:]]/}"
+            out+=$'[图片 Image #'"$n"$']\n来源：session 图片缓存\n文件：'"$path"$'\n文件名：'"$n.png"$'\n文件大小：'"$size"' bytes\n描述：这是一个 mock 图片描述。后续会替换为真实 image describe API 返回内容。'
+        else
+            out+="$token"
+        fi
         rest="${rest#*"$token"}"
     done
     printf '%s' "$out$rest"

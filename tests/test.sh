@@ -2458,17 +2458,32 @@ test_agent_image_placeholders() {
         source "$1"
         SESSION_ID=image-test-missing
         store_session_init
-        if agent_image_expand_placeholders_in_input "缺失 [Image #999]" >/dev/null; then
-            echo "unexpected success"
-            exit 1
-        fi
-        printf "failed"
+        result=$(agent_image_expand_placeholders_in_input "开始 [Image #1] 中间 [Image #999] 结尾")
+        printf "%s" "$result"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$missing_output" == "failed" ]]; then
-        green "Agent image placeholder missing file error"; ((PASS++)) || true
+    if [[ "$missing_output" == "开始 [Image #1] 中间 [Image #999] 结尾" ]]; then
+        green "Agent image placeholder skips missing files unchanged"; ((PASS++)) || true
     else
-        red "Agent image placeholder missing file error"; echo "  Output: $missing_output"; ((FAIL++)) || true
+        red "Agent image placeholder skips missing files unchanged"; echo "  Output: $missing_output"; ((FAIL++)) || true
+    fi
+
+    mixed_output=$(BASH_AGENT_HOME="$tmp_dir/home3" bash -c '
+        source "$1"
+        SESSION_ID=image-test-mixed
+        store_session_init
+        printf data > "$(store_session_image_dir)/1.png"
+        result=$(agent_image_expand_placeholders_in_input "开头 [Image #1] 中间 [Image #999] 结尾")
+        printf "%s" "$result"
+    ' _ "$script_file" 2>&1) || true
+
+    if [[ "$mixed_output" == "开头 [图片 Image #1]"* && \
+         "$mixed_output" == *"文件大小：4 bytes"* && \
+         "$mixed_output" == *"[Image #999]"* && \
+         "$mixed_output" == *" 结尾" ]]; then
+        green "Agent image placeholder mixed (some missing) works"; ((PASS++)) || true
+    else
+        red "Agent image placeholder mixed (some missing) works"; echo "  Output: $mixed_output"; ((FAIL++)) || true
     fi
 
     output=$(BASH_AGENT_HOME="$tmp_dir/home5" bash -c '
