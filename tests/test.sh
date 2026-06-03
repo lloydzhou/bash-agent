@@ -2416,10 +2416,15 @@ print(body.get('max_tokens', ''))
     rm -rf "$home_dir"
 }
 
-# Test 50: Bash image placeholder flow
+# Test 50: Bash image placeholder flow (bash-only, requires sourcing agent.sh)
 
 test_agent_image_placeholders() {
     info "Test 50: Bash image placeholder flow"
+    # Skip if AGENT is not a shell script (compiled binaries can't be sourced)
+    if [[ ! -f "$AGENT" ]] || ! head -1 "$AGENT" | grep -q '^#!'; then
+        green "Agent image placeholder (skip - not a shell script)"; ((PASS++)) || true
+        return 0
+    fi
     local tmp_dir script_file output missing_output mixed_output
     tmp_dir=$(mktemp -d)
     script_file="$tmp_dir/agent-no-main.sh"
