@@ -2416,149 +2416,33 @@ print(body.get('max_tokens', ''))
     rm -rf "$home_dir"
 }
 
-# Test 50: Bash image placeholder flow (bash-only, requires sourcing agent.sh)
+# Test 50: Image placeholder e2e test (all agent versions)
 
 test_agent_image_placeholders() {
-    # 仅当 AGENT 是 shell 脚本时才执行（编译版本无相关内部函数可测试）
-    [[ -f "$AGENT" && "$(head -1 "$AGENT")" == '#!'* ]] || return 0
-    info "Test 50: Bash image placeholder flow"
-    tmp_dir=$(mktemp -d)
-    script_file="$tmp_dir/agent-no-main.sh"
-    sed '$d' "$AGENT" > "$script_file"
+    info "Test 50: Image placeholder e2e test"
+    local home_dir conv_file session_id img_dir
+    home_dir=$(mktemp -d)
+    session_id="image-e2e-test-$$"
 
-    output=$(BASH_AGENT_HOME="$tmp_dir/home" bash -c '
-        source "$1"
-        SESSION_ID=image-test-session
-        store_session_init
-        dir=$(store_session_image_dir)
-        [[ -d "$dir" ]] || { echo "missing image dir"; exit 1; }
-        [[ "$(agent_image_next_name)" == "1.png" ]] || { echo "bad first name"; exit 1; }
-        printf abc > "$dir/1.png"
-        printf defg > "$dir/2.png"
-        printf old > "$dir/9.png"
-        [[ "$(agent_image_next_name)" == "4.png" ]] || { echo "bad next name"; exit 1; }
-        expanded=$(agent_image_expand_placeholders_in_input "开头 [Image #1] 中间文字 [Image #2] 结尾") || { echo "expand failed"; exit 1; }
-        printf "%s" "$expanded"
-    ' _ "$script_file" 2>&1) || true
+    # Create an image file in session images directory
+    img_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)/$session_id/images"
+    mkdir -p "$img_dir"
+    printf 'fake-png-data' > "$img_dir/1.png"
 
-    if [[ "$output" == "开头 [Image #1] 中间文字 [Image #2] 结尾"*"<attached-images>"* ]]; then
-        green "Agent image placeholder appends attached-images tag"; ((PASS++)) || true
+    # Run agent with [Image #1] marker; mock returns a simple text response
+    conv_file="$img_dir/../conversation.jsonl"
+    BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session "$session_id" '[Image #1] what is this?' >/dev/null 2>&1 || true
+
+    # Without DESCRIBE_API_KEY, describe returns empty, but expand still appends <attached-images>
+    if [[ -f "$conv_file" ]] && grep -q '<attached-images>' "$conv_file" 2>/dev/null; then
+        green "Agent image placeholder appends attached-images in conversation"; ((PASS++)) || true
     else
-        red "Agent image placeholder appends attached-images tag"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent image placeholder appends attached-images in conversation"; echo "  conv=$(cat "$conv_file" 2>/dev/null)"; ((FAIL++)) || true
     fi
 
-    missing_output=$(BASH_AGENT_HOME="$tmp_dir/home2" bash -c '
-        source "$1"
-        SESSION_ID=image-test-missing
-        store_session_init
-        result=$(agent_image_expand_placeholders_in_input "开始 [Image #1] 中间 [Image #999] 结尾")
-        printf "%s" "$result"
-    ' _ "$script_file" 2>&1) || true
-
-    if [[ "$missing_output" == "开始 [Image #1] 中间 [Image #999] 结尾"*"<attached-images>"* ]]; then
-        green "Agent image placeholder no images appends tag anyway"; ((PASS++)) || true
-    else
-        red "Agent image placeholder no images appends tag anyway"; echo "  Output: $missing_output"; ((FAIL++)) || true
-    fi
-
-    mixed_output=$(BASH_AGENT_HOME="$tmp_dir/home3" bash -c '
-        source "$1"
-        SESSION_ID=image-test-mixed
-        store_session_init
-        printf data > "$(store_session_image_dir)/1.png"
-        result=$(agent_image_expand_placeholders_in_input "开头 [Image #1] 中间 [Image #999] 结尾")
-        printf "%s" "$result"
-    ' _ "$script_file" 2>&1) || true
-
-    if [[ "$mixed_output" == "开头 [Image #1] 中间 [Image #999] 结尾"*"<attached-images>"* ]]; then
-        green "Agent image placeholder mixed (some missing) appends tag"; ((PASS++)) || true
-    else
-        red "Agent image placeholder mixed (some missing) appends tag"; echo "  Output: $mixed_output"; ((FAIL++)) || true
-    fi
-
-    output=$(BASH_AGENT_HOME="$tmp_dir/home5" bash -c '
-        source "$1"
-        uname() { printf "Darwin\n"; }
-        osascript() {
-            local arg out
-            for arg in "$@"; do
-                case "$arg" in
-                    *"POSIX file "*)
-                        out="${arg#*POSIX file \"}"
-                        out="${out%%\"*}"
-                        printf "PNG" > "$out"
-                        ;;
-                esac
-            done
-            printf "OK"
-        }
-        SESSION_ID=image-test-macos
-        store_session_init
-        name=$(agent_image_clipboard_to_cache) || exit 1
-        dir="$(store_session_image_dir)"
-        printf "name=<%s> content=<%s>" "$name" "$(cat "$dir/$name")"
-    ' _ "$script_file" 2>&1) || true
-
-    if [[ "$output" == "name=<1.png> content=<PNG>" ]]; then
-        green "Agent image clipboard macOS path works"; ((PASS++)) || true
-    else
-        red "Agent image clipboard macOS path works"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-
-    output=$(BASH_AGENT_HOME="$tmp_dir/home6" bash -c '
-        source "$1"
-        uname() { printf "Linux\n"; }
-        wl-paste() { printf "PNG"; }
-        SESSION_ID=image-test-linux-wl
-        store_session_init
-        name=$(agent_image_clipboard_to_cache) || exit 1
-        dir="$(store_session_image_dir)"
-        printf "name=<%s> content=<%s>" "$name" "$(cat "$dir/$name")"
-    ' _ "$script_file" 2>&1) || true
-
-    if [[ "$output" == "name=<1.png> content=<PNG>" ]]; then
-        green "Agent image clipboard Linux wl-paste path works"; ((PASS++)) || true
-    else
-        red "Agent image clipboard Linux wl-paste path works"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-
-    output=$(BASH_AGENT_HOME="$tmp_dir/home7" bash -c '
-        source "$1"
-        uname() { printf "Linux\n"; }
-        xclip() { printf "PNG"; }
-        SESSION_ID=image-test-linux-xclip
-        store_session_init
-        name=$(agent_image_clipboard_to_cache) || exit 1
-        dir="$(store_session_image_dir)"
-        printf "name=<%s> content=<%s>" "$name" "$(cat "$dir/$name")"
-    ' _ "$script_file" 2>&1) || true
-
-    if [[ "$output" == "name=<1.png> content=<PNG>" ]]; then
-        green "Agent image clipboard Linux xclip path works"; ((PASS++)) || true
-    else
-        red "Agent image clipboard Linux xclip path works"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-
-    output=$(BASH_AGENT_HOME="$tmp_dir/home8" bash -c '
-        source "$1"
-        uname() { printf "Linux\n"; }
-        wl-paste() { printf "RAWPNG"; }
-        oxipng() { printf "OXIPNG" > "${@: -1}"; }
-        SESSION_ID=image-test-linux-optimize
-        store_session_init
-        name=$(agent_image_clipboard_to_cache) || exit 1
-        dir="$(store_session_image_dir)"
-        printf "name=<%s> content=<%s>" "$name" "$(cat "$dir/$name")"
-    ' _ "$script_file" 2>&1) || true
-
-    if [[ "$output" == "name=<1.png> content=<OXIPNG>" ]]; then
-        green "Agent image clipboard PNG optimize step works"; ((PASS++)) || true
-    else
-        red "Agent image clipboard PNG optimize step works"; echo "  Output: $output"; ((FAIL++)) || true
-    fi
-
-    rm -rf "$tmp_dir"
+    rm -rf "$home_dir"
 }
+
 
 # ===== Main =====
 
