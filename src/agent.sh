@@ -171,17 +171,32 @@ util_read_optional() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 
 store_session_image_dir() { printf '%s/%s/images' "$(store_session_get_dir)" "${SESSION_ID:-}"; }
 
+agent_image_next_name() {
+    local max=0 file base num
+    for file in "$(store_session_image_dir)"/*.png; do
+        [[ -e "$file" ]] || continue
+        base="${file##*/}"
+        num="${base%.png}"
+        [[ "$num" =~ ^[0-9]+$ ]] || continue
+        (( num > max )) && max=$num
+    done
+    printf '%d.png' "$((max + 1))"
+}
+
 agent_image_clipboard_to_cache() {
     local name path tmp
-    name="$(printf '%d.png' "$(( $(ls "$(store_session_image_dir)"/*.png 2>/dev/null | wc -l) + 1 ))")" || return 1
+    name="$(agent_image_next_name)" || return 1
     path="$(store_session_image_dir)/$name"
     tmp="$path.tmp.$$"
     trap 'rm -f "$tmp" 2>/dev/null || true; trap - RETURN' RETURN
 
-    pbpaste -Prefer png >"$tmp" 2>/dev/null \
-        || wl-paste --type image/png >"$tmp" 2>/dev/null \
-        || xclip -selection clipboard -t image/png -o >"$tmp" 2>/dev/null \
-        || return 1
+    osascript -e 'set theImage to the clipboard as «class PNGf»' \
+        -e "set theFile to open for access POSIX file \"$tmp\" with write permission" \
+        -e 'write theImage to theFile' \
+        -e 'close access theFile' >/dev/null 2>&1 \
+    || wl-paste --type image/png >"$tmp" 2>/dev/null \
+    || xclip -selection clipboard -t image/png -o >"$tmp" 2>/dev/null \
+    || return 1
 
     [[ -s "$tmp" ]] || return 1
     command -v oxipng >/dev/null 2>&1 && oxipng -o 4 --strip safe --quiet "$tmp" >/dev/null 2>&1
@@ -1268,14 +1283,6 @@ agent_run_loop() {
     fi
 }
 
-agent_handle_user_input() {
-    local _input="$1" _expanded_input
-    if _expanded_input="$(agent_image_expand_placeholders_in_input "$_input")"; then
-        agent_run_loop "$_expanded_input"
-    else
-        return 1
-    fi
-}
 
 # 调用 agent_loop 并处理交互式终端提示符
 
@@ -1300,7 +1307,7 @@ agent_main_loop() {
                 ;;
             USER_INPUT)
                 local _input="${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                agent_handle_user_input "$_input" || true
+                agent_run_loop "$(agent_image_expand_placeholders_in_input "$_input")"
                 ;;
             AGENT_RESULT)
                 if [[ "$INTERRUPT_REQUESTED" == true ]]; then

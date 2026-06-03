@@ -2475,8 +2475,16 @@ test_agent_image_placeholders() {
         source "$1"
         uname() { printf "Darwin\n"; }
         osascript() {
-            local out="$2"
-            printf "PNG" > "$out"
+            local arg out
+            for arg in "$@"; do
+                case "$arg" in
+                    *"POSIX file "*)
+                        out="${arg#*POSIX file \"}"
+                        out="${out%%\"*}"
+                        printf "PNG" > "$out"
+                        ;;
+                esac
+            done
             printf "OK"
         }
         SESSION_ID=image-test-macos
