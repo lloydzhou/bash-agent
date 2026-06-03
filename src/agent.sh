@@ -212,11 +212,12 @@ agent_image_insert_placeholder_readline() {
 }
 
 agent_image_describe() {
-    local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}" paths=("$@") tmp desc="" p
+    local api_key="${DESCRIBE_API_KEY:-}" model="${DESCRIBE_MODEL:-glm-4v-flash}" \
+          base_url="${DESCRIBE_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}" paths=("$@") tmp desc="" p
     [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && return 0
     tmp=$(mktemp) || return 1
     trap 'rm -f "$tmp"' RETURN
-    printf '{"model":"glm-4v-flash","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"Describe each image in order. Extract all text content, describe layout, colors, objects, UI elements, and any visible details. One paragraph per image."}' > "$tmp"
+    printf '{"model":"%s","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"Describe each image in order. Extract all text content, describe layout, colors, objects, UI elements, and any visible details. One paragraph per image."}' "$model" > "$tmp"
     for p in "${paths[@]}"; do
         printf ',{"type":"image_url","image_url":{"url":"data:image/png;base64,' >> "$tmp"
         base64 < "$p" | tr -d '\n\r' >> "$tmp"
@@ -231,7 +232,7 @@ agent_image_describe() {
     done < <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 \
         --connect-timeout 5 --speed-limit 1 --speed-time 60 \
         -H "Content-Type: application/json" -H "Authorization: Bearer $api_key" \
-        -d "@$tmp" "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>&1 | \
+        -d "@$tmp" "${base_url}/chat/completions" 2>&1 | \
         util_awk_run -f "$AWK_DIR/http_stream.awk" | \
         util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" | \
         sse_parse)
