@@ -1372,7 +1372,16 @@ void agent_image_expand_placeholders(Agent *agent, char **input) {
     for (int i = 0; i < img_count; i++) free(image_paths[i]);
     free(image_paths);
 
-    if (!desc) return;
+    if (!desc) {
+        /* describe 返回空（无 API key 或调用失败），仍追加空标签 */
+        StrBuf result;
+        sb_init(&result);
+        sb_append(&result, *input);
+        sb_append(&result, "\n\n<attached-images>\n\n</attached-images>");
+        free(*input);
+        *input = result.data;
+        return;
+    }
 
     /* 构建结果: input + \n\n<attached-images>\n...\n</attached-images> */
     StrBuf result;
