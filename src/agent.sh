@@ -230,26 +230,9 @@ agent_image_describe() {
     fi
 
     # 用临时文件构建请求体，避免 base64 数据撑爆变量/args
-    local tmp awkscr response desc
+    local tmp desc
     tmp=$(mktemp) || return 1
-    awkscr=$(mktemp) || { rm -f "$tmp"; return 1; }
-    trap 'rm -f "$tmp" "$awkscr"' RETURN
-
-    # 写入提取 content 的 awk 脚本到临时文件
-    cat > "$awkscr" << 'AWKEOF'
-{
-    json = json $0
-}
-END {
-    choices = extract_value(json, "choices", 0)
-    n = split_top_level_objects(choices, blocks)
-    if (n > 0) {
-        msg = extract_value(blocks[1], "message", 0)
-        content = extract_str(msg, "content", 0)
-        if (content != "") print content
-    }
-}
-AWKEOF
+    trap 'rm -f "$tmp"' RETURN
 
     # JSON 头部
     printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
@@ -266,16 +249,24 @@ AWKEOF
     # JSON 尾部
     printf ']}]}' >> "$tmp"
 
-    response=$(curl -sS -X POST \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $api_key" \
-        -d "@$tmp" \
-        "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>/dev/null) || desc=""
+    # 临时接管全局连接参数，通过流式 SSE 管道调用 GLM
+    local saved_header_args=("${HEADER_ARGS[@]}") saved_api_url="$API_URL"
+    HEADER_ARGS=(-H "Content-Type: application/json" -H "Authorization: Bearer $api_key")
+    API_URL="https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
-    # 提取 content 字段（OpenAI 兼容格式，用 json.awk + 临时脚本解析）
-    if [[ -z "$desc" ]]; then
-        desc=$(printf '%s' "$response" | util_awk_run -f "$AWK_DIR/json.awk" -f "$awkscr") || desc=""
-    fi
+    desc=$(cat "$tmp" | llm_stream_curl | sse_convert | sse_parse 2>/dev/null | util_awk_run '
+    BEGIN { RS="\r\n"; state=0 }
+    state == 0 && /^\*2\r?$/    { state=1; next }
+    state == 1 && /^\$4\r?$/    { state=2; next }
+    state == 2                  { t=$0; state=3; next }
+    state == 3 && /^\$[0-9]+\r?$/ { state=4; next }
+    state == 4                  { if (t == "TEXT") printf "%s", $0; state=0; next }
+    { state=0 }
+    ')
+
+    # 恢复全局连接参数
+    HEADER_ARGS=("${saved_header_args[@]}")
+    API_URL="$saved_api_url"
 
     if [[ -n "$desc" ]]; then
         printf '%s' "$desc"
