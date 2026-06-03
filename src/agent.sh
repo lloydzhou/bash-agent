@@ -243,7 +243,7 @@ agent_image_describe() {
     response=$(curl -sS -X POST \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $api_key" \
-        -d "{\"model\":\"glm-4v-flash\",\"messages\":[{\"role\":\"user\",\"content\":${content_parts}}]}" \
+        -d "{\"model\":\"glm-4v-flashx\",\"messages\":[{\"role\":\"user\",\"content\":${content_parts}}]}" \
         "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>/dev/null) || desc=""
 
     # 提取 content 字段（OpenAI 兼容格式）
