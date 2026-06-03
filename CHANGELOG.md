@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+---
+
+## [4.1.0] - 2026-06-03
+
 > **Feature 版本**：新增图片粘贴支持 — Ctrl+V 贴图，自动调用 GLM-4V-Flash 转录/描述，四版本同步实现。
 
 ### Added
@@ -934,7 +938,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.7...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/lloydzhou/bash-agent/compare/v4.0.7...v4.1.0
 [4.0.7]: https://github.com/lloydzhou/bash-agent/compare/v4.0.6...v4.0.7
 [4.0.6]: https://github.com/lloydzhou/bash-agent/compare/v4.0.5...v4.0.6
 [4.0.5]: https://github.com/lloydzhou/bash-agent/compare/v4.0.4...v4.0.5
