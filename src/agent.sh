@@ -212,12 +212,10 @@ agent_image_insert_placeholder_readline() {
 }
 
 agent_image_describe() {
-    local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}" paths=("$@") tmp desc p
+    local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}" paths=("$@") tmp desc="" p
     [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && return 0
-
     tmp=$(mktemp) || return 1
     trap 'rm -f "$tmp"' RETURN
-
     printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
     for p in "${paths[@]}"; do
         [[ -f "$p" ]] || continue
@@ -226,8 +224,6 @@ agent_image_describe() {
         printf '"}}' >> "$tmp"
     done
     printf ']}]}' >> "$tmp"
-
-    desc=""
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT) desc+="${REPLY_MESSAGE[1]}" ;;
@@ -235,41 +231,25 @@ agent_image_describe() {
         esac
     done < <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 \
         --connect-timeout 5 --speed-limit 1 --speed-time 60 \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $api_key" \
-        -d "@$tmp" \
-        "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>&1 | \
+        -H "Content-Type: application/json" -H "Authorization: Bearer $api_key" \
+        -d "@$tmp" "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>&1 | \
         util_awk_run -f "$AWK_DIR/http_stream.awk" | \
         util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" | \
-        sse_parse
-    )
-
-    [[ -n "$desc" ]] && printf '%s' "$desc"
+        sse_parse)
+    printf '%s' "$desc"
 }
 
 agent_image_expand_placeholders_in_input() {
-    local input="$1" rest="$1" paths=() n p
-    # 扫描所有 [Image #N] 占位符，收集图片路径
+    local input="$1" rest="$1" n p desc paths=""
     while [[ "$rest" =~ \[Image\ #([0-9]+)\] ]]; do
         n="${BASH_REMATCH[1]}"
         p="$(store_session_image_dir)/$n.png"
-        [[ -f "$p" ]] && paths+=("$p")
+        [[ -f "$p" ]] && paths="${paths:+$paths }$p"
         rest="${rest#*"${BASH_REMATCH[0]}"}"
     done
-
-    # 无图片时原样返回
-    if [[ ${#paths[@]} -eq 0 ]]; then
-        printf '%s' "$input"
-        return 0
-    fi
-
-    # 一次性获取所有图片描述
-    local desc
-    desc=$(agent_image_describe "${paths[@]}") || desc=""
-
-    # 将描述追加到用户输入末尾，原始占位符不变
+    desc=$(agent_image_describe $paths)
     if [[ -n "$desc" ]]; then
-        printf '%s\n\n---\n[Attached Images Description]\n%s' "$input" "$desc"
+        printf '%s\n\n<attached-images>\n%s\n</attached-images>' "$input" "$desc"
     else
         printf '%s' "$input"
     fi
