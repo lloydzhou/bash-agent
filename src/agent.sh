@@ -218,15 +218,22 @@ agent_image_insert_placeholder_readline() {
     READLINE_POINT=$((point + ${#p}))
 }
 
+agent_image_describe() {
+    local path="$1" num="${2:-0}"
+    # TODO: 替换为真实 image describe API 调用（如调用多模态模型的 image 理解能力）
+    printf '这是一个 mock 图片描述。后续会替换为真实 image describe API 返回内容。'
+}
+
 agent_image_expand_placeholders_in_input() {
-    local input="$1" rest="$1" out="" token n path size
+    local input="$1" rest="$1" out="" token n path size desc
     while [[ "$rest" =~ \[Image\ #([0-9]+)\] ]]; do
         token="${BASH_REMATCH[0]}"; n="${BASH_REMATCH[1]}"
         out+="${rest%%"$token"*}"
         path="$(store_session_image_dir)/$n.png"
         if [[ -f "$path" ]]; then
             size=$(wc -c < "$path" 2>/dev/null || printf '?'); size="${size//[[:space:]]/}"
-            out+=$'[图片 Image #'"$n"$']\n来源：session 图片缓存\n文件：'"$path"$'\n文件名：'"$n.png"$'\n文件大小：'"$size"' bytes\n描述：这是一个 mock 图片描述。后续会替换为真实 image describe API 返回内容。'
+            desc="$(agent_image_describe "$path" "$n")"
+            out+=$'[图片 Image #'"$n"$']\n来源：session 图片缓存\n文件：'"$path"$'\n文件名：'"$n.png"$'\n文件大小：'"$size"' bytes\n描述：'"$desc"
         else
             out+="$token"
         fi
