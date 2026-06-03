@@ -172,9 +172,8 @@ util_read_optional() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 store_session_image_dir() { printf '%s/%s/images' "$(store_session_get_dir)" "${SESSION_ID:-}"; }
 
 agent_image_next_name() {
-    local dir count
-    dir="$(store_session_image_dir)"
-    count=$(ls "$dir"/*.png 2>/dev/null | wc -l | tr -d ' ')
+    local count
+    count=$(ls "$(store_session_image_dir)"/*.png 2>/dev/null | wc -l | tr -d ' ')
     printf '%d.png' "$((count + 1))"
 }
 
