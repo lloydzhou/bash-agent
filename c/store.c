@@ -126,9 +126,16 @@ static int touch_file(const char *path) {
     return 0;
 }
 
+const char *store_session_image_dir(const SessionPaths *paths) {
+    static __thread char buf[1024];
+    snprintf(buf, sizeof(buf), "%s/images", paths->session_dir);
+    return buf;
+}
+
 int store_session_init(const SessionPaths *p, int is_new) {
     if (util_mkdirs(p->base_dir, 0755) != 0) return -1;
     if (util_mkdirs(p->session_dir, 0755) != 0) return -1;
+    mkdir(store_session_image_dir(p), 0755);
     touch_file(p->conversation);
     touch_file(p->events);
     touch_file(p->summary);
@@ -162,6 +169,14 @@ int store_session_init(const SessionPaths *p, int is_new) {
     } else {
         touch_file(p->stats);
     }
+
+    /* 创建 images 目录 */
+    {
+        char imgdir[1024];
+        snprintf(imgdir, sizeof(imgdir), "%s/images", p->session_dir);
+        util_mkdirs(imgdir, 0755);
+    }
+
     return 0;
 }
 

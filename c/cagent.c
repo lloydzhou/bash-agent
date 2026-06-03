@@ -20,6 +20,7 @@
 #include "display.h"
 #include "store.h"
 #include "util.h"
+#include "linenoise.h"
 #include <curl/curl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,11 @@ static void usage(const char *prog) {
     fprintf(stderr, "  BASH_AGENT_HOME         Override base directory for session storage\n");
     fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)\n");
     fprintf(stderr, "  MODEL                   Default model name\n");
+}
+
+static char *g_paste_session_dir = NULL;
+static void image_paste_wrapper(char **out, size_t *outlen) {
+    agent_image_clipboard_paste(g_paste_session_dir, out, outlen);
 }
 
 int main(int argc, char *argv[]) {
@@ -310,6 +316,11 @@ int main(int argc, char *argv[]) {
         rcfg.home = home;
         /* 设置 SIGINT handler 中要设置的 agent->interrupted 指针 */
         readline_set_agent_interrupted(&agent->interrupted);
+        /* 注册图像粘贴回调（Ctrl+V） */
+        
+        linenoiseSetImagePasteCallback(image_paste_wrapper);
+        g_paste_session_dir = agent->paths.session_dir;
+
         readline_thread_start(&readline_thread, &rcfg);
 
         /* 主循环 */

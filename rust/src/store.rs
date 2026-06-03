@@ -32,6 +32,10 @@ use std::path::{Path, PathBuf};
             &self.base_dir
         }
 
+        pub fn image_dir(&self) -> PathBuf {
+            self.base_dir.join("images")
+        }
+
         pub fn init(&self) -> Result<()> {
             fs::create_dir_all(&self.base_dir)?;
             Ok(())
@@ -229,6 +233,10 @@ use std::path::{Path, PathBuf};
         store.get_dir()
     }
 
+    pub fn store_image_dir(store: &FileStore) -> PathBuf {
+        store.image_dir()
+    }
+
     pub fn store_get_latest_dir(home: &std::path::Path, cwd: &std::path::Path) -> Result<PathBuf> {
         let session_id = continue_session(home, cwd)?;
         Ok(paths_for(home, cwd, &session_id).session_dir)
@@ -241,6 +249,8 @@ use std::path::{Path, PathBuf};
     pub fn store_session_init(paths: &Paths, new_session: bool) -> Result<()> {
         fs::create_dir_all(&paths.base_dir)?;
         fs::create_dir_all(&paths.session_dir)?;
+        let img_dir = paths.session_dir.join("images");
+        fs::create_dir_all(&img_dir)?;
         for path in [
             &paths.conversation,
             &paths.events,
@@ -573,6 +583,11 @@ use std::path::{Path, PathBuf};
             plan_draft: session_dir.join("plan.draft"),
             stats: session_dir.join("stats.json"),
         }
+    }
+
+    /// Return the images directory path for a session.
+    pub fn image_dir(paths: &Paths) -> PathBuf {
+        paths.session_dir.join("images")
     }
 
     pub fn ensure_dir(path: &std::path::Path) -> Result<()> {

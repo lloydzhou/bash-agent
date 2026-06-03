@@ -267,6 +267,7 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 
 	// 启动 readline goroutine
 	rl := NewReadline(home)
+	rl.SetImagePasteCallback(a.ImagePasteCallback)
 	rl.Start()
 
 	// 主循环：从 readline goroutine 接收输入，交给 agent 处理

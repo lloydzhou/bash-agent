@@ -1,13 +1,18 @@
 package agent
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -45,6 +50,161 @@ type SubAgentResult struct {
 	CacheRead    int
 	CacheWrite   int
 	Requests     int
+}
+
+// imageNextName returns the next sequential image filename.
+func (a *Agent) imageNextName() string {
+	dir := a.store.ImageDir()
+	entries, _ := filepath.Glob(filepath.Join(dir, "*.png"))
+	return fmt.Sprintf("%d.png", len(entries)+1)
+}
+
+// ImagePasteCallback is called from linenoise when Ctrl+V is pressed.
+// It tries to read clipboard image and save to session cache.
+func (a *Agent) ImagePasteCallback() string {
+	name := a.imageNextName()
+	path := filepath.Join(a.store.ImageDir(), name)
+
+	// Try clipboard tools in order
+	var data []byte
+	if _, err := exec.LookPath("osascript"); err == nil {
+		cmd := exec.Command("osascript", "-e",
+			`set theImage to the clipboard as «class PNGf»`,
+			"-e", fmt.Sprintf(`set theFile to open for access POSIX file "%s" with write permission`, path+".tmp"),
+			"-e", `write theImage to theFile`,
+			"-e", `close access theFile`)
+		if err := cmd.Run(); err == nil {
+			data, _ = os.ReadFile(path + ".tmp")
+		}
+		os.Remove(path + ".tmp")
+	}
+	if data == nil {
+		if _, err := exec.LookPath("wl-paste"); err == nil {
+			data, _ = exec.Command("wl-paste", "--type", "image/png").Output()
+		}
+	}
+	if data == nil {
+		if _, err := exec.LookPath("xclip"); err == nil {
+			data, _ = exec.Command("xclip", "-selection", "clipboard", "-t", "image/png", "-o").Output()
+		}
+	}
+
+	if len(data) == 0 {
+		return ""
+	}
+
+	// Optional oxipng compression
+	if _, err := exec.LookPath("oxipng"); err == nil {
+		os.WriteFile(path+".tmp", data, 0644)
+		exec.Command("oxipng", "-o", "4", "--strip", "safe", "-q", path+".tmp").Run()
+		data, _ = os.ReadFile(path + ".tmp")
+		os.Remove(path + ".tmp")
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("[Image #%s]", name[:len(name)-4])
+}
+
+// imageDescribe calls GLM-4V-Flash to describe the given image files.
+func (a *Agent) imageDescribe(paths []string) string {
+	apiKey := os.Getenv("DESCRIBE_API_KEY")
+	model := os.Getenv("DESCRIBE_MODEL")
+	baseURL := os.Getenv("DESCRIBE_BASE_URL")
+	if apiKey == "" || len(paths) == 0 {
+		return ""
+	}
+	if model == "" {
+		model = "glm-4v-flash"
+	}
+	if baseURL == "" {
+		baseURL = "https://open.bigmodel.cn/api/paas/v4"
+	}
+
+	// Build content parts: text + image_url for each path
+	var contentParts []map[string]interface{}
+	contentParts = append(contentParts, map[string]interface{}{
+		"type": "text",
+		"text": "Output all visible text from each image, separated by a blank line between images. Transcribe every character including special symbols (arrows, prompts, dots, slashes). Preserve exact spacing and line breaks. Pay attention to date formats (month names, numbers). Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see.",
+	})
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		b64 := base64.StdEncoding.EncodeToString(data)
+		contentParts = append(contentParts, map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]string{
+				"url": "data:image/png;base64," + b64,
+			},
+		})
+	}
+
+	body := map[string]interface{}{
+		"model":    model,
+		"stream":   true,
+		"messages": []interface{}{map[string]interface{}{"role": "user", "content": contentParts}},
+	}
+	bodyJSON, _ := json.Marshal(body)
+
+	req, err := http.NewRequest("POST", baseURL+"/chat/completions", bytes.NewReader(bodyJSON))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	// Parse SSE response, collect TEXT from choices[0].delta.content
+	var desc strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			continue
+		}
+		for _, c := range chunk.Choices {
+			desc.WriteString(c.Delta.Content)
+		}
+	}
+	return desc.String()
+}
+
+// expandImagePlaceholders scans [Image #N] in input, collects files,
+// calls describe, and appends <attached-images> to the input.
+func (a *Agent) expandImagePlaceholders(input string) string {
+	re := regexp.MustCompile(`\[Image #(\d+)\]`)
+	var paths []string
+	for _, m := range re.FindAllStringSubmatch(input, -1) {
+		p := filepath.Join(a.store.ImageDir(), m[1]+".png")
+		if _, err := os.Stat(p); err == nil {
+			paths = append(paths, p)
+		}
+	}
+	desc := a.imageDescribe(paths)
+	return fmt.Sprintf("%s\n\n<attached-images>\n%s\n</attached-images>", input, desc)
 }
 
 func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatcher, display *TermDisplay) *Agent {
@@ -510,8 +670,6 @@ func (a *Agent) LoadSkill(name string) (string, error) {
 	return "", fmt.Errorf("skill not found: %s", name)
 }
 
-// ─── RunLoop: 单次用户输入的 LLM 循环 ───
-
 func (a *Agent) isStreamJSON() bool {
 	return a.cfg.OutputFormat == "stream-json"
 }
@@ -530,6 +688,11 @@ func (a *Agent) emitJSON(obj map[string]interface{}) {
 }
 
 func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
+	// Expand image placeholders before processing
+	if turnKind == "user_input" {
+		userInput = a.expandImagePlaceholders(userInput)
+	}
+
 	// 记录 user_input 事件（提前到 AddUserMessage 之前，与 bash 版一致）
 	if turnKind == "user_input" {
 		a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
