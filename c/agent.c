@@ -2045,7 +2045,7 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
     double p_cache    = dp_env_d("DP_P_CACHE", 0.30);
     double p_out      = dp_env_d("DP_P_OUT", 15.0);
     double S          = dp_env_d("DP_S", 500.0);
-    double min_keep_ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.12);
+    double min_keep_ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.25);
     double r          = dp_env_d("DP_R", 0.8);
     double beta       = dp_env_d("DP_BETA", 0.03);
     double quality_penalty = dp_env_d("DP_QUALITY_PENALTY", 0.2);
@@ -2121,13 +2121,16 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
         /* ② Cache miss */
         double cache_miss = (S + (double)K) * (p_input - p_cache) / 1e6;
         /* ③ Compact cost */
-        double compact_cost = (p_cache * (V + (double)H) + p_input * l_instr + p_out * S) / 1e6;
-        /* ⑤ Quality savings */
-        double v_plus_T = V + (double)total_tokens;
-        double v_plus_K = V + (double)K;
-        double quality_savings = quality_penalty * p_input *
-            (v_plus_T * v_plus_T - v_plus_K * v_plus_K) /
-            ((double)max_ctx * 1e6);
+        double compact_cost = (p_cache * V + p_input * ((double)H + l_instr) + p_out * S) / 1e6;
+        /* ⑤ Quality savings — only when context is large enough */
+        double quality_savings = 0.0;
+        if (total_tokens > max_ctx * 0.30) {
+            double v_plus_T = V + (double)total_tokens;
+            double v_plus_K = V + (double)K;
+            quality_savings = quality_penalty * p_input *
+                (v_plus_T * v_plus_T - v_plus_K * v_plus_K) /
+                ((double)max_ctx * 1e6);
+        }
 
         double benefit = savings - cache_miss - compact_cost - info_loss + quality_savings;
         if (benefit > best_benefit) {

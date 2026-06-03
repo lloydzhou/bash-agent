@@ -85,7 +85,7 @@ pub mod config {
                 dp_r: 0.8,
                 dp_beta: 0.03,
                 dp_quality_penalty: 0.2,
-                dp_min_keep_ratio: 0.12,
+                dp_min_keep_ratio: 0.25,
                 skills: Vec::new(),
                 thinking: "adaptive".to_string(),
                 effort: "high".to_string(),
@@ -598,7 +598,7 @@ pub mod compact_dp {
                 beta: 0.03,
                 quality_penalty: 0.2,
                 max_context: 200_000,
-                min_keep_ratio: 0.12,
+                min_keep_ratio: 0.25,
             }
         }
     }
@@ -739,17 +739,18 @@ pub mod compact_dp {
             let savings = (r_total - 1.0) * cfg.p_cache * h / 1_000_000.0;
             let cache_miss = (sf + kf) * (cfg.p_input - cfg.p_cache) / 1_000_000.0;
             let compact_cost =
-                (cfg.p_cache * (vf + h) + cfg.p_input * l_instr + cfg.p_out * sf) / 1_000_000.0;
+                (cfg.p_cache * vf + cfg.p_input * (h + l_instr) + cfg.p_out * sf) / 1_000_000.0;
 
-            // ⑤ Quality savings: 压缩减少上下文长度 → 改善回答质量 → 减少重试成本
-            //   不压缩: QP * p_input * (V+T)² / (M*1e6)
-            //   压缩后: QP * p_input * (V+K)² / (M*1e6)
-            //   增量收益 = 差值
+            // ⑤ Quality savings: only when context is large enough (> max_ctx × 30%)
             let max_ctx = cfg.max_context as f64;
             let tf = total_tokens as f64;
-            let quality_savings = cfg.quality_penalty * cfg.p_input
-                * ((vf + tf) * (vf + tf) - (vf + kf) * (vf + kf))
-                / (max_ctx * 1_000_000.0);
+            let quality_savings = if tf > max_ctx * 0.30 {
+                cfg.quality_penalty * cfg.p_input
+                    * ((vf + tf) * (vf + tf) - (vf + kf) * (vf + kf))
+                    / (max_ctx * 1_000_000.0)
+            } else {
+                0.0
+            };
 
             let benefit = savings - cache_miss - compact_cost - info_loss + quality_savings;
 

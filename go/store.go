@@ -605,7 +605,7 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 	}
 	minRatio := cfg.DPMinKeepRatio
 	if minRatio == 0 {
-		minRatio = 0.12
+		minRatio = 0.25
 	}
 	beta := cfg.DPBeta
 	if beta == 0 {
@@ -639,7 +639,7 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 
 		savings := (R - 1) * pCache * float64(H) / 1e6
 		cacheMiss := (S + float64(K)) * (pInput - pCache) / 1e6
-		compactCost := (pCache*(V+float64(H)) + pInput*lInstr + pOut*S) / 1e6
+		compactCost := (pCache*V + pInput*(float64(H)+lInstr) + pOut*S) / 1e6
 
 		// ⑤ Quality savings: 压缩减少上下文长度 → 改善回答质量 → 减少重试成本
 		//   不压缩: QP * p_input * (V+T)² / (M*1e6)
@@ -653,9 +653,13 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 		if qp == 0 {
 			qp = 0.2 // 默认开启，基于 "Lost in the Middle" 论文
 		}
-		vPlusT := V + float64(totalTokens)
-		vPlusK := V + float64(K)
-		qualitySavings := qp * pInput * (vPlusT*vPlusT - vPlusK*vPlusK) / (maxCtx * 1e6)
+		// ⑤ Quality savings: only when context is large enough (> maxCtx × 30%)
+		qualitySavings := 0.0
+		if float64(totalTokens) > maxCtx*0.30 {
+			vPlusT := V + float64(totalTokens)
+			vPlusK := V + float64(K)
+			qualitySavings = qp * pInput * (vPlusT*vPlusT - vPlusK*vPlusK) / (maxCtx * 1e6)
+		}
 
 		benefit := savings - cacheMiss - compactCost - infoLoss + qualitySavings
 

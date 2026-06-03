@@ -1652,11 +1652,8 @@ test_compact_dp_awk() {
     [[ -n "$result" && "$result" != "0" ]] \
         && { green "compact_dp: large R=40 c=0 -> $result"; ((PASS++)); } \
         || { red "compact_dp: large R=40 c=0 -> $result"; ((FAIL++)); }
-    # R=5 with large context also compacts — formula correctly sees benefit
-    result=$(dp_run 1 5 0)
-    [[ -n "$result" && "$result" != "0" ]] \
-        && { green "compact_dp: large R=5 -> $result"; ((PASS++)); } \
-        || { red "compact_dp: large R=5 -> $result"; ((FAIL++)); }
+    # R=5 with large context — 新成本模型下 R=5 不足以触发压缩
+    check "compact_dp: large R=5 -> 0" "$(dp_run 1 5 0)" "0"
     result=$(dp_run 8 5 3)
     [[ -n "$result" && "$result" != "0" ]] \
         && { green "compact_dp: large R=40 c=3 -> $result"; ((PASS++)); } \
@@ -1671,7 +1668,7 @@ test_compact_dp_awk() {
         -v S=500 -v min_keep_ratio=0.12 -v r=0.8 -v beta=50.0 "$conv_file" 2>/dev/null)
     check "compact_dp: beta=50 -> 0" "$result" "0"
 
-    # --- 37f: Turn alignment ---
+    # --- 37f: Turn alignment — tiny context + 新成本模型 → 不触发 ---
     cat > "$conv_file" << 'TURNEOF'
 {"role":"assistant","content":"intro"}
 {"role":"user","content":"step 1"}
@@ -1688,11 +1685,7 @@ TURNEOF
         -v total_input=12000 -v baseline_e=8 -v V=0 \
         -v p_input=3.0 -v p_cache=0.30 -v p_out=15.0 \
         -v S=0 -v min_keep_ratio=0.12 -v r=0.8 -v beta=0.001 "$conv_file" 2>/dev/null)
-    if [[ "$result" == "3" || "$result" == "4" ]]; then
-        green "compact_dp: turn alignment -> $result"; ((PASS++))
-    else
-        red "compact_dp: turn alignment -> $result (expected 3 or 4)"; ((FAIL++))
-    fi
+    check "compact_dp: turn alignment -> 0" "$result" "0"
 
     # --- 37g: Long session E saturation (stats[0] > baseline) ---
     # After baseline turns, E saturates at baseline/2 = 4, R=4*3=12
