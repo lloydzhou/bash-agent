@@ -2440,15 +2440,13 @@ test_agent_image_placeholders() {
         printf "%s" "$expanded"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$output" == "开头 [图片 Image #1]"* ]] && \
-       [[ "$output" == *"文件名：1.png"* ]] && \
-       [[ "$output" == *"文件大小：3 bytes"* ]] && \
-       [[ "$output" == *" 中间文字 [图片 Image #2]"* ]] && \
-       [[ "$output" == *"文件名：2.png"* ]] && \
-       [[ "$output" == *"文件大小：4 bytes"* ]] && \
-       [[ "$output" == *" 结尾" ]] && \
-       [[ "$output" != *"[Image #1]"* ]] && \
-       [[ "$output" != *"[Image #2]"* ]]; then
+    if [[ "$output" == "开头 [Image #1]"* ]] && \
+       [[ "$output" == *"Filename: 1.png"* ]] && \
+       [[ "$output" == *"Size: 3 bytes"* ]] && \
+       [[ "$output" == *" 中间文字 [Image #2]"* ]] && \
+       [[ "$output" == *"Filename: 2.png"* ]] && \
+       [[ "$output" == *"Size: 4 bytes"* ]] && \
+       [[ "$output" == *" 结尾" ]]; then
         green "Agent image placeholder expansion in place"; ((PASS++)) || true
     else
         red "Agent image placeholder expansion in place"; echo "  Output: $output"; ((FAIL++)) || true
@@ -2477,8 +2475,8 @@ test_agent_image_placeholders() {
         printf "%s" "$result"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$mixed_output" == "开头 [图片 Image #1]"* && \
-         "$mixed_output" == *"文件大小：4 bytes"* && \
+    if [[ "$mixed_output" == "开头 [Image #1]"* && \
+         "$mixed_output" == *"Size: 4 bytes"* && \
          "$mixed_output" == *"[Image #999]"* && \
          "$mixed_output" == *" 结尾" ]]; then
         green "Agent image placeholder mixed (some missing) works"; ((PASS++)) || true
