@@ -693,13 +693,14 @@ tool_format_result() {
 }
 
 tool_file_summary() {
-    local kind="$1" path="$2" bytes lines
+    local kind="$1" path="$2" bytes lines offset="$3" limit="$4" _rng=
     [[ -n "$path" && -f "$path" ]] || { printf '%s(%s)' "$kind" "$path"; return 0; }
     bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
     bytes=${bytes//[[:space:]]/}
     lines=$(util_awk_run 'END { print NR }' "$path" 2>/dev/null || echo 0)
     lines=${lines//[[:space:]]/}
-    printf '%s(%s) [%s lines, %s bytes]' "$kind" "$path" "$lines" "$bytes"
+    [[ -n "$offset$limit" ]] && _rng=", offset=${offset:-1}, limit=${limit:-$lines}"
+    printf '%s(%s) [%s lines, %s bytes%s]' "$kind" "$path" "$lines" "$bytes" "$_rng"
 }
 
 
@@ -1292,7 +1293,7 @@ agent_loop_stream() {
                     result_for_conv="$output"
                     case "$cur_tool_name" in
                         Edit)       result_for_conv="$(printf '%s' "$output" | sed -n '1p')" ;;
-                        Read|Write) output="$(tool_file_summary "$cur_tool_name" "${_TOOL_ARGS[0]:-}")"$'\n'"$output" ;;
+                        Read|Write) output="$(tool_file_summary "$cur_tool_name" "${_TOOL_ARGS[0]:-}" "${_TOOL_ARGS[1]:-}" "${_TOOL_ARGS[2]:-}")"$'\n'"$output" ;;
                     esac
                     tool_conv_results+="${cur_tool_id}"$'\t'"$(util_json_escape "$result_for_conv")"$'\n'
                     tool_emit_result "$cur_tool_id" "$cur_tool_name" "$output"
