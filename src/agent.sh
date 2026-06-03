@@ -1637,13 +1637,17 @@ interactive_mode() {
     display_term_title
     {
         exec 5> "$INPUT_FIFO"
+        bound=false
         while true; do
             stty echo 2>/dev/null || true
-            set -o emacs 2>/dev/null || true
-            bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>/dev/null || true
             if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then
                 util_write_msg "SESSION_END" "0" >&5
                 break
+            fi
+            if ! $bound; then
+                set -o emacs 2>/dev/null || true
+                bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>/dev/null || true
+                bound=true
             fi
             [[ "$line" == "exit" || "$line" == "quit" ]] && {
                 util_write_msg "SESSION_END" "0" >&5
