@@ -1362,6 +1362,13 @@ void agent_image_expand_placeholders(Agent *agent, char **input) {
 
     if (img_count == 0) {
         free(image_paths);
+        /* 无图片也追加空标签，与其他版本一致 */
+        StrBuf result;
+        sb_init(&result);
+        sb_append(&result, *input);
+        sb_append(&result, "\n\n<attached-images>\n\n</attached-images>");
+        free(*input);
+        *input = result.data;
         return;
     }
 
