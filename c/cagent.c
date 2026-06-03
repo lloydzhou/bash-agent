@@ -367,7 +367,6 @@ int main(int argc, char *argv[]) {
                 agent_loop(agent, expanded, "user_input");
                 if (expanded != input.data) sb_free(&input);
             }
-            }
             sb_free(&input);
         }
 
