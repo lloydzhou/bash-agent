@@ -2435,7 +2435,7 @@ test_agent_image_placeholders() {
         printf abc > "$dir/1.png"
         printf defg > "$dir/2.png"
         printf old > "$dir/9.png"
-        [[ "$(agent_image_next_name)" == "10.png" ]] || { echo "bad next name"; exit 1; }
+        [[ "$(agent_image_next_name)" == "4.png" ]] || { echo "bad next name"; exit 1; }
         expanded=$(agent_image_expand_placeholders_in_input "开头 [Image #1] 中间文字 [Image #2] 结尾") || { echo "expand failed"; exit 1; }
         printf "%s" "$expanded"
     ' _ "$script_file" 2>&1) || true

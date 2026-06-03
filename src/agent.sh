@@ -172,15 +172,10 @@ util_read_optional() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 store_session_image_dir() { printf '%s/%s/images' "$(store_session_get_dir)" "${SESSION_ID:-}"; }
 
 agent_image_next_name() {
-    local max=0 file base num
-    for file in "$(store_session_image_dir)"/*.png; do
-        [[ -e "$file" ]] || continue
-        base="${file##*/}"
-        num="${base%.png}"
-        [[ "$num" =~ ^[0-9]+$ ]] || continue
-        (( num > max )) && max=$num
-    done
-    printf '%d.png' "$((max + 1))"
+    local dir count
+    dir="$(store_session_image_dir)"
+    count=$(ls "$dir"/*.png 2>/dev/null | wc -l | tr -d ' ')
+    printf '%d.png' "$((count + 1))"
 }
 
 agent_image_clipboard_to_cache() {
