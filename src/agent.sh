@@ -179,29 +179,32 @@ agent_image_next_name() {
 agent_image_clipboard_to_cache() {
     local name path tmp
     name="$(agent_image_next_name)" || return 1
+    printf '\033[90m[debug] clipboard_to_cache: next_name=%s\033[0m\n' "$name" >&2
     path="$(store_session_image_dir)/$name"
     tmp="$path.tmp.$$"
     trap 'rm -f "$tmp" 2>/dev/null || true; trap - RETURN' RETURN
 
+    printf '\033[90m[debug] trying osascript...\033[0m\n' >&2
     osascript -e 'set theImage to the clipboard as «class PNGf»' \
         -e "set theFile to open for access POSIX file \"$tmp\" with write permission" \
         -e 'write theImage to theFile' \
         -e 'close access theFile' >/dev/null 2>&1 \
     || wl-paste --type image/png >"$tmp" 2>/dev/null \
     || xclip -selection clipboard -t image/png -o >"$tmp" 2>/dev/null \
-    || return 1
+    || { printf '\033[90m[debug] all clipboard tools failed\033[0m\n' >&2; return 1; }
 
-    [[ -s "$tmp" ]] || return 1
+    [[ -s "$tmp" ]] || { printf '\033[90m[debug] tmp file empty after paste\033[0m\n' >&2; return 1; }
     command -v oxipng >/dev/null 2>&1 && oxipng -o 4 --strip safe --quiet "$tmp" >/dev/null 2>&1
     mv "$tmp" "$path" || return 1
     printf '%s' "$name"
 }
 
 agent_image_insert_placeholder_readline() {
+    printf '\033[90m[debug] Ctrl+V triggered\033[0m\n' >&2
     local p line point
-    [[ -n "${READLINE_LINE+x}" ]] || return 1
+    [[ -n "${READLINE_LINE+x}" ]] || { printf '\033[90m[debug] READLINE_LINE not set\033[0m\n' >&2; return 1; }
     local image_name
-    image_name="$(agent_image_clipboard_to_cache)" || return 1
+    image_name="$(agent_image_clipboard_to_cache)" || { printf '\033[90m[debug] clipboard_to_cache failed\033[0m\n' >&2; return 1; }
     p="[Image #${image_name%.png}]"
     line="$READLINE_LINE"
     point=${READLINE_POINT:-${#line}}
@@ -1646,7 +1649,12 @@ interactive_mode() {
             fi
             if ! $bound; then
                 set -o emacs 2>/dev/null || true
-                bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>/dev/null || true
+                printf '\033[90m[debug] binding Ctrl+V...\033[0m\n' >&2
+                if bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>&1; then
+                    printf '\033[90m[debug] Ctrl+V bound OK\033[0m\n' >&2
+                else
+                    printf '\033[90m[debug] Ctrl+V bind FAILED\033[0m\n' >&2
+                fi
                 bound=true
             fi
             [[ "$line" == "exit" || "$line" == "quit" ]] && {
