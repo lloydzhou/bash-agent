@@ -1240,6 +1240,8 @@ impl Agent {
                                 let file_summary = Store::file_tool_result_summary(
                                     &call.name,
                                     call.fields.get("path").map(String::as_str).unwrap_or(""),
+                                    call.fields.get("offset").map(String::as_str).unwrap_or(""),
+                                    call.fields.get("limit").map(String::as_str).unwrap_or(""),
                                 );
                                 output = format!("{}\n{}", file_summary, output);
                             }

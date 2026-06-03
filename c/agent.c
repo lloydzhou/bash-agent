@@ -961,10 +961,14 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
 
                 /* 为 Read/Write 工具添加 file summary 前缀 */
                 if (strcmp(tc->name, "Read") == 0 || strcmp(tc->name, "Write") == 0) {
-                    /* 从 input_json 获取 path */
-                    char *fpath = NULL;
+                    /* 从 input_json 获取 path / offset / limit */
+                    char *fpath = NULL, *foffset = NULL, *flimit = NULL;
                     JsonParse jp2 = json_parse_root(tc->input_json.data);
-                    if (!jp2.error) fpath = json_get_string(jp2.val, "path");
+                    if (!jp2.error) {
+                        fpath = json_get_string(jp2.val, "path");
+                        foffset = json_get_string(jp2.val, "offset");
+                        flimit = json_get_string(jp2.val, "limit");
+                    }
 
                     StrBuf summary;
                     sb_init(&summary);
@@ -983,12 +987,20 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                             flines = nl;
                             fclose(fp);
                         }
-                        sb_appendf(&summary, "%s(%s) [%ld lines, %ld bytes]",
+                        sb_appendf(&summary, "%s(%s) [%ld lines, %ld bytes",
                                    tc->name, fpath, flines, fbytes);
+                        if ((foffset && *foffset) || (flimit && *flimit)) {
+                            sb_appendf(&summary, ", offset=%s, limit=%s",
+                                       foffset ? foffset : "1",
+                                       flimit ? flimit : "0");
+                        }
+                        sb_append(&summary, "]");
                     } else {
                         sb_appendf(&summary, "%s()", tc->name);
                     }
                     free(fpath);
+                    free(foffset);
+                    free(flimit);
 
                     /* display 只显示 summary 行 */
                     DisplayMessage *dm = malloc(sizeof(DisplayMessage));

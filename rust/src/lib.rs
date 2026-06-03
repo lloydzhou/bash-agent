@@ -1012,16 +1012,21 @@ pub mod conversation {
             self.append_line(&json!({"role":"user","content":content}))
         }
 
-        pub fn file_tool_result_summary(kind: &str, path: &str) -> String {
+        pub fn file_tool_result_summary(kind: &str, path: &str, offset: &str, limit: &str) -> String {
             if path.is_empty() {
                 return kind.to_string();
             }
             match std::fs::read(path) {
-                Ok(data) => format!(
-                    "{kind}({path}) [{} lines, {} bytes]",
-                    line_count(&data),
-                    data.len()
-                ),
+                Ok(data) => {
+                    let lines = line_count(&data);
+                    let mut rng = String::new();
+                    if !offset.is_empty() || !limit.is_empty() {
+                        let o = if offset.is_empty() { "1" } else { offset };
+                        let l = if limit.is_empty() { &lines.to_string() } else { limit };
+                        rng = format!(", offset={o}, limit={l}");
+                    }
+                    format!("{kind}({path}) [{lines} lines, {} bytes{rng}]", data.len())
+                }
                 Err(_) => format!("{kind}({path})"),
             }
         }

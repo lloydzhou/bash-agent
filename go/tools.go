@@ -709,7 +709,7 @@ func FormatToolResult(output string) string {
 
 // ─── FileSummary 文件信息摘要 ───
 
-func FileSummary(kind, path string) string {
+func FileSummary(kind, path, offset, limit string) string {
 	if path == "" {
 		return fmt.Sprintf("%s()", kind)
 	}
@@ -723,7 +723,17 @@ func FileSummary(kind, path string) string {
 	if err == nil {
 		lines = strings.Count(string(data), "\n")
 	}
-	return fmt.Sprintf("%s(%s) [%d lines, %d bytes]", kind, path, lines, info.Size())
+	rng := ""
+	if offset != "" || limit != "" {
+		if offset == "" {
+			offset = "1"
+		}
+		if limit == "" {
+			limit = fmt.Sprintf("%d", lines)
+		}
+		rng = fmt.Sprintf(", offset=%s, limit=%s", offset, limit)
+	}
+	return fmt.Sprintf("%s(%s) [%d lines, %d bytes%s]", kind, path, lines, info.Size(), rng)
 }
 
 // ─── ExtractToolParams 从 JSON 消息中提取工具参数 ───
