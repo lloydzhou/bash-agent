@@ -212,39 +212,22 @@ agent_image_insert_placeholder_readline() {
 }
 
 agent_image_describe() {
-    # 接受多个图片路径，返回所有图片的组合描述
-    # 使用智谱 GLM-4.6V-FlashX（免费）通过 curl 调用
-    local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}"
-    local paths=("$@")
-    [[ ${#paths[@]} -eq 0 ]] && return 0
+    local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}" paths=("$@") tmp desc p
+    [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && return 0
 
-    # 无 API key 时直接返回空
-    if [[ -z "$api_key" ]]; then
-        return 0
-    fi
-
-    # 用临时文件构建请求体，避免 base64 数据撑爆变量/args
-    local tmp desc
     tmp=$(mktemp) || return 1
     trap 'rm -f "$tmp"' RETURN
 
-    # JSON 头部
     printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
-
-    # 逐个追加 base64 图片段（直接写到文件，不经过变量）
-    local p
     for p in "${paths[@]}"; do
         [[ -f "$p" ]] || continue
         printf ',{"type":"image_url","image_url":{"url":"data:image/png;base64,' >> "$tmp"
         base64 < "$p" | tr -d '\n\r' >> "$tmp"
         printf '"}}' >> "$tmp"
     done
-
-    # JSON 尾部
     printf ']}]}' >> "$tmp"
 
-    # 流式调用 GLM：curl → http_stream → transport_openai_sse → sse_parse → while util_read_msg
-    local desc=""
+    desc=""
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT) desc+="${REPLY_MESSAGE[1]}" ;;
@@ -261,16 +244,7 @@ agent_image_describe() {
         sse_parse
     )
 
-    if [[ -n "$desc" ]]; then
-        printf '%s' "$desc"
-    else
-        # JSON 解析失败时的回退（无 python3 或响应异常）
-        local p num
-        for p in "${paths[@]}"; do
-            num="${p%.png}"; num="${num##*/}"
-            printf 'Image #%s: (description unavailable)\n' "$num"
-        done
-    fi
+    [[ -n "$desc" ]] && printf '%s' "$desc"
 }
 
 agent_image_expand_placeholders_in_input() {
