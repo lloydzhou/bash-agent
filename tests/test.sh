@@ -2419,13 +2419,9 @@ print(body.get('max_tokens', ''))
 # Test 50: Bash image placeholder flow (bash-only, requires sourcing agent.sh)
 
 test_agent_image_placeholders() {
+    # 仅当 AGENT 是 shell 脚本时才执行（编译版本无相关内部函数可测试）
+    [[ -f "$AGENT" && "$(head -1 "$AGENT")" == '#!'* ]] || return 0
     info "Test 50: Bash image placeholder flow"
-    # Skip if AGENT is not a shell script (compiled binaries can't be sourced)
-    if [[ ! -f "$AGENT" ]] || ! head -1 "$AGENT" | grep -q '^#!'; then
-        green "Agent image placeholder (skip - not a shell script)"; ((PASS++)) || true
-        return 0
-    fi
-    local tmp_dir script_file output missing_output mixed_output
     tmp_dir=$(mktemp -d)
     script_file="$tmp_dir/agent-no-main.sh"
     sed '$d' "$AGENT" > "$script_file"
