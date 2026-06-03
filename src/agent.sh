@@ -217,7 +217,7 @@ agent_image_describe() {
     [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && { printf '\033[90m[describe] skip (no paths or no key)\033[0m\n' >&2; return 0; }
     tmp=$(mktemp) || return 1
     trap 'rm -f "$tmp"' RETURN
-    printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
+    printf '{"model":"glm-4v-flash","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
     for p in "${paths[@]}"; do
         printf ',{"type":"image_url","image_url":{"url":"data:image/png;base64,' >> "$tmp"
         base64 < "$p" | tr -d '\n\r' >> "$tmp"
