@@ -8,6 +8,29 @@
 
 ---
 
+## [4.0.7] - 2026-06-03
+
+> **Bugfix + Chore 版本**：修复 DP 成本模型默认 pricing 值、SubAgent 结果显示格式、C/Go Bash 调用摘要缺失换行替换；tool_file_summary 新增 offset/limit 范围信息并同步四版本；tools.json 统一为 go/tools.json symlink，新增 golden 验证脚本确保系统提示词一致性。
+
+### Fixed
+
+- 修复 compact_dp.awk 默认 DP_P_INPUT/DP_P_OUT pricing 值，使压缩决策在未显式配置时使用合理经济模型
+- 修复 SubAgent 结果显示格式，补全 `in=` / `out=` 统计信息
+- 修复 C/Go 版本 Bash 调用摘要缺少替换（`\n` → `\\n`）和截断，与 Bash/Rust 版本对齐
+- 修复 `tool_file_summary` 未显示 offset/limit 范围信息的问题，四版本（Bash/C/Go/Rust）同步增强
+
+### Changed
+
+- `go/tools.json` 设为权威源，`src/tools.json`、`rust/src/tools.json`、`c/tools.json` 改为 symlink，消除 drift 风险
+- 新增 `scripts/update-system-prompt-golden.sh`（193 行），参数化 home/path/platform/shell，支持 `en_US` 和 `zh_CN` 双 locale
+- 新增 `make update-system-prompt-golden` target，将 Golden 验证纳入 CI 可重复流程
+- `Makefile` 删除冗余的 `test-tools-json` 等目标，简化构建配置
+
+### Tests
+
+- Golden 模板 `tests/fixtures/system_prompt_expected.txt` / `.zh_CN` 各 92 行，`make test-bash` 130/130 通过，golden 可复现零 diff
+- `tools.json` SHA256 四版本一致验证通过
+
 ## [4.0.6] - 2026-06-02
 
 > **Bugfix 版本**：修复 C 版本 Edit 工具 diff 行数统计、对齐三版本 DP compact 实现、修复 Go 版本统计计算 bug、修复 compact 后 current_turn_count 被错误重置的问题。同时更新默认 Bash 工具网络权限为读写模式。
@@ -893,7 +916,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.6...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.0.7...HEAD
+[4.0.7]: https://github.com/lloydzhou/bash-agent/compare/v4.0.6...v4.0.7
 [4.0.6]: https://github.com/lloydzhou/bash-agent/compare/v4.0.5...v4.0.6
 [4.0.5]: https://github.com/lloydzhou/bash-agent/compare/v4.0.4...v4.0.5
 [4.0.4]: https://github.com/lloydzhou/bash-agent/compare/v4.0.3...v4.0.4
