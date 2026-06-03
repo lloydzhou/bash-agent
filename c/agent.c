@@ -56,6 +56,20 @@ static char *agent_tool_display_summary(const char *name, JsonVal input, const c
             field = util_strdup(buf);
         }
     }
+    if (field && strcmp(name, "Bash") == 0) {
+        /* 替换换行为空格，截断过长命令，对齐 bash 版行为 */
+        char *p;
+        while ((p = strchr(field, '\n')) != NULL) *p = ' ';
+        size_t flen = strlen(field);
+        if (flen > 80) {
+            int slen = (int)util_utf8_truncate_len(field, 77);
+            char *trunc = malloc(slen + 4);
+            memcpy(trunc, field, slen);
+            strcpy(trunc + slen, "...");
+            free(field);
+            field = trunc;
+        }
+    }
     if (field) return field;
 
     if (input_json && input_json[0]) {

@@ -173,9 +173,11 @@ func (td *ToolDispatcher) CallSummary(name string, params map[string]string) str
 		key = "description"
 	}
 	value := params[key]
-	if name == "Bash" && len(value) > 80 {
-		value = value[:77] + "..."
+	if name == "Bash" {
 		value = strings.ReplaceAll(value, "\n", " ")
+		if len(value) > 80 {
+			value = value[:77] + "..."
+		}
 	}
 	if value != "" {
 		return fmt.Sprintf("%s(%s)", name, value)
