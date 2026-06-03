@@ -225,16 +225,20 @@ agent_image_describe() {
     done
     printf ']}]}' >> "$tmp"
     while util_read_msg; do
+        printf '\033[90m[describe] event=%s\033[0m\n' "${REPLY_MESSAGE[0]}" >&2
         case "${REPLY_MESSAGE[0]}" in
-            TEXT) desc+="${REPLY_MESSAGE[1]}" ;;
-            STOP|ERROR) break ;;
+            TEXT) desc+="${REPLY_MESSAGE[1]}"; printf '\033[90m[describe] TEXT chunk len=%d\033[0m\n' "${#REPLY_MESSAGE[1]}" >&2 ;;
+            STOP|ERROR) printf '\033[90m[describe] stop/error: %s\033[0m\n' "${REPLY_MESSAGE[*]}" >&2; break ;;
         esac
     done < <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 \
         --connect-timeout 5 --speed-limit 1 --speed-time 60 \
         -H "Content-Type: application/json" -H "Authorization: Bearer $api_key" \
         -d "@$tmp" "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>&1 | \
+        tee /tmp/describe_curl_raw.log | \
         util_awk_run -f "$AWK_DIR/http_stream.awk" | \
+        tee /tmp/describe_http_stream.log | \
         util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" | \
+        tee /tmp/describe_sse.log | \
         sse_parse)
     printf '\033[90m[describe] desc_len=%d preview=%.60s\033[0m\n' "${#desc}" "$desc" >&2
     printf '%s' "$desc"
