@@ -631,7 +631,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 					switch tc.Name {
 					case "Read", "Write":
 						pathParam := params["path"]
-						fs := FileSummary(tc.Name, pathParam)
+						fs := FileSummary(tc.Name, pathParam, params["offset"], params["limit"])
 						output = fs + "\n" + output
 					case "Edit":
 						convOutput = firstLine(output)

@@ -237,6 +237,9 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
 
         case DISPLAY_SUB_AGENT_RESULT: {
             ensure_newline(ds, out);
+            /* 清空当前行，避免子 agent 残留的输出内容导致排版混乱
+             * bash 版同样有 \r\033[K 保护 */
+            fprintf(out, "\r\033[K");
             if (msg->tool_exit_code == 0) {
                 fprintf(out, "\x1b[35m[sub-agent %s] completed (in=%d, out=%d)\x1b[0m\n",
                         msg->session_id ? msg->session_id : "?",
@@ -261,6 +264,7 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             }
             fflush(out);
             ds->last_char[0] = '\n';
+            ds->prev_was_thinking = 0;
             break;
         }
 

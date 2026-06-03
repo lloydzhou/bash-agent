@@ -476,7 +476,7 @@ store_conv_dp_decision() {
         -v total_compact="$3" -v total_input="$4" \
         -v baseline_e="${5:-${DP_BASELINE_E:-8}}" -v e_fixed="${6:-${DP_E_FIXED:-0}}" -v L_fixed="${7:-${DP_L:-0}}" \
         -v V="${8:-${DP_V:-5000}}" -v p_input="${9:-${DP_P_INPUT:-3.0}}" -v p_cache="${10:-${DP_P_CACHE:-0.30}}" -v p_out="${11:-${DP_P_OUT:-15.0}}" \
-        -v S="${12:-${DP_S:-500}}" -v min_keep_ratio="${13:-${DP_MIN_KEEP_RATIO:-0.12}}" -v r="${14:-${DP_R:-0.8}}" -v beta="${15:-${DP_BETA:-0.03}}" \
+        -v S="${12:-${DP_S:-500}}" -v min_keep_ratio="${13:-${DP_MIN_KEEP_RATIO:-0.25}}" -v r="${14:-${DP_R:-0.8}}" -v beta="${15:-${DP_BETA:-0.03}}" \
         -v max_context="${16:-${MAX_CONTEXT_TOKENS:-200000}}" -v quality_penalty="${17:-${DP_QUALITY_PENALTY:-0.2}}" \
         -f "$AWK_DIR/compact_dp.awk" "$CONV_FILE"
 }
@@ -693,13 +693,14 @@ tool_format_result() {
 }
 
 tool_file_summary() {
-    local kind="$1" path="$2" bytes lines
+    local kind="$1" path="$2" bytes lines offset="$3" limit="$4" _rng=
     [[ -n "$path" && -f "$path" ]] || { printf '%s(%s)' "$kind" "$path"; return 0; }
     bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
     bytes=${bytes//[[:space:]]/}
     lines=$(util_awk_run 'END { print NR }' "$path" 2>/dev/null || echo 0)
     lines=${lines//[[:space:]]/}
-    printf '%s(%s) [%s lines, %s bytes]' "$kind" "$path" "$lines" "$bytes"
+    [[ -n "$offset$limit" ]] && _rng=", offset=${offset:-1}, limit=${limit:-$lines}"
+    printf '%s(%s) [%s lines, %s bytes%s]' "$kind" "$path" "$lines" "$bytes" "$_rng"
 }
 
 
@@ -1111,7 +1112,7 @@ agent_compact_context() {
     if (( keep_lines == 0 )) || (( keep_lines >= total_lines && total_lines > 0 )); then
         local ct=$(store_stats_get current_context_tokens)
         if [[ "$trigger" == "plan_clear" || "$trigger" == "plan_confirm" ]] || (( ct > 0 && ct > MAX_CONTEXT_TOKENS * 90 / 100 )); then
-            keep_lines=$(store_conv_turn_keep "${DP_MIN_KEEP_RATIO:-0.12}")
+            keep_lines=$(store_conv_turn_keep "${DP_MIN_KEEP_RATIO:-0.25}")
         else
             return 1
         fi
@@ -1292,7 +1293,7 @@ agent_loop_stream() {
                     result_for_conv="$output"
                     case "$cur_tool_name" in
                         Edit)       result_for_conv="$(printf '%s' "$output" | sed -n '1p')" ;;
-                        Read|Write) output="$(tool_file_summary "$cur_tool_name" "${_TOOL_ARGS[0]:-}")"$'\n'"$output" ;;
+                        Read|Write) output="$(tool_file_summary "$cur_tool_name" "${_TOOL_ARGS[0]:-}" "${_TOOL_ARGS[1]:-}" "${_TOOL_ARGS[2]:-}")"$'\n'"$output" ;;
                     esac
                     tool_conv_results+="${cur_tool_id}"$'\t'"$(util_json_escape "$result_for_conv")"$'\n'
                     tool_emit_result "$cur_tool_id" "$cur_tool_name" "$output"

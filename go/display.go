@@ -159,6 +159,8 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 	case EventSubAgentResult:
 		// Fields: ["SUB_AGENT_RESULT", sessionID, status, in, out, thinking, text]
 		d.EnsureNewline()
+		// 清空当前行，避免子 agent 残留内容导致排版混乱（与 bash/C 版对齐）
+		fmt.Fprintf(d.writer, "\r\033[K")
 		if len(ev.Fields) >= 4 {
 			sessionID := ev.Fields[1]
 			status := ev.Fields[2]

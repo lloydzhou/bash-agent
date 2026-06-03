@@ -1,19 +1,16 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e update-system-prompt-golden clean
 
 build: build-bash build-go build-rust build-tcode build-c
 
 build-bash:
 	bash scripts/build.sh dist/agent.sh
 
-build-go: go/tools.json
+build-go:
 	mkdir -p go/.gocache go/.gomodcache dist
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go mod download
 	GOCACHE=$(PWD)/go/.gocache GOMODCACHE=$(PWD)/go/.gomodcache go -C go build -ldflags="-s -w" -trimpath -o ../dist/goagent ./cmd/goagent
-
-go/tools.json: src/tools.json
-	cp src/tools.json go/tools.json
 
 build-rust:
 	cd rust && cargo build --release -j 10
@@ -53,6 +50,9 @@ test-rust-e2e: build-rust
 
 test-c-e2e: build-c
 	AGENT=./dist/cagent bash tests/test.sh
+
+update-system-prompt-golden: build-bash
+	bash scripts/update-system-prompt-golden.sh
 
 clean:
 	rm -rf go/dist rust/target dist/cagent

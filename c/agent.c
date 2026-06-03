@@ -56,6 +56,20 @@ static char *agent_tool_display_summary(const char *name, JsonVal input, const c
             field = util_strdup(buf);
         }
     }
+    if (field && strcmp(name, "Bash") == 0) {
+        /* 替换换行为空格，截断过长命令，对齐 bash 版行为 */
+        char *p;
+        while ((p = strchr(field, '\n')) != NULL) *p = ' ';
+        size_t flen = strlen(field);
+        if (flen > 80) {
+            int slen = (int)util_utf8_truncate_len(field, 77);
+            char *trunc = malloc(slen + 4);
+            memcpy(trunc, field, slen);
+            strcpy(trunc + slen, "...");
+            free(field);
+            field = trunc;
+        }
+    }
     if (field) return field;
 
     if (input_json && input_json[0]) {
@@ -961,10 +975,14 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
 
                 /* 为 Read/Write 工具添加 file summary 前缀 */
                 if (strcmp(tc->name, "Read") == 0 || strcmp(tc->name, "Write") == 0) {
-                    /* 从 input_json 获取 path */
-                    char *fpath = NULL;
+                    /* 从 input_json 获取 path / offset / limit */
+                    char *fpath = NULL, *foffset = NULL, *flimit = NULL;
                     JsonParse jp2 = json_parse_root(tc->input_json.data);
-                    if (!jp2.error) fpath = json_get_string(jp2.val, "path");
+                    if (!jp2.error) {
+                        fpath = json_get_string(jp2.val, "path");
+                        foffset = json_get_string(jp2.val, "offset");
+                        flimit = json_get_string(jp2.val, "limit");
+                    }
 
                     StrBuf summary;
                     sb_init(&summary);
@@ -983,12 +1001,20 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                             flines = nl;
                             fclose(fp);
                         }
-                        sb_appendf(&summary, "%s(%s) [%ld lines, %ld bytes]",
+                        sb_appendf(&summary, "%s(%s) [%ld lines, %ld bytes",
                                    tc->name, fpath, flines, fbytes);
+                        if ((foffset && *foffset) || (flimit && *flimit)) {
+                            sb_appendf(&summary, ", offset=%s, limit=%s",
+                                       foffset ? foffset : "1",
+                                       flimit ? flimit : "0");
+                        }
+                        sb_append(&summary, "]");
                     } else {
                         sb_appendf(&summary, "%s()", tc->name);
                     }
                     free(fpath);
+                    free(foffset);
+                    free(flimit);
 
                     /* display 只显示 summary 行 */
                     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -2045,7 +2071,7 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
     double p_cache    = dp_env_d("DP_P_CACHE", 0.30);
     double p_out      = dp_env_d("DP_P_OUT", 15.0);
     double S          = dp_env_d("DP_S", 500.0);
-    double min_keep_ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.12);
+    double min_keep_ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.25);
     double r          = dp_env_d("DP_R", 0.8);
     double beta       = dp_env_d("DP_BETA", 0.03);
     double quality_penalty = dp_env_d("DP_QUALITY_PENALTY", 0.2);
@@ -2121,13 +2147,16 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
         /* ② Cache miss */
         double cache_miss = (S + (double)K) * (p_input - p_cache) / 1e6;
         /* ③ Compact cost */
-        double compact_cost = (p_cache * (V + (double)H) + p_input * l_instr + p_out * S) / 1e6;
-        /* ⑤ Quality savings */
-        double v_plus_T = V + (double)total_tokens;
-        double v_plus_K = V + (double)K;
-        double quality_savings = quality_penalty * p_input *
-            (v_plus_T * v_plus_T - v_plus_K * v_plus_K) /
-            ((double)max_ctx * 1e6);
+        double compact_cost = (p_cache * V + p_input * ((double)H + l_instr) + p_out * S) / 1e6;
+        /* ⑤ Quality savings — only when context is large enough */
+        double quality_savings = 0.0;
+        if (total_tokens > max_ctx * 0.30) {
+            double v_plus_T = V + (double)total_tokens;
+            double v_plus_K = V + (double)K;
+            quality_savings = quality_penalty * p_input *
+                (v_plus_T * v_plus_T - v_plus_K * v_plus_K) /
+                ((double)max_ctx * 1e6);
+        }
 
         double benefit = savings - cache_miss - compact_cost - info_loss + quality_savings;
         if (benefit > best_benefit) {

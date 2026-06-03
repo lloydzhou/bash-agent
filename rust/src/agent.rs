@@ -479,6 +479,8 @@ fn render_display_event(
             if ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
             }
+            // 清空当前行，避免子 agent 残留内容导致排版混乱（与 bash/C 版对齐）
+            display_write_human(out, interactive, "\r\x1b[K")?;
             if status == "ok" {
                 display_write_human(
                     out,
@@ -1238,6 +1240,8 @@ impl Agent {
                                 let file_summary = Store::file_tool_result_summary(
                                     &call.name,
                                     call.fields.get("path").map(String::as_str).unwrap_or(""),
+                                    call.fields.get("offset").map(String::as_str).unwrap_or(""),
+                                    call.fields.get("limit").map(String::as_str).unwrap_or(""),
                                 );
                                 output = format!("{}\n{}", file_summary, output);
                             }
