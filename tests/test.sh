@@ -2420,7 +2420,7 @@ print(body.get('max_tokens', ''))
 
 test_agent_image_placeholders() {
     info "Test 50: Bash image placeholder flow"
-    local tmp_dir script_file output missing_output
+    local tmp_dir script_file output missing_output mixed_output
     tmp_dir=$(mktemp -d)
     script_file="$tmp_dir/agent-no-main.sh"
     sed '$d' "$AGENT" > "$script_file"
@@ -2440,16 +2440,13 @@ test_agent_image_placeholders() {
         printf "%s" "$expanded"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$output" == "开头 [Image #1]"* ]] && \
-       [[ "$output" == *"Filename: 1.png"* ]] && \
-       [[ "$output" == *"Size: 3 bytes"* ]] && \
-       [[ "$output" == *" 中间文字 [Image #2]"* ]] && \
-       [[ "$output" == *"Filename: 2.png"* ]] && \
-       [[ "$output" == *"Size: 4 bytes"* ]] && \
-       [[ "$output" == *" 结尾" ]]; then
-        green "Agent image placeholder expansion in place"; ((PASS++)) || true
+    if [[ "$output" == "开头 [Image #1] 中间文字 [Image #2] 结尾"* ]] && \
+       [[ "$output" == *"[Attached Images Description]"* ]] && \
+       [[ "$output" == *"Image #1: This is a mock description"* ]] && \
+       [[ "$output" == *"Image #2: This is a mock description"* ]]; then
+        green "Agent image placeholder appends descriptions at end"; ((PASS++)) || true
     else
-        red "Agent image placeholder expansion in place"; echo "  Output: $output"; ((FAIL++)) || true
+        red "Agent image placeholder appends descriptions at end"; echo "  Output: $output"; ((FAIL++)) || true
     fi
 
     missing_output=$(BASH_AGENT_HOME="$tmp_dir/home2" bash -c '
@@ -2461,9 +2458,9 @@ test_agent_image_placeholders() {
     ' _ "$script_file" 2>&1) || true
 
     if [[ "$missing_output" == "开始 [Image #1] 中间 [Image #999] 结尾" ]]; then
-        green "Agent image placeholder skips missing files unchanged"; ((PASS++)) || true
+        green "Agent image placeholder no images returns input unchanged"; ((PASS++)) || true
     else
-        red "Agent image placeholder skips missing files unchanged"; echo "  Output: $missing_output"; ((FAIL++)) || true
+        red "Agent image placeholder no images returns input unchanged"; echo "  Output: $missing_output"; ((FAIL++)) || true
     fi
 
     mixed_output=$(BASH_AGENT_HOME="$tmp_dir/home3" bash -c '
@@ -2475,10 +2472,9 @@ test_agent_image_placeholders() {
         printf "%s" "$result"
     ' _ "$script_file" 2>&1) || true
 
-    if [[ "$mixed_output" == "开头 [Image #1]"* && \
-         "$mixed_output" == *"Size: 4 bytes"* && \
-         "$mixed_output" == *"[Image #999]"* && \
-         "$mixed_output" == *" 结尾" ]]; then
+    if [[ "$mixed_output" == "开头 [Image #1] 中间 [Image #999] 结尾"* && \
+         "$mixed_output" == *"[Attached Images Description]"* && \
+         "$mixed_output" == *"Image #1: This is a mock description"* ]]; then
         green "Agent image placeholder mixed (some missing) works"; ((PASS++)) || true
     else
         red "Agent image placeholder mixed (some missing) works"; echo "  Output: $mixed_output"; ((FAIL++)) || true

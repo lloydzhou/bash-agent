@@ -212,26 +212,89 @@ agent_image_insert_placeholder_readline() {
 }
 
 agent_image_describe() {
-    local path="$1" num="${2:-0}"
-    # TODO: replace with real image describe API call (multimodal model)
-    printf 'This is a mock image description. Will be replaced with real image describe API output.'
+    # 接受多个图片路径，返回所有图片的组合描述
+    # 使用智谱 GLM-4V-Flash（免费）通过 curl 调用
+    local api_key="${GLM_API_KEY:-${ZHIPUAI_API_KEY:-}}"
+    local paths=("$@")
+    [[ ${#paths[@]} -eq 0 ]] && return 0
+
+    # 无 API key 时的 mock 回退
+    if [[ -z "$api_key" ]]; then
+        local p desc="" num
+        for p in "${paths[@]}"; do
+            num="${p%.png}"; num="${num##*/}"
+            desc+="Image #${num}: This is a mock description for ${p}. (Set GLM_API_KEY to use GLM-4V-Flash)\n"
+        done
+        printf '%b' "$desc"
+        return 0
+    fi
+
+    # 构建请求体：base64 编码所有图片
+    local content_parts='[{"type":"text","text":"Please describe these images in order, one paragraph per image."}'
+    local p b64
+    for p in "${paths[@]}"; do
+        [[ -f "$p" ]] || continue
+        b64=$(base64 < "$p" | tr -d '\n\r')
+        content_parts+=",{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,${b64}\"}}"
+    done
+    content_parts+=']'
+
+    local response desc
+    response=$(curl -sS -X POST \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $api_key" \
+        -d "{\"model\":\"glm-4v-flash\",\"messages\":[{\"role\":\"user\",\"content\":${content_parts}}]}" \
+        "https://open.bigmodel.cn/api/paas/v4/chat/completions" 2>/dev/null) || desc=""
+
+    # 提取 content 字段（OpenAI 兼容格式）
+    if [[ -z "$desc" ]]; then
+        desc=$(printf '%s' "$response" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data['choices'][0]['message']['content'])
+except: pass
+" 2>/dev/null) || desc=""
+    fi
+
+    if [[ -n "$desc" ]]; then
+        printf '%s' "$desc"
+    else
+        # JSON 解析失败时的回退（无 python3 或响应异常）
+        local p num
+        for p in "${paths[@]}"; do
+            num="${p%.png}"; num="${num##*/}"
+            printf 'Image #%s: (description unavailable)\n' "$num"
+        done
+    fi
 }
 
 agent_image_expand_placeholders_in_input() {
-    local input="$1" rest="$1" out="" token n path size
+    local input="$1" rest="$1" paths=() n p
+    # 扫描所有 [Image #N] 占位符，收集图片路径
     while [[ "$rest" =~ \[Image\ #([0-9]+)\] ]]; do
-        token="${BASH_REMATCH[0]}"; n="${BASH_REMATCH[1]}"
-        out+="${rest%%"$token"*}"
-        path="$(store_session_image_dir)/$n.png"
-        if [[ -f "$path" ]]; then
-            size=$(wc -c < "$path" 2>/dev/null || printf '?'); size="${size//[[:space:]]/}"
-            out+=$'[Image #'"$n"$']\nSource: session image cache\nFile: '"$path"$'\nFilename: '"$n.png"$'\nSize: '"$size"' bytes\nDescription: '"$(agent_image_describe "$path" "$n")"
-        else
-            out+="$token"
-        fi
-        rest="${rest#*"$token"}"
+        n="${BASH_REMATCH[1]}"
+        p="$(store_session_image_dir)/$n.png"
+        [[ -f "$p" ]] && paths+=("$p")
+        rest="${rest#*"${BASH_REMATCH[0]}"}"
     done
-    printf '%s' "$out$rest"
+
+    # 无图片时原样返回
+    if [[ ${#paths[@]} -eq 0 ]]; then
+        printf '%s' "$input"
+        return 0
+    fi
+
+    # 一次性获取所有图片描述
+    local desc
+    desc=$(agent_image_describe "${paths[@]}") || desc=""
+
+    # 将描述追加到用户输入末尾，原始占位符不变
+    if [[ -n "$desc" ]]; then
+        printf '%s\n\n---\n[Attached Images Description]\n%s' "$input" "$desc"
+    else
+        printf '%s' "$input"
+    fi
 }
 
 util_find_skill_dirs() {
