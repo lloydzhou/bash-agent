@@ -218,7 +218,6 @@ agent_image_describe() {
     trap 'rm -f "$tmp"' RETURN
     printf '{"model":"glm-4.6v-flashx","messages":[{"role":"user","content":[{"type":"text","text":"Please describe these images in order, one paragraph per image."}' > "$tmp"
     for p in "${paths[@]}"; do
-        [[ -f "$p" ]] || continue
         printf ',{"type":"image_url","image_url":{"url":"data:image/png;base64,' >> "$tmp"
         base64 < "$p" | tr -d '\n\r' >> "$tmp"
         printf '"}}' >> "$tmp"
