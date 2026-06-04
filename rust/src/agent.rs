@@ -458,7 +458,9 @@ fn render_display_event(
                 return Ok(());
             }
             let tr_text = if result.tool_name == "Edit" {
-                let mut s = normalize_display_text(&result.content, interactive);
+                // Don't normalize_display_text here — display_write_human already does it.
+                // Double-normalizing would turn \n → \r\n → \r\r\n, causing garbled output.
+                let mut s = result.content.replace("\r\n", "\n").replace('\r', "\n");
                 if !s.ends_with('\n') {
                     s.push('\n');
                 }
@@ -466,7 +468,8 @@ fn render_display_event(
             } else if result.tool_name == "Read" || result.tool_name == "Write" {
                 first_line(&result.content).to_string() + "\n"
             } else {
-                normalize_display_text(&result.content, interactive) + "\n"
+                // Don't normalize_display_text here — display_write_human already does it.
+                result.content.clone() + "\n"
             };
             if ds.prev_was_thinking && ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
@@ -993,26 +996,52 @@ impl Agent {
                         }
                     }
                     self.flush_display();
+
+                    // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
+                    // main_loop 在内部循环等待所有 AgentResult 并处理，
+                    // 直到全部完成后再通知 readline 线程。
+                    // 这确保 display worker 独占 stdout（linenoise 未激活），
+                    // 避免两个线程同时写 stdout 导致排版混乱。
+                    while self.active_sub_count > 0 {
+                        match self.msg_rx.recv() {
+                            Ok(MainLoopMessage::AgentResult {
+                                session_id,
+                                status,
+                                thinking,
+                                text,
+                                in_tokens,
+                                out_tokens,
+                                cache_read_tokens,
+                                cache_creation_tokens,
+                                request_count,
+                            }) => {
+                                self.handle_sub_agent_result(
+                                    &session_id, &status, &thinking, &text,
+                                    in_tokens, out_tokens, cache_read_tokens,
+                                    cache_creation_tokens, request_count,
+                                )?;
+                                self.flush_display();
+                            }
+                            Ok(MainLoopMessage::UserInput { .. }) => {
+                                // 不应该在这里收到 UserInput（readline 在等待 done）
+                                // 忽略
+                            }
+                            Err(std::sync::mpsc::RecvError) => {
+                                // 所有发送端关闭
+                                let _ = done.send(());
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     // 通知 readline 线程处理完成
                     let _ = done.send(());
                 }
-                MainLoopMessage::AgentResult {
-                    session_id,
-                    status,
-                    thinking,
-                    text,
-                    in_tokens,
-                    out_tokens,
-                    cache_read_tokens,
-                    cache_creation_tokens,
-                    request_count,
-                } => {
-                    if self.cfg.interactive {
-                        // Clear the prompt line before rendering sub-agent output.
-                        let _ = write!(self.stderr.borrow_mut(), "\r\x1b[K");
-                    }
-                    self.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
-                    self.flush_display();
+                MainLoopMessage::AgentResult { .. } => {
+                    // 在交互模式下，AgentResult 应该在 UserInput 的内部 while 循环中被处理。
+                    // 如果走到这里，说明是非交互模式或者异常情况。
+                    // 非交互模式下直接忽略（active_sub_count 不会 > 0 因为没有 while 循环等待）。
+                    // 保留此分支以防意外。
                 }
             }
 
