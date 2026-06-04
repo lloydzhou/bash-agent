@@ -11,12 +11,17 @@ import (
 // TermDisplay — 终端输出显示
 // ═══════════════════════════════════════════
 
+// OutputLocker hides the prompt before output and restores it after.
+// Returns an unlock function that must be called when output is done.
+type OutputLocker func() func()
+
 type TermDisplay struct {
 	writer         io.Writer // 输出目标（默认 os.Stdout）
 	lastChar       byte      // 上次输出的最后一个字符
 	prevThinking   bool      // 上一个事件是否为 THINKING
 	silent         bool      // stream-json 模式下抑制人类可读输出
 	titleFormatter func(model string) string
+	outputLocker   OutputLocker // hide/show 保护（可能为 nil）
 }
 
 func NewTermDisplay() *TermDisplay {
@@ -66,6 +71,11 @@ func (d *TermDisplay) SetSilent(s bool) {
 	d.silent = s
 }
 
+// SetOutputLocker sets a callback for hide/show protection during display output.
+func (d *TermDisplay) SetOutputLocker(locker OutputLocker) {
+	d.outputLocker = locker
+}
+
 // SetTitle 设置终端标题
 func (d *TermDisplay) SetTitle(title string) {
 	if d.silent {
@@ -83,6 +93,18 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 	if d.silent {
 		return
 	}
+
+	// Hide linenoise prompt before writing output
+	var unlock func()
+	if d.outputLocker != nil {
+		unlock = d.outputLocker()
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+
 	switch ev.Type {
 	case EventText:
 		// thinking → text 转换时补换行

@@ -25,12 +25,6 @@ typedef struct {
     union {
         struct {
             char *text;   /* 用户输入的文本，需要调用者 free */
-            /* done 同步机制 — 模仿 Rust 版的 done channel。
-             * readline 线程发送 USER_INPUT 后阻塞等待 main_loop 处理完成。
-             * main_loop 处理完后 signal done，readline 线程被唤醒继续读下一行。 */
-            pthread_mutex_t *done_mutex;
-            pthread_cond_t  *done_cond;
-            int             *done_flag;   /* 0=未完成, 1=完成 */
         } user_input;
         struct {
             char *session_id;

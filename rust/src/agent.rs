@@ -236,7 +236,7 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
 enum MainLoopMessage {
     UserInput {
         input: String,
-        done: mpsc::Sender<()>, // 通知 readline 线程处理完成
+        // 不再有 done channel — readline 线程不再等待 agent 完成
     },
     AgentResult {
         session_id: String,
@@ -251,7 +251,13 @@ enum MainLoopMessage {
     },
 }
 
-pub(crate) struct Agent {
+/// Wrapper to allow sending raw linenoiseState pointers across threads.
+/// Safety: we only use the pointer for Hide/Show calls under mutex protection.
+pub(crate) struct LinenoiseStatePtr(*mut ffi::LinenoiseState);
+unsafe impl Send for LinenoiseStatePtr {}
+unsafe impl Sync for LinenoiseStatePtr {}
+
+struct Agent {
     cfg: Config,
     cwd: PathBuf,
     home: PathBuf,
@@ -276,6 +282,7 @@ pub(crate) struct Agent {
     display_tx: Option<mpsc::Sender<DisplayCommand>>,
     display_handle: Option<thread::JoinHandle<()>>,
     cancel_read_fd: i32,                      // cancel pipe 读端 FD，传给 Runner 做 kqueue wait
+    linenoise_state: Arc<Mutex<Option<LinenoiseStatePtr>>>, // 共享 linenoiseState，display worker 用于 hide/show
 }
 
 struct DisplayState {
@@ -547,7 +554,7 @@ fn render_display_event(
 }
 
 impl Agent {
-    fn start_display_worker(interactive: bool) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
+    fn start_display_worker(interactive: bool, ls: Arc<Mutex<Option<LinenoiseStatePtr>>>) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
         let (tx, rx) = mpsc::channel::<DisplayCommand>();
         let handle = thread::spawn(move || {
             let mut ds = DisplayState {
@@ -558,7 +565,23 @@ impl Agent {
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     DisplayCommand::Event(evt) => {
+                        // Hide linenoise prompt before output
+                        if interactive {
+                            let guard = ls.lock().unwrap();
+                            if let Some(LinenoiseStatePtr(ls_ptr)) = *guard {
+                                unsafe { ffi::hide(ls_ptr); }
+                            }
+                            drop(guard);
+                        }
                         let _ = render_display_event(&mut ds, &mut out, interactive, evt);
+                        // Show linenoise prompt after output
+                        if interactive {
+                            let guard = ls.lock().unwrap();
+                            if let Some(LinenoiseStatePtr(ls_ptr)) = *guard {
+                                unsafe { ffi::show(ls_ptr); }
+                            }
+                            drop(guard);
+                        }
                     }
                     DisplayCommand::Flush(done) => {
                         let _ = out.flush();
@@ -643,11 +666,12 @@ impl Agent {
         let transport = Arc::from(crate::transport::new_transport(&cfg));
         let (msg_tx, msg_rx) = mpsc::channel(); // 初始化消息队列
         let msg_tx = Arc::new(Mutex::new(Some(msg_tx))); // 包装在 Arc<Mutex<Option>> 中
+        let linenoise_state: Arc<Mutex<Option<LinenoiseStatePtr>>> = Arc::new(Mutex::new(None));
 
         let (display_tx, display_handle) = if cfg.output_format == OutputFormat::StreamJson {
             (None, None)
         } else {
-            let (tx, handle) = Self::start_display_worker(cfg.interactive);
+            let (tx, handle) = Self::start_display_worker(cfg.interactive, linenoise_state.clone());
             (Some(tx), Some(handle))
         };
 
@@ -676,6 +700,7 @@ impl Agent {
             display_tx,
             display_handle,
             cancel_read_fd: 0, // 占位，稍后由 agent_run 设置
+            linenoise_state,
         };
 
         if new_session {
@@ -785,6 +810,7 @@ impl Agent {
                 display_tx: None,
                 display_handle: None,
                 cancel_read_fd: -1,
+                linenoise_state: Arc::new(Mutex::new(None)),
             };
 
             // 4. 执行 agent_loop
@@ -896,6 +922,9 @@ impl Agent {
         ffi::set_image_dir(self.paths.session_dir.join("images"));
         ffi::register_paste_callback();
 
+        // 使用 Agent 结构体中的共享 linenoiseState（display worker 已经持有 clone）
+        let linenoise_state = self.linenoise_state.clone();
+
         // 启动 readline 线程，将用户输入发送到消息队列
         let msg_tx_arc = self.msg_tx.clone();
         let history_path_clone = history_path.to_string_lossy().to_string();
@@ -903,45 +932,106 @@ impl Agent {
             ffi::set_multiline(true);
             ffi::history_load(&history_path_clone);
             ffi::history_set_max_len(1000);
+
+            let mut linebuf = vec![0u8; 65536];
+            let prompt = "\x1b[32m> \x1b[0m";
+            let c_prompt = std::ffi::CString::new(prompt).expect("prompt");
+
             // 借鉴 bash 版本：线程退出时主动 drop 发送端，让 main_loop 收到 Disconnected
             let result = (|| {
                 loop {
-                    let line = match ffi::line("\x1b[32m> \x1b[0m") {
-                        Ok(s) => s.trim_end().to_string(),
-                        Err(ffi::LineError::Interrupted) => {
-                            // Ctrl+C 重新输入当前行（与 Go 版本一致）
-                            continue;
+                    // 重置 errno
+                    #[cfg(target_os = "macos")]
+                    unsafe { *libc::__error() = 0 };
+                    #[cfg(target_os = "linux")]
+                    unsafe { *libc::__errno_location() = 0 };
+
+                    // EditStart: 初始化非阻塞编辑会话
+                    let mut ls: std::mem::MaybeUninit<ffi::LinenoiseState> = std::mem::MaybeUninit::uninit();
+                    let rc = unsafe {
+                        ffi::edit_start_raw(
+                            ls.as_mut_ptr(),
+                            0, // stdin fd
+                            2, // stderr fd
+                            linebuf.as_mut_ptr() as *mut libc::c_char,
+                            linebuf.len(),
+                            c_prompt.as_ptr(),
+                        )
+                    };
+                    if rc == -1 {
+                        return; // 无法启动编辑
+                    }
+                    let ls_ptr = ls.as_mut_ptr();
+
+                    // 注册到共享状态
+                    {
+                        let mut guard = linenoise_state.lock().unwrap();
+                        *guard = Some(LinenoiseStatePtr(ls_ptr));
+                    }
+
+                    // Feed 循环
+                    let line = loop {
+                        let result = unsafe { ffi::edit_feed_raw(ls_ptr) };
+                        let more_ptr = ffi::edit_more_ptr();
+                        if result == more_ptr {
+                            continue; // 还在编辑
                         }
-                        Err(ffi::LineError::Eof) => {
-                            // Ctrl+D 退出
-                            return;
+                        if result.is_null() {
+                            #[cfg(target_os = "macos")]
+                            let err = unsafe { *libc::__error() };
+                            #[cfg(target_os = "linux")]
+                            let err = unsafe { *libc::__errno_location() };
+                            if err == libc::EAGAIN {
+                                break Err(ffi::LineError::Interrupted);
+                            }
+                            break Err(ffi::LineError::Eof);
+                        }
+                        // Got a line
+                        let s = unsafe {
+                            let rust_str = std::ffi::CStr::from_ptr(result).to_string_lossy().into_owned();
+                            ffi::free_line(result);
+                            rust_str
+                        };
+                        break Ok(s);
+                    };
+
+                    // 清除共享状态
+                    {
+                        let mut guard = linenoise_state.lock().unwrap();
+                        *guard = None;
+                    }
+
+                    // EditStop
+                    unsafe { ffi::edit_stop_ptr(ls_ptr); }
+
+                    match line {
+                        Ok(s) => {
+                            let trimmed = s.trim_end().to_string();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            if trimmed == "exit" || trimmed == "quit" {
+                                return;
+                            }
+                            ffi::history_add(&trimmed);
+                            ffi::history_save(&history_path_clone);
+                            // 发送到消息队列 — 不再等 done
+                            let tx_guard = msg_tx_arc.lock().unwrap();
+                            if let Some(tx) = tx_guard.as_ref() {
+                                if tx.send(MainLoopMessage::UserInput { input: trimmed }).is_err() {
+                                    return;
+                                }
+                            } else {
+                                return;
+                            }
+                        }
+                        Err(ffi::LineError::Interrupted) => {
+                            continue; // Ctrl+C → 重新输入
                         }
                         Err(_) => {
-                            return;
+                            return; // Ctrl+D / EOF
                         }
-                    };
-                    if line.is_empty() {
-                        continue;
                     }
-                    if line == "exit" || line == "quit" {
-                        return;
-                    }
-                    ffi::history_add(&line);
-                    ffi::history_save(&history_path_clone);
-                    // 创建同步 channel
-                    let (done_tx, done_rx) = mpsc::channel();
-                    // 将用户输入发送到消息队列
-                    let tx_guard = msg_tx_arc.lock().unwrap();
-                    if let Some(tx) = tx_guard.as_ref() {
-                        if tx.send(MainLoopMessage::UserInput { input: line, done: done_tx }).is_err() {
-                            return;
-                        }
-                    } else {
-                        return;
-                    }
-                    drop(tx_guard); // 释放锁
-                    // 等待 main_loop 处理完成
-                    let _ = done_rx.recv();
                 }
             })();
             // readline 线程退出时，主动 drop 发送端（借鉴 bash 版本 exec 4>&-）
@@ -980,7 +1070,7 @@ impl Agent {
                 }
             };
             match msg {
-                MainLoopMessage::UserInput { input, done } => {
+                MainLoopMessage::UserInput { input } => {
                     if self.cfg.interactive {
                         // 清除当前行（包括提示符）
                         let _ = write!(self.stderr.borrow_mut(), "\r\x1b[2K");
@@ -999,9 +1089,8 @@ impl Agent {
 
                     // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
                     // main_loop 在内部循环等待所有 AgentResult 并处理，
-                    // 直到全部完成后再通知 readline 线程。
-                    // 这确保 display worker 独占 stdout（linenoise 未激活），
-                    // 避免两个线程同时写 stdout 导致排版混乱。
+                    // 直到全部完成后再返回主循环（readline 已在下一轮 EditStart）。
+                    // display worker 的 hide/show 保证输出不会与 linenoise 冲突。
                     while self.active_sub_count > 0 {
                         match self.msg_rx.recv() {
                             Ok(MainLoopMessage::AgentResult {
@@ -1023,19 +1112,18 @@ impl Agent {
                                 self.flush_display();
                             }
                             Ok(MainLoopMessage::UserInput { .. }) => {
-                                // 不应该在这里收到 UserInput（readline 在等待 done）
-                                // 忽略
+                                // readline 已不再等 done，可能发来新的 UserInput。
+                                // 将其放回队列末尾，等当前子 agent 完成后再处理。
+                                // TODO: 暂时忽略，后续可改为队列缓存。
                             }
                             Err(std::sync::mpsc::RecvError) => {
                                 // 所有发送端关闭
-                                let _ = done.send(());
                                 return Ok(());
                             }
                         }
                     }
 
-                    // 通知 readline 线程处理完成
-                    let _ = done.send(());
+                    // 不再通知 readline 线程 — 它已经在下一轮 EditStart
                 }
                 MainLoopMessage::AgentResult { .. } => {
                     // 在交互模式下，AgentResult 应该在 UserInput 的内部 while 循环中被处理。

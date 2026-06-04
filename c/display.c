@@ -1,4 +1,5 @@
 #include "display.h"
+#include "readline.h"
 #include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -162,6 +163,9 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
     }
 
     /* human 模式 */
+    /* Hide linenoise prompt before writing to stdout */
+    if (interactive) readline_display_hide();
+
     switch (msg->type) {
         case DISPLAY_THINKING:
             /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
@@ -304,6 +308,9 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             signal_flush(msg);
             break;
     }
+
+    /* Show linenoise prompt after writing to stdout */
+    if (interactive) readline_display_show();
 }
 
 /* display 线程主函数 */

@@ -247,7 +247,7 @@ Examples:
 	}
 }
 
-// runInteractive 交互模式（使用 linenoise + 独立 goroutine，对齐 c/readline.c 架构）
+// runInteractive 交互模式（使用 linenoise Hide/Show 架构）
 func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStore, display *agent.TermDisplay, home, model, initialInput string) {
 	fmt.Println("\033[36mbash-agent interactive mode (type 'exit' or Ctrl+D to quit)\033[0m")
 
@@ -270,13 +270,16 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	rl.SetImagePasteCallback(a.ImagePasteCallback)
 	rl.Start()
 
+	// 让 display 持有 readline 的 hide/show 回调，用于输出保护
+	display.SetOutputLocker(rl.AcquireOutputLock)
+
 	// 主循环：从 readline goroutine 接收输入，交给 agent 处理
 	for input := range rl.Input() {
 		if err := a.RunLoop(ctx, input, "user_input"); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		a.FlushDisplay()
-		rl.Done() // 通知 readline goroutine 可以显示下一个提示符
+		// 不再调用 rl.Done() — readline goroutine 立即开始下一轮 EditStart
 	}
 
 	fmt.Printf("\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n", store.SessionID())
