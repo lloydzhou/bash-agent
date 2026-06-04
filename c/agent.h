@@ -58,6 +58,11 @@ typedef struct {
     /* 中断标志 */
     volatile int interrupted;
 
+    /* 运行标志 — 1 表示 agent 正在处理（agent_loop 执行中），
+     * 0 表示空闲等待输入。
+     * readline 线程在 Ctrl+C 时检查此标志来决定是否中断 agent。 */
+    volatile int running;
+
     /* 待处理的 fork 子 agent（在 tool_result 写入后执行复制） */
     void **pending_fork_args;  /* SubAgentArgs* 数组 */
     int pending_fork_count;

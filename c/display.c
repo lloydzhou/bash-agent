@@ -1,5 +1,5 @@
 #include "display.h"
-#include "readline.h"
+#include "linenoise.h"
 #include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,14 +47,9 @@ static int ends_with_newline(const char *s) {
 }
 #endif
 
-static void write_human(FILE *out, const char *text) {
-    fputs(text, out);
-    fflush(out);
-}
-
-static void ensure_newline(DisplayState *ds, FILE *out) {
+static void ensure_newline(DisplayState *ds) {
     if (ds->last_char[0] != '\n') {
-        fputc('\n', out);
+        linenoiseWrite("\n", 1);
         ds->last_char[0] = '\n';
         ds->last_char[1] = '\0';
     }
@@ -162,49 +157,43 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
         return;
     }
 
-    /* human 模式 */
-    /* Hide linenoise prompt before writing to stdout */
-    if (interactive) readline_display_hide();
+    /* human 模式 — 每个 linenoisePrintf 调用内部原子地处理 Hide/Show */
+    (void)out;  /* stream-json 用 out；human 模式走 linenoisePrintf */
 
     switch (msg->type) {
         case DISPLAY_THINKING:
-            /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
             if (interactive && ds->last_char[0] == '\n') {
-                fprintf(out, "\r\033[K");
+                linenoiseWrite("\r\033[K", 4);
                 ds->last_char[0] = '\0';
             }
             if (msg->content) {
-                fprintf(out, "\x1b[90m%s\x1b[0m", msg->content);
-                fflush(out);
+                linenoisePrintf("\x1b[90m%s\x1b[0m", msg->content);
                 ds_update_last_char(ds, msg->content);
             }
             ds->prev_was_thinking = 1;
             break;
 
         case DISPLAY_TEXT:
-            /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
             if (interactive && ds->last_char[0] == '\n') {
-                fprintf(out, "\r\033[K");
+                linenoiseWrite("\r\033[K", 4);
                 ds->last_char[0] = '\0';
             }
             if (msg->content) {
-                /* Insert newline when transitioning from thinking to text */
                 if (ds->prev_was_thinking && ds->last_char[0] != '\n') {
-                    fputc('\n', out);
+                    linenoiseWrite("\n", 1);
                     ds->last_char[0] = '\n';
                 }
-                write_human(out, msg->content);
+                linenoiseWrite(msg->content, strlen(msg->content));
                 ds_update_last_char(ds, msg->content);
             }
             ds->prev_was_thinking = 0;
             break;
 
         case DISPLAY_TOOL_CALL: {
-            ensure_newline(ds, out);
+            ensure_newline(ds);
             const char *name = msg->tool_name ? msg->tool_name : "unknown";
             const char *summary = msg->content ? msg->content : "";
-            fprintf(out, "\x1b[33m[tool] %s(%s)\x1b[0m\n", name, summary);
-            fflush(out);
+            linenoisePrintf("\x1b[33m[tool] %s(%s)\x1b[0m\n", name, summary);
             ds->last_char[0] = '\n';
             ds->prev_was_thinking = 0;
             break;
@@ -213,92 +202,92 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
         case DISPLAY_TOOL_RESULT:
             if (msg->content && msg->content[0]) {
                 if (ds->prev_was_thinking && ds->last_char[0] != '\n') {
-                    fputc('\n', out);
+                    linenoiseWrite("\n", 1);
                     ds->last_char[0] = '\n';
                 }
                 ds->prev_was_thinking = 0;
-                fprintf(out, "%s\n", msg->content);
-                fflush(out);
+                const char *tr_name = msg->tool_name ? msg->tool_name : "";
+                if (strcmp(tr_name, "Edit") == 0) {
+                    linenoisePrintf("%s\n", msg->content);
+                } else if (strcmp(tr_name, "Read") == 0 || strcmp(tr_name, "Write") == 0) {
+                    const char *nl = strchr(msg->content, '\n');
+                    if (nl) {
+                        linenoiseWrite(msg->content, (size_t)(nl - msg->content));
+                        linenoiseWrite("\n", 1);
+                    } else {
+                        linenoisePrintf("%s\n", msg->content);
+                    }
+                } else {
+                    linenoisePrintf("%s\n", msg->content);
+                }
                 ds->last_char[0] = '\n';
             }
             break;
 
         case DISPLAY_USAGE:
-            /* human 模式不显示 usage */
             break;
 
         case DISPLAY_STOP:
-            ensure_newline(ds, out);
+            ensure_newline(ds);
             if (msg->content && strcmp(msg->content, "interrupted") == 0) {
-                fprintf(out, "\x1b[36mInterrupted.\x1b[0m\n");
-                fflush(out);
+                linenoisePrintf("\x1b[36mInterrupted.\x1b[0m\n");
                 ds->last_char[0] = '\n';
             }
             break;
 
         case DISPLAY_ERROR:
-            ensure_newline(ds, out);
-            fprintf(stderr, "\x1b[31mError: %s\x1b[0m\n",
+            ensure_newline(ds);
+            linenoisePrintf("\x1b[31mError: %s\x1b[0m\n",
                     msg->content ? msg->content : "unknown");
-            fflush(stderr);
             ds->last_char[0] = '\n';
             break;
 
         case DISPLAY_SUB_AGENT_START:
-            /* bash 版不单独展示 start，靠 tool_result 显示。
-             * C 版也一样，不额外输出。 */
             break;
 
         case DISPLAY_CONTEXT_UPDATE:
-            ensure_newline(ds, out);
-            fprintf(out, "\x1b[36mContext compacted (%s).\x1b[0m\n",
+            ensure_newline(ds);
+            linenoisePrintf("\x1b[36mContext compacted (%s).\x1b[0m\n",
                     msg->tool_name ? msg->tool_name : "auto");
-            fflush(out);
             ds->last_char[0] = '\n';
             break;
 
         case DISPLAY_IMAGE_DESCRIBE: {
-            ensure_newline(ds, out);
+            ensure_newline(ds);
             const char *images = msg->tool_name ? msg->tool_name : "";
             const char *desc = msg->content ? msg->content : "";
             if (desc[0]) {
-                fprintf(out, "\x1b[36m📸 %s: %s\x1b[0m\n", images, desc);
+                linenoisePrintf("\x1b[36m📸 %s: %s\x1b[0m\n", images, desc);
             }
-            fflush(out);
             ds->last_char[0] = '\n';
             break;
         }
 
         case DISPLAY_SUB_AGENT_RESULT: {
-            /* 清空当前行，避免子 agent 残留的输出内容导致排版混乱
-             * bash 版同样有 \r\033[K 保护 */
             if (interactive && ds->last_char[0] == '\n') {
-                fprintf(out, "\r\033[K");
+                linenoiseWrite("\r\033[K", 4);
             }
-            ensure_newline(ds, out);
+            ensure_newline(ds);
             if (msg->tool_exit_code == 0) {
-                fprintf(out, "\x1b[35m[sub-agent %s] completed (in=%d, out=%d)\x1b[0m\n",
+                linenoisePrintf("\x1b[35m[sub-agent %s] completed (in=%d, out=%d)\x1b[0m\n",
                         msg->session_id ? msg->session_id : "?",
                         msg->in_tokens, msg->out_tokens);
             } else {
-                fprintf(out, "\x1b[31m[sub-agent %s] failed\x1b[0m\n",
+                linenoisePrintf("\x1b[31m[sub-agent %s] failed\x1b[0m\n",
                         msg->session_id ? msg->session_id : "?");
             }
-            /* thinking — 灰色，截断 120 字节（UTF-8 安全） */
             if (msg->tool_name && msg->tool_name[0]) {
                 int tlen = (int)util_utf8_truncate_len(msg->tool_name, 120);
-                fprintf(out, "\x1b[90m%.*s%s\x1b[0m\n",
+                linenoisePrintf("\x1b[90m%.*s%s\x1b[0m\n",
                         tlen, msg->tool_name,
                         strlen(msg->tool_name) > 120 ? "…" : "");
             }
-            /* text — 截断 120 字节（UTF-8 安全） */
             if (msg->content && msg->content[0]) {
                 int clen = (int)util_utf8_truncate_len(msg->content, 120);
-                fprintf(out, "%.*s%s\n",
+                linenoisePrintf("%.*s%s\n",
                         clen, msg->content,
                         strlen(msg->content) > 120 ? "…" : "");
             }
-            fflush(out);
             ds->last_char[0] = '\n';
             ds->prev_was_thinking = 0;
             break;
@@ -308,9 +297,6 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             signal_flush(msg);
             break;
     }
-
-    /* Show linenoise prompt after writing to stdout */
-    if (interactive) readline_display_show();
 }
 
 /* display 线程主函数 */

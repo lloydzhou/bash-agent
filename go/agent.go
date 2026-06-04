@@ -38,6 +38,10 @@ type Agent struct {
 	pendingSubAgents int    // 等待中的子 agent 数量
 	subResultCh      chan SubAgentResult
 	subMu            sync.Mutex
+	runMu            sync.Mutex
+	currentCancel    context.CancelFunc
+	currentInterrupt *atomic.Bool
+	running          atomic.Bool // 1 = agent 正在处理（RunLoop 执行中），0 = 空闲等待输入
 }
 
 type SubAgentResult struct {
@@ -238,6 +242,24 @@ func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatch
 	a.tools.SetPlanClear(a.HandlePlanClear)
 	a.tools.SetSkillLoader(a.LoadSkill)
 	return a
+}
+
+// Interrupt cancels the currently running agent turn. In raw terminal mode
+// Ctrl+C is read by linenoise as byte 0x03 rather than delivered as SIGINT,
+// so the readline goroutine calls this when it consumes Ctrl+C.
+// Mirrors C version: only interrupts when agent is running (agent_loop active).
+func (a *Agent) Interrupt() {
+	if !a.running.Load() {
+		return
+	}
+	a.runMu.Lock()
+	if a.currentInterrupt != nil {
+		a.currentInterrupt.Store(true)
+	}
+	if a.currentCancel != nil {
+		a.currentCancel()
+	}
+	a.runMu.Unlock()
 }
 
 func (a *Agent) EmitDisplay(ev Event) {
@@ -688,6 +710,10 @@ func (a *Agent) emitJSON(obj map[string]interface{}) {
 }
 
 func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
+	// 设置 running 标志：1 表示 agent 正在处理，readline 据此判断 Ctrl+C 是否应中断
+	a.running.Store(true)
+	defer a.running.Store(false)
+
 	// 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
 	if turnKind == "user_input" {
 		a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
@@ -736,6 +762,18 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	var interrupted atomic.Bool
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	a.runMu.Lock()
+	a.currentInterrupt = &interrupted
+	a.currentCancel = cancel
+	a.runMu.Unlock()
+	defer func() {
+		a.runMu.Lock()
+		if a.currentInterrupt == &interrupted {
+			a.currentInterrupt = nil
+			a.currentCancel = nil
+		}
+		a.runMu.Unlock()
+	}()
 	sigCh := make(chan os.Signal, 1)
 	sigDone := make(chan struct{})
 	signal.Notify(sigCh, syscall.SIGINT)

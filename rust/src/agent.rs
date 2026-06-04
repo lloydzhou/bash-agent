@@ -12,7 +12,6 @@ use crate::util::{
     build_claude_request,
     chrono_like_now,
     chrono_now_rfc3339,
-    normalize_display_text,
     parse_input_fields,
     stats_get_f64,
     touch,
@@ -251,12 +250,6 @@ enum MainLoopMessage {
     },
 }
 
-/// Wrapper to allow sending raw linenoiseState pointers across threads.
-/// Safety: we only use the pointer for Hide/Show calls under mutex protection.
-pub(crate) struct LinenoiseStatePtr(*mut ffi::LinenoiseState);
-unsafe impl Send for LinenoiseStatePtr {}
-unsafe impl Sync for LinenoiseStatePtr {}
-
 struct Agent {
     cfg: Config,
     cwd: PathBuf,
@@ -268,6 +261,7 @@ struct Agent {
     http: StreamClient,
     transport: TransportRef,
     interrupted: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,              // 1 = agent_loop 执行中，readline 据此判断 Ctrl+C 是否应中断
     last_context_tokens: usize,
     last_input_tokens: usize,
     last_output_tokens: usize,
@@ -282,7 +276,6 @@ struct Agent {
     display_tx: Option<mpsc::Sender<DisplayCommand>>,
     display_handle: Option<thread::JoinHandle<()>>,
     cancel_read_fd: i32,                      // cancel pipe 读端 FD，传给 Runner 做 kqueue wait
-    linenoise_state: Arc<Mutex<Option<LinenoiseStatePtr>>>, // 共享 linenoiseState，display worker 用于 hide/show
 }
 
 struct DisplayState {
@@ -364,99 +357,81 @@ enum DisplayCommand {
     Flush(mpsc::Sender<()>),
 }
 
-fn display_write_human(out: &mut dyn Write, interactive: bool, s: &str) -> Result<()> {
-    write!(out, "{}", normalize_display_text(s, interactive))?;
-    out.flush()?;
+#[allow(dead_code)]
+fn display_write_human(_out: &mut dyn Write, _interactive: bool, _s: &str) -> Result<()> {
+    ffi::linenoise_write(_s);
     Ok(())
 }
 
 fn render_display_event(
     ds: &mut DisplayState,
-    out: &mut dyn Write,
     interactive: bool,
     evt: DisplayEvent,
 ) -> Result<()> {
+    let lw = |s: &str| { ffi::linenoise_write(s); };
+
     match evt {
         DisplayEvent::Thinking(content) => {
-            // bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\x1b[K
             if interactive && ds.last_char == "\n" {
-                display_write_human(out, interactive, "\r\x1b[K")?;
+                lw("\r\x1b[K");
+                ds.last_char.clear();
             }
-            display_write_human(out, interactive, &format!("\x1b[90m{}\x1b[0m", content))?;
-            let display_content = normalize_display_text(&content, interactive);
-            if display_content.ends_with('\n') {
-                ds.last_char = "\n".to_string();
-            } else if let Some(c) = display_content.chars().last() {
-                ds.last_char = c.to_string();
+            if !content.is_empty() {
+                /* 颜色码 + 内容 + 重置必须在一个 linenoiseWrite 调用内，
+                 * 否则中间的 Show 重绘 prompt 时 \x1b[0m 会重置终端颜色 */
+                lw(&format!("\x1b[90m{}\x1b[0m", content));
+                update_last_char(ds, &content);
             }
             ds.prev_was_thinking = true;
         }
         DisplayEvent::Text(content) => {
-            // bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\x1b[K
             if interactive && ds.last_char == "\n" {
-                display_write_human(out, interactive, "\r\x1b[K")?;
+                lw("\r\x1b[K");
+                ds.last_char.clear();
             }
             if ds.prev_was_thinking && ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
+                lw("\n");
                 ds.last_char = "\n".to_string();
             }
-            display_write_human(out, interactive, &content)?;
-            let display_content = normalize_display_text(&content, interactive);
-            if display_content.ends_with('\n') {
-                ds.last_char = "\n".to_string();
-            } else if let Some(c) = display_content.chars().last() {
-                ds.last_char = c.to_string();
+            if !content.is_empty() {
+                lw(&content);
+                update_last_char(ds, &content);
             }
             ds.prev_was_thinking = false;
         }
         DisplayEvent::ToolCall(call) => {
-            if ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
-            }
+            ensure_newline(ds, &lw);
+            lw(&format!(
+                "\x1b[33m[tool] {}\x1b[0m\n",
+                build_tool_call_summary(&call.name, &call.fields)
+            ));
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
-            display_write_human(
-                out,
-                interactive,
-                &format!(
-                    "\x1b[33m[tool] {}\x1b[0m\n",
-                    build_tool_call_summary(&call.name, &call.fields)
-                ),
-            )?;
         }
         DisplayEvent::Usage(_) => {}
         DisplayEvent::Stop(reason) => {
-            if ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
-                ds.last_char = "\n".to_string();
-            }
+            ensure_newline(ds, &lw);
             if reason == "interrupted" {
-                display_write_human(out, interactive, "\x1b[36mInterrupted.\x1b[0m\n")?;
+                lw("\x1b[36mInterrupted.\x1b[0m\n");
                 ds.last_char = "\n".to_string();
             }
             ds.prev_was_thinking = false;
         }
         DisplayEvent::Error(message) => {
-            if ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
-            }
-            display_write_human(out, interactive, &format!("\x1b[31mError: {}\x1b[0m\n", message))?;
+            ensure_newline(ds, &lw);
+            lw(&format!("\x1b[31mError: {}\x1b[0m\n", message));
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
         DisplayEvent::UserMessage(content) => {
-            if ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
-            }
-            display_write_human(out, interactive, &format!("\x1b[32m> {}\x1b[0m\n", truncate_for_replay(&content, 77)))?;
+            ensure_newline(ds, &lw);
+            lw(&format!("\x1b[32m> {}\x1b[0m\n", truncate_for_replay(&content, 77)));
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
         DisplayEvent::ContextUpdate(trigger) => {
-            if ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
-            }
-            display_write_human(out, interactive, &format!("\x1b[36mContext compacted ({}).\x1b[0m\n", trigger))?;
+            ensure_newline(ds, &lw);
+            lw(&format!("\x1b[36mContext compacted ({}).\x1b[0m\n", trigger));
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
@@ -465,30 +440,20 @@ fn render_display_event(
                 return Ok(());
             }
             let tr_text = if result.tool_name == "Edit" {
-                // Don't normalize_display_text here — display_write_human already does it.
-                // Double-normalizing would turn \n → \r\n → \r\r\n, causing garbled output.
                 let mut s = result.content.replace("\r\n", "\n").replace('\r', "\n");
-                if !s.ends_with('\n') {
-                    s.push('\n');
-                }
+                if !s.ends_with('\n') { s.push('\n'); }
                 s
             } else if result.tool_name == "Read" || result.tool_name == "Write" {
                 first_line(&result.content).to_string() + "\n"
             } else {
-                // Don't normalize_display_text here — display_write_human already does it.
                 result.content.clone() + "\n"
             };
             if ds.prev_was_thinking && ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
-                ds.last_char = "\n".to_string();
+                lw("\n");
             }
             ds.prev_was_thinking = false;
-            display_write_human(out, interactive, &tr_text)?;
-            if tr_text.ends_with('\n') {
-                ds.last_char = "\n".to_string();
-            } else if let Some(c) = tr_text.chars().last() {
-                ds.last_char = c.to_string();
-            }
+            lw(&tr_text);
+            update_last_char(ds, &tr_text);
         }
         DisplayEvent::SubAgentResult {
             session_id,
@@ -498,53 +463,31 @@ fn render_display_event(
             in_tokens,
             out_tokens,
         } => {
-            if ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
+            if interactive && ds.last_char == "\n" {
+                lw("\r\x1b[K");
             }
-            // 清空当前行，避免子 agent 残留内容导致排版混乱
-            // 只在 interactive 模式下执行，与 bash 版对齐
-            if interactive {
-                display_write_human(out, interactive, "\r\x1b[K")?;
-            }
+            ensure_newline(ds, &lw);
             if status == "ok" {
-                display_write_human(
-                    out,
-                    interactive,
-                    &format!(
-                        "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m\n",
-                        session_id, in_tokens, out_tokens
-                    ),
-                )?;
+                lw(&format!(
+                    "\x1b[35m[sub-agent {}] completed (in={}, out={})\x1b[0m\n",
+                    session_id, in_tokens, out_tokens
+                ));
             } else {
-                display_write_human(
-                    out,
-                    interactive,
-                    &format!("\x1b[31m[sub-agent {}] failed\x1b[0m\n", session_id),
-                )?;
+                lw(&format!("\x1b[31m[sub-agent {}] failed\x1b[0m\n", session_id));
             }
             if !thinking.is_empty() {
-                display_write_human(
-                    out,
-                    interactive,
-                    &format!("\x1b[90m{}\x1b[0m\n", truncate_str(&thinking, 120)),
-                )?;
+                lw(&format!("\x1b[90m{}\x1b[0m\n", truncate_str(&thinking, 120)));
             }
             if !text.is_empty() {
-                display_write_human(out, interactive, &format!("{}\n", truncate_str(&text, 120)))?;
+                lw(&format!("{}\n", truncate_str(&text, 120)));
             }
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
         DisplayEvent::ImageDescribe { images, description } => {
-            if ds.last_char != "\n" {
-                display_write_human(out, interactive, "\n")?;
-            }
+            ensure_newline(ds, &lw);
             if !description.is_empty() {
-                display_write_human(
-                    out,
-                    interactive,
-                    &format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, description),
-                )?;
+                lw(&format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, description));
             }
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
@@ -553,38 +496,44 @@ fn render_display_event(
     Ok(())
 }
 
+fn ensure_newline(ds: &mut DisplayState, lw: &dyn Fn(&str)) {
+    if ds.last_char != "\n" {
+        lw("\n");
+        ds.last_char = "\n".to_string();
+    }
+}
+
+fn update_last_char(ds: &mut DisplayState, s: &str) {
+    if s.is_empty() { return; }
+    let mut esc = false;
+    let mut last_visible: Option<char> = None;
+    for c in s.chars() {
+        if esc {
+            if ('\u{40}'..='\u{7e}').contains(&c) { esc = false; }
+            continue;
+        }
+        if c == '\u{1b}' { esc = true; continue; }
+        last_visible = Some(c);
+    }
+    if let Some(c) = last_visible {
+        ds.last_char = c.to_string();
+    }
+}
+
 impl Agent {
-    fn start_display_worker(interactive: bool, ls: Arc<Mutex<Option<LinenoiseStatePtr>>>) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
+    fn start_display_worker(interactive: bool) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
         let (tx, rx) = mpsc::channel::<DisplayCommand>();
         let handle = thread::spawn(move || {
             let mut ds = DisplayState {
                 last_char: String::from("\n"),
                 prev_was_thinking: false,
             };
-            let mut out: Box<dyn Write + Send> = Box::new(io::stdout());
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     DisplayCommand::Event(evt) => {
-                        // Hide linenoise prompt before output
-                        if interactive {
-                            let guard = ls.lock().unwrap();
-                            if let Some(LinenoiseStatePtr(ls_ptr)) = *guard {
-                                unsafe { ffi::hide(ls_ptr); }
-                            }
-                            drop(guard);
-                        }
-                        let _ = render_display_event(&mut ds, &mut out, interactive, evt);
-                        // Show linenoise prompt after output
-                        if interactive {
-                            let guard = ls.lock().unwrap();
-                            if let Some(LinenoiseStatePtr(ls_ptr)) = *guard {
-                                unsafe { ffi::show(ls_ptr); }
-                            }
-                            drop(guard);
-                        }
+                        let _ = render_display_event(&mut ds, interactive, evt);
                     }
                     DisplayCommand::Flush(done) => {
-                        let _ = out.flush();
                         let _ = done.send(());
                     }
                 }
@@ -663,15 +612,15 @@ impl Agent {
         let tools_json: Vec<Value> = serde_json::from_str(TOOLS_JSON)?;
         let api_url = api_url(&cfg);
         let interrupted = Arc::new(AtomicBool::new(false));
+        let running = Arc::new(AtomicBool::new(false));
         let transport = Arc::from(crate::transport::new_transport(&cfg));
         let (msg_tx, msg_rx) = mpsc::channel(); // 初始化消息队列
         let msg_tx = Arc::new(Mutex::new(Some(msg_tx))); // 包装在 Arc<Mutex<Option>> 中
-        let linenoise_state: Arc<Mutex<Option<LinenoiseStatePtr>>> = Arc::new(Mutex::new(None));
 
         let (display_tx, display_handle) = if cfg.output_format == OutputFormat::StreamJson {
             (None, None)
         } else {
-            let (tx, handle) = Self::start_display_worker(cfg.interactive, linenoise_state.clone());
+            let (tx, handle) = Self::start_display_worker(cfg.interactive);
             (Some(tx), Some(handle))
         };
 
@@ -686,6 +635,7 @@ impl Agent {
             http: StreamClient::new()?,
             transport,
             interrupted,
+            running,
             last_context_tokens: 0,
             last_input_tokens: 0,
             last_output_tokens: 0,
@@ -700,7 +650,6 @@ impl Agent {
             display_tx,
             display_handle,
             cancel_read_fd: 0, // 占位，稍后由 agent_run 设置
-            linenoise_state,
         };
 
         if new_session {
@@ -796,6 +745,7 @@ impl Agent {
                 http: StreamClient::new().expect("Failed to create HTTP client"),
                 transport: Arc::from(crate::transport::new_transport(&cfg)),
                 interrupted: Arc::new(AtomicBool::new(false)),
+                running: Arc::new(AtomicBool::new(false)),
                 last_context_tokens: 0,
                 last_input_tokens: 0,
                 last_output_tokens: 0,
@@ -810,7 +760,6 @@ impl Agent {
                 display_tx: None,
                 display_handle: None,
                 cancel_read_fd: -1,
-                linenoise_state: Arc::new(Mutex::new(None)),
             };
 
             // 4. 执行 agent_loop
@@ -922,8 +871,9 @@ impl Agent {
         ffi::set_image_dir(self.paths.session_dir.join("images"));
         ffi::register_paste_callback();
 
-        // 使用 Agent 结构体中的共享 linenoiseState（display worker 已经持有 clone）
-        let linenoise_state = self.linenoise_state.clone();
+        // 使用 Agent 结构体中的共享 interrupted / running，供 Ctrl+C 中断 agent
+        let interrupted_flag = self.interrupted.clone();
+        let running_flag = self.running.clone();
 
         // 启动 readline 线程，将用户输入发送到消息队列
         let msg_tx_arc = self.msg_tx.clone();
@@ -963,11 +913,9 @@ impl Agent {
                     }
                     let ls_ptr = ls.as_mut_ptr();
 
-                    // 注册到共享状态
-                    {
-                        let mut guard = linenoise_state.lock().unwrap();
-                        *guard = Some(LinenoiseStatePtr(ls_ptr));
-                    }
+                    // 注册到 linenoise 全局状态（linenoiseWrite 用它做 Hide/Show）
+                    unsafe { ffi::register_state(ls_ptr); }
+                    ffi::set_active(true);
 
                     // Feed 循环
                     let line = loop {
@@ -996,10 +944,8 @@ impl Agent {
                     };
 
                     // 清除共享状态
-                    {
-                        let mut guard = linenoise_state.lock().unwrap();
-                        *guard = None;
-                    }
+                    ffi::set_active(false);
+                    unsafe { ffi::register_state(std::ptr::null_mut()); }
 
                     // EditStop
                     unsafe { ffi::edit_stop_ptr(ls_ptr); }
@@ -1026,7 +972,11 @@ impl Agent {
                             }
                         }
                         Err(ffi::LineError::Interrupted) => {
-                            continue; // Ctrl+C → 重新输入
+                            // Ctrl+C — 如果 agent 正在运行，设置 interrupted 标志中断 HTTP 请求
+                            if running_flag.load(Ordering::SeqCst) {
+                                interrupted_flag.store(true, Ordering::SeqCst);
+                            }
+                            continue;
                         }
                         Err(_) => {
                             return; // Ctrl+D / EOF
@@ -1075,6 +1025,8 @@ impl Agent {
                         // 清除当前行（包括提示符）
                         let _ = write!(self.stderr.borrow_mut(), "\r\x1b[2K");
                     }
+                    self.running.store(true, Ordering::SeqCst);
+                    self.interrupted.store(false, Ordering::SeqCst);
                     if let Err(e) = self.agent_loop(input) {
                         let msg = e.to_string();
                         // 不打印中断相关的错误（包括 SSE 流被 Ctrl+C 断开的情况）
@@ -1085,6 +1037,7 @@ impl Agent {
                             self.error(&msg);
                         }
                     }
+                    self.running.store(false, Ordering::SeqCst);
                     self.flush_display();
 
                     // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
@@ -2288,7 +2241,7 @@ fn image_describe(paths: &[std::path::PathBuf]) -> String {
 
     use base64::Engine as _;
     let mut content: Vec<serde_json::Value> = vec![
-        serde_json::json!({"type": "text", "text": "Output all visible text from each image. Transcribe every character including special symbols. Preserve exact spacing and line breaks. Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."})
+        serde_json::json!({"type": "text", "text": "Output all visible text from each image, separated by a blank line between images. Transcribe every character including special symbols (arrows, prompts, dots, slashes). Preserve exact spacing and line breaks. Pay attention to date formats (month names, numbers). Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."})
     ];
     for p in paths {
         if let Ok(data) = std::fs::read(p) {

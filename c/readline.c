@@ -9,67 +9,43 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <termios.h>
 
 /* ============================================================
- * 全局 SIGINT 状态
+ * Ctrl+C / 中断状态
  *
- * 模仿 Rust 版的 CTRLC_FLAG 设计：
- * - 全局标志由 SIGINT handler 设置
- * - readline 线程用它区分 Ctrl+C（重新提示）和 Ctrl+D（退出）
- * - agent_loop 的 SSE 层检查它来中断 HTTP 请求
+ * 交互模式（linenoise raw mode）：
+ *   - ISIG 被禁用，Ctrl+C 产生 0x03 字节而非 SIGINT
+ *   - linenoise 捕获后返回 NULL + errno=EAGAIN
+ *   - 此时通过 g_agent_interrupted 设置 agent 的中断标志
+ *
+ * 非交互模式（fgets）：
+ *   - ISIG 开启，Ctrl+C 产生 SIGINT
+ *   - sigint_handler 设置 g_sigint_received，readline 循环检测后退出
  * ============================================================ */
 
 static volatile sig_atomic_t g_sigint_received = 0;
 
-/* agent 的 interrupted 指针— 在 readline_thread_start 之前由 cagent.c 设置 */
+/* agent 的 interrupted 和 running 指针 — 在 readline_thread_start 之前设置 */
 static volatile int *g_agent_interrupted = NULL;
+static const volatile int *g_agent_running = NULL;
 
-int readline_sigint_consumed(void) {
-    if (g_sigint_received) {
-        g_sigint_received = 0;
-        return 1;
-    }
-    return 0;
-}
-
-void readline_set_agent_interrupted(volatile int *flag) {
-    g_agent_interrupted = flag;
+void readline_set_agent_interrupted(volatile int *interrupted, const volatile int *running) {
+    g_agent_interrupted = interrupted;
+    g_agent_running = running;
 }
 
 static void sigint_handler(int sig) {
     (void)sig;
     g_sigint_received = 1;
-    /* 同时设置 agent 的 interrupted 标志，让 http_post_sse 中的 curl 被中断 */
+    /* 非交互模式下，直接设置 agent interrupted 标志 */
     if (g_agent_interrupted) {
         *(g_agent_interrupted) = 1;
     }
 }
 
-/* ============================================================
- * 全局 linenoiseState 共享 — display worker 用它做 Hide/Show
- * ============================================================ */
-
-static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
-static struct linenoiseState *g_current_ls = NULL;
-static int g_ls_active = 0; /* 1=linenoise 在编辑中 */
-
-/* display worker 调用：Hide 当前 prompt */
-void readline_display_hide(void) {
-    pthread_mutex_lock(&g_display_mutex);
-    if (g_ls_active && g_current_ls) {
-        linenoiseHide(g_current_ls);
-    }
-    pthread_mutex_unlock(&g_display_mutex);
-}
-
-/* display worker 调用：Show 当前 prompt */
-void readline_display_show(void) {
-    pthread_mutex_lock(&g_display_mutex);
-    if (g_ls_active && g_current_ls) {
-        linenoiseShow(g_current_ls);
-    }
-    pthread_mutex_unlock(&g_display_mutex);
-}
+/* display_begin/end are now in linenoise.c (alongside linenoiseWrite).
+ * They share the same mutex and state. No duplicate declarations here. */
 
 /* ============================================================
  * History 文件路径构建
@@ -143,10 +119,8 @@ static void *readline_thread_fn(void *arg) {
             }
 
             /* 注册到全局共享状态，让 display worker 可以 Hide/Show */
-            pthread_mutex_lock(&g_display_mutex);
-            g_current_ls = &ls;
-            g_ls_active = 1;
-            pthread_mutex_unlock(&g_display_mutex);
+            linenoiseRegisterState(&ls);
+            linenoiseSetActive(1);
 
             /* 循环读取输入 */
             char *result;
@@ -157,18 +131,21 @@ static void *readline_thread_fn(void *arg) {
             }
 
             /* 清除全局共享状态 */
-            pthread_mutex_lock(&g_display_mutex);
-            g_current_ls = NULL;
-            g_ls_active = 0;
-            pthread_mutex_unlock(&g_display_mutex);
+            linenoiseSetActive(0);
+            linenoiseRegisterState(NULL);
 
             linenoiseEditStop(&ls);
 
-            if (result == NULL) {
-                if (errno == EAGAIN) {
-                    /* Ctrl+C — linenoise 已显示 ^C 并换行，继续循环 */
-                    continue;
-                }
+              if (result == NULL) {
+                  if (errno == EAGAIN) {
+                      /* Ctrl+C — linenoise 已显示 ^C 并换行
+                       * 如果 agent 正在运行（agent_loop 执行中），
+                       * 设置 interrupted 标志让它中断当前 HTTP 请求 */
+                      if (g_agent_running && *g_agent_running && g_agent_interrupted) {
+                          *(g_agent_interrupted) = 1;
+                      }
+                      continue;
+                  }
                 /* Ctrl+D 或 I/O 错误 — 退出 */
                 fprintf(stderr, "\n");
                 break;

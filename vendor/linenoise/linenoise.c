@@ -2394,3 +2394,198 @@ int linenoiseHistoryLoad(const char *filename) {
     fclose(fp);
     return 0;
 }
+
+/* ============================================================
+ * Readline state management & mutex for EditFeed synchronization
+ * ============================================================ */
+
+#include <stdarg.h>
+
+#ifdef _WIN32
+/* Windows: use critical section for mutex-like behavior */
+static CRITICAL_SECTION g_display_mutex;
+static int g_display_mutex_init = 0;
+#define INIT_MUTEX() do { \
+    if (!g_display_mutex_init) { \
+        InitializeCriticalSection(&g_display_mutex); \
+        g_display_mutex_init = 1; \
+    } \
+} while(0)
+#define LOCK_MUTEX() EnterCriticalSection(&g_display_mutex)
+#define UNLOCK_MUTEX() LeaveCriticalSection(&g_display_mutex)
+#else
+/* POSIX: use pthread mutex */
+#include <pthread.h>
+static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define INIT_MUTEX() (void)0
+#define LOCK_MUTEX() pthread_mutex_lock(&g_display_mutex)
+#define UNLOCK_MUTEX() pthread_mutex_unlock(&g_display_mutex)
+#endif
+
+static struct linenoiseState *g_current_ls = NULL;
+static int g_ls_active = 0;
+static int g_prompt_detached = 0;  /* last output didn't end with \n */
+static int g_output_col = 0;       /* physical cursor column at end of last output */
+
+/* Simulate terminal cursor position after writing a string.
+ * Start from 'start_col' on a terminal of 'cols' columns.
+ * Returns the final column (0 = cursor wrapped to start of next line).
+ *
+ * Correctly handles:
+ *  - ANSI CSI sequences (zero-width, skipped)
+ *  - \\n / \\r (column resets to 0)
+ *  - Wide chars that trigger wrap-before-write when they don't fit */
+static int simulateCursorCol(const char *s, size_t len, int start_col, int cols) {
+    int col = start_col;
+    size_t i = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)s[i];
+        /* Skip ANSI CSI sequences */
+        if (c == 0x1b && i + 1 < len) {
+            size_t skip = ansiEscapeLen(s + i, len - i);
+            if (skip > 0) { i += skip; continue; }
+        }
+        /* Newline / carriage return */
+        if (c == '\n' || c == '\r') { col = 0; i++; continue; }
+        /* Get UTF-8 character display width */
+        size_t clen;
+        uint32_t cp = utf8DecodeChar(s + i, &clen);
+        int cw = utf8CharWidth(cp);
+        if (cw < 0) cw = 0;
+        /* Simulate terminal wrapping */
+        if (cols > 0 && cw > 0) {
+            if (col + cw > cols) col = 0;   /* wide char doesn't fit → wrap */
+            col += cw;
+            if (col >= cols) col = 0;        /* at exact edge → delayed wrap */
+        } else {
+            col += cw;
+        }
+        i += clen;
+    }
+    return col;
+}
+
+/* Internal: the core write logic. Caller must hold g_display_mutex.
+ *
+ * Hide prompt -> restore cursor if detached -> OPOST on -> write ->
+ * flush -> OPOST off -> update state -> Show prompt
+ *
+ * linenoiseHide() restores the cursor to the end of previous output.
+ * If previous output was detached (didn't end with \n), we also need
+ * to move the cursor back up to the correct row. */
+static void linenoiseWriteInternal(const char *s, size_t len) {
+    if (!s || len == 0) return;
+
+    if (g_ls_active && g_current_ls) {
+        linenoiseHide(g_current_ls);
+
+        /* If previous output didn't end with \n, the prompt was pushed to
+         * a separate line below the output. After Hide clears that line,
+         * cursor is on a blank line. Move back up to where output ended. */
+        if (g_prompt_detached) {
+            write(STDOUT_FILENO, "\x1b[1A\r", 5);
+            if (g_output_col > 0) {
+                char seq[16];
+                int n = snprintf(seq, sizeof(seq), "\x1b[%dC", g_output_col);
+                write(STDOUT_FILENO, seq, n);
+            }
+            g_prompt_detached = 0;
+        }
+
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag |= OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+    }
+
+    /* Write the string */
+    write(STDOUT_FILENO, s, len);
+
+    if (g_ls_active && g_current_ls) {
+        fflush(stdout);
+
+        /* Restore raw mode (OPOST off) for linenoise */
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag &= ~OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+
+        /* Update output_col: simulate terminal wrapping for accurate cursor tracking */
+        {
+            int cols = (g_current_ls && g_current_ls->cols > 0) ? (int)g_current_ls->cols : 0;
+            size_t lastNL = (size_t)-1;
+            for (size_t i = len; i > 0; i--) {
+                if (s[i-1] == '\n' || s[i-1] == '\r') {
+                    lastNL = i - 1;
+                    break;
+                }
+            }
+            if (lastNL < len) {
+                /* Text after last newline: start from column 0 */
+                g_output_col = simulateCursorCol(s + lastNL + 1, len - lastNL - 1, 0, cols);
+            } else {
+                /* No newline: continue from current column */
+                g_output_col = simulateCursorCol(s, len, g_output_col, cols);
+            }
+        }
+
+        /* If output didn't end with \n, push prompt to next line
+         * so it doesn't collide with the output. */
+        if (s[len-1] != '\n') {
+            write(STDOUT_FILENO, "\r\n", 2);
+            fflush(stdout);
+            g_prompt_detached = 1;
+        } else {
+            g_prompt_detached = 0;
+        }
+
+        linenoiseShow(g_current_ls);
+    }
+}
+
+/* linenoiseWrite - safe printf for linenoise raw mode.
+ * Prints a string to stdout. When linenoise is active, it handles
+ * Hide/OPOST/Show and cursor position tracking internally.
+ * Each call is atomic (holds the display mutex). */
+void linenoiseWrite(const char *s, size_t len) {
+    if (!s || len == 0) return;
+    INIT_MUTEX();
+    LOCK_MUTEX();
+    linenoiseWriteInternal(s, len);
+    UNLOCK_MUTEX();
+}
+
+
+/* linenoisePrintf - printf-style convenience wrapper for linenoiseWrite.
+ * Formats into a stack buffer and calls linenoiseWrite atomically. */
+void linenoisePrintf(const char *fmt, ...) {
+    char buf[256 * 1024];  /* 256KB — tool_result 等内容可能超过 100K */
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        size_t len = (size_t)n;
+        if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+        linenoiseWrite(buf, len);
+    }
+}
+
+/* Register current linenoise state (called by readline thread) */
+void linenoiseRegisterState(struct linenoiseState *ls) {
+    INIT_MUTEX();
+    LOCK_MUTEX();
+    g_current_ls = ls;
+    UNLOCK_MUTEX();
+}
+
+/* Set linenoise active flag (called by readline thread) */
+void linenoiseSetActive(int active) {
+    INIT_MUTEX();
+    LOCK_MUTEX();
+    g_ls_active = active;
+    UNLOCK_MUTEX();
+}
+

@@ -27,10 +27,6 @@ static int linenoise_edit_start(struct linenoiseState *l, int ifd, int ofd,
 	return linenoiseEditStart(l, ifd, ofd, buf, buflen, prompt);
 }
 
-static char *linenoise_edit_feed(struct linenoiseState *l) {
-	return linenoiseEditFeed(l);
-}
-
 static void linenoise_edit_stop(struct linenoiseState *l) {
 	linenoiseEditStop(l);
 }
@@ -67,6 +63,18 @@ static struct edit_feed_result linenoise_edit_feed_safe(struct linenoiseState *l
 
 // C wrapper that calls the Go export below.
 extern void goImagePasteCallback(char **out, size_t *outlen);
+
+static void linenoise_write(const char *s, size_t len) {
+	linenoiseWrite(s, len);
+}
+
+static void linenoise_register_state(void *state) {
+	linenoiseRegisterState(state);
+}
+
+static void linenoise_set_active(int active) {
+	linenoiseSetActive(active);
+}
 */
 import "C"
 import (
@@ -80,8 +88,14 @@ var (
 	ErrMore        = errors.New("edit more") // sentinel: still editing
 )
 
-// LinenoiseState wraps the C struct linenoiseState for non-blocking editing.
-type LinenoiseState C.struct_linenoiseState
+// LinenoiseState owns C-allocated linenoise state, input buffer and prompt.
+// All three must stay alive until EditStop; linenoiseState stores pointers to
+// the buffer and prompt internally.
+type LinenoiseState struct {
+	ptr    *C.struct_linenoiseState
+	buf    unsafe.Pointer
+	prompt *C.char
+}
 
 // imagePasteFn is set by SetImagePasteCallback.
 var imagePasteFn func() string
@@ -157,18 +171,33 @@ func SetMultiLine(ml bool) {
 // EditStart initializes a non-blocking line editing session.
 // Returns a LinenoiseState pointer for subsequent EditFeed/EditStop/Hide/Show calls.
 func EditStart(stdinFd, stdoutFd int, buf []byte, prompt string) (*LinenoiseState, error) {
-	cprompt := C.CString(prompt)
-	defer C.free(unsafe.Pointer(cprompt))
-
-	ls := &LinenoiseState{}
-	rc := C.linenoise_edit_start((*C.struct_linenoiseState)(ls),
-		C.int(stdinFd), C.int(stdoutFd),
-		(*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)),
-		cprompt)
-	if rc == -1 {
+	bufLen := len(buf)
+	if bufLen == 0 {
+		bufLen = 65536
+	}
+	// Allocate buffer in C memory so linenoiseState never holds a Go pointer.
+	cbuf := C.malloc(C.size_t(bufLen))
+	if cbuf == nil {
 		return nil, ErrEOF
 	}
-	return ls, nil
+	cprompt := C.CString(prompt) // also C-allocated
+	cls := (*C.struct_linenoiseState)(C.malloc(C.size_t(unsafe.Sizeof(C.struct_linenoiseState{}))))
+	if cls == nil {
+		C.free(cbuf)
+		C.free(unsafe.Pointer(cprompt))
+		return nil, ErrEOF
+	}
+	rc := C.linenoise_edit_start(cls,
+		C.int(stdinFd), C.int(stdoutFd),
+		(*C.char)(cbuf), C.size_t(bufLen),
+		cprompt)
+	if rc == -1 {
+		C.free(unsafe.Pointer(cls))
+		C.free(cbuf)
+		C.free(unsafe.Pointer(cprompt))
+		return nil, ErrEOF
+	}
+	return &LinenoiseState{ptr: cls, buf: cbuf, prompt: cprompt}, nil
 }
 
 // EditFeed processes one character / event from stdin.
@@ -177,7 +206,10 @@ func EditStart(stdinFd, stdoutFd int, buf []byte, prompt string) (*LinenoiseStat
 // Returns ("", ErrInterrupted) on Ctrl+C.
 // Returns ("", ErrEOF) on Ctrl+D or error.
 func EditFeed(ls *LinenoiseState) (string, error) {
-	r := C.linenoise_edit_feed_safe((*C.struct_linenoiseState)(ls))
+	if ls == nil || ls.ptr == nil {
+		return "", ErrEOF
+	}
+	r := C.linenoise_edit_feed_safe(ls.ptr)
 	if r.line == C.linenoiseEditMore {
 		return "", ErrMore
 	}
@@ -196,21 +228,63 @@ func EditFeed(ls *LinenoiseState) (string, error) {
 
 // EditStop exits raw mode and cleans up the editing session.
 func EditStop(ls *LinenoiseState) {
-	C.linenoise_edit_stop((*C.struct_linenoiseState)(ls))
+	if ls == nil || ls.ptr == nil {
+		return
+	}
+	C.linenoise_edit_stop(ls.ptr)
+	C.free(unsafe.Pointer(ls.ptr))
+	C.free(ls.buf)
+	C.free(unsafe.Pointer(ls.prompt))
+	ls.ptr = nil
+	ls.buf = nil
+	ls.prompt = nil
 }
 
 // Hide clears the current prompt line from the terminal.
 func Hide(ls *LinenoiseState) {
-	C.linenoise_hide((*C.struct_linenoiseState)(ls))
+	if ls != nil && ls.ptr != nil {
+		C.linenoise_hide(ls.ptr)
+	}
 }
 
 // Show restores the prompt line to the terminal.
 func Show(ls *LinenoiseState) {
-	C.linenoise_show((*C.struct_linenoiseState)(ls))
+	if ls != nil && ls.ptr != nil {
+		C.linenoise_show(ls.ptr)
+	}
 }
 
 // PollStdin polls stdin for available data with a timeout in milliseconds.
 // Returns >0 if data available, 0 on timeout, -1 on error.
 func PollStdin(fd int, timeoutMs int) int {
 	return int(C.poll_stdin(C.int(fd), C.int(timeoutMs)))
+}
+
+// LinenoiseWrite writes a string to stdout with automatic Hide/OPOST/Show management.
+// Each call is atomic — Lock → Hide → write → Show → Unlock.
+func LinenoiseWrite(s string) {
+	if len(s) == 0 {
+		return
+	}
+	C.linenoise_write((*C.char)(unsafe.Pointer(unsafe.StringData(s))), C.size_t(len(s)))
+}
+
+// RegisterState registers the linenoise state with the display system.
+// Must be called when starting an editing session so that LinenoiseWrite
+// knows which state to Hide/Show.
+func RegisterState(ls *LinenoiseState) {
+	if ls != nil && ls.ptr != nil {
+		C.linenoise_register_state(unsafe.Pointer(ls.ptr))
+	}
+}
+
+// SetActive sets whether the editor is active.
+// Must be called (true before EditFeed, false after) so that LinenoiseWrite
+// knows when to apply Hide/OPOST/Show.
+func SetActive(active bool) {
+	if active {
+		C.linenoise_set_active(1)
+	} else {
+		C.linenoise_set_active(0)
+	}
 }

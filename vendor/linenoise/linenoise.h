@@ -120,6 +120,16 @@ void linenoisePrintKeyCodes(void);
 void linenoiseMaskModeEnable(void);
 void linenoiseMaskModeDisable(void);
 
+/* Display output: atomic write that coordinates with linenoise prompt.
+ * Handles Hide → restore cursor → OPOST on → write → OPOST off → Show.
+ * Cursor position is tracked internally; callers don't need to manage it. */
+void linenoiseWrite(const char *s, size_t len);
+void linenoisePrintf(const char *fmt, ...);
+
+/* State management for readline thread. */
+void linenoiseRegisterState(struct linenoiseState *ls);
+void linenoiseSetActive(int active);
+
 #ifdef __cplusplus
 }
 #endif

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/lloyd/claude-code/bash-agent/go2/linenoise"
@@ -14,22 +13,11 @@ import (
 // Readline runs linenoise in a dedicated goroutine and communicates
 // with the agent main goroutine via channels.
 //
-// Architecture (linenoise Hide/Show approach):
-//
-//	[readline goroutine] --inputCh--> [agent main goroutine]
-//	   EditStart/EditFeed              RunLoop()
-//	   loops immediately               display: Hide→write→Show per chunk
-//
-// The readline goroutine never waits for the agent to finish.
-// The display worker uses Hide/Show to avoid prompt corruption.
+// Display output uses linenoiseWrite which handles Hide/OPOST/Show internally.
 type Readline struct {
-	inputCh  chan string
-	histPath string
-
-	// Shared state with display worker (protected by mu)
-	mu     sync.Mutex
-	ls     *linenoise.LinenoiseState // current linenoiseState (nil when not editing)
-	active bool                      // true when in an editing session
+	inputCh     chan string
+	histPath    string
+	interruptCb func() // called on Ctrl+C to interrupt running agent
 }
 
 // NewReadline creates a Readline with history stored at ~/.bash-agent/history.
@@ -62,6 +50,12 @@ func (r *Readline) Input() <-chan string {
 	return r.inputCh
 }
 
+// SetInterruptCallback registers a function to be called when Ctrl+C is pressed
+// during agent execution. The callback should cancel the current agent turn.
+func (r *Readline) SetInterruptCallback(fn func()) {
+	r.interruptCb = fn
+}
+
 const promptStr = "\x1b[32m> \x1b[0m"
 
 func (r *Readline) loop() {
@@ -78,11 +72,9 @@ func (r *Readline) loop() {
 			return
 		}
 
-		// Register the linenoiseState for display worker to use
-		r.mu.Lock()
-		r.ls = ls
-		r.active = true
-		r.mu.Unlock()
+		// Register state for LinenoiseWrite to use Hide/Show
+		linenoise.RegisterState(ls)
+		linenoise.SetActive(true)
 
 		// Non-blocking poll + feed loop
 		var line string
@@ -104,17 +96,19 @@ func (r *Readline) loop() {
 			break
 		}
 
-		// Unregister the linenoiseState
-		r.mu.Lock()
-		r.ls = nil
-		r.active = false
-		r.mu.Unlock()
+		// Unregister state
+		linenoise.SetActive(false)
+		linenoise.RegisterState(nil)
 
 		linenoise.EditStop(ls)
 
 		if feedErr != nil {
 			if feedErr == linenoise.ErrInterrupted {
 				// Ctrl+C — linenoise already displayed ^C and newline
+				// Notify agent to interrupt if running
+				if r.interruptCb != nil {
+					r.interruptCb()
+				}
 				continue
 			}
 			// Ctrl+D or I/O error — exit
@@ -138,21 +132,6 @@ func (r *Readline) loop() {
 
 		// Send to agent — no done wait
 		r.inputCh <- line
-	}
-}
-
-// AcquireOutputLock hides the linenoise prompt and returns an unlock function.
-// The display worker should call this before writing to stdout.
-func (r *Readline) AcquireOutputLock() func() {
-	r.mu.Lock()
-	if r.active && r.ls != nil {
-		linenoise.Hide(r.ls)
-	}
-	return func() {
-		if r.active && r.ls != nil {
-			linenoise.Show(r.ls)
-		}
-		r.mu.Unlock()
 	}
 }
 
