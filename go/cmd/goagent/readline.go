@@ -15,8 +15,9 @@ import (
 //
 // Display output uses linenoiseWrite which handles Hide/OPOST/Show internally.
 type Readline struct {
-	inputCh  chan string
-	histPath string
+	inputCh     chan string
+	histPath    string
+	interruptCb func() // called on Ctrl+C to interrupt running agent
 }
 
 // NewReadline creates a Readline with history stored at ~/.bash-agent/history.
@@ -47,6 +48,12 @@ func (r *Readline) SetImagePasteCallback(fn func() string) {
 // Input returns the channel on which user input lines are delivered.
 func (r *Readline) Input() <-chan string {
 	return r.inputCh
+}
+
+// SetInterruptCallback registers a function to be called when Ctrl+C is pressed
+// during agent execution. The callback should cancel the current agent turn.
+func (r *Readline) SetInterruptCallback(fn func()) {
+	r.interruptCb = fn
 }
 
 const promptStr = "\x1b[32m> \x1b[0m"
@@ -98,6 +105,10 @@ func (r *Readline) loop() {
 		if feedErr != nil {
 			if feedErr == linenoise.ErrInterrupted {
 				// Ctrl+C — linenoise already displayed ^C and newline
+				// Notify agent to interrupt if running
+				if r.interruptCb != nil {
+					r.interruptCb()
+				}
 				continue
 			}
 			// Ctrl+D or I/O error — exit
