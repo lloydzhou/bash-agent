@@ -509,10 +509,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
         return 0;
     }
 
-    StrBuf acc_text, acc_thinking;
-    sb_init(&acc_text);
-    sb_init(&acc_thinking);
-
     char *line = NULL;
     size_t line_cap = 0;
     while (getline(&line, &line_cap, f) >= 0) {
@@ -529,20 +525,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
         if (!type) continue;
 
         if (strcmp(type, "user_input") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *content = json_get_string(jp.val, "content");
             if (content && content[0]) {
                 util_truncate_str(content, 80);
@@ -560,42 +542,24 @@ int agent_replay_events(Agent *agent, int max_turns) {
             }
             free(content);
         } else if (strcmp(type, "text") == 0) {
-            if (acc_thinking.len > 0) {
+            char *content = json_get_string(jp.val, "content");
+            if (content && *content) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
+                *dm = display_msg_text(content);
                 push_display(agent->display_queue, dm);
                 replayed = 1;
-                sb_truncate(&acc_thinking, 0);
             }
-            char *content = json_get_string(jp.val, "content");
-            if (content && *content) sb_append(&acc_text, content);
             free(content);
         } else if (strcmp(type, "thinking") == 0) {
-            if (acc_text.len > 0) {
+            char *content = json_get_string(jp.val, "content");
+            if (content && *content) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
+                *dm = display_msg_thinking(content);
                 push_display(agent->display_queue, dm);
                 replayed = 1;
-                sb_truncate(&acc_text, 0);
             }
-            char *content = json_get_string(jp.val, "content");
-            if (content && *content) sb_append(&acc_thinking, content);
             free(content);
         } else if (strcmp(type, "tool_call") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *name = json_get_string(jp.val, "name");
             char *id = json_get_string(jp.val, "id");
             JsonVal input_val = json_get(jp.val, "input");
@@ -619,20 +583,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
             free(name);
             free(id);
         } else if (strcmp(type, "tool_result") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *content = json_get_string(jp.val, "content");
             if (content) util_truncate_str(content, 200);
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -643,20 +593,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
             replayed = 1;
             free(content);
         } else if (strcmp(type, "sub_agent_result") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *sid = json_get_string(jp.val, "session_id");
             char *status = json_get_string(jp.val, "status");
             char *thinking = json_get_string(jp.val, "thinking");
@@ -675,20 +611,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
             free(thinking);
             free(text);
         } else if (strcmp(type, "image_describe") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *images = json_get_string(jp.val, "images");
             char *desc = json_get_string(jp.val, "content");
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -698,20 +620,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
             free(images);
             free(desc);
         } else if (strcmp(type, "error") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *message = json_get_string(jp.val, "message");
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_error(message ? message : "unknown");
@@ -723,21 +631,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
         free(type);
     }
 
-    if (acc_thinking.len > 0) {
-        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-        *dm = display_msg_thinking(acc_thinking.data);
-        push_display(agent->display_queue, dm);
-        replayed = 1;
-    }
-    if (acc_text.len > 0) {
-        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-        *dm = display_msg_text(acc_text.data);
-        push_display(agent->display_queue, dm);
-        replayed = 1;
-    }
-
-    sb_free(&acc_text);
-    sb_free(&acc_thinking);
     free(line);
     fclose(f);
     return replayed;
@@ -765,31 +658,50 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     /* 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本 */
     char *expanded_input = NULL;
     if ((turn_kind == NULL || strcmp(turn_kind, "user_input") == 0) && strstr(user_input, "[Image #") != NULL) {
-        expanded_input = strdup(user_input);
-        agent_image_expand_placeholders(agent, &expanded_input);
-
-        /* 提取 <attached-images> 中的描述内容 */
-        char *desc_start = strstr(expanded_input, "<attached-images>");
-        char *desc_end = strstr(expanded_input, "</attached-images>");
-        char *desc = NULL;
-        if (desc_start && desc_end) {
-            desc_start += strlen("<attached-images>");
-            desc = strndup(desc_start, (size_t)(desc_end - desc_start));
-        }
-
-        /* 收集所有 [Image #N] 占位符 */
-        StrBuf images;
+        /* 收集所有 [Image #N] 占位符和对应路径 */
+        StrBuf images, expanded;
         sb_init(&images);
+        sb_init(&expanded);
+        sb_append(&expanded, user_input);
+
+        const char *pattern = "[Image #";
         const char *rest = user_input;
         int first_img = 1;
-        while ((rest = strstr(rest, "[Image #")) != NULL) {
+        char **paths = NULL;
+        int path_count = 0;
+        int path_cap = 16;
+        paths = calloc((size_t)path_cap, sizeof(char*));
+
+        while ((rest = strstr(rest, pattern)) != NULL) {
             const char *end = strchr(rest, ']');
             if (!end) break;
             if (!first_img) sb_append_char(&images, ' ');
             first_img = 0;
             sb_appendn(&images, rest, (size_t)(end - rest + 1));
+
+            /* 提取数字并检查文件 */
+            int n = 0;
+            const char *num = rest + strlen(pattern);
+            while (*num >= '0' && *num <= '9') {
+                n = n * 10 + (*num - '0');
+                num++;
+            }
+            char imgpath[1024];
+            snprintf(imgpath, sizeof(imgpath), "%s/%d.png", store_session_image_dir(&agent->paths), n);
+            FILE *f = fopen(imgpath, "r");
+            if (f) {
+                fclose(f);
+                if (path_count >= path_cap) {
+                    path_cap *= 2;
+                    paths = realloc(paths, (size_t)path_cap * sizeof(char*));
+                }
+                paths[path_count++] = util_strdup(imgpath);
+            }
             rest = end + 1;
         }
+
+        /* 调用 describe 获取描述 */
+        char *desc = agent_image_describe(paths, path_count);
 
         /* 记录 image_describe 事件 */
         if (images.len > 0) {
@@ -809,8 +721,17 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             push_display(agent->display_queue, dm);
         }
 
-        sb_free(&images);
+        /* 拼接 expanded_input */
+        sb_append(&expanded, "\n\n<attached-images>\n");
+        sb_append(&expanded, desc ? desc : "");
+        sb_append(&expanded, "\n</attached-images>");
+
+        /* 清理 */
+        for (int i = 0; i < path_count; i++) free(paths[i]);
+        free(paths);
         free(desc);
+        sb_free(&images);
+        expanded_input = expanded.data;
         user_input = expanded_input;
     }
 
@@ -1236,6 +1157,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         push_display_event(&agent->paths, agent->display_queue, dm);
     }
 
+    free(expanded_input);
     return 0;
 }
 

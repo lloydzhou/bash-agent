@@ -289,24 +289,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 		return
 	}
 
-	var accText, accThinking string
-	flushThinking := func() {
-		if accThinking != "" {
-			display.ShowEvent(agent.Event{Type: agent.EventThinking, Fields: []string{"THINKING", accThinking}})
-			accThinking = ""
-		}
-	}
-	flushText := func() {
-		if accText != "" {
-			display.ShowEvent(agent.Event{Type: agent.EventText, Fields: []string{"TEXT", accText}})
-			accText = ""
-		}
-	}
-	flushAll := func() {
-		flushThinking()
-		flushText()
-	}
-
 	for _, line := range lines {
 		var ev map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
@@ -318,21 +300,21 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 		case "session_start", "usage", "sub_agent_start", "sub_agent_end", "context_update":
 			continue
 		case "user_input":
-			flushAll()
 			content, _ := ev["content"].(string)
 			if content != "" {
 				display.ShowEvent(agent.Event{Type: agent.EventUserMessage, Fields: []string{"USER_INPUT", content}})
 			}
 		case "text":
-			flushThinking()
 			content, _ := ev["content"].(string)
-			accText += content
+			if content != "" {
+				display.ShowEvent(agent.Event{Type: agent.EventText, Fields: []string{"TEXT", content}})
+			}
 		case "thinking":
-			flushText()
 			content, _ := ev["content"].(string)
-			accThinking += content
+			if content != "" {
+				display.ShowEvent(agent.Event{Type: agent.EventThinking, Fields: []string{"THINKING", content}})
+			}
 		case "tool_call":
-			flushAll()
 			name, _ := ev["name"].(string)
 			id, _ := ev["id"].(string)
 			input := "{}"
@@ -344,7 +326,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			}
 			display.ShowEvent(agent.Event{Type: agent.EventToolCall, Fields: []string{"TOOL_CALL", name, id, input, name}})
 		case "tool_result":
-			flushAll()
 			content, _ := ev["content"].(string)
 			toolUseID, _ := ev["tool_use_id"].(string)
 			name, _ := ev["name"].(string)
@@ -354,7 +335,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			}
 			display.ShowEvent(agent.Event{Type: agent.EventToolResult, Fields: []string{"TOOL_RESULT", toolUseID, name, content}})
 		case "sub_agent_result":
-			flushAll()
 			sid, _ := ev["session_id"].(string)
 			status, _ := ev["status"].(string)
 			in := "0"
@@ -379,19 +359,16 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			text, _ := ev["text"].(string)
 			display.ShowEvent(agent.Event{Type: agent.EventSubAgentResult, Fields: []string{"SUB_AGENT_RESULT", sid, status, in, out, thinking, text}})
 		case "image_describe":
-			flushAll()
 			images, _ := ev["images"].(string)
 			desc, _ := ev["content"].(string)
 			display.ShowEvent(agent.Event{Type: agent.EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
 		case "stop":
-			flushAll()
+			// Don't emit STOP for replay
 		case "error":
-			flushAll()
 			msg, _ := ev["message"].(string)
 			display.ShowEvent(agent.Event{Type: agent.EventError, Fields: []string{"ERROR", msg}})
 		}
 	}
-	flushAll()
 	fmt.Println()
 }
 

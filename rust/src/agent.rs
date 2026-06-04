@@ -524,12 +524,6 @@ fn render_display_event(
                     interactive,
                     &format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, description),
                 )?;
-            } else {
-                display_write_human(
-                    out,
-                    interactive,
-                    &format!("\x1b[36m📸 {} described\x1b[0m\n", images),
-                )?;
             }
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
@@ -1993,8 +1987,6 @@ impl Agent {
             last_char: "\n".to_string(),
             prev_was_thinking: false,
         };
-        let mut acc_text = String::new();
-        let mut acc_thinking = String::new();
 
         let reader = BufReader::new(file);
         for line in reader.lines() {
@@ -2009,7 +2001,6 @@ impl Agent {
             match evt_type {
                 "session_start" | "usage" | "stop" | "retry" => continue,
                 "user_input" | "user_message" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
                     if content.is_empty() {
                         continue;
@@ -2021,7 +2012,6 @@ impl Agent {
                     );
                 }
                 "sub_agent_result" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let session_id = evt.get("session_id").and_then(Value::as_str).unwrap_or("");
                     let status = evt.get("status").and_then(Value::as_str).unwrap_or("");
                     let input_tokens = evt.get("input_tokens").map(|v| v.to_string()).unwrap_or_default();
@@ -2042,7 +2032,6 @@ impl Agent {
                     );
                 }
                 "image_describe" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let images = evt.get("images").and_then(Value::as_str).unwrap_or("");
                     let desc = evt.get("content").and_then(Value::as_str).unwrap_or("");
                     self.display_replay_event(
@@ -2055,19 +2044,26 @@ impl Agent {
                     );
                 }
                 "thinking" => {
-                    // Flush text, accumulate thinking (match bash event_replay.awk)
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "text");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    acc_thinking.push_str(content);
+                    if !content.is_empty() {
+                        self.display_replay_event(
+                            &mut ds,
+                            "THINKING",
+                            &std::collections::HashMap::from([("content", content)]),
+                        );
+                    }
                 }
                 "text" => {
-                    // Flush thinking, accumulate text (match bash event_replay.awk)
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "thinking");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    acc_text.push_str(content);
+                    if !content.is_empty() {
+                        self.display_replay_event(
+                            &mut ds,
+                            "TEXT",
+                            &std::collections::HashMap::from([("content", content)]),
+                        );
+                    }
                 }
                 "tool_call" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
                     let default_input = json!({});
                     let input = evt.get("input").unwrap_or(&default_input);
@@ -2082,7 +2078,6 @@ impl Agent {
                     self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
                 }
                 "tool_result" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
                     let display = truncate_for_replay(content, 200);
@@ -2096,7 +2091,6 @@ impl Agent {
                     );
                 }
                 "error" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let msg = evt.get("message").and_then(Value::as_str).unwrap_or("");
                     self.display_replay_event(
                         &mut ds,
@@ -2106,7 +2100,6 @@ impl Agent {
                 }
                 "assistant_message" => {
                     // Legacy format: emit TEXT + TOOL_CALL per tool_call (match bash event_replay.awk)
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
                     if !text.is_empty() {
                         self.display_replay_event(
@@ -2135,40 +2128,8 @@ impl Agent {
                 _ => {}
             }
         }
-        Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
         self.queue_display_only(DisplayEvent::Text("\n".to_string()));
         self.flush_display();
-    }
-
-    /// Flush accumulated text/thinking through display_replay_event.
-    /// `which`: "thinking" = flush thinking only, "text" = flush text only, "both" = flush both.
-    fn flush_acc(
-        this: &Self,
-        acc_thinking: &mut String,
-        acc_text: &mut String,
-        ds: &mut DisplayState,
-        which: &str,
-    ) {
-        if which == "thinking" || which == "both" {
-            if !acc_thinking.is_empty() {
-                let content = std::mem::take(acc_thinking);
-                this.display_replay_event(
-                    ds,
-                    "THINKING",
-                    &std::collections::HashMap::from([("content", content.as_str())]),
-                );
-            }
-        }
-        if which == "text" || which == "both" {
-            if !acc_text.is_empty() {
-                let content = std::mem::take(acc_text);
-                this.display_replay_event(
-                    ds,
-                    "TEXT",
-                    &std::collections::HashMap::from([("content", content.as_str())]),
-                );
-            }
-        }
     }
 
     fn error(&self, msg: &str) {
