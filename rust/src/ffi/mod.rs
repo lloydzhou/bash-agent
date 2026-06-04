@@ -47,6 +47,9 @@ unsafe extern "C" {
     fn linenoiseHistoryLoad(filename: *const c_char) -> libc::c_int;
     fn linenoiseSetMultiLine(ml: libc::c_int);
     fn linenoiseSetImagePasteCallback(cb: Option<unsafe extern "C" fn(*mut *mut libc::c_char, *mut libc::size_t)>);
+    fn linenoiseWrite(s: *const c_char, len: libc::size_t);
+    fn linenoiseRegisterState(ls: *mut LinenoiseState);
+    fn linenoiseSetActive(active: libc::c_int);
 
     // Non-blocking API
     fn linenoiseEditStart(
@@ -129,6 +132,30 @@ pub unsafe fn hide(ls: *mut LinenoiseState) {
 /// ls must be a valid, active linenoiseState pointer.
 pub unsafe fn show(ls: *mut LinenoiseState) {
     unsafe { linenoiseShow(ls); }
+}
+
+/// Atomic display write: Lock → Hide → restore cursor → OPOST on → write →
+/// OPOST off → update cursor → handle detach → Show → Unlock.
+/// Each call is fully self-contained; callers don't track columns or call begin/end.
+pub fn linenoise_write(s: &str) {
+    if s.is_empty() {
+        return;
+    }
+    unsafe {
+        linenoiseWrite(s.as_ptr() as *const c_char, s.len() as libc::size_t);
+    }
+}
+
+/// Register/unregister the active linenoise state for synchronized display output.
+/// # Safety
+/// ls must be a valid pointer or null.
+pub unsafe fn register_state(ls: *mut LinenoiseState) {
+    unsafe { linenoiseRegisterState(ls); }
+}
+
+/// Set whether a linenoise edit session is currently active.
+pub fn set_active(active: bool) {
+    unsafe { linenoiseSetActive(if active { 1 } else { 0 }); }
 }
 
 /// Free a line returned by linenoise or edit_feed_raw.
@@ -275,10 +302,7 @@ fn try_clipboard_image(next: usize, img_dir: &std::path::Path) -> Option<Vec<u8>
     let tmp_path = img_dir.join(format!("{next}.png.tmp"));
     let tmp_str = tmp_path.to_string_lossy().to_string();
     let osa_cmd = format!(
-        "set theImage to the clipboard as «class PNGf»
-set theFile to open for access POSIX file \"{tmp_str}\" with write permission
-write theImage to theFile
-close access theFile"
+        "set theImage to the clipboard as «class PNGf»\nset theFile to open for access POSIX file \"{tmp_str}\" with write permission\nwrite theImage to theFile\ncoaccess theFile"
     );
     if std::process::Command::new("osascript")
         .arg("-e")
