@@ -2841,13 +2841,12 @@ void agent_update_title(Agent *agent) {
 
     int tc = json_get_int(jp.val, "current_turn_count");
     int ar = json_get_int(jp.val, "agent_request_count");
-    int ai = json_get_int(jp.val, "total_input_tokens");
+    long long ll_ai = json_get_ll(jp.val, "total_input_tokens");
     int ao = json_get_int(jp.val, "total_output_tokens");
-    int cr = json_get_int(jp.val, "total_cache_read_tokens");
+    long long ll_cr = json_get_ll(jp.val, "total_cache_read_tokens");
     int ct = json_get_int(jp.val, "current_context_tokens");
 
     /* 对齐 bash 版 term_title.awk: model T:turn R:req I:in+cr(pct) O:out C:ctx */
-    long long ll_ai = ai, ll_cr = cr;
     long long total_i = ll_ai + ll_cr;
     int pct = (total_i > 0) ? (int)(ll_cr * 100 / total_i) : 0;
 
