@@ -239,18 +239,6 @@ agent_image_describe() {
     printf '%s' "$desc"
 }
 
-agent_image_expand_placeholders_in_input() {
-    local input="$1" rest="$1" n p desc paths=""
-    while [[ "$rest" =~ \[Image\ #([0-9]+)\] ]]; do
-        n="${BASH_REMATCH[1]}"
-        p="$(store_session_image_dir)/$n.png"
-        [[ -f "$p" ]] && paths="${paths:+$paths }$p"
-        rest="${rest#*"${BASH_REMATCH[0]}"}"
-    done
-    desc=$(agent_image_describe $paths)
-    printf '%s\n\n<attached-images>\n%s\n</attached-images>' "$input" "$desc"
-}
-
 util_find_skill_dirs() {
     local cwd home
     cwd="${PWD:-$(pwd)}"
@@ -1154,15 +1142,7 @@ display_message() {
             display_sub_agent_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" "${REPLY_MESSAGE[5]}" "${REPLY_MESSAGE[6]}"
             ;;
         IMAGE_DESCRIBE)
-            local _id_images="${REPLY_MESSAGE[1]}" _id_desc="${REPLY_MESSAGE[2]}" _id_preview=""
-            # 截取描述前 50 字作为预览
-            [[ -n "$_id_desc" ]] && _id_preview="${_id_desc:0:50}" && (( ${#_id_desc} > 50 )) && _id_preview+="..."
-            display_ensure_newline
-            if [[ -n "$_id_preview" ]]; then
-                printf '\033[36m📸 %s: %s\033[0m\n' "$_id_images" "$_id_preview"
-            else
-                printf '\033[36m📸 %s described\033[0m\n' "$_id_images"
-            fi
+            [[ -n "${REPLY_MESSAGE[2]}" ]] && display_human_text "$(printf '\033[36m📸 %s: %s\033[0m\n' "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]:0:50}")"
             DISPLAY_LAST_CHAR=$'\n'
             ;;
         USER_MESSAGE)
@@ -1337,8 +1317,7 @@ agent_main_loop() {
                 break
                 ;;
             USER_INPUT)
-                local _input="${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                agent_run_loop "$_input"
+                agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
                 ;;
             AGENT_RESULT)
                 if [[ "$INTERRUPT_REQUESTED" == true ]]; then
@@ -1436,20 +1415,16 @@ agent_loop() {
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     # 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
     if [[ "$turn_kind" == user_input && "$user_input" == *"[Image #"* ]]; then
-        local expanded_input desc_json _images=""
-        expanded_input=$(agent_image_expand_placeholders_in_input "$user_input")
-        desc_json=$(printf '%s' "$expanded_input" | sed -n 's/.*<attached-images>\(.*\)<\/attached-images>.*/\1/p')
-        # 收集所有 [Image #N] 占位符
-        local _rest="$user_input"
+        local _rest="$user_input" _images="" _paths="" desc_json
         while [[ "$_rest" =~ \[Image\ #([0-9]+)\] ]]; do
-            _images="${_images:+$_images }${BASH_REMATCH[0]}"
+            [[ -f "$(store_session_image_dir)/${BASH_REMATCH[1]}.png" ]] && _paths+=" $(store_session_image_dir)/${BASH_REMATCH[1]}.png"
+            _images+="${_images:+ }${BASH_REMATCH[0]}"
             _rest="${_rest#*"${BASH_REMATCH[0]}"}"
         done
-        if [[ -n "$_images" ]]; then
-            store_event_append "{\"type\":\"image_describe\",\"images\":\"$(util_json_escape "$_images")\",\"content\":\"$(util_json_escape "$desc_json")\"}"
-            util_write_msg "IMAGE_DESCRIBE" "$_images" "$desc_json" >&4 2>/dev/null || true
-        fi
-        user_input="$expanded_input"
+        desc_json=$(agent_image_describe $_paths)
+        store_event_append "{\"type\":\"image_describe\",\"images\":\"$(util_json_escape "$_images")\",\"content\":\"$(util_json_escape "$desc_json")\"}"
+        util_write_msg "IMAGE_DESCRIBE" "$_images" "$desc_json" >&4 2>/dev/null || true
+        user_input+=$'\n\n<attached-images>\n'"$desc_json"$'\n</attached-images>'
     fi
     store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
