@@ -131,15 +131,13 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 	case EventToolCall:
 		d.prevThinking = false
 		d.EnsureNewline()
-		name := ""
-		if len(ev.Fields) > 1 {
-			name = ev.Fields[1]
-		}
 		summary := ""
 		if len(ev.Fields) > 4 {
 			summary = ev.Fields[4]
+		} else if len(ev.Fields) > 1 {
+			summary = ev.Fields[1]
 		}
-		d.writef("\033[33m[tool] %s(%s)\033[0m\n", name, summary)
+		d.writef("\033[33m[tool] %s\033[0m\n", summary)
 
 	case EventToolResult:
 		d.prevThinking = false
