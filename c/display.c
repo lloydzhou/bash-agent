@@ -5,12 +5,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <wchar.h>
+#include <locale.h>
+#include <sys/ioctl.h>
 
 /* display 线程的显示状态 */
 typedef struct {
     char last_char[8];      /* 最后一个字符（UTF-8 安全） */
     int prev_was_thinking;
-    int output_col;         /* assistant 尾行显示列（MVP：ANSI=0，ASCII=1，非 ASCII=2） */
+    int output_col;         /* assistant 尾行显示列（ANSI=0，按 wcwidth 计算） */
 } DisplayState;
 
 static void ds_init(DisplayState *ds) {
@@ -22,6 +25,11 @@ static void ds_init(DisplayState *ds) {
 
 static void ds_update_output_col(DisplayState *ds, const char *text) {
     if (!text || !*text) return;
+    static int locale_inited = 0;
+    if (!locale_inited) {
+        setlocale(LC_CTYPE, "");
+        locale_inited = 1;
+    }
     int esc = 0;
     for (const unsigned char *p = (const unsigned char *)text; *p; ) {
         unsigned char c = *p;
@@ -49,12 +57,30 @@ static void ds_update_output_col(DisplayState *ds, const char *text) {
             ds->output_col++;
             p++;
         } else {
-            ds->output_col += 2;
-            if (c < 0xE0) p += 2;
-            else if (c < 0xF0) p += 3;
-            else p += 4;
+            wchar_t wc = 0;
+            int len = 1;
+            if (c < 0xE0) len = 2;
+            else if (c < 0xF0) len = 3;
+            else len = 4;
+            int w = mbtowc(&wc, (const char *)p, len);
+            if (w > 0) {
+                int cw = wcwidth(wc);
+                ds->output_col += (cw > 0) ? cw : 0;
+                p += w;
+            } else {
+                ds->output_col += 2;
+                p += len;
+            }
         }
     }
+}
+
+static int ds_physical_output_col(DisplayState *ds) {
+    struct winsize ws;
+    if (ioctl(1, TIOCGWINSZ, &ws) != 0 || ws.ws_col <= 0 || ds->output_col <= 0) {
+        return ds->output_col;
+    }
+    return ((ds->output_col - 1) % ws.ws_col) + 1;
 }
 
 static void ds_update_last_char(DisplayState *ds, const char *text) {
@@ -371,7 +397,7 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
     }
 
     /* Show linenoise prompt after writing to stdout and release lock */
-    if (interactive) readline_display_end(ds->output_col, ds->last_char[0] == '\n');
+    if (interactive) readline_display_end(ds_physical_output_col(ds), ds->last_char[0] == '\n');
 }
 
 /* display 线程主函数 */

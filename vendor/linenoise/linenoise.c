@@ -2423,7 +2423,13 @@ static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct linenoiseState *g_current_ls = NULL;
 static int g_ls_active = 0;
 static int g_prompt_detached = 0;  /* last output didn't end with \n */
-static int g_output_col = 0;       /* cursor column at end of last output (last line) */
+static int g_output_col = 0;       /* physical cursor column at end of last output */
+
+static int linenoiseNormalizeOutputCol(int col) {
+    int cols = (g_current_ls && g_current_ls->cols > 0) ? (int)g_current_ls->cols : 0;
+    if (cols <= 0 || col <= 0) return col;
+    return ((col - 1) % cols) + 1;
+}
 
 /* Calculate display width of a UTF-8 string (public, used by readline layers) */
 size_t linenoiseUtf8StrWidth(const char *s, size_t len) {
@@ -2491,6 +2497,7 @@ static void linenoiseWriteInternal(const char *s, size_t len) {
             } else {
                 g_output_col += (int)utf8StrWidth(s, len);
             }
+            g_output_col = linenoiseNormalizeOutputCol(g_output_col);
         }
 
         /* If output didn't end with \n, push prompt to next line
@@ -2556,7 +2563,7 @@ void readline_display_end(int output_col, int output_at_newline) {
             tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
         }
 
-        g_output_col = output_col;
+        g_output_col = linenoiseNormalizeOutputCol(output_col);
 
         if (!output_at_newline) {
             write(STDOUT_FILENO, "\r\n", 2);

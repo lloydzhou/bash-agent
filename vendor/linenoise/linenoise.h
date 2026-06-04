@@ -127,6 +127,8 @@ size_t linenoiseUtf8StrWidth(const char *s, size_t len);
  * Hide/OPOST-enable/write/flush/OPOST-disable/Show management.
  * Callers only need this one function — no separate outputCol tracking needed. */
 void linenoiseWrite(const char *s, size_t len);
+void readline_display_begin(void);
+void readline_display_end(int output_col, int output_at_newline);
 
 #ifdef __cplusplus
 }
