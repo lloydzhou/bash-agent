@@ -164,6 +164,10 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
     /* human 模式 */
     switch (msg->type) {
         case DISPLAY_THINKING:
+            /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
+            if (interactive && ds->last_char[0] == '\n') {
+                fprintf(out, "\r\033[K");
+            }
             if (msg->content) {
                 fprintf(out, "\x1b[90m%s\x1b[0m", msg->content);
                 fflush(out);
@@ -173,7 +177,12 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             break;
 
         case DISPLAY_TEXT:
+            /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
+            if (interactive && ds->last_char[0] == '\n') {
+                fprintf(out, "\r\033[K");
+            }
             if (msg->content) {
+                /* Insert newline when transitioning from thinking to text */
                 if (ds->prev_was_thinking && ds->last_char[0] != '\n') {
                     fputc('\n', out);
                     ds->last_char[0] = '\n';

@@ -371,6 +371,10 @@ fn render_display_event(
 ) -> Result<()> {
     match evt {
         DisplayEvent::Thinking(content) => {
+            // bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\x1b[K
+            if interactive && ds.last_char == "\n" {
+                display_write_human(out, interactive, "\r\x1b[K")?;
+            }
             display_write_human(out, interactive, &format!("\x1b[90m{}\x1b[0m", content))?;
             let display_content = normalize_display_text(&content, interactive);
             if display_content.ends_with('\n') {
@@ -381,6 +385,10 @@ fn render_display_event(
             ds.prev_was_thinking = true;
         }
         DisplayEvent::Text(content) => {
+            // bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\x1b[K
+            if interactive && ds.last_char == "\n" {
+                display_write_human(out, interactive, "\r\x1b[K")?;
+            }
             if ds.prev_was_thinking && ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
                 ds.last_char = "\n".to_string();
@@ -483,8 +491,11 @@ fn render_display_event(
             if ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
             }
-            // 清空当前行，避免子 agent 残留内容导致排版混乱（与 bash/C 版对齐）
-            display_write_human(out, interactive, "\r\x1b[K")?;
+            // 清空当前行，避免子 agent 残留内容导致排版混乱
+            // 只在 interactive 模式下执行，与 bash 版对齐
+            if interactive {
+                display_write_human(out, interactive, "\r\x1b[K")?;
+            }
             if status == "ok" {
                 display_write_human(
                     out,
