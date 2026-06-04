@@ -47,12 +47,6 @@ static void sigint_handler(int sig) {
 /* display_begin/end are now in linenoise.c (alongside linenoiseWrite).
  * They share the same mutex and state. No duplicate declarations here. */
 
-/* Hide/Show are now handled internally by linenoiseWrite. */
-void readline_display_hide(void) {}
-void readline_display_show(void) {}
-
-
-
 /* ============================================================
  * History 文件路径构建
  *

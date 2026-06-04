@@ -120,29 +120,26 @@ void linenoisePrintKeyCodes(void);
 void linenoiseMaskModeEnable(void);
 void linenoiseMaskModeDisable(void);
 
-/* UTF-8 display width calculation (used by readline layers for output column tracking). */
-size_t linenoiseUtf8StrWidth(const char *s, size_t len);
-
-/* Unified display output: writes a string to stdout with automatic
- * Hide/OPOST-enable/write/flush/OPOST-disable/Show management.
- * Callers only need this one function — no separate outputCol tracking needed. */
+/* Display output: atomic write that coordinates with linenoise prompt.
+ * Handles Hide → restore cursor → OPOST on → write → OPOST off → Show.
+ * Cursor position is tracked internally; callers don't need to manage it. */
 void linenoiseWrite(const char *s, size_t len);
+void linenoisePrintf(const char *fmt, ...);
+
+/* Batch display API (for Rust compatibility). */
 void readline_display_begin(void);
 void readline_display_end(int output_col, int output_at_newline);
+
+/* State management for readline thread. */
+void linenoiseRegisterState(struct linenoiseState *ls);
+void linenoiseSetActive(int active);
+
+/* Lock/Unlock for EditFeed synchronization. */
+void linenoiseEditLock(void);
+void linenoiseEditUnlock(void);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* __LINENOISE_H */
-
-/* State management for readline thread.
- * The readline thread calls these to register/unregister its linenoiseState.
- */
-void linenoiseRegisterState(struct linenoiseState *ls);
-void linenoiseSetActive(int active);
-
-/* Lock/Unlock for EditFeed synchronization with display operations.
- * These should be called around linenoiseEditFeed to prevent concurrent display. */
-void linenoiseEditLock(void);
-void linenoiseEditUnlock(void);

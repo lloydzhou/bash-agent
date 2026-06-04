@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/lloyd/claude-code/bash-agent/go2/linenoise"
 )
@@ -19,8 +18,6 @@ type TermDisplay struct {
 	prevThinking bool      // 上一个事件是否为 THINKING
 	silent       bool      // stream-json 模式下抑制人类可读输出
 	testWriter   io.Writer // 仅用于测试：非 nil 时走这里而非 linenoiseWrite
-	outputCol    int       // assistant 尾行显示列（ANSI=0，ASCII=1，非 ASCII=2）
-	batching     bool      // 是否处于一次事件批量输出中
 }
 
 func NewTermDisplay() *TermDisplay {
@@ -32,94 +29,35 @@ func (d *TermDisplay) SetWriter(w io.Writer) {
 	d.testWriter = w
 }
 
-// writeRaw 发送字符串，不更新显示状态。
+// writeRaw 发送字符串，不更新 lastChar（用于 ANSI 控制序列）。
 func (d *TermDisplay) writeRaw(s string) {
 	if s == "" {
 		return
 	}
 	if d.testWriter != nil {
 		fmt.Fprint(d.testWriter, s)
-	} else if d.batching {
-		fmt.Fprint(os.Stdout, s)
 	} else {
 		linenoise.LinenoiseWrite(s)
 	}
 }
 
-// write 发送字符串并更新显示状态。
+// write 发送字符串并更新 lastChar。
 func (d *TermDisplay) write(s string) {
-	d.writeRaw(s)
-	d.updateState(s)
+	if s == "" {
+		return
+	}
+	if d.testWriter != nil {
+		fmt.Fprint(d.testWriter, s)
+	} else {
+		linenoise.LinenoiseWrite(s)
+	}
+	d.lastChar = s[len(s)-1]
 }
 
 // writef 格式化并写入
 func (d *TermDisplay) writef(format string, args ...interface{}) {
 	s := fmt.Sprintf(format, args...)
 	d.write(s)
-}
-
-func (d *TermDisplay) beginEvent() {
-	if d.testWriter == nil {
-		linenoise.DisplayBegin()
-	}
-	d.batching = true
-}
-
-func (d *TermDisplay) endEvent() {
-	if !d.batching {
-		return
-	}
-	d.batching = false
-	if d.testWriter == nil {
-		linenoise.DisplayEnd(d.outputCol, d.lastChar == '\n')
-	}
-}
-
-func (d *TermDisplay) updateState(s string) {
-	if s == "" {
-		return
-	}
-	d.lastChar = s[len(s)-1]
-	d.updateOutputCol(s)
-}
-
-func (d *TermDisplay) updateOutputCol(s string) {
-	esc := false
-	for len(s) > 0 {
-		c := s[0]
-		if esc {
-			_, size := utf8.DecodeRuneInString(s)
-			if size <= 0 {
-				size = 1
-			}
-			if c >= 0x40 && c <= 0x7e {
-				esc = false
-			}
-			s = s[size:]
-			continue
-		}
-		if c == 0x1b && len(s) > 1 && s[1] == '[' {
-			esc = true
-			s = s[2:]
-			continue
-		}
-		if c == '\r' || c == '\n' {
-			d.outputCol = 0
-			s = s[1:]
-			continue
-		}
-		if c < 0x80 {
-			d.outputCol++
-			s = s[1:]
-			continue
-		}
-		_, size := utf8.DecodeRuneInString(s)
-		if size <= 0 {
-			size = 1
-		}
-		d.outputCol += 2
-		s = s[size:]
-	}
 }
 
 // EnsureNewline 确保光标在新行
@@ -132,9 +70,6 @@ func (d *TermDisplay) EnsureNewline() {
 // SetLastChar 直接设置上次输出的最后一个字符
 func (d *TermDisplay) SetLastChar(c byte) {
 	d.lastChar = c
-	if c == '\n' || c == '\r' || c == 0 {
-		d.outputCol = 0
-	}
 }
 
 // HumanText 输出人类可读文本
@@ -162,7 +97,6 @@ func (d *TermDisplay) clearLineIfAtNewline() {
 	if d.testWriter == nil && d.lastChar == '\n' {
 		d.write("\r\033[K")
 		d.lastChar = 0
-		d.outputCol = 0
 	}
 }
 
@@ -171,9 +105,6 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 	if d.silent {
 		return
 	}
-
-	d.beginEvent()
-	defer d.endEvent()
 
 	switch ev.Type {
 	case EventText:
@@ -189,23 +120,26 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 	case EventThinking:
 		d.clearLineIfAtNewline()
 		if len(ev.Fields) > 1 && ev.Fields[1] != "" {
-			// ANSI 颜色控制序列不能更新 lastChar，否则内容以 \n 结尾时会被误判为未换行，导致额外空行。
-			d.writeRaw("\033[90m")
-			d.write(ev.Fields[1])
-			d.writeRaw("\033[0m")
+			content := ev.Fields[1]
+			/* 颜色码 + 内容 + 重置必须在一个 linenoiseWrite 调用内，
+			 * 否则中间的 Show 重绘 prompt 时 \033[0m 会重置终端颜色 */
+			linenoise.LinenoiseWrite("\033[90m" + content + "\033[0m")
+			d.lastChar = content[len(content)-1]
 		}
 		d.prevThinking = true
 
 	case EventToolCall:
 		d.prevThinking = false
 		d.EnsureNewline()
+		name := ""
+		if len(ev.Fields) > 1 {
+			name = ev.Fields[1]
+		}
 		summary := ""
 		if len(ev.Fields) > 4 {
 			summary = ev.Fields[4]
-		} else if len(ev.Fields) > 1 {
-			summary = ev.Fields[1]
 		}
-		d.writef("\033[33m[tool] %s\033[0m\n", summary)
+		d.writef("\033[33m[tool] %s(%s)\033[0m\n", name, summary)
 
 	case EventToolResult:
 		d.prevThinking = false

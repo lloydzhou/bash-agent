@@ -72,14 +72,6 @@ static void linenoise_write(const char *s, size_t len) {
 	linenoiseWrite(s, len);
 }
 
-static void readline_display_begin_wrapper(void) {
-	readline_display_begin();
-}
-
-static void readline_display_end_wrapper(int output_col, int output_at_newline) {
-	readline_display_end(output_col, output_at_newline);
-}
-
 static void linenoise_register_state(void *state) {
 	linenoiseRegisterState(state);
 }
@@ -273,27 +265,12 @@ func PollStdin(fd int, timeoutMs int) int {
 }
 
 // LinenoiseWrite writes a string to stdout with automatic Hide/OPOST/Show management.
-// This is the only function callers need for display output — no separate
-// outputCol tracking, OPOST toggling, or Hide/Show calls required.
+// Each call is atomic — Lock → Hide → write → Show → Unlock.
 func LinenoiseWrite(s string) {
 	if len(s) == 0 {
 		return
 	}
 	C.linenoise_write((*C.char)(unsafe.Pointer(unsafe.StringData(s))), C.size_t(len(s)))
-}
-
-// DisplayBegin hides the active prompt and holds the linenoise display lock.
-func DisplayBegin() {
-	C.readline_display_begin_wrapper()
-}
-
-// DisplayEnd restores the active prompt and releases the linenoise display lock.
-func DisplayEnd(outputCol int, outputAtNewline bool) {
-	atNewline := 0
-	if outputAtNewline {
-		atNewline = 1
-	}
-	C.readline_display_end_wrapper(C.int(outputCol), C.int(atNewline))
 }
 
 // RegisterState registers the linenoise state with the display system.
