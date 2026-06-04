@@ -8,6 +8,28 @@
 
 ---
 
+## [4.2.0] - 2026-06-05
+
+> **Architecture 版本**：统一 linenoiseWrite 原子显示输出，C/Go/Rust 三版本共用同一套 Hide→OPOST→Write→Show 同步机制；新增 Ctrl+C 中断 agent 能力；修复 Rust 段错误和 Ctrl+V 粘贴。
+
+### Changed
+
+- **统一 linenoiseWrite 原子显示架构**：在 `vendor/linenoise/linenoise.c` 中新增 `linenoiseWrite`/`linenoisePrintf`，单次调用原子完成 Lock→Hide→恢复光标→OPOST 开→写入→OPOST 关→光标跟踪→Show→Unlock。上层 display 代码不再需要手动管理 begin/end、列跟踪或 Hide/Show 配对。C/Go/Rust 三版本统一使用此接口。
+- **CJK 光标跟踪**：新增 `simulateCursorCol` 逐字符模拟终端折行，正确处理宽字符放不下时的换行和恰好填满行的延迟折行，替代原来有 bug 的 `linenoiseNormalizeOutputCol`。
+- **Ctrl+C 中断 agent**：readline 线程检测 Ctrl+C（linenoise 返回 EAGAIN），通过 `running` 标志判断是否正在执行 agent，若是则设置 `interrupted` 中断正在进行的 SSE/HTTP 请求；空闲状态仅重新显示提示符。
+- **Go linenoiseState C 分配**：`LinenoiseState` 改为通过 `C.malloc` 分配，避免 cgo 指针传递给 C 代码存储的违规问题。
+- **Thinking 颜色原子性**：Go 版 thinking 流式输出的 `\033[90m` + content + `\033[0m` 合并为单次 `linenoiseWrite` 调用，防止 Show 重绘 prompt 时 `\033[0m` 重置终端颜色。
+- **图片描述提示词统一**：C/Rust 版本同步 bash/go 版本的 describe 提示词，增加"separated by a blank line between images"等细节。
+- **移除未使用的 vendor 函数**：`readline_display_begin/end`、`linenoiseEditLock/Unlock`、`linenoiseNormalizeOutputCol`、`linenoiseUtf8StrWidth`。
+
+### Fixed
+
+- **Rust 段错误（exit 退出）**：`LinenoiseState` 声明为 `[u8; 0]`（零大小），导致栈分配不足，C 函数写入无效内存。修复为 `[u64; 64]`（512 字节）。
+- **Rust Ctrl+V 粘贴失效**：AppleScript 中 `coaccess theFile` 拼写错误，应为 `close access theFile`，导致 osascript 执行失败。
+- **Go ToolCall 名称重复**：`CallSummary` 已返回 `name(args)` 格式，display 层又包了一层变成 `name(name(args))`。
+
+---
+
 ## [4.1.1] - 2026-06-03
 
 > **Bugfix + Refactor 版本**：重构 linenoise 交互为 Hide/Show 架构替代 done 信号阻塞方案，彻底解决 display 与 readline 的终端竞争；修复缓存命中率 / token 计数溢出；image expand 流程精简。
