@@ -120,8 +120,35 @@ void linenoisePrintKeyCodes(void);
 void linenoiseMaskModeEnable(void);
 void linenoiseMaskModeDisable(void);
 
+/* Unified display API for interop with output workers.
+ * These functions handle Hide/Show/OPOST/promptDetached internally.
+ *
+ * Usage pattern:
+ *   linenoiseDisplayLock();        // Acquire lock, hide prompt, enable OPOST
+ *   linenoiseDisplayWrite(...);   // Multiple calls to write content
+ *   linenoiseDisplayFlush(ended);  // Disable OPOST, optional \r\n, show prompt, release lock
+ *
+ * Or use the combined API:
+ *   linenoiseDisplayWriteStr(text); // Lock, write, unlock in one call
+ */
+void linenoiseDisplayLock(void);
+void linenoiseDisplayWrite(const char *text, size_t len);
+void linenoiseDisplayFlush(int endedAtNewline);
+void linenoiseDisplayWriteStr(const char *text);  /* Convenience: lock+write+flush */
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* __LINENOISE_H */
+
+/* State management for readline thread.
+ * The readline thread calls these to register/unregister its linenoiseState.
+ */
+void linenoiseRegisterState(struct linenoiseState *ls);
+void linenoiseSetActive(int active);
+
+/* Lock/Unlock for EditFeed synchronization with display operations.
+ * These should be called around linenoiseEditFeed to prevent concurrent display. */
+void linenoiseEditLock(void);
+void linenoiseEditUnlock(void);

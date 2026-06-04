@@ -10,6 +10,7 @@
 typedef struct {
     char last_char[8];      /* 最后一个字符（UTF-8 安全） */
     int prev_was_thinking;
+    int output_col;         /* assistant 尾行显示列（MVP：ANSI=0，ASCII=1，非 ASCII=2） */
 } DisplayState;
 
 static void ds_init(DisplayState *ds) {
@@ -17,6 +18,43 @@ static void ds_init(DisplayState *ds) {
     ds->last_char[0] = '\n';
     ds->last_char[1] = '\0';
     ds->prev_was_thinking = 0;
+}
+
+static void ds_update_output_col(DisplayState *ds, const char *text) {
+    if (!text || !*text) return;
+    int esc = 0;
+    for (const unsigned char *p = (const unsigned char *)text; *p; ) {
+        unsigned char c = *p;
+        if (esc) {
+            if (c >= 0x40 && c <= 0x7e) esc = 0;
+            p++;
+            continue;
+        }
+        if (c == 0x1b && p[1] == '[') {
+            esc = 1;
+            p += 2;
+            continue;
+        }
+        if (c == '\r') {
+            ds->output_col = 0;
+            p++;
+            continue;
+        }
+        if (c == '\n') {
+            ds->output_col = 0;
+            p++;
+            continue;
+        }
+        if (c < 0x80) {
+            ds->output_col++;
+            p++;
+        } else {
+            ds->output_col += 2;
+            if (c < 0xE0) p += 2;
+            else if (c < 0xF0) p += 3;
+            else p += 4;
+        }
+    }
 }
 
 static void ds_update_last_char(DisplayState *ds, const char *text) {
@@ -57,6 +95,7 @@ static void ensure_newline(DisplayState *ds, FILE *out) {
         fputc('\n', out);
         ds->last_char[0] = '\n';
         ds->last_char[1] = '\0';
+        ds->output_col = 0;
     }
 }
 
@@ -163,8 +202,9 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
     }
 
     /* human 模式 */
-    /* Hide linenoise prompt before writing to stdout */
-    if (interactive) readline_display_hide();
+    /* Hide linenoise prompt before writing to stdout; keep readline lock held
+     * until after Show so EditFeed cannot mutate terminal state concurrently. */
+    if (interactive) readline_display_begin();
 
     switch (msg->type) {
         case DISPLAY_THINKING:
@@ -172,10 +212,12 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             if (interactive && ds->last_char[0] == '\n') {
                 fprintf(out, "\r\033[K");
                 ds->last_char[0] = '\0';
+                ds->output_col = 0;
             }
             if (msg->content) {
                 fprintf(out, "\x1b[90m%s\x1b[0m", msg->content);
                 fflush(out);
+                ds_update_output_col(ds, msg->content);
                 ds_update_last_char(ds, msg->content);
             }
             ds->prev_was_thinking = 1;
@@ -186,14 +228,17 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             if (interactive && ds->last_char[0] == '\n') {
                 fprintf(out, "\r\033[K");
                 ds->last_char[0] = '\0';
+                ds->output_col = 0;
             }
             if (msg->content) {
                 /* Insert newline when transitioning from thinking to text */
                 if (ds->prev_was_thinking && ds->last_char[0] != '\n') {
                     fputc('\n', out);
                     ds->last_char[0] = '\n';
+                    ds->output_col = 0;
                 }
                 write_human(out, msg->content);
+                ds_update_output_col(ds, msg->content);
                 ds_update_last_char(ds, msg->content);
             }
             ds->prev_was_thinking = 0;
@@ -201,9 +246,8 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
 
         case DISPLAY_TOOL_CALL: {
             ensure_newline(ds, out);
-            const char *name = msg->tool_name ? msg->tool_name : "unknown";
             const char *summary = msg->content ? msg->content : "";
-            fprintf(out, "\x1b[33m[tool] %s(%s)\x1b[0m\n", name, summary);
+            fprintf(out, "\x1b[33m[tool] %s\x1b[0m\n", summary);
             fflush(out);
             ds->last_char[0] = '\n';
             ds->prev_was_thinking = 0;
@@ -215,11 +259,28 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                 if (ds->prev_was_thinking && ds->last_char[0] != '\n') {
                     fputc('\n', out);
                     ds->last_char[0] = '\n';
+                    ds->output_col = 0;
                 }
                 ds->prev_was_thinking = 0;
-                fprintf(out, "%s\n", msg->content);
+                const char *tr_name = msg->tool_name ? msg->tool_name : "";
+                if (strcmp(tr_name, "Edit") == 0) {
+                    /* Edit: 全文 + 换行 */
+                    fprintf(out, "%s\n", msg->content);
+                } else if (strcmp(tr_name, "Read") == 0 || strcmp(tr_name, "Write") == 0) {
+                    /* Read/Write: 只显示第一行摘要 + 换行 */
+                    const char *nl = strchr(msg->content, '\n');
+                    if (nl) {
+                        fprintf(out, "%.*s\n", (int)(nl - msg->content), msg->content);
+                    } else {
+                        fprintf(out, "%s\n", msg->content);
+                    }
+                } else {
+                    /* 其他工具：全文 + 换行 */
+                    fprintf(out, "%s\n", msg->content);
+                }
                 fflush(out);
                 ds->last_char[0] = '\n';
+                ds->output_col = 0;
             }
             break;
 
@@ -309,8 +370,8 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             break;
     }
 
-    /* Show linenoise prompt after writing to stdout */
-    if (interactive) readline_display_show();
+    /* Show linenoise prompt after writing to stdout and release lock */
+    if (interactive) readline_display_end(ds->output_col, ds->last_char[0] == '\n');
 }
 
 /* display 线程主函数 */

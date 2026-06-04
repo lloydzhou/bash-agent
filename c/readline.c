@@ -9,37 +9,36 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <termios.h>
 
 /* ============================================================
- * 全局 SIGINT 状态
+ * Ctrl+C / 中断状态
  *
- * 模仿 Rust 版的 CTRLC_FLAG 设计：
- * - 全局标志由 SIGINT handler 设置
- * - readline 线程用它区分 Ctrl+C（重新提示）和 Ctrl+D（退出）
- * - agent_loop 的 SSE 层检查它来中断 HTTP 请求
+ * 交互模式（linenoise raw mode）：
+ *   - ISIG 被禁用，Ctrl+C 产生 0x03 字节而非 SIGINT
+ *   - linenoise 捕获后返回 NULL + errno=EAGAIN
+ *   - 此时通过 g_agent_interrupted 设置 agent 的中断标志
+ *
+ * 非交互模式（fgets）：
+ *   - ISIG 开启，Ctrl+C 产生 SIGINT
+ *   - sigint_handler 设置 g_sigint_received，readline 循环检测后退出
  * ============================================================ */
 
 static volatile sig_atomic_t g_sigint_received = 0;
 
-/* agent 的 interrupted 指针— 在 readline_thread_start 之前由 cagent.c 设置 */
+/* agent 的 interrupted 和 running 指针 — 在 readline_thread_start 之前设置 */
 static volatile int *g_agent_interrupted = NULL;
+static const volatile int *g_agent_running = NULL;
 
-int readline_sigint_consumed(void) {
-    if (g_sigint_received) {
-        g_sigint_received = 0;
-        return 1;
-    }
-    return 0;
-}
-
-void readline_set_agent_interrupted(volatile int *flag) {
-    g_agent_interrupted = flag;
+void readline_set_agent_interrupted(volatile int *interrupted, const volatile int *running) {
+    g_agent_interrupted = interrupted;
+    g_agent_running = running;
 }
 
 static void sigint_handler(int sig) {
     (void)sig;
     g_sigint_received = 1;
-    /* 同时设置 agent 的 interrupted 标志，让 http_post_sse 中的 curl 被中断 */
+    /* 非交互模式下，直接设置 agent interrupted 标志 */
     if (g_agent_interrupted) {
         *(g_agent_interrupted) = 1;
     }
@@ -52,8 +51,77 @@ static void sigint_handler(int sig) {
 static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct linenoiseState *g_current_ls = NULL;
 static int g_ls_active = 0; /* 1=linenoise 在编辑中 */
+static int g_prompt_detached = 0;  /* 上一轮输出没以 \n 结尾，prompt 被 push 到下一行 */
+static int g_output_col = 0;       /* 上一轮输出结束时的光标列位置 */
 
-/* display worker 调用：Hide 当前 prompt */
+/* ============================================================
+ * display worker 调用：开始一轮输出
+ *
+ * 流程：锁 mutex → Hide prompt → 如果 detached 则回退光标到 output_col → 开 OPOST
+ * 对应 Go 版 Readline.AcquireOutputLock
+ * ============================================================ */
+void readline_display_begin(void) {
+    pthread_mutex_lock(&g_display_mutex);
+    if (g_ls_active && g_current_ls) {
+        /* Hide prompt */
+        linenoiseHide(g_current_ls);
+
+        /* 如果上一轮输出没以 \n 结尾（prompt detached），光标回退到上一行的 output_col */
+        if (g_prompt_detached) {
+            fputs("\x1b[1A\r", stdout);
+            if (g_output_col > 0) {
+                fprintf(stdout, "\x1b[%dC", g_output_col);
+            }
+            fflush(stdout);
+            g_prompt_detached = 0;
+        }
+
+        /* 暂时恢复 OPOST，让 display 的 \n 自动 CR+LF */
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag |= OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+    }
+}
+
+/* ============================================================
+ * display worker 调用：结束一轮输出
+ *
+ * 流程：flush → 关 OPOST（恢复 raw mode）→ 如果没以 \n 结尾则 push prompt → 记录 output_col → Show → 解锁
+ * 对应 Go 版 AcquireOutputLock 返回的 unlock 函数
+ * ============================================================ */
+void readline_display_end(int output_col, int output_at_newline) {
+    if (g_ls_active && g_current_ls) {
+        /* 先 flush 所有 display 输出（在 OPOST 下 \n 已被正确转换） */
+        fflush(stdout);
+
+        /* 恢复 linenoise raw mode（关闭 OPOST），避免 Show 的输出被 OPOST 干扰 */
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag &= ~OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+
+        /* 如果输出没以 \n 结尾，push prompt 到下一行 */
+        if (!output_at_newline) {
+            fputs("\r\n", stdout);
+            fflush(stdout);
+            g_prompt_detached = 1;
+        } else {
+            g_prompt_detached = 0;
+        }
+
+        /* 记录本次输出的光标列位置，供下一轮 begin 回退用 */
+        g_output_col = output_col;
+
+        /* Show prompt */
+        linenoiseShow(g_current_ls);
+    }
+    pthread_mutex_unlock(&g_display_mutex);
+}
+
+/* display worker 调用：Hide 当前 prompt（兼容旧调用点） */
 void readline_display_hide(void) {
     pthread_mutex_lock(&g_display_mutex);
     if (g_ls_active && g_current_ls) {
@@ -164,11 +232,16 @@ static void *readline_thread_fn(void *arg) {
 
             linenoiseEditStop(&ls);
 
-            if (result == NULL) {
-                if (errno == EAGAIN) {
-                    /* Ctrl+C — linenoise 已显示 ^C 并换行，继续循环 */
-                    continue;
-                }
+              if (result == NULL) {
+                  if (errno == EAGAIN) {
+                      /* Ctrl+C — linenoise 已显示 ^C 并换行
+                       * 如果 agent 正在运行（agent_loop 执行中），
+                       * 设置 interrupted 标志让它中断当前 HTTP 请求 */
+                      if (g_agent_running && *g_agent_running && g_agent_interrupted) {
+                          *(g_agent_interrupted) = 1;
+                      }
+                      continue;
+                  }
                 /* Ctrl+D 或 I/O 错误 — 退出 */
                 fprintf(stderr, "\n");
                 break;

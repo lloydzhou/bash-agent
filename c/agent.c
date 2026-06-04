@@ -1504,14 +1504,17 @@ int agent_main_loop(Agent *agent) {
         if (!msg) continue;
 
         switch (msg->type) {
-            case MSG_USER_INPUT: {
-                /* 重置 interrupted 标志。
-                 * 防止等待输入时的 Ctrl+C（设了 agent->interrupted=1）
-                 * 残留到 agent_loop 开始时导致立即中断。
-                 * 模仿 Rust 版 agent_loop_stream 入口的 CTRLC_FLAG.swap(false) 模式。 */
-                agent->interrupted = 0;
+              case MSG_USER_INPUT: {
+                  /* 重置 interrupted 标志。
+                   * 防止等待输入时的 Ctrl+C（设了 agent->interrupted=1）
+                   * 残留到 agent_loop 开始时导致立即中断。 */
+                  agent->interrupted = 0;
+                  /* 标记 agent 正在运行，readline 线程的 Ctrl+C 可中断 */
+                  agent->running = 1;
 
-                agent_loop(agent, msg->data.user_input.text, "user_input");
+                  agent_loop(agent, msg->data.user_input.text, "user_input");
+
+                  agent->running = 0;
 
                 /* 对齐 bash 版: 每轮 agent_loop 完成后刷新终端标题 */
                 agent_update_title(agent);
@@ -1564,7 +1567,6 @@ int agent_main_loop(Agent *agent) {
                 if (agent->interactive) {
                     display_flush(agent->display_queue);
                 }
-                /* 不再 signal done — readline 线程立即进入下一轮 EditStart */
                 break;
             }
             case MSG_AGENT_RESULT: {

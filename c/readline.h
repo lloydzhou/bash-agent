@@ -21,13 +21,16 @@ typedef struct {
 /* 启动 readline 线程，返回 pthread_t */
 int readline_thread_start(pthread_t *thread, const ReadlineConfig *cfg);
 
-/* 检查并消费 SIGINT 标志 */
-int readline_sigint_consumed(void);
+/* 设置 agent 的 interrupted 和 running 指针
+ * interrupted: Ctrl+C 时设为 1，让 agent_loop 中断 HTTP 请求
+ * running: agent_loop 执行中为 1，readline 据此判断 Ctrl+C 是否应中断 */
+void readline_set_agent_interrupted(volatile int *interrupted, const volatile int *running);
 
-/* 设置 agent 的 interrupted 指针（SIGINT handler 中同时设置） */
-void readline_set_agent_interrupted(volatile int *flag);
+/* display worker 调用：在同一把锁内 Hide→输出→Show，避免与 EditFeed 并发 */
+void readline_display_begin(void);
+void readline_display_end(int output_col, int output_at_newline);
 
-/* display worker 调用：Hide/Show 当前 linenoise prompt */
+/* 兼容旧调用点 */
 void readline_display_hide(void);
 void readline_display_show(void);
 

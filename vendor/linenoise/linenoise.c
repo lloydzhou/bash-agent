@@ -2394,3 +2394,223 @@ int linenoiseHistoryLoad(const char *filename) {
     fclose(fp);
     return 0;
 }
+
+/* ============================================================
+ * Unified Display API
+ *
+ * These functions provide a unified way for display workers to output
+ * content while managing linenoise prompt state internally.
+ *
+ * The state includes:
+ * - g_display_mutex: protects all display operations
+ * - g_current_ls: pointer to current linenoise state (set by readline thread)
+ * - g_ls_active: whether linenoise is in editing mode
+ * - g_prompt_detached: whether prompt was pushed to next line
+ * - g_output_col: last display output column (for cursor restore)
+ * - g_last_char: last character written (for newline detection)
+ * ============================================================ */
+
+#ifdef _WIN32
+/* Windows: use critical section for mutex-like behavior */
+static CRITICAL_SECTION g_display_mutex;
+static int g_display_mutex_init = 0;
+#define INIT_MUTEX() do { \
+    if (!g_display_mutex_init) { \
+        InitializeCriticalSection(&g_display_mutex); \
+        g_display_mutex_init = 1; \
+    } \
+} while(0)
+#define LOCK_MUTEX() EnterCriticalSection(&g_display_mutex)
+#define UNLOCK_MUTEX() LeaveCriticalSection(&g_display_mutex)
+#else
+/* POSIX: use pthread mutex */
+#include <pthread.h>
+static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define INIT_MUTEX() (void)0
+#define LOCK_MUTEX() pthread_mutex_lock(&g_display_mutex)
+#define UNLOCK_MUTEX() pthread_mutex_unlock(&g_display_mutex)
+#endif
+
+static struct linenoiseState *g_current_ls = NULL;
+static int g_ls_active = 0;
+static int g_prompt_detached = 0;
+static int g_output_col = 0;
+static char g_last_char = '\n';
+
+/* Update output column based on text content (UTF-8 aware) */
+static void update_output_col(const char *text, size_t len) {
+    if (!text || len == 0) return;
+
+    int esc = 0;
+    for (size_t i = 0; i < len; ) {
+        unsigned char c = (unsigned char)text[i];
+
+        /* Handle ANSI escape sequences */
+        if (esc) {
+            if (c >= 0x40 && c <= 0x7e) esc = 0;
+            i++;
+            continue;
+        }
+        if (c == 0x1b && i + 1 < len && text[i + 1] == '[') {
+            esc = 1;
+            i += 2;
+            continue;
+        }
+
+        /* Handle control characters */
+        if (c == '\r') {
+            g_output_col = 0;
+            i++;
+            continue;
+        }
+        if (c == '\n') {
+            g_output_col = 0;
+            i++;
+            continue;
+        }
+
+        /* UTF-8 character: count display width */
+        if (c < 0x80) {
+            g_output_col++;
+            i++;
+        } else if (c < 0xE0 && i + 1 < len) {
+            g_output_col += 2;  /* 2-byte UTF-8 */
+            i += 2;
+        } else if (c < 0xF0 && i + 2 < len) {
+            g_output_col += 2;  /* 3-byte UTF-8 */
+            i += 3;
+        } else if (c < 0xF8 && i + 3 < len) {
+            g_output_col += 2;  /* 4-byte UTF-8 */
+            i += 4;
+        } else {
+            i++;  /* Invalid UTF-8, skip */
+        }
+    }
+}
+
+/* Update last character (UTF-8 safe) */
+static void update_last_char(const char *text, size_t len) {
+    if (len > 0) {
+        /* Find the last UTF-8 character */
+        size_t i = len - 1;
+        while (i > 0 && ((unsigned char)text[i] & 0xC0) == 0x80) {
+            i--;
+        }
+        if (i < len) {
+            g_last_char = text[i];
+        }
+    }
+}
+
+/* Lock display, hide prompt, enable OPOST.
+ * Must be followed by DisplayWrite() calls and DisplayFlush().
+ */
+void linenoiseDisplayLock(void) {
+    INIT_MUTEX();
+    LOCK_MUTEX();
+
+    if (g_ls_active && g_current_ls) {
+        /* Hide prompt */
+        linenoiseHide(g_current_ls);
+
+        /* Restore cursor if prompt was detached */
+        if (g_prompt_detached) {
+            fputs("\x1b[1A\r", stdout);
+            if (g_output_col > 0) {
+                fprintf(stdout, "\x1b[%dC", g_output_col);
+            }
+            fflush(stdout);
+            g_prompt_detached = 0;
+        }
+
+        /* Enable OPOST so \n becomes \r\n automatically */
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag |= OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+    }
+}
+
+/* Write content to stdout.
+ * Should be called between DisplayLock() and DisplayFlush().
+ * Multiple calls are supported.
+ */
+void linenoiseDisplayWrite(const char *text, size_t len) {
+    if (text && len > 0) {
+        fwrite(text, 1, len, stdout);
+        update_output_col(text, len);
+        update_last_char(text, len);
+    }
+}
+
+/* Flush output, restore OPOST, optionally add newline, show prompt, unlock.
+ * endedAtNewline: whether the last output ended with '\n'
+ */
+void linenoiseDisplayFlush(int endedAtNewline) {
+    if (g_ls_active && g_current_ls) {
+        /* Flush all output */
+        fflush(stdout);
+
+        /* Disable OPOST to restore linenoise raw mode */
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag &= ~OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+
+        /* If output didn't end at newline, push prompt to next line */
+        if (!endedAtNewline) {
+            fputs("\r\n", stdout);
+            fflush(stdout);
+            g_prompt_detached = 1;
+        } else {
+            g_prompt_detached = 0;
+        }
+
+        /* Show prompt */
+        linenoiseShow(g_current_ls);
+    }
+
+    UNLOCK_MUTEX();
+}
+
+/* Convenience function: lock, write string, flush in one call.
+ * For simple one-line outputs.
+ */
+void linenoiseDisplayWriteStr(const char *text) {
+    if (!text) return;
+
+    linenoiseDisplayLock();
+    size_t len = strlen(text);
+    linenoiseDisplayWrite(text, len);
+    int endedAtNewline = (len > 0 && text[len - 1] == '\n');
+    linenoiseDisplayFlush(endedAtNewline);
+}
+
+/* Register current linenoise state (called by readline thread) */
+void linenoiseRegisterState(struct linenoiseState *ls) {
+    INIT_MUTEX();
+    LOCK_MUTEX();
+    g_current_ls = ls;
+    UNLOCK_MUTEX();
+}
+
+/* Set linenoise active flag (called by readline thread) */
+void linenoiseSetActive(int active) {
+    INIT_MUTEX();
+    LOCK_MUTEX();
+    g_ls_active = active;
+    UNLOCK_MUTEX();
+}
+
+/* Lock for EditFeed - prevents concurrent display operations */
+void linenoiseEditLock(void) {
+    INIT_MUTEX();
+    LOCK_MUTEX();
+}
+
+/* Unlock for EditFeed */
+void linenoiseEditUnlock(void) {
+    UNLOCK_MUTEX();
+}

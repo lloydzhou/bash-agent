@@ -29,13 +29,6 @@
 #include <unistd.h>
 #include <termios.h>
 
-static volatile int g_interrupted = 0;
-
-static void sigint_handler(int sig) {
-    (void)sig;
-    g_interrupted = 1;
-}
-
 static void usage(const char *prog) {
     fprintf(stderr, "Usage: %s [options] [prompt]\n", prog);
     fprintf(stderr, "Options:\n");
@@ -234,8 +227,6 @@ int main(int argc, char *argv[]) {
         effective_session = session_new_id();
     }
 
-    /* 设置 SIGINT handler */
-    signal(SIGINT, sigint_handler);
 
     /* 创建消息队列 */
     MsgQueue input_queue, display_queue;
@@ -317,8 +308,8 @@ int main(int argc, char *argv[]) {
         rcfg.input_queue = &input_queue;
         rcfg.interactive = 1;
         rcfg.home = home;
-        /* 设置 SIGINT handler 中要设置的 agent->interrupted 指针 */
-        readline_set_agent_interrupted(&agent->interrupted);
+        /* 设置 agent 的 interrupted 和 running 指针，供 Ctrl+C 中断使用 */
+        readline_set_agent_interrupted(&agent->interrupted, &agent->running);
         /* 注册图像粘贴回调（Ctrl+V） */
         
         linenoiseSetImagePasteCallback(image_paste_wrapper);
