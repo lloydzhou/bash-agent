@@ -68,10 +68,11 @@ unsafe extern "C" {
 }
 
 /// Opaque type matching C's struct linenoiseState.
-/// We only ever hold a pointer to it — the layout is managed by linenoise.c.
+/// Must be large enough for the actual C struct (~376 bytes on 64-bit).
+/// Uses u64 for correct 8-byte alignment matching size_t/pointer fields.
 #[repr(C)]
 pub struct LinenoiseState {
-    _opaque: [u8; 0],
+    _opaque: [u64; 64], // 512 bytes, generous for struct linenoiseState
 }
 
 /// Result of a non-blocking EditFeed call.
@@ -302,7 +303,7 @@ fn try_clipboard_image(next: usize, img_dir: &std::path::Path) -> Option<Vec<u8>
     let tmp_path = img_dir.join(format!("{next}.png.tmp"));
     let tmp_str = tmp_path.to_string_lossy().to_string();
     let osa_cmd = format!(
-        "set theImage to the clipboard as «class PNGf»\nset theFile to open for access POSIX file \"{tmp_str}\" with write permission\nwrite theImage to theFile\ncoaccess theFile"
+        "set theImage to the clipboard as «class PNGf»\nset theFile to open for access POSIX file \"{tmp_str}\" with write permission\nwrite theImage to theFile\nclose access theFile"
     );
     if std::process::Command::new("osascript")
         .arg("-e")

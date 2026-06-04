@@ -126,17 +126,9 @@ void linenoiseMaskModeDisable(void);
 void linenoiseWrite(const char *s, size_t len);
 void linenoisePrintf(const char *fmt, ...);
 
-/* Batch display API (for Rust compatibility). */
-void readline_display_begin(void);
-void readline_display_end(int output_col, int output_at_newline);
-
 /* State management for readline thread. */
 void linenoiseRegisterState(struct linenoiseState *ls);
 void linenoiseSetActive(int active);
-
-/* Lock/Unlock for EditFeed synchronization. */
-void linenoiseEditLock(void);
-void linenoiseEditUnlock(void);
 
 #ifdef __cplusplus
 }

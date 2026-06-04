@@ -2427,12 +2427,6 @@ static int g_ls_active = 0;
 static int g_prompt_detached = 0;  /* last output didn't end with \n */
 static int g_output_col = 0;       /* physical cursor column at end of last output */
 
-static int linenoiseNormalizeOutputCol(int col) {
-    int cols = (g_current_ls && g_current_ls->cols > 0) ? (int)g_current_ls->cols : 0;
-    if (cols <= 0 || col <= 0) return col;
-    return ((col - 1) % cols) + 1;
-}
-
 /* Simulate terminal cursor position after writing a string.
  * Start from 'start_col' on a terminal of 'cols' columns.
  * Returns the final column (0 = cursor wrapped to start of next line).
@@ -2469,11 +2463,6 @@ static int simulateCursorCol(const char *s, size_t len, int start_col, int cols)
         i += clen;
     }
     return col;
-}
-
-/* Calculate display width of a UTF-8 string (public, used by readline layers) */
-size_t linenoiseUtf8StrWidth(const char *s, size_t len) {
-    return utf8StrWidth(s, len);
 }
 
 /* Internal: the core write logic. Caller must hold g_display_mutex.
@@ -2568,58 +2557,6 @@ void linenoiseWrite(const char *s, size_t len) {
     UNLOCK_MUTEX();
 }
 
-/* readline_display_begin/end - compatibility wrappers.
- * The C display layer can use these for batch display:
- *   display_begin() -> multiple linenoiseWrite() -> display_end()
- * The display_end must be called to release the mutex. */
-void readline_display_begin(void) {
-    LOCK_MUTEX();
-    if (g_ls_active && g_current_ls) {
-        linenoiseHide(g_current_ls);
-
-        if (g_prompt_detached) {
-            write(STDOUT_FILENO, "\x1b[1A\r", 5);
-            if (g_output_col > 0) {
-                char seq[16];
-                int n = snprintf(seq, sizeof(seq), "\x1b[%dC", g_output_col);
-                write(STDOUT_FILENO, seq, n);
-            }
-            g_prompt_detached = 0;
-        }
-
-        struct termios tios;
-        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
-            tios.c_oflag |= OPOST;
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
-        }
-    }
-}
-
-void readline_display_end(int output_col, int output_at_newline) {
-    if (g_ls_active && g_current_ls) {
-        fflush(stdout);
-
-        struct termios tios;
-        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
-            tios.c_oflag &= ~OPOST;
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
-        }
-
-        g_output_col = linenoiseNormalizeOutputCol(output_col);
-
-        if (!output_at_newline) {
-            write(STDOUT_FILENO, "\r\n", 2);
-            fflush(stdout);
-            g_prompt_detached = 1;
-        } else {
-            g_prompt_detached = 0;
-        }
-
-        linenoiseShow(g_current_ls);
-    }
-    UNLOCK_MUTEX();
-}
-
 
 /* linenoisePrintf - printf-style convenience wrapper for linenoiseWrite.
  * Formats into a stack buffer and calls linenoiseWrite atomically. */
@@ -2652,13 +2589,3 @@ void linenoiseSetActive(int active) {
     UNLOCK_MUTEX();
 }
 
-/* Lock for EditFeed - prevents concurrent display operations */
-void linenoiseEditLock(void) {
-    INIT_MUTEX();
-    LOCK_MUTEX();
-}
-
-/* Unlock for EditFeed */
-void linenoiseEditUnlock(void) {
-    UNLOCK_MUTEX();
-}

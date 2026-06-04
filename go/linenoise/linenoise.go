@@ -27,10 +27,6 @@ static int linenoise_edit_start(struct linenoiseState *l, int ifd, int ofd,
 	return linenoiseEditStart(l, ifd, ofd, buf, buflen, prompt);
 }
 
-static char *linenoise_edit_feed(struct linenoiseState *l) {
-	return linenoiseEditFeed(l);
-}
-
 static void linenoise_edit_stop(struct linenoiseState *l) {
 	linenoiseEditStop(l);
 }
