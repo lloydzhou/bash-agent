@@ -120,21 +120,13 @@ void linenoisePrintKeyCodes(void);
 void linenoiseMaskModeEnable(void);
 void linenoiseMaskModeDisable(void);
 
-/* Unified display API for interop with output workers.
- * These functions handle Hide/Show/OPOST/promptDetached internally.
- *
- * Usage pattern:
- *   linenoiseDisplayLock();        // Acquire lock, hide prompt, enable OPOST
- *   linenoiseDisplayWrite(...);   // Multiple calls to write content
- *   linenoiseDisplayFlush(ended);  // Disable OPOST, optional \r\n, show prompt, release lock
- *
- * Or use the combined API:
- *   linenoiseDisplayWriteStr(text); // Lock, write, unlock in one call
- */
-void linenoiseDisplayLock(void);
-void linenoiseDisplayWrite(const char *text, size_t len);
-void linenoiseDisplayFlush(int endedAtNewline);
-void linenoiseDisplayWriteStr(const char *text);  /* Convenience: lock+write+flush */
+/* UTF-8 display width calculation (used by readline layers for output column tracking). */
+size_t linenoiseUtf8StrWidth(const char *s, size_t len);
+
+/* Unified display output: writes a string to stdout with automatic
+ * Hide/OPOST-enable/write/flush/OPOST-disable/Show management.
+ * Callers only need this one function — no separate outputCol tracking needed. */
+void linenoiseWrite(const char *s, size_t len);
 
 #ifdef __cplusplus
 }

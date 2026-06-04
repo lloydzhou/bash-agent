@@ -2396,18 +2396,7 @@ int linenoiseHistoryLoad(const char *filename) {
 }
 
 /* ============================================================
- * Unified Display API
- *
- * These functions provide a unified way for display workers to output
- * content while managing linenoise prompt state internally.
- *
- * The state includes:
- * - g_display_mutex: protects all display operations
- * - g_current_ls: pointer to current linenoise state (set by readline thread)
- * - g_ls_active: whether linenoise is in editing mode
- * - g_prompt_detached: whether prompt was pushed to next line
- * - g_output_col: last display output column (for cursor restore)
- * - g_last_char: last character written (for newline detection)
+ * Readline state management & mutex for EditFeed synchronization
  * ============================================================ */
 
 #ifdef _WIN32
@@ -2433,97 +2422,122 @@ static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static struct linenoiseState *g_current_ls = NULL;
 static int g_ls_active = 0;
-static int g_prompt_detached = 0;
-static int g_output_col = 0;
-static char g_last_char = '\n';
+static int g_prompt_detached = 0;  /* last output didn't end with \n */
+static int g_output_col = 0;       /* cursor column at end of last output (last line) */
 
-/* Update output column based on text content (UTF-8 aware) */
-static void update_output_col(const char *text, size_t len) {
-    if (!text || len == 0) return;
-
-    int esc = 0;
-    for (size_t i = 0; i < len; ) {
-        unsigned char c = (unsigned char)text[i];
-
-        /* Handle ANSI escape sequences */
-        if (esc) {
-            if (c >= 0x40 && c <= 0x7e) esc = 0;
-            i++;
-            continue;
-        }
-        if (c == 0x1b && i + 1 < len && text[i + 1] == '[') {
-            esc = 1;
-            i += 2;
-            continue;
-        }
-
-        /* Handle control characters */
-        if (c == '\r') {
-            g_output_col = 0;
-            i++;
-            continue;
-        }
-        if (c == '\n') {
-            g_output_col = 0;
-            i++;
-            continue;
-        }
-
-        /* UTF-8 character: count display width */
-        if (c < 0x80) {
-            g_output_col++;
-            i++;
-        } else if (c < 0xE0 && i + 1 < len) {
-            g_output_col += 2;  /* 2-byte UTF-8 */
-            i += 2;
-        } else if (c < 0xF0 && i + 2 < len) {
-            g_output_col += 2;  /* 3-byte UTF-8 */
-            i += 3;
-        } else if (c < 0xF8 && i + 3 < len) {
-            g_output_col += 2;  /* 4-byte UTF-8 */
-            i += 4;
-        } else {
-            i++;  /* Invalid UTF-8, skip */
-        }
-    }
+/* Calculate display width of a UTF-8 string (public, used by readline layers) */
+size_t linenoiseUtf8StrWidth(const char *s, size_t len) {
+    return utf8StrWidth(s, len);
 }
 
-/* Update last character (UTF-8 safe) */
-static void update_last_char(const char *text, size_t len) {
-    if (len > 0) {
-        /* Find the last UTF-8 character */
-        size_t i = len - 1;
-        while (i > 0 && ((unsigned char)text[i] & 0xC0) == 0x80) {
-            i--;
-        }
-        if (i < len) {
-            g_last_char = text[i];
-        }
-    }
-}
-
-/* Lock display, hide prompt, enable OPOST.
- * Must be followed by DisplayWrite() calls and DisplayFlush().
- */
-void linenoiseDisplayLock(void) {
-    INIT_MUTEX();
-    LOCK_MUTEX();
+/* Internal: the core write logic. Caller must hold g_display_mutex.
+ *
+ * Hide prompt -> restore cursor if detached -> OPOST on -> write ->
+ * flush -> OPOST off -> update state -> Show prompt
+ *
+ * linenoiseHide() restores the cursor to the end of previous output.
+ * If previous output was detached (didn't end with \n), we also need
+ * to move the cursor back up to the correct row. */
+static void linenoiseWriteInternal(const char *s, size_t len) {
+    if (!s || len == 0) return;
 
     if (g_ls_active && g_current_ls) {
-        /* Hide prompt */
         linenoiseHide(g_current_ls);
 
-        /* Restore cursor if prompt was detached */
+        /* If previous output didn't end with \n, the prompt was pushed to
+         * a separate line below the output. After Hide clears that line,
+         * cursor is on a blank line. Move back up to where output ended. */
         if (g_prompt_detached) {
-            fputs("\x1b[1A\r", stdout);
+            write(STDOUT_FILENO, "\x1b[1A\r", 4);
             if (g_output_col > 0) {
-                fprintf(stdout, "\x1b[%dC", g_output_col);
+                char seq[16];
+                int n = snprintf(seq, sizeof(seq), "\x1b[%dC", g_output_col);
+                write(STDOUT_FILENO, seq, n);
             }
-            fflush(stdout);
             g_prompt_detached = 0;
         }
 
-        /* Enable OPOST so \n becomes \r\n automatically */
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag |= OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+    }
+
+    /* Write the string */
+    write(STDOUT_FILENO, s, len);
+
+    if (g_ls_active && g_current_ls) {
+        fflush(stdout);
+
+        /* Restore raw mode (OPOST off) for linenoise */
+        struct termios tios;
+        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+            tios.c_oflag &= ~OPOST;
+            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+        }
+
+        /* Update output_col: reset on \n/\r, compute width of last line segment */
+        {
+            size_t lastNL = (size_t)-1;
+            for (size_t i = len; i > 0; i--) {
+                if (s[i-1] == '\n' || s[i-1] == '\r') {
+                    lastNL = i - 1;
+                    break;
+                }
+            }
+            if (lastNL < len) {
+                g_output_col = (int)utf8StrWidth(s + lastNL + 1, len - lastNL - 1);
+            } else {
+                g_output_col += (int)utf8StrWidth(s, len);
+            }
+        }
+
+        /* If output didn't end with \n, push prompt to next line
+         * so it doesn't collide with the output. */
+        if (s[len-1] != '\n') {
+            write(STDOUT_FILENO, "\r\n", 2);
+            fflush(stdout);
+            g_prompt_detached = 1;
+        } else {
+            g_prompt_detached = 0;
+        }
+
+        linenoiseShow(g_current_ls);
+    }
+}
+
+/* linenoiseWrite - safe printf for linenoise raw mode.
+ * Prints a string to stdout. When linenoise is active, it handles
+ * Hide/OPOST/Show and cursor position tracking internally.
+ * Each call is atomic (holds the display mutex). */
+void linenoiseWrite(const char *s, size_t len) {
+    if (!s || len == 0) return;
+    INIT_MUTEX();
+    LOCK_MUTEX();
+    linenoiseWriteInternal(s, len);
+    UNLOCK_MUTEX();
+}
+
+/* readline_display_begin/end - compatibility wrappers.
+ * The C display layer can use these for batch display:
+ *   display_begin() -> multiple linenoiseWrite() -> display_end()
+ * The display_end must be called to release the mutex. */
+void readline_display_begin(void) {
+    LOCK_MUTEX();
+    if (g_ls_active && g_current_ls) {
+        linenoiseHide(g_current_ls);
+
+        if (g_prompt_detached) {
+            write(STDOUT_FILENO, "\x1b[1A\r", 4);
+            if (g_output_col > 0) {
+                char seq[16];
+                int n = snprintf(seq, sizeof(seq), "\x1b[%dC", g_output_col);
+                write(STDOUT_FILENO, seq, n);
+            }
+            g_prompt_detached = 0;
+        }
+
         struct termios tios;
         if (tcgetattr(STDIN_FILENO, &tios) == 0) {
             tios.c_oflag |= OPOST;
@@ -2532,61 +2546,31 @@ void linenoiseDisplayLock(void) {
     }
 }
 
-/* Write content to stdout.
- * Should be called between DisplayLock() and DisplayFlush().
- * Multiple calls are supported.
- */
-void linenoiseDisplayWrite(const char *text, size_t len) {
-    if (text && len > 0) {
-        fwrite(text, 1, len, stdout);
-        update_output_col(text, len);
-        update_last_char(text, len);
-    }
-}
-
-/* Flush output, restore OPOST, optionally add newline, show prompt, unlock.
- * endedAtNewline: whether the last output ended with '\n'
- */
-void linenoiseDisplayFlush(int endedAtNewline) {
+void readline_display_end(int output_col, int output_at_newline) {
     if (g_ls_active && g_current_ls) {
-        /* Flush all output */
         fflush(stdout);
 
-        /* Disable OPOST to restore linenoise raw mode */
         struct termios tios;
         if (tcgetattr(STDIN_FILENO, &tios) == 0) {
             tios.c_oflag &= ~OPOST;
             tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
         }
 
-        /* If output didn't end at newline, push prompt to next line */
-        if (!endedAtNewline) {
-            fputs("\r\n", stdout);
+        g_output_col = output_col;
+
+        if (!output_at_newline) {
+            write(STDOUT_FILENO, "\r\n", 2);
             fflush(stdout);
             g_prompt_detached = 1;
         } else {
             g_prompt_detached = 0;
         }
 
-        /* Show prompt */
         linenoiseShow(g_current_ls);
     }
-
     UNLOCK_MUTEX();
 }
 
-/* Convenience function: lock, write string, flush in one call.
- * For simple one-line outputs.
- */
-void linenoiseDisplayWriteStr(const char *text) {
-    if (!text) return;
-
-    linenoiseDisplayLock();
-    size_t len = strlen(text);
-    linenoiseDisplayWrite(text, len);
-    int endedAtNewline = (len > 0 && text[len - 1] == '\n');
-    linenoiseDisplayFlush(endedAtNewline);
-}
 
 /* Register current linenoise state (called by readline thread) */
 void linenoiseRegisterState(struct linenoiseState *ls) {

@@ -44,100 +44,14 @@ static void sigint_handler(int sig) {
     }
 }
 
-/* ============================================================
- * 全局 linenoiseState 共享 — display worker 用它做 Hide/Show
- * ============================================================ */
+/* display_begin/end are now in linenoise.c (alongside linenoiseWrite).
+ * They share the same mutex and state. No duplicate declarations here. */
 
-static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
-static struct linenoiseState *g_current_ls = NULL;
-static int g_ls_active = 0; /* 1=linenoise 在编辑中 */
-static int g_prompt_detached = 0;  /* 上一轮输出没以 \n 结尾，prompt 被 push 到下一行 */
-static int g_output_col = 0;       /* 上一轮输出结束时的光标列位置 */
+/* Hide/Show are now handled internally by linenoiseWrite. */
+void readline_display_hide(void) {}
+void readline_display_show(void) {}
 
-/* ============================================================
- * display worker 调用：开始一轮输出
- *
- * 流程：锁 mutex → Hide prompt → 如果 detached 则回退光标到 output_col → 开 OPOST
- * 对应 Go 版 Readline.AcquireOutputLock
- * ============================================================ */
-void readline_display_begin(void) {
-    pthread_mutex_lock(&g_display_mutex);
-    if (g_ls_active && g_current_ls) {
-        /* Hide prompt */
-        linenoiseHide(g_current_ls);
 
-        /* 如果上一轮输出没以 \n 结尾（prompt detached），光标回退到上一行的 output_col */
-        if (g_prompt_detached) {
-            fputs("\x1b[1A\r", stdout);
-            if (g_output_col > 0) {
-                fprintf(stdout, "\x1b[%dC", g_output_col);
-            }
-            fflush(stdout);
-            g_prompt_detached = 0;
-        }
-
-        /* 暂时恢复 OPOST，让 display 的 \n 自动 CR+LF */
-        struct termios tios;
-        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
-            tios.c_oflag |= OPOST;
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
-        }
-    }
-}
-
-/* ============================================================
- * display worker 调用：结束一轮输出
- *
- * 流程：flush → 关 OPOST（恢复 raw mode）→ 如果没以 \n 结尾则 push prompt → 记录 output_col → Show → 解锁
- * 对应 Go 版 AcquireOutputLock 返回的 unlock 函数
- * ============================================================ */
-void readline_display_end(int output_col, int output_at_newline) {
-    if (g_ls_active && g_current_ls) {
-        /* 先 flush 所有 display 输出（在 OPOST 下 \n 已被正确转换） */
-        fflush(stdout);
-
-        /* 恢复 linenoise raw mode（关闭 OPOST），避免 Show 的输出被 OPOST 干扰 */
-        struct termios tios;
-        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
-            tios.c_oflag &= ~OPOST;
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
-        }
-
-        /* 如果输出没以 \n 结尾，push prompt 到下一行 */
-        if (!output_at_newline) {
-            fputs("\r\n", stdout);
-            fflush(stdout);
-            g_prompt_detached = 1;
-        } else {
-            g_prompt_detached = 0;
-        }
-
-        /* 记录本次输出的光标列位置，供下一轮 begin 回退用 */
-        g_output_col = output_col;
-
-        /* Show prompt */
-        linenoiseShow(g_current_ls);
-    }
-    pthread_mutex_unlock(&g_display_mutex);
-}
-
-/* display worker 调用：Hide 当前 prompt（兼容旧调用点） */
-void readline_display_hide(void) {
-    pthread_mutex_lock(&g_display_mutex);
-    if (g_ls_active && g_current_ls) {
-        linenoiseHide(g_current_ls);
-    }
-    pthread_mutex_unlock(&g_display_mutex);
-}
-
-/* display worker 调用：Show 当前 prompt */
-void readline_display_show(void) {
-    pthread_mutex_lock(&g_display_mutex);
-    if (g_ls_active && g_current_ls) {
-        linenoiseShow(g_current_ls);
-    }
-    pthread_mutex_unlock(&g_display_mutex);
-}
 
 /* ============================================================
  * History 文件路径构建
@@ -211,10 +125,8 @@ static void *readline_thread_fn(void *arg) {
             }
 
             /* 注册到全局共享状态，让 display worker 可以 Hide/Show */
-            pthread_mutex_lock(&g_display_mutex);
-            g_current_ls = &ls;
-            g_ls_active = 1;
-            pthread_mutex_unlock(&g_display_mutex);
+            linenoiseRegisterState(&ls);
+            linenoiseSetActive(1);
 
             /* 循环读取输入 */
             char *result;
@@ -225,10 +137,8 @@ static void *readline_thread_fn(void *arg) {
             }
 
             /* 清除全局共享状态 */
-            pthread_mutex_lock(&g_display_mutex);
-            g_current_ls = NULL;
-            g_ls_active = 0;
-            pthread_mutex_unlock(&g_display_mutex);
+            linenoiseSetActive(0);
+            linenoiseRegisterState(NULL);
 
             linenoiseEditStop(&ls);
 
