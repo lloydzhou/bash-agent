@@ -270,9 +270,6 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	rl.SetImagePasteCallback(a.ImagePasteCallback)
 	rl.Start()
 
-	// 让 display 持有 readline 的 hide/show 回调，用于输出保护
-	display.SetOutputLocker(rl.AcquireOutputLock)
-
 	// 主循环：从 readline goroutine 接收输入，交给 agent 处理
 	for input := range rl.Input() {
 		if err := a.RunLoop(ctx, input, "user_input"); err != nil {

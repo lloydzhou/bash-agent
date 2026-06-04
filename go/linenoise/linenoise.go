@@ -67,6 +67,18 @@ static struct edit_feed_result linenoise_edit_feed_safe(struct linenoiseState *l
 
 // C wrapper that calls the Go export below.
 extern void goImagePasteCallback(char **out, size_t *outlen);
+
+static void linenoise_write(const char *s, size_t len) {
+	linenoiseWrite(s, len);
+}
+
+static void linenoise_register_state(void *state) {
+	linenoiseRegisterState(state);
+}
+
+static void linenoise_set_active(int active) {
+	linenoiseSetActive(active);
+}
 */
 import "C"
 import (
@@ -213,4 +225,34 @@ func Show(ls *LinenoiseState) {
 // Returns >0 if data available, 0 on timeout, -1 on error.
 func PollStdin(fd int, timeoutMs int) int {
 	return int(C.poll_stdin(C.int(fd), C.int(timeoutMs)))
+}
+
+// LinenoiseWrite writes a string to stdout with automatic Hide/OPOST/Show management.
+// This is the only function callers need for display output — no separate
+// outputCol tracking, OPOST toggling, or Hide/Show calls required.
+func LinenoiseWrite(s string) {
+	if len(s) == 0 {
+		return
+	}
+	C.linenoise_write((*C.char)(unsafe.Pointer(unsafe.StringData(s))), C.size_t(len(s)))
+}
+
+// RegisterState registers the linenoise state with the display system.
+// Must be called when starting an editing session so that LinenoiseWrite
+// knows which state to Hide/Show.
+func RegisterState(ls *LinenoiseState) {
+	if ls != nil {
+		C.linenoise_register_state(unsafe.Pointer(ls))
+	}
+}
+
+// SetActive sets whether the editor is active.
+// Must be called (true before EditFeed, false after) so that LinenoiseWrite
+// knows when to apply Hide/OPOST/Show.
+func SetActive(active bool) {
+	if active {
+		C.linenoise_set_active(1)
+	} else {
+		C.linenoise_set_active(0)
+	}
 }

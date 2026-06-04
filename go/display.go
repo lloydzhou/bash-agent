@@ -3,48 +3,54 @@ package agent
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
+
+	"github.com/lloyd/claude-code/bash-agent/go2/linenoise"
 )
 
 // ═══════════════════════════════════════════
 // TermDisplay — 终端输出显示
 // ═══════════════════════════════════════════
 
-// OutputLocker hides the prompt before output and restores it after.
-// Returns an unlock function that must be called when output is done.
-type OutputLocker func() func()
-
 type TermDisplay struct {
-	writer         io.Writer // 输出目标（默认 os.Stdout）
-	lastChar       byte      // 上次输出的最后一个字符
-	prevThinking   bool      // 上一个事件是否为 THINKING
-	silent         bool      // stream-json 模式下抑制人类可读输出
-	titleFormatter func(model string) string
-	outputLocker   OutputLocker // hide/show 保护（可能为 nil）
+	lastChar     byte      // 上次输出的最后一个字符
+	prevThinking bool      // 上一个事件是否为 THINKING
+	silent       bool      // stream-json 模式下抑制人类可读输出
+	testWriter   io.Writer // 仅用于测试：非 nil 时走这里而非 linenoiseWrite
 }
 
 func NewTermDisplay() *TermDisplay {
-	return &TermDisplay{
-		writer: os.Stdout,
+	return &TermDisplay{}
+}
+
+// SetWriter 设置输出目标（仅用于测试）
+func (d *TermDisplay) SetWriter(w io.Writer) {
+	d.testWriter = w
+}
+
+// write 发送字符串。生产环境走 linenoiseWrite（自动 Hide/OPOST/Show），
+// 测试环境走 testWriter。
+func (d *TermDisplay) write(s string) {
+	if d.testWriter != nil {
+		fmt.Fprint(d.testWriter, s)
+	} else {
+		linenoise.LinenoiseWrite(s)
+	}
+	if len(s) > 0 {
+		d.lastChar = s[len(s)-1]
 	}
 }
 
-// SetWriter 设置输出目标
-func (d *TermDisplay) SetWriter(w io.Writer) {
-	d.writer = w
-}
-
-// SetTitleFormatter 设置标题格式化函数
-func (d *TermDisplay) SetTitleFormatter(fn func(model string) string) {
-	d.titleFormatter = fn
+// writef 格式化并写入
+func (d *TermDisplay) writef(format string, args ...interface{}) {
+	s := fmt.Sprintf(format, args...)
+	d.write(s)
 }
 
 // EnsureNewline 确保光标在新行
 func (d *TermDisplay) EnsureNewline() {
 	if d.lastChar != '\n' && d.lastChar != 0 {
-		fmt.Fprintln(d.writer)
-		d.lastChar = '\n'
+		d.write("\n")
 	}
 }
 
@@ -58,12 +64,7 @@ func (d *TermDisplay) HumanText(s string) {
 	if s == "" {
 		return
 	}
-	fmt.Fprint(d.writer, s)
-	if strings.HasSuffix(s, "\n") {
-		d.lastChar = '\n'
-	} else {
-		d.lastChar = s[len(s)-1]
-	}
+	d.write(s)
 }
 
 // SetSilent 设置静默模式（stream-json 时抑制人类可读输出）
@@ -71,21 +72,12 @@ func (d *TermDisplay) SetSilent(s bool) {
 	d.silent = s
 }
 
-// SetOutputLocker sets a callback for hide/show protection during display output.
-func (d *TermDisplay) SetOutputLocker(locker OutputLocker) {
-	d.outputLocker = locker
-}
-
 // SetTitle 设置终端标题
 func (d *TermDisplay) SetTitle(title string) {
 	if d.silent {
 		return
 	}
-	if d.titleFormatter != nil {
-		title = d.titleFormatter(title)
-	}
-	// OSC 终端标题
-	fmt.Fprintf(d.writer, "\033]0;%s\007", title)
+	d.write(fmt.Sprintf("\033]0;%s\007", title))
 }
 
 // ShowEvent 显示一个 Event
@@ -94,37 +86,19 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 		return
 	}
 
-	// Hide linenoise prompt before writing output
-	var unlock func()
-	if d.outputLocker != nil {
-		unlock = d.outputLocker()
-	}
-	defer func() {
-		if unlock != nil {
-			unlock()
-		}
-	}()
-
 	switch ev.Type {
 	case EventText:
-		// thinking → text 转换时补换行
 		if d.prevThinking && d.lastChar != '\n' {
-			fmt.Fprintln(d.writer)
-			d.lastChar = '\n'
+			d.write("\n")
 		}
 		d.prevThinking = false
 		if len(ev.Fields) > 1 && ev.Fields[1] != "" {
-			d.HumanText(ev.Fields[1])
+			d.write(ev.Fields[1])
 		}
 
 	case EventThinking:
 		if len(ev.Fields) > 1 && ev.Fields[1] != "" {
-			fmt.Fprintf(d.writer, "\033[90m%s\033[0m", ev.Fields[1])
-			if strings.HasSuffix(ev.Fields[1], "\n") {
-				d.lastChar = '\n'
-			} else {
-				d.lastChar = ev.Fields[1][len(ev.Fields[1])-1]
-			}
+			d.writef("\033[90m%s\033[0m", ev.Fields[1])
 		}
 		d.prevThinking = true
 
@@ -133,19 +107,17 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 		d.EnsureNewline()
 		summary := ""
 		if len(ev.Fields) > 4 {
-			// Fields: ["TOOL_CALL", name, id, inputJSON, callSummary]
 			summary = ev.Fields[4]
 		} else if len(ev.Fields) > 1 {
 			summary = ev.Fields[1]
 		}
-		fmt.Fprintf(d.writer, "\033[33m[tool] %s\033[0m\n", summary)
-		d.lastChar = '\n'
+		d.writef("\033[33m[tool] %s\033[0m\n", summary)
 
 	case EventToolResult:
 		d.prevThinking = false
 		text := ""
 		if len(ev.Fields) > 3 {
-			text = ev.Fields[3] // result content
+			text = ev.Fields[3]
 		}
 		if text != "" {
 			name := ""
@@ -153,36 +125,28 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 				name = ev.Fields[2]
 			}
 			if name == "Edit" {
-				// Edit: 全文 + 换行
 				text = text + "\n"
 			} else if name == "Read" || name == "Write" {
-				// Read/Write: 只显示第一行摘要 + 换行
 				lines := strings.SplitN(text, "\n", 2)
 				text = lines[0] + "\n"
 			} else {
-				// 其他工具：全文 + 换行（与 bash 版一致）
 				text = text + "\n"
 			}
-			d.HumanText(text)
+			d.write(text)
 		}
 
 	case EventUsage:
-		// usage 不需要终端显示
 
 	case EventStop:
 		d.prevThinking = false
 		d.EnsureNewline()
-		// 与 bash 版 display_message STOP 分支对齐：interrupted 时打印提示
 		if len(ev.Fields) > 1 && ev.Fields[1] == "interrupted" {
-			fmt.Printf("\033[36mInterrupted.\033[0m\n")
-			d.lastChar = '\n'
+			d.writef("\033[36mInterrupted.\033[0m\n")
 		}
 
 	case EventSubAgentResult:
-		// Fields: ["SUB_AGENT_RESULT", sessionID, status, in, out, thinking, text]
 		d.EnsureNewline()
-		// 清空当前行，避免子 agent 残留内容导致排版混乱（与 bash/C 版对齐）
-		fmt.Fprintf(d.writer, "\r\033[K")
+		d.write("\r\033[K")
 		if len(ev.Fields) >= 4 {
 			sessionID := ev.Fields[1]
 			status := ev.Fields[2]
@@ -200,33 +164,31 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 				text = ev.Fields[6]
 			}
 			if status == "ok" {
-				fmt.Fprintf(d.writer, "\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n", sessionID, in, out)
+				d.writef("\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n", sessionID, in, out)
 			} else {
-				fmt.Fprintf(d.writer, "\033[31m[sub-agent %s] failed\033[0m\n", sessionID)
+				d.writef("\033[31m[sub-agent %s] failed\033[0m\n", sessionID)
 			}
 			if thinking != "" {
 				if len(thinking) > 120 {
-					fmt.Fprintf(d.writer, "\033[90m%s…\033[0m\n", thinking[:120])
+					d.writef("\033[90m%s…\033[0m\n", thinking[:120])
 				} else {
-					fmt.Fprintf(d.writer, "\033[90m%s\033[0m\n", thinking)
+					d.writef("\033[90m%s\033[0m\n", thinking)
 				}
 			}
 			if text != "" {
 				if len(text) > 120 {
-					fmt.Fprintf(d.writer, "%s…\n", text[:120])
+					d.writef("%s…\n", text[:120])
 				} else {
-					fmt.Fprintf(d.writer, "%s\n", text)
+					d.writef("%s\n", text)
 				}
 			}
 		}
-		d.lastChar = '\n'
 
 	case EventError:
 		d.EnsureNewline()
 		if len(ev.Fields) > 1 {
-			fmt.Fprintf(d.writer, "\033[31mError: %s\033[0m\n", ev.Fields[1])
+			d.writef("\033[31mError: %s\033[0m\n", ev.Fields[1])
 		}
-		d.lastChar = '\n'
 
 	case EventContextUpdate:
 		d.EnsureNewline()
@@ -234,8 +196,7 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 		if len(ev.Fields) > 2 {
 			info = ev.Fields[2]
 		}
-		fmt.Fprintf(d.writer, "\033[36mContext compacted (%s).\033[0m\n", info)
-		d.lastChar = '\n'
+		d.writef("\033[36mContext compacted (%s).\033[0m\n", info)
 
 	case EventImageDescribe:
 		d.EnsureNewline()
@@ -248,9 +209,8 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 			desc = ev.Fields[2]
 		}
 		if desc != "" {
-			fmt.Fprintf(d.writer, "\033[36m📸 %s: %s\033[0m\n", images, desc)
+			d.writef("\033[36m📸 %s: %s\033[0m\n", images, desc)
 		}
-		d.lastChar = '\n'
 
 	case EventUserMessage:
 		content := ""
@@ -259,8 +219,7 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 		}
 		if content != "" {
 			d.EnsureNewline()
-			fmt.Fprintf(d.writer, "\033[33m> %s\033[0m\n", content)
-			d.lastChar = '\n'
+			d.writef("\033[33m> %s\033[0m\n", content)
 		}
 	}
 }
