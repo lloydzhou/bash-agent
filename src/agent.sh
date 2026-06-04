@@ -1438,7 +1438,6 @@ agent_loop() {
     if [[ "$turn_kind" == user_input && "$user_input" == *"[Image #"* ]]; then
         local expanded_input desc_json _images=""
         expanded_input=$(agent_image_expand_placeholders_in_input "$user_input")
-        # 提取 <attached-images> 中的描述内容
         desc_json=$(printf '%s' "$expanded_input" | sed -n 's/.*<attached-images>\(.*\)<\/attached-images>.*/\1/p')
         # 收集所有 [Image #N] 占位符
         local _rest="$user_input"
@@ -1446,8 +1445,10 @@ agent_loop() {
             _images="${_images:+$_images }${BASH_REMATCH[0]}"
             _rest="${_rest#*"${BASH_REMATCH[0]}"}"
         done
-        [[ -n "$_images" ]] && store_event_append "{\"type\":\"image_describe\",\"images\":\"$(util_json_escape "$_images")\",\"content\":\"$(util_json_escape "$desc_json")\"}"
-        [[ -n "$_images" ]] && util_write_msg "IMAGE_DESCRIBE" "$_images" "$desc_json" >&4 2>/dev/null || true
+        if [[ -n "$_images" ]]; then
+            store_event_append "{\"type\":\"image_describe\",\"images\":\"$(util_json_escape "$_images")\",\"content\":\"$(util_json_escape "$desc_json")\"}"
+            util_write_msg "IMAGE_DESCRIBE" "$_images" "$desc_json" >&4 2>/dev/null || true
+        fi
         user_input="$expanded_input"
     fi
     store_conv_add_user "$user_input"
