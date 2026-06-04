@@ -8,6 +8,28 @@
 
 ---
 
+## [4.1.1] - 2026-06-03
+
+> **Bugfix + Refactor 版本**：重构 linenoise 交互为 Hide/Show 架构替代 done 信号阻塞方案，彻底解决 display 与 readline 的终端竞争；修复缓存命中率 / token 计数溢出；image expand 流程精简。
+
+### Changed
+
+- **linenoise Hide/Show 架构替代 done 信号阻塞**：readline 线程不再阻塞等待 done，改为 EditStart/EditFeed/EditStop 循环；display worker 每个 chunk 输出时加锁 → Hide → 写 stdout → Show → 解锁；去掉 doneCh / done channel / done_mutex+cond 同步机制。SSE chunk 间（~50ms）微秒级 hide→write→show，不阻塞 readline，Ctrl+C 更响应（`928e76a`）
+- **image expand 流程精简**：从外层移入 agent_loop 内部，简化代码逻辑，修复截断和细节问题（`0bf9126`, `541cb78`, `995c8a4`, `d1d30b9`, `42b8071`）
+- **同步 bash 调整到 C/Go/Rust**：e2e 测试增加 events 校验（`f4b0d92`）
+- **简化 replay 逻辑**：移除累积量计算（`d6e9d5f`）
+
+### Fixed
+
+- **C/Rust display 排版错乱**：修复 linenoise 提示符与 display 输出竞争导致的文字交叠（`9a2b9d7`）
+- **Rust sub-agent 结果渲染竞争**：防止 sub-agent 结果渲染时 linenoise 和 display worker 竞争 stdout（`aa9d5ca`）
+- **C 版 replay 后 flush display**：防止 replay 后 display 残留与 readline 竞争终端；清行后重置 last_char（`8e6f9c0`）
+- **C 版缓存命中率 int 溢出**：缓存命中率计算使用 int 导致溢出，大 session 显示 -1%，改用 long long（`c5fffa7`）
+- **token 计数溢出**：token 计数改用 long long 防止大 session 溢出（`7c90d08`）
+- **IMAGE_DESCRIBE display 不截断描述**：修复图片描述内容被错误截断的问题（`42b8071`）
+
+---
+
 ## [4.1.0] - 2026-06-03
 
 > **Feature 版本**：新增图片粘贴支持 — Ctrl+V 贴图，自动调用 GLM-4V-Flash 转录/描述，四版本同步实现。
@@ -938,7 +960,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/lloydzhou/bash-agent/compare/v4.1.0...v4.2.0
 [4.1.0]: https://github.com/lloydzhou/bash-agent/compare/v4.0.7...v4.1.0
 [4.0.7]: https://github.com/lloydzhou/bash-agent/compare/v4.0.6...v4.0.7
 [4.0.6]: https://github.com/lloydzhou/bash-agent/compare/v4.0.5...v4.0.6
