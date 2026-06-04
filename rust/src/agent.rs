@@ -2241,7 +2241,7 @@ fn image_describe(paths: &[std::path::PathBuf]) -> String {
 
     use base64::Engine as _;
     let mut content: Vec<serde_json::Value> = vec![
-        serde_json::json!({"type": "text", "text": "Output all visible text from each image. Transcribe every character including special symbols. Preserve exact spacing and line breaks. Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."})
+        serde_json::json!({"type": "text", "text": "Output all visible text from each image, separated by a blank line between images. Transcribe every character including special symbols (arrows, prompts, dots, slashes). Preserve exact spacing and line breaks. Pay attention to date formats (month names, numbers). Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."})
     ];
     for p in paths {
         if let Ok(data) = std::fs::read(p) {

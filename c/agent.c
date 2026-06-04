@@ -1244,9 +1244,10 @@ char *agent_image_describe(char **paths, int count) {
     sb_append(&body, ",\"messages\":[{\"role\":\"user\",\"content\":[");
     sb_append(&body, "{\"type\":\"text\",\"text\":");
     sb_append_json_string(&body,
-        "Output all visible text from each image. "
-        "Transcribe every character including special symbols. "
+        "Output all visible text from each image, separated by a blank line between images. "
+        "Transcribe every character including special symbols (arrows, prompts, dots, slashes). "
         "Preserve exact spacing and line breaks. "
+        "Pay attention to date formats (month names, numbers). "
         "Do not summarize or describe - just output the raw text exactly as shown. "
         "If an image has no text, briefly describe what you see.");
     sb_append(&body, "}");
