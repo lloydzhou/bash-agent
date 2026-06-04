@@ -518,17 +518,11 @@ fn render_display_event(
             if ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
             }
-            // 截取描述前 50 字作为预览
-            let preview = if description.len() > 50 {
-                format!("{}...", &description[..50])
-            } else {
-                description.clone()
-            };
-            if !preview.is_empty() {
+            if !description.is_empty() {
                 display_write_human(
                     out,
                     interactive,
-                    &format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, preview),
+                    &format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, description),
                 )?;
             } else {
                 display_write_human(

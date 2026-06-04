@@ -419,9 +419,9 @@ static char *display_msg_to_event(DisplayMessage *msg) {
         sb_append_char(&buf, '}');
         break;
     case DISPLAY_IMAGE_DESCRIBE:
-        sb_append(&buf, "{\"type\":\"image_describe\",\"images\":");
-        sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
-        sb_append(&buf, ",\"content\":");
+        sb_append(&buf, "{\"type\":\"image_describe\",\"images\":\"");
+        sb_append(&buf, msg->tool_name ? msg->tool_name : "");
+        sb_append(&buf, "\",\"content\":");
         sb_append_json_string(&buf, msg->content ? msg->content : "");
         sb_append_char(&buf, '}');
         break;
@@ -795,9 +795,9 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         if (images.len > 0) {
             StrBuf evt;
             sb_init(&evt);
-            sb_append(&evt, "{\"type\":\"image_describe\",\"images\":");
-            sb_append_json_string(&evt, images.data);
-            sb_append(&evt, ",\"content\":");
+            sb_append(&evt, "{\"type\":\"image_describe\",\"images\":\"");
+            sb_append(&evt, images.data);
+            sb_append(&evt, "\",\"content\":");
             sb_append_json_string(&evt, desc ? desc : "");
             sb_append_char(&evt, '}');
             store_event_append(&agent->paths, evt.data);

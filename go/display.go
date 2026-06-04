@@ -225,17 +225,8 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 		if len(ev.Fields) > 2 {
 			desc = ev.Fields[2]
 		}
-		// 截取描述前 50 字作为预览
-		preview := ""
-		if len(desc) > 50 {
-			preview = desc[:50] + "..."
-		} else if desc != "" {
-			preview = desc
-		}
-		if preview != "" {
-			fmt.Fprintf(d.writer, "\033[36m📸 %s: %s\033[0m\n", images, preview)
-		} else {
-			fmt.Fprintf(d.writer, "\033[36m📸 %s described\033[0m\n", images)
+		if desc != "" {
+			fmt.Fprintf(d.writer, "\033[36m📸 %s: %s\033[0m\n", images, desc)
 		}
 		d.lastChar = '\n'
 
