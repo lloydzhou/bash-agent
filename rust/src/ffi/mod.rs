@@ -47,6 +47,93 @@ unsafe extern "C" {
     fn linenoiseHistoryLoad(filename: *const c_char) -> libc::c_int;
     fn linenoiseSetMultiLine(ml: libc::c_int);
     fn linenoiseSetImagePasteCallback(cb: Option<unsafe extern "C" fn(*mut *mut libc::c_char, *mut libc::size_t)>);
+
+    // Non-blocking API
+    fn linenoiseEditStart(
+        l: *mut LinenoiseState,
+        stdin_fd: libc::c_int,
+        stdout_fd: libc::c_int,
+        buf: *mut c_char,
+        buflen: libc::size_t,
+        prompt: *const c_char,
+    ) -> libc::c_int;
+    fn linenoiseEditFeed(l: *mut LinenoiseState) -> *mut c_char;
+    fn linenoiseEditStop(l: *mut LinenoiseState);
+    fn linenoiseHide(l: *mut LinenoiseState);
+    fn linenoiseShow(l: *mut LinenoiseState);
+    static linenoiseEditMore: *mut c_char;
+}
+
+/// Opaque type matching C's struct linenoiseState.
+/// We only ever hold a pointer to it — the layout is managed by linenoise.c.
+#[repr(C)]
+pub struct LinenoiseState {
+    _opaque: [u8; 0],
+}
+
+/// Result of a non-blocking EditFeed call.
+#[derive(Debug)]
+pub enum FeedResult {
+    /// More input is needed (user is still typing).
+    More,
+    /// User pressed Enter; contains the complete line.
+    Done(String),
+    /// User pressed Ctrl+C.
+    Interrupted,
+    /// User pressed Ctrl+D or I/O error.
+    Eof,
+}
+
+/// Start editing and return a raw pointer (caller manages lifetime).
+/// # Safety
+/// Caller must ensure the buf outlives the editing session.
+pub unsafe fn edit_start_raw(
+    ls: *mut LinenoiseState,
+    stdin_fd: i32,
+    stdout_fd: i32,
+    buf: *mut c_char,
+    buflen: usize,
+    prompt: *const c_char,
+) -> i32 {
+    unsafe { linenoiseEditStart(ls, stdin_fd, stdout_fd, buf, buflen, prompt) }
+}
+
+/// Feed one character using raw pointer.
+/// # Safety
+/// ls must be a valid pointer from edit_start_raw.
+pub unsafe fn edit_feed_raw(ls: *mut LinenoiseState) -> *mut c_char {
+    unsafe { linenoiseEditFeed(ls) }
+}
+
+/// Get the linenoiseEditMore sentinel pointer for comparison.
+pub fn edit_more_ptr() -> *mut c_char {
+    unsafe { linenoiseEditMore }
+}
+
+/// Stop editing using raw pointer.
+/// # Safety
+/// ls must be valid.
+pub unsafe fn edit_stop_ptr(ls: *mut LinenoiseState) {
+    unsafe { linenoiseEditStop(ls); }
+}
+
+/// Hide the current prompt line.
+/// # Safety
+/// ls must be a valid, active linenoiseState pointer.
+pub unsafe fn hide(ls: *mut LinenoiseState) {
+    unsafe { linenoiseHide(ls); }
+}
+
+/// Show (restore) the current prompt line.
+/// # Safety
+/// ls must be a valid, active linenoiseState pointer.
+pub unsafe fn show(ls: *mut LinenoiseState) {
+    unsafe { linenoiseShow(ls); }
+}
+
+/// Free a line returned by linenoise or edit_feed_raw.
+pub fn free_line(ptr: *mut c_char) {
+    unsafe { linenoiseFree(ptr); }
 }
 
 /// Read a line from stdin with the given prompt.

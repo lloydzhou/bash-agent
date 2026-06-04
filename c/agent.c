@@ -418,6 +418,13 @@ static char *display_msg_to_event(DisplayMessage *msg) {
         sb_append_json_string(&buf, msg->content ? msg->content : "");
         sb_append_char(&buf, '}');
         break;
+    case DISPLAY_IMAGE_DESCRIBE:
+        sb_append(&buf, "{\"type\":\"image_describe\",\"images\":\"");
+        sb_append(&buf, msg->tool_name ? msg->tool_name : "");
+        sb_append(&buf, "\",\"content\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
     default:
         sb_free(&buf);
         return NULL;
@@ -502,10 +509,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
         return 0;
     }
 
-    StrBuf acc_text, acc_thinking;
-    sb_init(&acc_text);
-    sb_init(&acc_thinking);
-
     char *line = NULL;
     size_t line_cap = 0;
     while (getline(&line, &line_cap, f) >= 0) {
@@ -522,20 +525,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
         if (!type) continue;
 
         if (strcmp(type, "user_input") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *content = json_get_string(jp.val, "content");
             if (content && content[0]) {
                 util_truncate_str(content, 80);
@@ -553,42 +542,24 @@ int agent_replay_events(Agent *agent, int max_turns) {
             }
             free(content);
         } else if (strcmp(type, "text") == 0) {
-            if (acc_thinking.len > 0) {
+            char *content = json_get_string(jp.val, "content");
+            if (content && *content) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
+                *dm = display_msg_text(content);
                 push_display(agent->display_queue, dm);
                 replayed = 1;
-                sb_truncate(&acc_thinking, 0);
             }
-            char *content = json_get_string(jp.val, "content");
-            if (content && *content) sb_append(&acc_text, content);
             free(content);
         } else if (strcmp(type, "thinking") == 0) {
-            if (acc_text.len > 0) {
+            char *content = json_get_string(jp.val, "content");
+            if (content && *content) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
+                *dm = display_msg_thinking(content);
                 push_display(agent->display_queue, dm);
                 replayed = 1;
-                sb_truncate(&acc_text, 0);
             }
-            char *content = json_get_string(jp.val, "content");
-            if (content && *content) sb_append(&acc_thinking, content);
             free(content);
         } else if (strcmp(type, "tool_call") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *name = json_get_string(jp.val, "name");
             char *id = json_get_string(jp.val, "id");
             JsonVal input_val = json_get(jp.val, "input");
@@ -612,20 +583,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
             free(name);
             free(id);
         } else if (strcmp(type, "tool_result") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *content = json_get_string(jp.val, "content");
             if (content) util_truncate_str(content, 200);
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -636,20 +593,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
             replayed = 1;
             free(content);
         } else if (strcmp(type, "sub_agent_result") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *sid = json_get_string(jp.val, "session_id");
             char *status = json_get_string(jp.val, "status");
             char *thinking = json_get_string(jp.val, "thinking");
@@ -667,21 +610,16 @@ int agent_replay_events(Agent *agent, int max_turns) {
             free(status);
             free(thinking);
             free(text);
+        } else if (strcmp(type, "image_describe") == 0) {
+            char *images = json_get_string(jp.val, "images");
+            char *desc = json_get_string(jp.val, "content");
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_image_describe(images ? images : "", desc ? desc : "");
+            push_display(agent->display_queue, dm);
+            replayed = 1;
+            free(images);
+            free(desc);
         } else if (strcmp(type, "error") == 0) {
-            if (acc_thinking.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(acc_thinking.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_thinking, 0);
-            }
-            if (acc_text.len > 0) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(acc_text.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_truncate(&acc_text, 0);
-            }
             char *message = json_get_string(jp.val, "message");
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_error(message ? message : "unknown");
@@ -693,21 +631,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
         free(type);
     }
 
-    if (acc_thinking.len > 0) {
-        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-        *dm = display_msg_thinking(acc_thinking.data);
-        push_display(agent->display_queue, dm);
-        replayed = 1;
-    }
-    if (acc_text.len > 0) {
-        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-        *dm = display_msg_text(acc_text.data);
-        push_display(agent->display_queue, dm);
-        replayed = 1;
-    }
-
-    sb_free(&acc_text);
-    sb_free(&acc_thinking);
     free(line);
     fclose(f);
     return replayed;
@@ -730,6 +653,86 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         sb_append_char(&evt, '}');
         store_event_append(&agent->paths, evt.data);
         sb_free(&evt);
+    }
+
+    /* 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本 */
+    char *expanded_input = NULL;
+    if ((turn_kind == NULL || strcmp(turn_kind, "user_input") == 0) && strstr(user_input, "[Image #") != NULL) {
+        /* 收集所有 [Image #N] 占位符和对应路径 */
+        StrBuf images, expanded;
+        sb_init(&images);
+        sb_init(&expanded);
+        sb_append(&expanded, user_input);
+
+        const char *pattern = "[Image #";
+        const char *rest = user_input;
+        int first_img = 1;
+        char **paths = NULL;
+        int path_count = 0;
+        int path_cap = 16;
+        paths = calloc((size_t)path_cap, sizeof(char*));
+
+        while ((rest = strstr(rest, pattern)) != NULL) {
+            const char *end = strchr(rest, ']');
+            if (!end) break;
+            if (!first_img) sb_append_char(&images, ' ');
+            first_img = 0;
+            sb_appendn(&images, rest, (size_t)(end - rest + 1));
+
+            /* 提取数字并检查文件 */
+            int n = 0;
+            const char *num = rest + strlen(pattern);
+            while (*num >= '0' && *num <= '9') {
+                n = n * 10 + (*num - '0');
+                num++;
+            }
+            char imgpath[1024];
+            snprintf(imgpath, sizeof(imgpath), "%s/%d.png", store_session_image_dir(&agent->paths), n);
+            FILE *f = fopen(imgpath, "r");
+            if (f) {
+                fclose(f);
+                if (path_count >= path_cap) {
+                    path_cap *= 2;
+                    paths = realloc(paths, (size_t)path_cap * sizeof(char*));
+                }
+                paths[path_count++] = util_strdup(imgpath);
+            }
+            rest = end + 1;
+        }
+
+        /* 调用 describe 获取描述 */
+        char *desc = agent_image_describe(paths, path_count);
+
+        /* 记录 image_describe 事件 */
+        if (images.len > 0) {
+            StrBuf evt;
+            sb_init(&evt);
+            sb_append(&evt, "{\"type\":\"image_describe\",\"images\":\"");
+            sb_append(&evt, images.data);
+            sb_append(&evt, "\",\"content\":");
+            sb_append_json_string(&evt, desc ? desc : "");
+            sb_append_char(&evt, '}');
+            store_event_append(&agent->paths, evt.data);
+            sb_free(&evt);
+
+            /* 推送 IMAGE_DESCRIBE 到 display queue */
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_image_describe(images.data, desc);
+            push_display(agent->display_queue, dm);
+        }
+
+        /* 拼接 expanded_input */
+        sb_append(&expanded, "\n\n<attached-images>\n");
+        sb_append(&expanded, desc ? desc : "");
+        sb_append(&expanded, "\n</attached-images>");
+
+        /* 清理 */
+        for (int i = 0; i < path_count; i++) free(paths[i]);
+        free(paths);
+        free(desc);
+        sb_free(&images);
+        expanded_input = expanded.data;
+        user_input = expanded_input;
     }
 
     /* 重置中断标志 */
@@ -1154,6 +1157,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         push_display_event(&agent->paths, agent->display_queue, dm);
     }
 
+    free(expanded_input);
     return 0;
 }
 
@@ -1507,9 +1511,6 @@ int agent_main_loop(Agent *agent) {
                  * 模仿 Rust 版 agent_loop_stream 入口的 CTRLC_FLAG.swap(false) 模式。 */
                 agent->interrupted = 0;
 
-                /* 展开图片 placeholder [Image #N] → describe + <attached-images> */
-                agent_image_expand_placeholders(agent, &msg->data.user_input.text);
-
                 agent_loop(agent, msg->data.user_input.text, "user_input");
 
                 /* 对齐 bash 版: 每轮 agent_loop 完成后刷新终端标题 */
@@ -1559,18 +1560,11 @@ int agent_main_loop(Agent *agent) {
                     free(sub_msg);
                 }
 
-                /* 所有轮次完成：先等待 display 队列写完，再 signal done。
-                 * 否则 linenoise 可能先重绘下一轮提示符，和异步 display 输出交错。 */
+                /* 所有轮次完成：等待 display 队列写完 */
                 if (agent->interactive) {
                     display_flush(agent->display_queue);
                 }
-                /* signal done（通知 readline 线程继续读下一行） */
-                if (msg->data.user_input.done_mutex) {
-                    pthread_mutex_lock(msg->data.user_input.done_mutex);
-                    *(msg->data.user_input.done_flag) = 1;
-                    pthread_cond_signal(msg->data.user_input.done_cond);
-                    pthread_mutex_unlock(msg->data.user_input.done_mutex);
-                }
+                /* 不再 signal done — readline 线程立即进入下一轮 EditStart */
                 break;
             }
             case MSG_AGENT_RESULT: {
@@ -2813,6 +2807,31 @@ static void format_int_commas(int n, char *out, size_t out_size) {
     }
 }
 
+static void format_ll_commas(long long n, char *out, size_t out_size) {
+    char raw[32];
+    snprintf(raw, sizeof(raw), "%lld", n);
+    size_t len = strlen(raw);
+    size_t commas = (len > 0) ? (len - 1) / 3 : 0;
+    size_t need = len + commas + 1;
+    if (out_size < need) {
+        snprintf(out, out_size, "%lld", n);
+        return;
+    }
+
+    out[need - 1] = '\0';
+    int ri = (int)len - 1;
+    int oi = (int)need - 2;
+    int group = 0;
+    while (ri >= 0) {
+        if (group == 3) {
+            out[oi--] = ',';
+            group = 0;
+        }
+        out[oi--] = raw[ri--];
+        group++;
+    }
+}
+
 void agent_update_title(Agent *agent) {
     if (!agent->interactive) return;
     char *stats_content = store_stats_read(agent->paths.stats);
@@ -2822,19 +2841,19 @@ void agent_update_title(Agent *agent) {
 
     int tc = json_get_int(jp.val, "current_turn_count");
     int ar = json_get_int(jp.val, "agent_request_count");
-    int ai = json_get_int(jp.val, "total_input_tokens");
+    long long ll_ai = json_get_ll(jp.val, "total_input_tokens");
     int ao = json_get_int(jp.val, "total_output_tokens");
-    int cr = json_get_int(jp.val, "total_cache_read_tokens");
+    long long ll_cr = json_get_ll(jp.val, "total_cache_read_tokens");
     int ct = json_get_int(jp.val, "current_context_tokens");
 
     /* 对齐 bash 版 term_title.awk: model T:turn R:req I:in+cr(pct) O:out C:ctx */
-    int total_i = ai + cr;
-    int pct = (total_i > 0) ? (cr * 100 / total_i) : 0;
+    long long total_i = ll_ai + ll_cr;
+    int pct = (total_i > 0) ? (int)(ll_cr * 100 / total_i) : 0;
 
     char tc_s[32], ar_s[32], total_i_s[32], ao_s[32], ct_s[32];
     format_int_commas(tc, tc_s, sizeof(tc_s));
     format_int_commas(ar, ar_s, sizeof(ar_s));
-    format_int_commas(total_i, total_i_s, sizeof(total_i_s));
+    format_ll_commas(total_i, total_i_s, sizeof(total_i_s));
     format_int_commas(ao, ao_s, sizeof(ao_s));
     format_int_commas(ct, ct_s, sizeof(ct_s));
 

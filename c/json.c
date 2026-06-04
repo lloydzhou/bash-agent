@@ -210,6 +210,17 @@ int json_get_int(JsonVal obj, const char *key) {
     return (int)strtod(buf, NULL);
 }
 
+long long json_get_ll(JsonVal obj, const char *key) {
+    JsonVal v = json_get(obj, key);
+    if (v.type != JSON_NUMBER) return 0;
+    char buf[64];
+    size_t len = v.end - v.start;
+    if (len >= sizeof(buf)) return 0;
+    memcpy(buf, v.src + v.start, len);
+    buf[len] = '\0';
+    return strtoll(buf, NULL, 10);
+}
+
 double json_get_double(JsonVal obj, const char *key) {
     JsonVal v = json_get(obj, key);
     return json_number_val(v);

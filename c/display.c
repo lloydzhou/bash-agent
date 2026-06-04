@@ -1,4 +1,5 @@
 #include "display.h"
+#include "readline.h"
 #include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -143,6 +144,13 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "auto");
             sb_append_char(&buf, '}');
             break;
+        case DISPLAY_IMAGE_DESCRIBE:
+            sb_append(&buf, "{\"type\":\"image_describe\",\"images\":\"");
+            sb_append(&buf, msg->tool_name ? msg->tool_name : "");
+            sb_append(&buf, "\",\"content\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
         case DISPLAY_FLUSH:
             signal_flush(msg);
             sb_free(&buf);
@@ -155,8 +163,16 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
     }
 
     /* human 模式 */
+    /* Hide linenoise prompt before writing to stdout */
+    if (interactive) readline_display_hide();
+
     switch (msg->type) {
         case DISPLAY_THINKING:
+            /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
+            if (interactive && ds->last_char[0] == '\n') {
+                fprintf(out, "\r\033[K");
+                ds->last_char[0] = '\0';
+            }
             if (msg->content) {
                 fprintf(out, "\x1b[90m%s\x1b[0m", msg->content);
                 fflush(out);
@@ -166,7 +182,13 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             break;
 
         case DISPLAY_TEXT:
+            /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
+            if (interactive && ds->last_char[0] == '\n') {
+                fprintf(out, "\r\033[K");
+                ds->last_char[0] = '\0';
+            }
             if (msg->content) {
+                /* Insert newline when transitioning from thinking to text */
                 if (ds->prev_was_thinking && ds->last_char[0] != '\n') {
                     fputc('\n', out);
                     ds->last_char[0] = '\n';
@@ -235,11 +257,25 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             ds->last_char[0] = '\n';
             break;
 
-        case DISPLAY_SUB_AGENT_RESULT: {
+        case DISPLAY_IMAGE_DESCRIBE: {
             ensure_newline(ds, out);
+            const char *images = msg->tool_name ? msg->tool_name : "";
+            const char *desc = msg->content ? msg->content : "";
+            if (desc[0]) {
+                fprintf(out, "\x1b[36m📸 %s: %s\x1b[0m\n", images, desc);
+            }
+            fflush(out);
+            ds->last_char[0] = '\n';
+            break;
+        }
+
+        case DISPLAY_SUB_AGENT_RESULT: {
             /* 清空当前行，避免子 agent 残留的输出内容导致排版混乱
              * bash 版同样有 \r\033[K 保护 */
-            fprintf(out, "\r\033[K");
+            if (interactive && ds->last_char[0] == '\n') {
+                fprintf(out, "\r\033[K");
+            }
+            ensure_newline(ds, out);
             if (msg->tool_exit_code == 0) {
                 fprintf(out, "\x1b[35m[sub-agent %s] completed (in=%d, out=%d)\x1b[0m\n",
                         msg->session_id ? msg->session_id : "?",
@@ -272,6 +308,9 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             signal_flush(msg);
             break;
     }
+
+    /* Show linenoise prompt after writing to stdout */
+    if (interactive) readline_display_show();
 }
 
 /* display 线程主函数 */

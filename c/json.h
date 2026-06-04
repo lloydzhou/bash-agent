@@ -63,6 +63,9 @@ char *json_get_string(JsonVal obj, const char *key);
 /* 获取整数值 */
 int json_get_int(JsonVal obj, const char *key);
 
+/* 获取 long long 整数值（用于大 token 计数） */
+long long json_get_ll(JsonVal obj, const char *key);
+
 /* 获取浮点数值 */
 double json_get_double(JsonVal obj, const char *key);
 

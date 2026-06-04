@@ -236,7 +236,7 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
 enum MainLoopMessage {
     UserInput {
         input: String,
-        done: mpsc::Sender<()>, // 通知 readline 线程处理完成
+        // 不再有 done channel — readline 线程不再等待 agent 完成
     },
     AgentResult {
         session_id: String,
@@ -251,7 +251,13 @@ enum MainLoopMessage {
     },
 }
 
-pub(crate) struct Agent {
+/// Wrapper to allow sending raw linenoiseState pointers across threads.
+/// Safety: we only use the pointer for Hide/Show calls under mutex protection.
+pub(crate) struct LinenoiseStatePtr(*mut ffi::LinenoiseState);
+unsafe impl Send for LinenoiseStatePtr {}
+unsafe impl Sync for LinenoiseStatePtr {}
+
+struct Agent {
     cfg: Config,
     cwd: PathBuf,
     home: PathBuf,
@@ -276,6 +282,7 @@ pub(crate) struct Agent {
     display_tx: Option<mpsc::Sender<DisplayCommand>>,
     display_handle: Option<thread::JoinHandle<()>>,
     cancel_read_fd: i32,                      // cancel pipe 读端 FD，传给 Runner 做 kqueue wait
+    linenoise_state: Arc<Mutex<Option<LinenoiseStatePtr>>>, // 共享 linenoiseState，display worker 用于 hide/show
 }
 
 struct DisplayState {
@@ -346,6 +353,10 @@ enum DisplayEvent {
         in_tokens: usize,
         out_tokens: usize,
     },
+    ImageDescribe {
+        images: String,
+        description: String,
+    },
 }
 
 enum DisplayCommand {
@@ -367,6 +378,10 @@ fn render_display_event(
 ) -> Result<()> {
     match evt {
         DisplayEvent::Thinking(content) => {
+            // bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\x1b[K
+            if interactive && ds.last_char == "\n" {
+                display_write_human(out, interactive, "\r\x1b[K")?;
+            }
             display_write_human(out, interactive, &format!("\x1b[90m{}\x1b[0m", content))?;
             let display_content = normalize_display_text(&content, interactive);
             if display_content.ends_with('\n') {
@@ -377,6 +392,10 @@ fn render_display_event(
             ds.prev_was_thinking = true;
         }
         DisplayEvent::Text(content) => {
+            // bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\x1b[K
+            if interactive && ds.last_char == "\n" {
+                display_write_human(out, interactive, "\r\x1b[K")?;
+            }
             if ds.prev_was_thinking && ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
                 ds.last_char = "\n".to_string();
@@ -446,7 +465,9 @@ fn render_display_event(
                 return Ok(());
             }
             let tr_text = if result.tool_name == "Edit" {
-                let mut s = normalize_display_text(&result.content, interactive);
+                // Don't normalize_display_text here — display_write_human already does it.
+                // Double-normalizing would turn \n → \r\n → \r\r\n, causing garbled output.
+                let mut s = result.content.replace("\r\n", "\n").replace('\r', "\n");
                 if !s.ends_with('\n') {
                     s.push('\n');
                 }
@@ -454,7 +475,8 @@ fn render_display_event(
             } else if result.tool_name == "Read" || result.tool_name == "Write" {
                 first_line(&result.content).to_string() + "\n"
             } else {
-                normalize_display_text(&result.content, interactive) + "\n"
+                // Don't normalize_display_text here — display_write_human already does it.
+                result.content.clone() + "\n"
             };
             if ds.prev_was_thinking && ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
@@ -479,8 +501,11 @@ fn render_display_event(
             if ds.last_char != "\n" {
                 display_write_human(out, interactive, "\n")?;
             }
-            // 清空当前行，避免子 agent 残留内容导致排版混乱（与 bash/C 版对齐）
-            display_write_human(out, interactive, "\r\x1b[K")?;
+            // 清空当前行，避免子 agent 残留内容导致排版混乱
+            // 只在 interactive 模式下执行，与 bash 版对齐
+            if interactive {
+                display_write_human(out, interactive, "\r\x1b[K")?;
+            }
             if status == "ok" {
                 display_write_human(
                     out,
@@ -510,12 +535,26 @@ fn render_display_event(
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
+        DisplayEvent::ImageDescribe { images, description } => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+            }
+            if !description.is_empty() {
+                display_write_human(
+                    out,
+                    interactive,
+                    &format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, description),
+                )?;
+            }
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+        }
     }
     Ok(())
 }
 
 impl Agent {
-    fn start_display_worker(interactive: bool) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
+    fn start_display_worker(interactive: bool, ls: Arc<Mutex<Option<LinenoiseStatePtr>>>) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
         let (tx, rx) = mpsc::channel::<DisplayCommand>();
         let handle = thread::spawn(move || {
             let mut ds = DisplayState {
@@ -526,7 +565,23 @@ impl Agent {
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     DisplayCommand::Event(evt) => {
+                        // Hide linenoise prompt before output
+                        if interactive {
+                            let guard = ls.lock().unwrap();
+                            if let Some(LinenoiseStatePtr(ls_ptr)) = *guard {
+                                unsafe { ffi::hide(ls_ptr); }
+                            }
+                            drop(guard);
+                        }
                         let _ = render_display_event(&mut ds, &mut out, interactive, evt);
+                        // Show linenoise prompt after output
+                        if interactive {
+                            let guard = ls.lock().unwrap();
+                            if let Some(LinenoiseStatePtr(ls_ptr)) = *guard {
+                                unsafe { ffi::show(ls_ptr); }
+                            }
+                            drop(guard);
+                        }
                     }
                     DisplayCommand::Flush(done) => {
                         let _ = out.flush();
@@ -611,11 +666,12 @@ impl Agent {
         let transport = Arc::from(crate::transport::new_transport(&cfg));
         let (msg_tx, msg_rx) = mpsc::channel(); // 初始化消息队列
         let msg_tx = Arc::new(Mutex::new(Some(msg_tx))); // 包装在 Arc<Mutex<Option>> 中
+        let linenoise_state: Arc<Mutex<Option<LinenoiseStatePtr>>> = Arc::new(Mutex::new(None));
 
         let (display_tx, display_handle) = if cfg.output_format == OutputFormat::StreamJson {
             (None, None)
         } else {
-            let (tx, handle) = Self::start_display_worker(cfg.interactive);
+            let (tx, handle) = Self::start_display_worker(cfg.interactive, linenoise_state.clone());
             (Some(tx), Some(handle))
         };
 
@@ -644,6 +700,7 @@ impl Agent {
             display_tx,
             display_handle,
             cancel_read_fd: 0, // 占位，稍后由 agent_run 设置
+            linenoise_state,
         };
 
         if new_session {
@@ -753,6 +810,7 @@ impl Agent {
                 display_tx: None,
                 display_handle: None,
                 cancel_read_fd: -1,
+                linenoise_state: Arc::new(Mutex::new(None)),
             };
 
             // 4. 执行 agent_loop
@@ -864,6 +922,9 @@ impl Agent {
         ffi::set_image_dir(self.paths.session_dir.join("images"));
         ffi::register_paste_callback();
 
+        // 使用 Agent 结构体中的共享 linenoiseState（display worker 已经持有 clone）
+        let linenoise_state = self.linenoise_state.clone();
+
         // 启动 readline 线程，将用户输入发送到消息队列
         let msg_tx_arc = self.msg_tx.clone();
         let history_path_clone = history_path.to_string_lossy().to_string();
@@ -871,45 +932,106 @@ impl Agent {
             ffi::set_multiline(true);
             ffi::history_load(&history_path_clone);
             ffi::history_set_max_len(1000);
+
+            let mut linebuf = vec![0u8; 65536];
+            let prompt = "\x1b[32m> \x1b[0m";
+            let c_prompt = std::ffi::CString::new(prompt).expect("prompt");
+
             // 借鉴 bash 版本：线程退出时主动 drop 发送端，让 main_loop 收到 Disconnected
             let result = (|| {
                 loop {
-                    let line = match ffi::line("\x1b[32m> \x1b[0m") {
-                        Ok(s) => s.trim_end().to_string(),
-                        Err(ffi::LineError::Interrupted) => {
-                            // Ctrl+C 重新输入当前行（与 Go 版本一致）
-                            continue;
+                    // 重置 errno
+                    #[cfg(target_os = "macos")]
+                    unsafe { *libc::__error() = 0 };
+                    #[cfg(target_os = "linux")]
+                    unsafe { *libc::__errno_location() = 0 };
+
+                    // EditStart: 初始化非阻塞编辑会话
+                    let mut ls: std::mem::MaybeUninit<ffi::LinenoiseState> = std::mem::MaybeUninit::uninit();
+                    let rc = unsafe {
+                        ffi::edit_start_raw(
+                            ls.as_mut_ptr(),
+                            0, // stdin fd
+                            2, // stderr fd
+                            linebuf.as_mut_ptr() as *mut libc::c_char,
+                            linebuf.len(),
+                            c_prompt.as_ptr(),
+                        )
+                    };
+                    if rc == -1 {
+                        return; // 无法启动编辑
+                    }
+                    let ls_ptr = ls.as_mut_ptr();
+
+                    // 注册到共享状态
+                    {
+                        let mut guard = linenoise_state.lock().unwrap();
+                        *guard = Some(LinenoiseStatePtr(ls_ptr));
+                    }
+
+                    // Feed 循环
+                    let line = loop {
+                        let result = unsafe { ffi::edit_feed_raw(ls_ptr) };
+                        let more_ptr = ffi::edit_more_ptr();
+                        if result == more_ptr {
+                            continue; // 还在编辑
                         }
-                        Err(ffi::LineError::Eof) => {
-                            // Ctrl+D 退出
-                            return;
+                        if result.is_null() {
+                            #[cfg(target_os = "macos")]
+                            let err = unsafe { *libc::__error() };
+                            #[cfg(target_os = "linux")]
+                            let err = unsafe { *libc::__errno_location() };
+                            if err == libc::EAGAIN {
+                                break Err(ffi::LineError::Interrupted);
+                            }
+                            break Err(ffi::LineError::Eof);
+                        }
+                        // Got a line
+                        let s = unsafe {
+                            let rust_str = std::ffi::CStr::from_ptr(result).to_string_lossy().into_owned();
+                            ffi::free_line(result);
+                            rust_str
+                        };
+                        break Ok(s);
+                    };
+
+                    // 清除共享状态
+                    {
+                        let mut guard = linenoise_state.lock().unwrap();
+                        *guard = None;
+                    }
+
+                    // EditStop
+                    unsafe { ffi::edit_stop_ptr(ls_ptr); }
+
+                    match line {
+                        Ok(s) => {
+                            let trimmed = s.trim_end().to_string();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            if trimmed == "exit" || trimmed == "quit" {
+                                return;
+                            }
+                            ffi::history_add(&trimmed);
+                            ffi::history_save(&history_path_clone);
+                            // 发送到消息队列 — 不再等 done
+                            let tx_guard = msg_tx_arc.lock().unwrap();
+                            if let Some(tx) = tx_guard.as_ref() {
+                                if tx.send(MainLoopMessage::UserInput { input: trimmed }).is_err() {
+                                    return;
+                                }
+                            } else {
+                                return;
+                            }
+                        }
+                        Err(ffi::LineError::Interrupted) => {
+                            continue; // Ctrl+C → 重新输入
                         }
                         Err(_) => {
-                            return;
+                            return; // Ctrl+D / EOF
                         }
-                    };
-                    if line.is_empty() {
-                        continue;
                     }
-                    if line == "exit" || line == "quit" {
-                        return;
-                    }
-                    ffi::history_add(&line);
-                    ffi::history_save(&history_path_clone);
-                    // 创建同步 channel
-                    let (done_tx, done_rx) = mpsc::channel();
-                    // 将用户输入发送到消息队列
-                    let tx_guard = msg_tx_arc.lock().unwrap();
-                    if let Some(tx) = tx_guard.as_ref() {
-                        if tx.send(MainLoopMessage::UserInput { input: line, done: done_tx }).is_err() {
-                            return;
-                        }
-                    } else {
-                        return;
-                    }
-                    drop(tx_guard); // 释放锁
-                    // 等待 main_loop 处理完成
-                    let _ = done_rx.recv();
                 }
             })();
             // readline 线程退出时，主动 drop 发送端（借鉴 bash 版本 exec 4>&-）
@@ -948,7 +1070,7 @@ impl Agent {
                 }
             };
             match msg {
-                MainLoopMessage::UserInput { input, done } => {
+                MainLoopMessage::UserInput { input } => {
                     if self.cfg.interactive {
                         // 清除当前行（包括提示符）
                         let _ = write!(self.stderr.borrow_mut(), "\r\x1b[2K");
@@ -964,26 +1086,50 @@ impl Agent {
                         }
                     }
                     self.flush_display();
-                    // 通知 readline 线程处理完成
-                    let _ = done.send(());
-                }
-                MainLoopMessage::AgentResult {
-                    session_id,
-                    status,
-                    thinking,
-                    text,
-                    in_tokens,
-                    out_tokens,
-                    cache_read_tokens,
-                    cache_creation_tokens,
-                    request_count,
-                } => {
-                    if self.cfg.interactive {
-                        // Clear the prompt line before rendering sub-agent output.
-                        let _ = write!(self.stderr.borrow_mut(), "\r\x1b[K");
+
+                    // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
+                    // main_loop 在内部循环等待所有 AgentResult 并处理，
+                    // 直到全部完成后再返回主循环（readline 已在下一轮 EditStart）。
+                    // display worker 的 hide/show 保证输出不会与 linenoise 冲突。
+                    while self.active_sub_count > 0 {
+                        match self.msg_rx.recv() {
+                            Ok(MainLoopMessage::AgentResult {
+                                session_id,
+                                status,
+                                thinking,
+                                text,
+                                in_tokens,
+                                out_tokens,
+                                cache_read_tokens,
+                                cache_creation_tokens,
+                                request_count,
+                            }) => {
+                                self.handle_sub_agent_result(
+                                    &session_id, &status, &thinking, &text,
+                                    in_tokens, out_tokens, cache_read_tokens,
+                                    cache_creation_tokens, request_count,
+                                )?;
+                                self.flush_display();
+                            }
+                            Ok(MainLoopMessage::UserInput { .. }) => {
+                                // readline 已不再等 done，可能发来新的 UserInput。
+                                // 将其放回队列末尾，等当前子 agent 完成后再处理。
+                                // TODO: 暂时忽略，后续可改为队列缓存。
+                            }
+                            Err(std::sync::mpsc::RecvError) => {
+                                // 所有发送端关闭
+                                return Ok(());
+                            }
+                        }
                     }
-                    self.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
-                    self.flush_display();
+
+                    // 不再通知 readline 线程 — 它已经在下一轮 EditStart
+                }
+                MainLoopMessage::AgentResult { .. } => {
+                    // 在交互模式下，AgentResult 应该在 UserInput 的内部 while 循环中被处理。
+                    // 如果走到这里，说明是非交互模式或者异常情况。
+                    // 非交互模式下直接忽略（active_sub_count 不会 > 0 因为没有 while 循环等待）。
+                    // 保留此分支以防意外。
                 }
             }
 
@@ -1109,11 +1255,53 @@ impl Agent {
         crate::tools::drain_fd(self.cancel_read_fd);
 
         let result = (|| -> Result<()> {
-            let user_input = expand_image_placeholders(&user_input, &self.paths);
-            self.conv.add_user(&user_input)?;
+            // 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
             if turn_kind == "user_input" {
                 self.append_event(json!({"type":"user_input","content":user_input}))?;
             }
+
+            // 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+            let user_input = if turn_kind == "user_input" && user_input.contains("[Image #") {
+                let expanded = expand_image_placeholders(&user_input, &self.paths);
+
+                // 提取 <attached-images> 中的描述内容
+                let desc = if let Some(start) = expanded.find("<attached-images>") {
+                    let start = start + "<attached-images>".len();
+                    if let Some(end) = expanded.find("</attached-images>") {
+                        expanded[start..end].to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                // 收集所有 [Image #N] 占位符
+                let re = regex::Regex::new(r"\[Image #\d+\]").unwrap();
+                let matches: Vec<&str> = re.find_iter(&user_input).map(|m| m.as_str()).collect();
+                if !matches.is_empty() {
+                    let images = matches.join(" ");
+
+                    // 记录 image_describe 事件
+                    self.append_event(json!({
+                        "type": "image_describe",
+                        "images": images,
+                        "content": desc
+                    }))?;
+
+                    // 推送 IMAGE_DESCRIBE 到 display
+                    self.queue_display_event(DisplayEvent::ImageDescribe {
+                        images,
+                        description: desc,
+                    })?;
+                }
+
+                expanded
+            } else {
+                user_input
+            };
+
+            self.conv.add_user(&user_input)?;
             // Increment turn count
             self.increment_turn_count();
 
@@ -1412,6 +1600,7 @@ impl Agent {
             DisplayEvent::UserMessage(_) => {}
             DisplayEvent::ContextUpdate(_) => {}
             DisplayEvent::SubAgentResult { .. } => {}
+            DisplayEvent::ImageDescribe { .. } => {}
         }
         if let Some(tx) = &self.display_tx {
             tx.send(DisplayCommand::Event(evt))
@@ -1871,6 +2060,10 @@ impl Agent {
             },
             "STOP" => DisplayEvent::Stop(fields.get("reason").copied().unwrap_or("").to_string()),
             "ERROR" => DisplayEvent::Error(fields.get("message").copied().unwrap_or("").to_string()),
+            "IMAGE_DESCRIBE" => DisplayEvent::ImageDescribe {
+                images: fields.get("images").copied().unwrap_or("").to_string(),
+                description: fields.get("content").copied().unwrap_or("").to_string(),
+            },
             _ => return,
         };
         self.queue_display_only(evt);
@@ -1922,8 +2115,6 @@ impl Agent {
             last_char: "\n".to_string(),
             prev_was_thinking: false,
         };
-        let mut acc_text = String::new();
-        let mut acc_thinking = String::new();
 
         let reader = BufReader::new(file);
         for line in reader.lines() {
@@ -1938,7 +2129,6 @@ impl Agent {
             match evt_type {
                 "session_start" | "usage" | "stop" | "retry" => continue,
                 "user_input" | "user_message" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
                     if content.is_empty() {
                         continue;
@@ -1950,7 +2140,6 @@ impl Agent {
                     );
                 }
                 "sub_agent_result" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let session_id = evt.get("session_id").and_then(Value::as_str).unwrap_or("");
                     let status = evt.get("status").and_then(Value::as_str).unwrap_or("");
                     let input_tokens = evt.get("input_tokens").map(|v| v.to_string()).unwrap_or_default();
@@ -1970,20 +2159,39 @@ impl Agent {
                         ]),
                     );
                 }
+                "image_describe" => {
+                    let images = evt.get("images").and_then(Value::as_str).unwrap_or("");
+                    let desc = evt.get("content").and_then(Value::as_str).unwrap_or("");
+                    self.display_replay_event(
+                        &mut ds,
+                        "IMAGE_DESCRIBE",
+                        &std::collections::HashMap::from([
+                            ("images", images),
+                            ("content", desc),
+                        ]),
+                    );
+                }
                 "thinking" => {
-                    // Flush text, accumulate thinking (match bash event_replay.awk)
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "text");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    acc_thinking.push_str(content);
+                    if !content.is_empty() {
+                        self.display_replay_event(
+                            &mut ds,
+                            "THINKING",
+                            &std::collections::HashMap::from([("content", content)]),
+                        );
+                    }
                 }
                 "text" => {
-                    // Flush thinking, accumulate text (match bash event_replay.awk)
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "thinking");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    acc_text.push_str(content);
+                    if !content.is_empty() {
+                        self.display_replay_event(
+                            &mut ds,
+                            "TEXT",
+                            &std::collections::HashMap::from([("content", content)]),
+                        );
+                    }
                 }
                 "tool_call" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
                     let default_input = json!({});
                     let input = evt.get("input").unwrap_or(&default_input);
@@ -1998,7 +2206,6 @@ impl Agent {
                     self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
                 }
                 "tool_result" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
                     let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
                     let display = truncate_for_replay(content, 200);
@@ -2012,7 +2219,6 @@ impl Agent {
                     );
                 }
                 "error" => {
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let msg = evt.get("message").and_then(Value::as_str).unwrap_or("");
                     self.display_replay_event(
                         &mut ds,
@@ -2022,7 +2228,6 @@ impl Agent {
                 }
                 "assistant_message" => {
                     // Legacy format: emit TEXT + TOOL_CALL per tool_call (match bash event_replay.awk)
-                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
                     let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
                     if !text.is_empty() {
                         self.display_replay_event(
@@ -2051,40 +2256,8 @@ impl Agent {
                 _ => {}
             }
         }
-        Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
         self.queue_display_only(DisplayEvent::Text("\n".to_string()));
         self.flush_display();
-    }
-
-    /// Flush accumulated text/thinking through display_replay_event.
-    /// `which`: "thinking" = flush thinking only, "text" = flush text only, "both" = flush both.
-    fn flush_acc(
-        this: &Self,
-        acc_thinking: &mut String,
-        acc_text: &mut String,
-        ds: &mut DisplayState,
-        which: &str,
-    ) {
-        if which == "thinking" || which == "both" {
-            if !acc_thinking.is_empty() {
-                let content = std::mem::take(acc_thinking);
-                this.display_replay_event(
-                    ds,
-                    "THINKING",
-                    &std::collections::HashMap::from([("content", content.as_str())]),
-                );
-            }
-        }
-        if which == "text" || which == "both" {
-            if !acc_text.is_empty() {
-                let content = std::mem::take(acc_text);
-                this.display_replay_event(
-                    ds,
-                    "TEXT",
-                    &std::collections::HashMap::from([("content", content.as_str())]),
-                );
-            }
-        }
     }
 
     fn error(&self, msg: &str) {

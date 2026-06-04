@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/lloyd/claude-code/bash-agent/go2/linenoise"
 )
@@ -12,15 +14,22 @@ import (
 // Readline runs linenoise in a dedicated goroutine and communicates
 // with the agent main goroutine via channels.
 //
-// Architecture (mirrors c/readline.c):
+// Architecture (linenoise Hide/Show approach):
 //
 //	[readline goroutine] --inputCh--> [agent main goroutine]
-//	   linenoise.Line()                  RunLoop()
-//	   waits on doneCh                   signals doneCh when finished
+//	   EditStart/EditFeed              RunLoop()
+//	   loops immediately               display: Hide→write→Show per chunk
+//
+// The readline goroutine never waits for the agent to finish.
+// The display worker uses Hide/Show to avoid prompt corruption.
 type Readline struct {
-	inputCh  chan string // lines read from terminal
-	doneCh   chan struct{} // agent signals "done processing"
+	inputCh  chan string
 	histPath string
+
+	// Shared state with display worker (protected by mu)
+	mu     sync.Mutex
+	ls     *linenoise.LinenoiseState // current linenoiseState (nil when not editing)
+	active bool                      // true when in an editing session
 }
 
 // NewReadline creates a Readline with history stored at ~/.bash-agent/history.
@@ -30,7 +39,6 @@ func NewReadline(home string) *Readline {
 
 	return &Readline{
 		inputCh:  make(chan string, 1),
-		doneCh:   make(chan struct{}, 1),
 		histPath: histPath,
 	}
 }
@@ -54,19 +62,58 @@ func (r *Readline) Input() <-chan string {
 	return r.inputCh
 }
 
-// Done signals the readline goroutine that the agent has finished
-// processing the current input and the next prompt may be shown.
-func (r *Readline) Done() {
-	r.doneCh <- struct{}{}
-}
-
 const promptStr = "\x1b[32m> \x1b[0m"
 
 func (r *Readline) loop() {
+	buf := make([]byte, 65536)
+	stdinFd := int(os.Stdin.Fd())
+
 	for {
-		line, err := linenoise.Line(promptStr)
+		// Start a new editing session
+		ls, err := linenoise.EditStart(stdinFd, 2, buf, promptStr)
 		if err != nil {
-			if err == linenoise.ErrInterrupted {
+			// Failed to start editing (e.g., not a terminal)
+			fmt.Fprint(os.Stderr, "\n")
+			close(r.inputCh)
+			return
+		}
+
+		// Register the linenoiseState for display worker to use
+		r.mu.Lock()
+		r.ls = ls
+		r.active = true
+		r.mu.Unlock()
+
+		// Non-blocking poll + feed loop
+		var line string
+		var feedErr error
+		for {
+			// Poll stdin with 50ms timeout to allow display worker to acquire lock
+			linenoise.PollStdin(stdinFd, 50)
+
+			line, feedErr = linenoise.EditFeed(ls)
+			if feedErr == nil {
+				// Got a complete line
+				break
+			}
+			if feedErr == linenoise.ErrMore {
+				// Still editing, poll again
+				continue
+			}
+			// ErrInterrupted or ErrEOF
+			break
+		}
+
+		// Unregister the linenoiseState
+		r.mu.Lock()
+		r.ls = nil
+		r.active = false
+		r.mu.Unlock()
+
+		linenoise.EditStop(ls)
+
+		if feedErr != nil {
+			if feedErr == linenoise.ErrInterrupted {
 				// Ctrl+C — linenoise already displayed ^C and newline
 				continue
 			}
@@ -89,8 +136,33 @@ func (r *Readline) loop() {
 		linenoise.HistoryAdd(line)
 		linenoise.HistorySave(r.histPath)
 
-		// Send to agent and wait for it to finish processing
+		// Send to agent — no done wait
 		r.inputCh <- line
-		<-r.doneCh
 	}
+}
+
+// AcquireOutputLock hides the linenoise prompt and returns an unlock function.
+// The display worker should call this before writing to stdout.
+func (r *Readline) AcquireOutputLock() func() {
+	r.mu.Lock()
+	if r.active && r.ls != nil {
+		linenoise.Hide(r.ls)
+	}
+	return func() {
+		if r.active && r.ls != nil {
+			linenoise.Show(r.ls)
+		}
+		r.mu.Unlock()
+	}
+}
+
+// SetRawStdin sets stdin to raw mode (used for non-blocking poll compatibility).
+func SetRawStdin() func() {
+	// This is handled internally by linenoise EditStart/EditStop
+	return func() {}
+}
+
+// StdinFd returns the file descriptor for stdin.
+func StdinFd() int {
+	return int(syscall.Stdin)
 }

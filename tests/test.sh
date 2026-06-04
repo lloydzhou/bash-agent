@@ -2420,7 +2420,7 @@ print(body.get('max_tokens', ''))
 
 test_agent_image_placeholders() {
     info "Test 50: Image placeholder e2e test"
-    local home_dir conv_file session_id img_dir
+    local home_dir conv_file events_file session_id img_dir
     home_dir=$(mktemp -d)
     session_id="image-e2e-test-$$"
 
@@ -2431,6 +2431,7 @@ test_agent_image_placeholders() {
 
     # Run agent with [Image #1] marker; mock returns a simple text response
     conv_file="$img_dir/../conversation.jsonl"
+    events_file="$img_dir/../events.jsonl"
     BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session "$session_id" '[Image #1] what is this?' >/dev/null 2>&1 || true
 
     # Without DESCRIBE_API_KEY, describe returns empty, but expand still appends <attached-images>
@@ -2438,6 +2439,13 @@ test_agent_image_placeholders() {
         green "Agent image placeholder appends attached-images in conversation"; ((PASS++)) || true
     else
         red "Agent image placeholder appends attached-images in conversation"; echo "  conv=$(cat "$conv_file" 2>/dev/null)"; ((FAIL++)) || true
+    fi
+
+    # Check events.jsonl has user_input with [Image #N] and image_describe
+    if [[ -f "$events_file" ]] && grep -q '"type":"user_input"' "$events_file" && grep -q '\[Image #1\]' "$events_file" && grep -q '"type":"image_describe"' "$events_file"; then
+        green "Agent image placeholder events recorded"; ((PASS++)) || true
+    else
+        red "Agent image placeholder events recorded"; echo "  events=$(cat "$events_file" 2>/dev/null)"; ((FAIL++)) || true
     fi
 
     rm -rf "$home_dir"

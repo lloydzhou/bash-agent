@@ -27,4 +27,8 @@ int readline_sigint_consumed(void);
 /* 设置 agent 的 interrupted 指针（SIGINT handler 中同时设置） */
 void readline_set_agent_interrupted(volatile int *flag);
 
+/* display worker 调用：Hide/Show 当前 linenoise prompt */
+void readline_display_hide(void);
+void readline_display_show(void);
+
 #endif /* READLINE_H */

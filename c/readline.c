@@ -46,6 +46,32 @@ static void sigint_handler(int sig) {
 }
 
 /* ============================================================
+ * 全局 linenoiseState 共享 — display worker 用它做 Hide/Show
+ * ============================================================ */
+
+static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct linenoiseState *g_current_ls = NULL;
+static int g_ls_active = 0; /* 1=linenoise 在编辑中 */
+
+/* display worker 调用：Hide 当前 prompt */
+void readline_display_hide(void) {
+    pthread_mutex_lock(&g_display_mutex);
+    if (g_ls_active && g_current_ls) {
+        linenoiseHide(g_current_ls);
+    }
+    pthread_mutex_unlock(&g_display_mutex);
+}
+
+/* display worker 调用：Show 当前 prompt */
+void readline_display_show(void) {
+    pthread_mutex_lock(&g_display_mutex);
+    if (g_ls_active && g_current_ls) {
+        linenoiseShow(g_current_ls);
+    }
+    pthread_mutex_unlock(&g_display_mutex);
+}
+
+/* ============================================================
  * History 文件路径构建
  *
  * 与 Bash/Rust/Go 版一致：~/.bash-agent/history
@@ -72,6 +98,8 @@ static char *build_history_path(const char *home) {
  *   - Enter 时返回堆分配的字符串
  *
  * 输出到 stderr（不污染 stdout 管道）。
+ * 不再使用 done 同步 — readline 线程立即进入下一轮 EditStart。
+ * display worker 通过共享 linenoiseState + Hide/Show 保护输出。
  * ============================================================ */
 
 static void *readline_thread_fn(void *arg) {
@@ -114,6 +142,12 @@ static void *readline_thread_fn(void *arg) {
                 break;
             }
 
+            /* 注册到全局共享状态，让 display worker 可以 Hide/Show */
+            pthread_mutex_lock(&g_display_mutex);
+            g_current_ls = &ls;
+            g_ls_active = 1;
+            pthread_mutex_unlock(&g_display_mutex);
+
             /* 循环读取输入 */
             char *result;
             while ((result = linenoiseEditFeed(&ls)) == linenoiseEditMore) {
@@ -121,6 +155,12 @@ static void *readline_thread_fn(void *arg) {
                  * 但 linenoise 自己处理 Ctrl+C（返回 NULL + EAGAIN）
                  * 这里只是继续等待 */
             }
+
+            /* 清除全局共享状态 */
+            pthread_mutex_lock(&g_display_mutex);
+            g_current_ls = NULL;
+            g_ls_active = 0;
+            pthread_mutex_unlock(&g_display_mutex);
 
             linenoiseEditStop(&ls);
 
@@ -157,41 +197,21 @@ static void *readline_thread_fn(void *arg) {
             linenoiseHistorySave(hist_path);
 
             /* 构造 InputMessage 并推送到队列。
-             * 使用 done 同步机制（模仿 Rust 版 done channel）：
-             * readline 线程发送消息后阻塞等待 agent_main_loop 处理完成。
-             * 这确保 agent 运行期间不会显示提示符或读取下一行。 */
-            pthread_mutex_t done_mutex;
-            pthread_cond_t done_cond;
-            int done_flag = 0;
-            pthread_mutex_init(&done_mutex, NULL);
-            pthread_cond_init(&done_cond, NULL);
-
+             * 不再使用 done 同步机制 — readline 线程立即进入下一轮 EditStart。
+             * display worker 通过 Hide/Show 保护输出。 */
             InputMessage *msg = malloc(sizeof(InputMessage));
-            if (!msg) { pthread_mutex_destroy(&done_mutex); pthread_cond_destroy(&done_cond); break; }
+            if (!msg) break;
             memset(msg, 0, sizeof(*msg));
             msg->type = MSG_USER_INPUT;
             msg->data.user_input.text = util_strdup(linebuf);
-            msg->data.user_input.done_mutex = &done_mutex;
-            msg->data.user_input.done_cond = &done_cond;
-            msg->data.user_input.done_flag = &done_flag;
 
             if (mq_push(cfg->input_queue, msg) != 0) {
                 input_message_free(msg);
                 free(msg);
-                pthread_mutex_destroy(&done_mutex);
-                pthread_cond_destroy(&done_cond);
                 break; /* 队列已关闭 */
             }
 
-            /* 等待 agent_main_loop 处理完成 */
-            pthread_mutex_lock(&done_mutex);
-            while (!done_flag) {
-                pthread_cond_wait(&done_cond, &done_mutex);
-            }
-            pthread_mutex_unlock(&done_mutex);
-
-            pthread_mutex_destroy(&done_mutex);
-            pthread_cond_destroy(&done_cond);
+            /* 不再等 done — 立即进入下一轮循环 */
         }
 
         /* 恢复原始 SIGINT handler */

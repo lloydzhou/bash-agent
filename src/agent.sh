@@ -239,18 +239,6 @@ agent_image_describe() {
     printf '%s' "$desc"
 }
 
-agent_image_expand_placeholders_in_input() {
-    local input="$1" rest="$1" n p desc paths=""
-    while [[ "$rest" =~ \[Image\ #([0-9]+)\] ]]; do
-        n="${BASH_REMATCH[1]}"
-        p="$(store_session_image_dir)/$n.png"
-        [[ -f "$p" ]] && paths="${paths:+$paths }$p"
-        rest="${rest#*"${BASH_REMATCH[0]}"}"
-    done
-    desc=$(agent_image_describe $paths)
-    printf '%s\n\n<attached-images>\n%s\n</attached-images>' "$input" "$desc"
-}
-
 util_find_skill_dirs() {
     local cwd home
     cwd="${PWD:-$(pwd)}"
@@ -1153,6 +1141,9 @@ display_message() {
         SUB_AGENT_RESULT)
             display_sub_agent_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" "${REPLY_MESSAGE[5]}" "${REPLY_MESSAGE[6]}"
             ;;
+        IMAGE_DESCRIBE)
+            [[ -n "${REPLY_MESSAGE[2]}" ]] && { display_human_text "$(printf '\033[36m📸 %s: %s\033[0m\n' "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}")"; DISPLAY_LAST_CHAR=$'\n'; }
+            ;;
         USER_MESSAGE)
             display_ensure_newline
             _um_text="${REPLY_MESSAGE[1]%%$'\n'*}"
@@ -1325,8 +1316,7 @@ agent_main_loop() {
                 break
                 ;;
             USER_INPUT)
-                local _input="${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                agent_run_loop "$(agent_image_expand_placeholders_in_input "$_input")"
+                agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
                 ;;
             AGENT_RESULT)
                 if [[ "$INTERRUPT_REQUESTED" == true ]]; then
@@ -1422,6 +1412,19 @@ agent_loop() {
     local user_input="$1" turn_kind="${2:-user_input}" _se="" _type="" _reason="" had_error=false
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
+    # 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+    if [[ "$turn_kind" == user_input && "$user_input" == *"[Image #"* ]]; then
+        local _rest="$user_input" _images="" _paths="" desc
+        while [[ "$_rest" =~ \[Image\ #([0-9]+)\] ]]; do
+            [[ -f "$(store_session_image_dir)/${BASH_REMATCH[1]}.png" ]] && _paths+=" $(store_session_image_dir)/${BASH_REMATCH[1]}.png"
+            _images+="${_images:+ }${BASH_REMATCH[0]}"
+            _rest="${_rest#*"${BASH_REMATCH[0]}"}"
+        done
+        desc=$(agent_image_describe $_paths)
+        store_event_append "{\"type\":\"image_describe\",\"images\":\"$_images\",\"content\":\"$(util_json_escape "$desc")\"}"
+        util_write_msg "IMAGE_DESCRIBE" "$_images" "$desc" >&4 2>/dev/null || true
+        user_input+=$'\n\n<attached-images>\n'"$desc"$'\n</attached-images>'
+    fi
     store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
     # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl

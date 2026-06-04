@@ -247,7 +247,7 @@ Examples:
 	}
 }
 
-// runInteractive 交互模式（使用 linenoise + 独立 goroutine，对齐 c/readline.c 架构）
+// runInteractive 交互模式（使用 linenoise Hide/Show 架构）
 func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStore, display *agent.TermDisplay, home, model, initialInput string) {
 	fmt.Println("\033[36mbash-agent interactive mode (type 'exit' or Ctrl+D to quit)\033[0m")
 
@@ -270,13 +270,16 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	rl.SetImagePasteCallback(a.ImagePasteCallback)
 	rl.Start()
 
+	// 让 display 持有 readline 的 hide/show 回调，用于输出保护
+	display.SetOutputLocker(rl.AcquireOutputLock)
+
 	// 主循环：从 readline goroutine 接收输入，交给 agent 处理
 	for input := range rl.Input() {
 		if err := a.RunLoop(ctx, input, "user_input"); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		a.FlushDisplay()
-		rl.Done() // 通知 readline goroutine 可以显示下一个提示符
+		// 不再调用 rl.Done() — readline goroutine 立即开始下一轮 EditStart
 	}
 
 	fmt.Printf("\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n", store.SessionID())
@@ -287,24 +290,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 	lines := store.GetRecentEvents(maxTurns)
 	if len(lines) == 0 {
 		return
-	}
-
-	var accText, accThinking string
-	flushThinking := func() {
-		if accThinking != "" {
-			display.ShowEvent(agent.Event{Type: agent.EventThinking, Fields: []string{"THINKING", accThinking}})
-			accThinking = ""
-		}
-	}
-	flushText := func() {
-		if accText != "" {
-			display.ShowEvent(agent.Event{Type: agent.EventText, Fields: []string{"TEXT", accText}})
-			accText = ""
-		}
-	}
-	flushAll := func() {
-		flushThinking()
-		flushText()
 	}
 
 	for _, line := range lines {
@@ -318,21 +303,21 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 		case "session_start", "usage", "sub_agent_start", "sub_agent_end", "context_update":
 			continue
 		case "user_input":
-			flushAll()
 			content, _ := ev["content"].(string)
 			if content != "" {
 				display.ShowEvent(agent.Event{Type: agent.EventUserMessage, Fields: []string{"USER_INPUT", content}})
 			}
 		case "text":
-			flushThinking()
 			content, _ := ev["content"].(string)
-			accText += content
+			if content != "" {
+				display.ShowEvent(agent.Event{Type: agent.EventText, Fields: []string{"TEXT", content}})
+			}
 		case "thinking":
-			flushText()
 			content, _ := ev["content"].(string)
-			accThinking += content
+			if content != "" {
+				display.ShowEvent(agent.Event{Type: agent.EventThinking, Fields: []string{"THINKING", content}})
+			}
 		case "tool_call":
-			flushAll()
 			name, _ := ev["name"].(string)
 			id, _ := ev["id"].(string)
 			input := "{}"
@@ -344,7 +329,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			}
 			display.ShowEvent(agent.Event{Type: agent.EventToolCall, Fields: []string{"TOOL_CALL", name, id, input, name}})
 		case "tool_result":
-			flushAll()
 			content, _ := ev["content"].(string)
 			toolUseID, _ := ev["tool_use_id"].(string)
 			name, _ := ev["name"].(string)
@@ -354,7 +338,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			}
 			display.ShowEvent(agent.Event{Type: agent.EventToolResult, Fields: []string{"TOOL_RESULT", toolUseID, name, content}})
 		case "sub_agent_result":
-			flushAll()
 			sid, _ := ev["session_id"].(string)
 			status, _ := ev["status"].(string)
 			in := "0"
@@ -378,15 +361,17 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			thinking, _ := ev["thinking"].(string)
 			text, _ := ev["text"].(string)
 			display.ShowEvent(agent.Event{Type: agent.EventSubAgentResult, Fields: []string{"SUB_AGENT_RESULT", sid, status, in, out, thinking, text}})
+		case "image_describe":
+			images, _ := ev["images"].(string)
+			desc, _ := ev["content"].(string)
+			display.ShowEvent(agent.Event{Type: agent.EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
 		case "stop":
-			flushAll()
+			// Don't emit STOP for replay
 		case "error":
-			flushAll()
 			msg, _ := ev["message"].(string)
 			display.ShowEvent(agent.Event{Type: agent.EventError, Fields: []string{"ERROR", msg}})
 		}
 	}
-	flushAll()
 	fmt.Println()
 }
 

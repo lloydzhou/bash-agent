@@ -688,14 +688,42 @@ func (a *Agent) emitJSON(obj map[string]interface{}) {
 }
 
 func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
-	// Expand image placeholders before processing
-	if turnKind == "user_input" {
-		userInput = a.expandImagePlaceholders(userInput)
-	}
-
-	// 记录 user_input 事件（提前到 AddUserMessage 之前，与 bash 版一致）
+	// 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
 	if turnKind == "user_input" {
 		a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
+	}
+
+	// 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+	if turnKind == "user_input" && strings.Contains(userInput, "[Image #") {
+		expandedInput := a.expandImagePlaceholders(userInput)
+
+		// 提取 <attached-images> 中的描述内容
+		desc := ""
+		if start := strings.Index(expandedInput, "<attached-images>"); start >= 0 {
+			start += len("<attached-images>")
+			if end := strings.Index(expandedInput[start:], "</attached-images>"); end >= 0 {
+				desc = expandedInput[start : start+end]
+			}
+		}
+
+		// 收集所有 [Image #N] 占位符
+		re := regexp.MustCompile(`\[Image #\d+\]`)
+		matches := re.FindAllString(userInput, -1)
+		if len(matches) > 0 {
+			images := strings.Join(matches, " ")
+
+			// 记录 image_describe 事件
+			a.emitJSON(map[string]interface{}{
+				"type":    "image_describe",
+				"images":  images,
+				"content": desc,
+			})
+
+			// 推送 IMAGE_DESCRIBE 到 display
+			a.EmitDisplay(Event{Type: EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
+		}
+
+		userInput = expandedInput
 	}
 
 	// 添加用户消息

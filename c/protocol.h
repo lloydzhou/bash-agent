@@ -25,12 +25,6 @@ typedef struct {
     union {
         struct {
             char *text;   /* 用户输入的文本，需要调用者 free */
-            /* done 同步机制 — 模仿 Rust 版的 done channel。
-             * readline 线程发送 USER_INPUT 后阻塞等待 main_loop 处理完成。
-             * main_loop 处理完后 signal done，readline 线程被唤醒继续读下一行。 */
-            pthread_mutex_t *done_mutex;
-            pthread_cond_t  *done_cond;
-            int             *done_flag;   /* 0=未完成, 1=完成 */
         } user_input;
         struct {
             char *session_id;
@@ -65,6 +59,7 @@ typedef enum {
     DISPLAY_SUB_AGENT_START,     /* SubAgent 启动通知 */
     DISPLAY_CONTEXT_UPDATE,      /* 上下文压缩通知 */
     DISPLAY_FLUSH,               /* display 队列同步屏障 */
+    DISPLAY_IMAGE_DESCRIBE,      /* 图片描述结果 */
 } DisplayMsgType;
 
 typedef struct {
@@ -103,6 +98,7 @@ DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *
                                              const char *thinking, const char *text,
                                              int in_tokens, int out_tokens);
 DisplayMessage display_msg_context_update(const char *trigger);
+DisplayMessage display_msg_image_describe(const char *images, const char *description);
 
 /* 释放 DisplayMessage 内部动态分配的内存 */
 void display_message_free(DisplayMessage *msg);
