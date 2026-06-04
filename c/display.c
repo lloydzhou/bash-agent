@@ -167,6 +167,7 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
             if (interactive && ds->last_char[0] == '\n') {
                 fprintf(out, "\r\033[K");
+                ds->last_char[0] = '\0';
             }
             if (msg->content) {
                 fprintf(out, "\x1b[90m%s\x1b[0m", msg->content);
@@ -180,6 +181,7 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             /* bash 版在每个消息显示前检查 last_char=='\n' 并执行 \r\033[K */
             if (interactive && ds->last_char[0] == '\n') {
                 fprintf(out, "\r\033[K");
+                ds->last_char[0] = '\0';
             }
             if (msg->content) {
                 /* Insert newline when transitioning from thinking to text */
