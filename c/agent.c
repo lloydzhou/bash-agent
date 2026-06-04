@@ -2807,6 +2807,31 @@ static void format_int_commas(int n, char *out, size_t out_size) {
     }
 }
 
+static void format_ll_commas(long long n, char *out, size_t out_size) {
+    char raw[32];
+    snprintf(raw, sizeof(raw), "%lld", n);
+    size_t len = strlen(raw);
+    size_t commas = (len > 0) ? (len - 1) / 3 : 0;
+    size_t need = len + commas + 1;
+    if (out_size < need) {
+        snprintf(out, out_size, "%lld", n);
+        return;
+    }
+
+    out[need - 1] = '\0';
+    int ri = (int)len - 1;
+    int oi = (int)need - 2;
+    int group = 0;
+    while (ri >= 0) {
+        if (group == 3) {
+            out[oi--] = ',';
+            group = 0;
+        }
+        out[oi--] = raw[ri--];
+        group++;
+    }
+}
+
 void agent_update_title(Agent *agent) {
     if (!agent->interactive) return;
     char *stats_content = store_stats_read(agent->paths.stats);
@@ -2822,13 +2847,14 @@ void agent_update_title(Agent *agent) {
     int ct = json_get_int(jp.val, "current_context_tokens");
 
     /* 对齐 bash 版 term_title.awk: model T:turn R:req I:in+cr(pct) O:out C:ctx */
-    int total_i = ai + cr;
-    int pct = (total_i > 0) ? (cr * 100 / total_i) : 0;
+    long long ll_ai = ai, ll_cr = cr;
+    long long total_i = ll_ai + ll_cr;
+    int pct = (total_i > 0) ? (int)(ll_cr * 100 / total_i) : 0;
 
     char tc_s[32], ar_s[32], total_i_s[32], ao_s[32], ct_s[32];
     format_int_commas(tc, tc_s, sizeof(tc_s));
     format_int_commas(ar, ar_s, sizeof(ar_s));
-    format_int_commas(total_i, total_i_s, sizeof(total_i_s));
+    format_ll_commas(total_i, total_i_s, sizeof(total_i_s));
     format_int_commas(ao, ao_s, sizeof(ao_s));
     format_int_commas(ct, ct_s, sizeof(ct_s));
 
