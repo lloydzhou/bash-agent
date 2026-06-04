@@ -65,6 +65,7 @@ typedef enum {
     DISPLAY_SUB_AGENT_START,     /* SubAgent 启动通知 */
     DISPLAY_CONTEXT_UPDATE,      /* 上下文压缩通知 */
     DISPLAY_FLUSH,               /* display 队列同步屏障 */
+    DISPLAY_IMAGE_DESCRIBE,      /* 图片描述结果 */
 } DisplayMsgType;
 
 typedef struct {
@@ -103,6 +104,7 @@ DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *
                                              const char *thinking, const char *text,
                                              int in_tokens, int out_tokens);
 DisplayMessage display_msg_context_update(const char *trigger);
+DisplayMessage display_msg_image_describe(const char *images, const char *description);
 
 /* 释放 DisplayMessage 内部动态分配的内存 */
 void display_message_free(DisplayMessage *msg);

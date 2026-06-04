@@ -123,6 +123,15 @@ DisplayMessage display_msg_context_update(const char *trigger) {
     return m;
 }
 
+DisplayMessage display_msg_image_describe(const char *images, const char *description) {
+    DisplayMessage m;
+    memset(&m, 0, sizeof(m));
+    m.type = DISPLAY_IMAGE_DESCRIBE;
+    m.tool_name = util_strdup(images ? images : "");  /* 复用 tool_name 存 images 占位符 */
+    m.content = util_strdup(description ? description : "");
+    return m;
+}
+
 /* ============================================================
  * DisplayMessage 释放
  * ============================================================ */

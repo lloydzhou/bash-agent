@@ -143,6 +143,13 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "auto");
             sb_append_char(&buf, '}');
             break;
+        case DISPLAY_IMAGE_DESCRIBE:
+            sb_append(&buf, "{\"type\":\"image_describe\",\"images\":");
+            sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+            sb_append(&buf, ",\"content\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
         case DISPLAY_FLUSH:
             signal_flush(msg);
             sb_free(&buf);
@@ -234,6 +241,24 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             fflush(out);
             ds->last_char[0] = '\n';
             break;
+
+        case DISPLAY_IMAGE_DESCRIBE: {
+            ensure_newline(ds, out);
+            const char *images = msg->tool_name ? msg->tool_name : "";
+            const char *desc = msg->content ? msg->content : "";
+            /* 截取描述前 50 字作为预览 */
+            int desc_len = (int)util_utf8_truncate_len(desc, 50);
+            if (desc_len > 0) {
+                fprintf(out, "\x1b[36m📸 %s: %.*s%s\x1b[0m\n",
+                        images, desc_len, desc,
+                        strlen(desc) > 50 ? "..." : "");
+            } else {
+                fprintf(out, "\x1b[36m📸 %s described\x1b[0m\n", images);
+            }
+            fflush(out);
+            ds->last_char[0] = '\n';
+            break;
+        }
 
         case DISPLAY_SUB_AGENT_RESULT: {
             ensure_newline(ds, out);

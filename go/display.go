@@ -215,6 +215,30 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 		fmt.Fprintf(d.writer, "\033[36mContext compacted (%s).\033[0m\n", info)
 		d.lastChar = '\n'
 
+	case EventImageDescribe:
+		d.EnsureNewline()
+		images := ""
+		if len(ev.Fields) > 1 {
+			images = ev.Fields[1]
+		}
+		desc := ""
+		if len(ev.Fields) > 2 {
+			desc = ev.Fields[2]
+		}
+		// 截取描述前 50 字作为预览
+		preview := ""
+		if len(desc) > 50 {
+			preview = desc[:50] + "..."
+		} else if desc != "" {
+			preview = desc
+		}
+		if preview != "" {
+			fmt.Fprintf(d.writer, "\033[36m📸 %s: %s\033[0m\n", images, preview)
+		} else {
+			fmt.Fprintf(d.writer, "\033[36m📸 %s described\033[0m\n", images)
+		}
+		d.lastChar = '\n'
+
 	case EventUserMessage:
 		content := ""
 		if len(ev.Fields) > 1 {

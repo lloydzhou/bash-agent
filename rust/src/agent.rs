@@ -346,6 +346,10 @@ enum DisplayEvent {
         in_tokens: usize,
         out_tokens: usize,
     },
+    ImageDescribe {
+        images: String,
+        description: String,
+    },
 }
 
 enum DisplayCommand {
@@ -506,6 +510,32 @@ fn render_display_event(
             }
             if !text.is_empty() {
                 display_write_human(out, interactive, &format!("{}\n", truncate_str(&text, 120)))?;
+            }
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+        }
+        DisplayEvent::ImageDescribe { images, description } => {
+            if ds.last_char != "\n" {
+                display_write_human(out, interactive, "\n")?;
+            }
+            // 截取描述前 50 字作为预览
+            let preview = if description.len() > 50 {
+                format!("{}...", &description[..50])
+            } else {
+                description.clone()
+            };
+            if !preview.is_empty() {
+                display_write_human(
+                    out,
+                    interactive,
+                    &format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, preview),
+                )?;
+            } else {
+                display_write_human(
+                    out,
+                    interactive,
+                    &format!("\x1b[36m📸 {} described\x1b[0m\n", images),
+                )?;
             }
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
@@ -1109,11 +1139,53 @@ impl Agent {
         crate::tools::drain_fd(self.cancel_read_fd);
 
         let result = (|| -> Result<()> {
-            let user_input = expand_image_placeholders(&user_input, &self.paths);
-            self.conv.add_user(&user_input)?;
+            // 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
             if turn_kind == "user_input" {
                 self.append_event(json!({"type":"user_input","content":user_input}))?;
             }
+
+            // 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+            let user_input = if turn_kind == "user_input" && user_input.contains("[Image #") {
+                let expanded = expand_image_placeholders(&user_input, &self.paths);
+
+                // 提取 <attached-images> 中的描述内容
+                let desc = if let Some(start) = expanded.find("<attached-images>") {
+                    let start = start + "<attached-images>".len();
+                    if let Some(end) = expanded.find("</attached-images>") {
+                        expanded[start..end].to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                // 收集所有 [Image #N] 占位符
+                let re = regex::Regex::new(r"\[Image #\d+\]").unwrap();
+                let matches: Vec<&str> = re.find_iter(&user_input).map(|m| m.as_str()).collect();
+                if !matches.is_empty() {
+                    let images = matches.join(" ");
+
+                    // 记录 image_describe 事件
+                    self.append_event(json!({
+                        "type": "image_describe",
+                        "images": images,
+                        "content": desc
+                    }))?;
+
+                    // 推送 IMAGE_DESCRIBE 到 display
+                    self.queue_display_event(DisplayEvent::ImageDescribe {
+                        images,
+                        description: desc,
+                    })?;
+                }
+
+                expanded
+            } else {
+                user_input
+            };
+
+            self.conv.add_user(&user_input)?;
             // Increment turn count
             self.increment_turn_count();
 
@@ -1412,6 +1484,7 @@ impl Agent {
             DisplayEvent::UserMessage(_) => {}
             DisplayEvent::ContextUpdate(_) => {}
             DisplayEvent::SubAgentResult { .. } => {}
+            DisplayEvent::ImageDescribe { .. } => {}
         }
         if let Some(tx) = &self.display_tx {
             tx.send(DisplayCommand::Event(evt))
@@ -1871,6 +1944,10 @@ impl Agent {
             },
             "STOP" => DisplayEvent::Stop(fields.get("reason").copied().unwrap_or("").to_string()),
             "ERROR" => DisplayEvent::Error(fields.get("message").copied().unwrap_or("").to_string()),
+            "IMAGE_DESCRIBE" => DisplayEvent::ImageDescribe {
+                images: fields.get("images").copied().unwrap_or("").to_string(),
+                description: fields.get("content").copied().unwrap_or("").to_string(),
+            },
             _ => return,
         };
         self.queue_display_only(evt);
@@ -1967,6 +2044,19 @@ impl Agent {
                             ("output_tokens", output_tokens.as_str()),
                             ("thinking", thinking),
                             ("text", text),
+                        ]),
+                    );
+                }
+                "image_describe" => {
+                    Self::flush_acc(self, &mut acc_thinking, &mut acc_text, &mut ds, "both");
+                    let images = evt.get("images").and_then(Value::as_str).unwrap_or("");
+                    let desc = evt.get("content").and_then(Value::as_str).unwrap_or("");
+                    self.display_replay_event(
+                        &mut ds,
+                        "IMAGE_DESCRIBE",
+                        &std::collections::HashMap::from([
+                            ("images", images),
+                            ("content", desc),
                         ]),
                     );
                 }

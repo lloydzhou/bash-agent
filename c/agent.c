@@ -418,6 +418,13 @@ static char *display_msg_to_event(DisplayMessage *msg) {
         sb_append_json_string(&buf, msg->content ? msg->content : "");
         sb_append_char(&buf, '}');
         break;
+    case DISPLAY_IMAGE_DESCRIBE:
+        sb_append(&buf, "{\"type\":\"image_describe\",\"images\":");
+        sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "");
+        sb_append(&buf, ",\"content\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
     default:
         sb_free(&buf);
         return NULL;
@@ -667,6 +674,29 @@ int agent_replay_events(Agent *agent, int max_turns) {
             free(status);
             free(thinking);
             free(text);
+        } else if (strcmp(type, "image_describe") == 0) {
+            if (acc_thinking.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_thinking(acc_thinking.data);
+                push_display(agent->display_queue, dm);
+                replayed = 1;
+                sb_truncate(&acc_thinking, 0);
+            }
+            if (acc_text.len > 0) {
+                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                *dm = display_msg_text(acc_text.data);
+                push_display(agent->display_queue, dm);
+                replayed = 1;
+                sb_truncate(&acc_text, 0);
+            }
+            char *images = json_get_string(jp.val, "images");
+            char *desc = json_get_string(jp.val, "content");
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_image_describe(images ? images : "", desc ? desc : "");
+            push_display(agent->display_queue, dm);
+            replayed = 1;
+            free(images);
+            free(desc);
         } else if (strcmp(type, "error") == 0) {
             if (acc_thinking.len > 0) {
                 DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -730,6 +760,58 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         sb_append_char(&evt, '}');
         store_event_append(&agent->paths, evt.data);
         sb_free(&evt);
+    }
+
+    /* 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本 */
+    char *expanded_input = NULL;
+    if ((turn_kind == NULL || strcmp(turn_kind, "user_input") == 0) && strstr(user_input, "[Image #") != NULL) {
+        expanded_input = strdup(user_input);
+        agent_image_expand_placeholders(agent, &expanded_input);
+
+        /* 提取 <attached-images> 中的描述内容 */
+        char *desc_start = strstr(expanded_input, "<attached-images>");
+        char *desc_end = strstr(expanded_input, "</attached-images>");
+        char *desc = NULL;
+        if (desc_start && desc_end) {
+            desc_start += strlen("<attached-images>");
+            desc = strndup(desc_start, (size_t)(desc_end - desc_start));
+        }
+
+        /* 收集所有 [Image #N] 占位符 */
+        StrBuf images;
+        sb_init(&images);
+        const char *rest = user_input;
+        int first_img = 1;
+        while ((rest = strstr(rest, "[Image #")) != NULL) {
+            const char *end = strchr(rest, ']');
+            if (!end) break;
+            if (!first_img) sb_append_char(&images, ' ');
+            first_img = 0;
+            sb_appendn(&images, rest, (size_t)(end - rest + 1));
+            rest = end + 1;
+        }
+
+        /* 记录 image_describe 事件 */
+        if (images.len > 0) {
+            StrBuf evt;
+            sb_init(&evt);
+            sb_append(&evt, "{\"type\":\"image_describe\",\"images\":");
+            sb_append_json_string(&evt, images.data);
+            sb_append(&evt, ",\"content\":");
+            sb_append_json_string(&evt, desc ? desc : "");
+            sb_append_char(&evt, '}');
+            store_event_append(&agent->paths, evt.data);
+            sb_free(&evt);
+
+            /* 推送 IMAGE_DESCRIBE 到 display queue */
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_image_describe(images.data, desc);
+            push_display(agent->display_queue, dm);
+        }
+
+        sb_free(&images);
+        free(desc);
+        user_input = expanded_input;
     }
 
     /* 重置中断标志 */
@@ -1506,9 +1588,6 @@ int agent_main_loop(Agent *agent) {
                  * 残留到 agent_loop 开始时导致立即中断。
                  * 模仿 Rust 版 agent_loop_stream 入口的 CTRLC_FLAG.swap(false) 模式。 */
                 agent->interrupted = 0;
-
-                /* 展开图片 placeholder [Image #N] → describe + <attached-images> */
-                agent_image_expand_placeholders(agent, &msg->data.user_input.text);
 
                 agent_loop(agent, msg->data.user_input.text, "user_input");
 
