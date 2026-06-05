@@ -1010,7 +1010,14 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                             while ((ch = fgetc(fp)) != EOF) {
                                 if (ch == '\n') nl++;
                             }
-                            flines = nl;
+                            /* nl = 换行符个数；最后一行无换行符结尾则补1 */
+                            if (fbytes > 0) {
+                                fseek(fp, -1, SEEK_END);
+                                int last = fgetc(fp);
+                                flines = nl + (last != '\n' ? 1 : 0);
+                            } else {
+                                flines = 0;
+                            }
                             fclose(fp);
                         }
                         sb_appendf(&summary, "%s(%s) [%ld lines, %ld bytes",

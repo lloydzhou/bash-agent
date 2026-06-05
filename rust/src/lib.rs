@@ -1086,7 +1086,9 @@ pub mod conversation {
         if s.is_empty() {
             0
         } else {
-            s.iter().filter(|&&c| c == b'\n').count() + 1
+            let nl = s.iter().filter(|&&c| c == b'\n').count();
+            // 对齐 awk NR: 换行符个数，最后不以 \n 结尾则补1
+            if s.last() == Some(&b'\n') { nl } else { nl + 1 }
         }
     }
 

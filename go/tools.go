@@ -265,21 +265,69 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 	}
 
 	newContent := strings.Replace(content, oldStr, newStr, 1)
+
+	// 生成 diff — 对齐 bash 版: diff -u --color=always
+	label := p
+	if strings.HasPrefix(label, "/") {
+		label = label[1:]
+	}
+	oldFile, _ := os.CreateTemp("", "edit_diff_old_*.tmp")
+	newFile, _ := os.CreateTemp("", "edit_diff_new_*.tmp")
+	var diffOutput string
+	if oldFile != nil && newFile != nil {
+		os.WriteFile(oldFile.Name(), []byte(content), 0644)
+		os.WriteFile(newFile.Name(), []byte(newContent), 0644)
+		cmd := exec.Command("diff", "-u", "--color=always",
+			"--label", "a/"+label, "--label", "b/"+label,
+			oldFile.Name(), newFile.Name())
+		out, _ := cmd.Output()
+		diffOutput = string(out)
+		if strings.Contains(diffOutput, "unsupported --color") || strings.Contains(diffOutput, "unrecognized option '--color'") {
+			cmd = exec.Command("diff", "-u",
+				"--label", "a/"+label, "--label", "b/"+label,
+				oldFile.Name(), newFile.Name())
+			out, _ = cmd.Output()
+			diffOutput = string(out)
+		}
+		os.Remove(oldFile.Name())
+		os.Remove(newFile.Name())
+		oldFile.Close()
+		newFile.Close()
+	}
+
 	if err := os.WriteFile(p, []byte(newContent), 0644); err != nil {
 		return "", err
 	}
 
-	// 统计添加/删除行数
-	added := strings.Count(newStr, "\n")
-	removed := strings.Count(oldStr, "\n")
-	if !strings.HasSuffix(oldStr, "\n") {
-		removed++
-	}
-	if !strings.HasSuffix(newStr, "\n") {
-		added++
+	// 统计 added/removed 行数 — 跳过 ANSI escape (\x1b[...m)
+	added := 0
+	removed := 0
+	for _, line := range strings.Split(diffOutput, "\n") {
+		p := line
+		for len(p) > 0 && p[0] == '\x1b' {
+			if len(p) > 1 && p[1] == '[' {
+				idx := strings.IndexAny(p[2:], "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+				if idx >= 0 {
+					p = p[idx+3:]
+				} else {
+					break
+				}
+			} else {
+				break
+			}
+		}
+		if strings.HasPrefix(p, "+") && !strings.HasPrefix(p, "++") {
+			added++
+		} else if strings.HasPrefix(p, "-") && !strings.HasPrefix(p, "--") {
+			removed++
+		}
 	}
 
-	return fmt.Sprintf("Edit(%s) [+%d -%d lines]", p, added, removed), nil
+	result := fmt.Sprintf("Edit(%s) [+%d -%d lines]", p, added, removed)
+	if diffOutput != "" {
+		result += "\n" + diffOutput
+	}
+	return result, nil
 }
 
 var (
@@ -719,11 +767,16 @@ func FileSummary(kind, path, offset, limit string) string {
 	if err != nil {
 		return fmt.Sprintf("%s(%s)", kind, path)
 	}
-	// 统计行数
+	// 统计行数 — 换行符个数，最后一行无换行补1
 	data, err := os.ReadFile(path)
 	lines := 0
 	if err == nil {
-		lines = strings.Count(string(data), "\n")
+		nl := strings.Count(string(data), "\n")
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			lines = nl + 1
+		} else {
+			lines = nl
+		}
 	}
 	rng := ""
 	if offset != "" || limit != "" {
