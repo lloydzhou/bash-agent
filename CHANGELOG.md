@@ -8,6 +8,17 @@
 
 ---
 
+## [4.2.1] - 2026-06-05
+
+> **UX 版本**：终端标题增加 ⏳ 沙漏状态指示，直观显示 agent 处理状态；新增版本架构一致性规则。
+
+### Changed
+
+- **终端标题 busy/idle 指示**：OSC 标题增加 ⏳ 前缀，处理中显示 `⏳ model T:...`，空闲显示 `model T:...`。title 刷新由 stats update 驱动（默认 busy），agent_loop 结束后显式设 idle。Bash/Go/Rust/C 四版本同步实现。
+- **版本架构一致性规则**：AGENT.md 新增架构逻辑一致性要求，明确 Bash 版为主线、C/Go/Rust 为 Port 版本必须复刻主线，三个 Port 版本之间差异也必须保持一致。
+
+---
+
 ## [4.2.0] - 2026-06-05
 
 > **Architecture 版本**：统一 linenoiseWrite 原子显示输出，C/Go/Rust 三版本共用同一套 Hide→OPOST→Write→Show 同步机制；新增 Ctrl+C 中断 agent 能力；修复 Rust 段错误和 Ctrl+V 粘贴。
