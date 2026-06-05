@@ -557,7 +557,7 @@ store_conv_turn_keep() {
 }
 
 # — store_stats: stats 格式化 API —
-store_stats_format_title() { util_awk_run -v model="$1" -f "$AWK_DIR/term_title.awk" "$STATS_FILE"; }
+store_stats_format_title() { util_awk_run -v model="$1" ${2:+-v status="$2"} -f "$AWK_DIR/term_title.awk" "$STATS_FILE"; }
 
 # — store_conv: sub-agent 结果发送 —
 store_sub_send_result() {
@@ -1168,7 +1168,7 @@ display_message() {
     esac
 }
 
-display_term_title() { store_stats_format_title "$MODEL"; }
+display_term_title() { store_stats_format_title "$MODEL" "${1:-}"; }
 
 # 子进程渲染：从管道读取 RESP 消息，渲染到 stdout（终端）
 display_stream() { while util_read_msg; do display_message; done; }
@@ -1317,6 +1317,7 @@ agent_main_loop() {
                 ;;
             USER_INPUT)
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
+                display_term_title "idle"
                 ;;
             AGENT_RESULT)
                 if [[ "$INTERRUPT_REQUESTED" == true ]]; then
@@ -1634,7 +1635,7 @@ interactive_mode() {
         printf '\n'
         DISPLAY_LAST_CHAR=$'\n'
     fi
-    display_term_title
+    display_term_title "idle"
     {
         exec 5> "$INPUT_FIFO"
         set -o emacs 2>/dev/null || true

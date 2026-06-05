@@ -731,14 +731,19 @@ func (s *FileStore) ConvTurnKeep(ratio float64) (int, error) {
 
 // ─── FormatTitle: 终端标题 ───
 
-func (s *FileStore) FormatTitle(model string) string {
+func (s *FileStore) FormatTitle(model, status string) string {
 	st := s.stats
 	cacheTotal := st.InputTokens + st.CacheRead
 	cachePct := "—"
 	if cacheTotal > 0 && st.CacheRead > 0 {
 		cachePct = fmt.Sprintf("%.0f%%", float64(st.CacheRead)/float64(cacheTotal)*100)
 	}
-	return fmt.Sprintf("%s T:%s R:%d I:%s(%s) O:%s C:%s",
+	prefix := "⏳ "
+	if status == "idle" {
+		prefix = ""
+	}
+	return fmt.Sprintf("%s%s T:%s R:%d I:%s(%s) O:%s C:%s",
+		prefix,
 		model,
 		fmtInt(st.TurnCount),
 		st.TotalRequests,

@@ -190,7 +190,7 @@ type SessionStore interface {
 	// Stats
 	UpdateStats(usage Usage, model string) error
 	GetStats() Stats
-	FormatTitle(model string) string
+	FormatTitle(model, status string) string
 	SetContextTokens(n int)
 	IncrementTurn() error
 	SetTurnCount(n int) error

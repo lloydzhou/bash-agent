@@ -215,7 +215,7 @@ Examples:
 	}
 
 	// 设置标题
-	display.SetTitle(store.FormatTitle(cfg.Model))
+	display.SetTitle(store.FormatTitle(cfg.Model, "idle"))
 
 	// 运行
 	ctx := context.Background()
@@ -255,7 +255,7 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	replayEvents(a, store, display, 10)
 
 	// 更新终端标题
-	display.SetTitle(store.FormatTitle(model))
+	display.SetTitle(store.FormatTitle(model, "idle"))
 
 	// 如果有初始输入，先执行
 	if initialInput != "" {
@@ -263,6 +263,7 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		a.FlushDisplay()
+		display.SetTitle(store.FormatTitle(model, "idle"))
 	}
 
 	// 启动 readline goroutine
@@ -277,6 +278,7 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		a.FlushDisplay()
+		display.SetTitle(store.FormatTitle(model, "idle"))
 		// 不再调用 rl.Done() — readline goroutine 立即开始下一轮 EditStart
 	}
 

@@ -75,3 +75,12 @@ Bash / Go / Rust / C 四个版本的 **system prompt** 和 **tools.json** 必须
 - [ ] `go/`、`rust/src/`、`c/`、`src/` 四处的 `tools.json` SHA256 是否一致？(`sha256sum src/tools.json rust/src/tools.json go/tools.json c/tools.json`)
 
 > **经验**: 同一 session 在三个版本间切换是正常的开发/调试流程。system prompt 不同直接导致缓存失效，每次切换都相当于冷启动。保持一致性就是省钱。
+
+### 架构逻辑一致性
+
+C / Go / Rust 是 Bash 版的 **Port 版本**，整体架构必须完全复刻 Bash 版。Bash 版是主线，所有架构决策以 Bash 版为准。三个 Port 版本在 Bash 版因语言限制做不到的地方可以超越（如多线程、原子操作等），但 **Port 版本之间的差异也必须保持一致**——不允许某个 Port 版本有独有行为而其他版本没有。
+
+**规则**:
+1. 以 Bash 版为主线，任何运行时行为改动先改 Bash 版，再同步到 C / Go / Rust
+2. C / Go / Rust 三个版本之间必须完全一致，不得出现某个版本独有的行为或缺失
+3. 如果 Bash 版因语言限制无法实现某个功能，三个 Port 版本仍须保持一致
