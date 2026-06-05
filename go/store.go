@@ -742,7 +742,11 @@ func (s *FileStore) FormatTitle(model, status string) string {
 	if status == "idle" {
 		prefix = ""
 	}
-	return fmt.Sprintf("%s%s T:%s R:%d I:%s(%s) O:%s C:%s",
+	progress := 3
+	if status == "idle" {
+		progress = 0
+	}
+	return fmt.Sprintf("%s%s T:%s R:%d I:%s(%s) O:%s C:%s\x1b]9;4;%d\x07",
 		prefix,
 		model,
 		fmtInt(st.TurnCount),
@@ -750,7 +754,8 @@ func (s *FileStore) FormatTitle(model, status string) string {
 		fmtInt(cacheTotal),
 		cachePct,
 		fmtInt(st.OutputTokens),
-		fmtInt(st.ContextTokens))
+		fmtInt(st.ContextTokens),
+		progress)
 }
 
 // fmtInt 整数千分位格式化

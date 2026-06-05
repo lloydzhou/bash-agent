@@ -29,6 +29,7 @@ NR == 1 {
 }
 END {
     prefix = (status == "idle") ? "" : "⏳ "
-    printf "\033]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\007", \
-        prefix, model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c) > "/dev/stderr"
+    progress = (status == "idle") ? 0 : 3
+    printf "\033]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\007\033]9;4;%d\007", \
+        prefix, model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c), progress > "/dev/stderr"
 }

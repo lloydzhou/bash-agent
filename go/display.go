@@ -85,7 +85,7 @@ func (d *TermDisplay) SetSilent(s bool) {
 	d.silent = s
 }
 
-// SetTitle 设置终端标题
+// SetTitle 设置终端标题 + iTerm2 progress indicator
 func (d *TermDisplay) SetTitle(title string) {
 	if d.silent {
 		return

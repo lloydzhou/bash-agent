@@ -1932,9 +1932,10 @@ impl Agent {
             }
         };
         let prefix = if status == "idle" { "" } else { "⏳ " };
+        let progress = if status == "idle" { 0 } else { 3 };
         let _ = write!(
             self.stderr.borrow_mut(),
-            "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{}\x07",
+            "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{}\x07\x1b]9;4;{}\x07",
             prefix,
             self.cfg.model,
             Self::fmt_num(tc),
@@ -1942,7 +1943,8 @@ impl Agent {
             Self::fmt_num(ai + cr),
             cache_pct,
             Self::fmt_num(ao),
-            Self::fmt_num(ctx)
+            Self::fmt_num(ctx),
+            progress
         );
         let _ = self.stderr.borrow_mut().flush();
     }
