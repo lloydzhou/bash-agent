@@ -2435,7 +2435,7 @@ static int g_output_col = 0;       /* physical cursor column at end of last outp
  *  - ANSI CSI sequences (zero-width, skipped)
  *  - \\n / \\r (column resets to 0)
  *  - Wide chars that trigger wrap-before-write when they don't fit */
-static int simulateCursorCol(const char *s, size_t len, int start_col, int cols) {
+static int simulateCursorColEx(const char *s, size_t len, int start_col, int cols, int *out_at_margin) {
     int col = start_col;
     int at_margin = 0;  /* delayed wrap: cursor at right margin, not yet on next line */
     size_t i = 0;
@@ -2466,6 +2466,7 @@ static int simulateCursorCol(const char *s, size_t len, int start_col, int cols)
         i += clen;
     }
     /* If delayed wrap is pending, report col as 0 (cursor will wrap on next output) */
+    if (out_at_margin) *out_at_margin = at_margin;
     return at_margin ? 0 : col;
 }
 
@@ -2509,16 +2510,11 @@ static void linenoiseWriteInternal(const char *s, size_t len) {
     if (g_ls_active && g_current_ls) {
         fflush(stdout);
 
-        /* Restore raw mode (OPOST off) for linenoise */
-        struct termios tios;
-        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
-            tios.c_oflag &= ~OPOST;
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
-        }
-
-        /* Update output_col: simulate terminal wrapping for accurate cursor tracking */
+        /* Update output_col: simulate terminal wrapping for accurate cursor tracking.
+         * Must be done while OPOST is still ON, before we turn it off below. */
         {
             int cols = (g_current_ls && g_current_ls->cols > 0) ? (int)g_current_ls->cols : 0;
+            int at_margin = 0;
             size_t lastNL = (size_t)-1;
             for (size_t i = len; i > 0; i--) {
                 if (s[i-1] == '\n' || s[i-1] == '\r') {
@@ -2528,10 +2524,31 @@ static void linenoiseWriteInternal(const char *s, size_t len) {
             }
             if (lastNL < len) {
                 /* Text after last newline: start from column 0 */
-                g_output_col = simulateCursorCol(s + lastNL + 1, len - lastNL - 1, 0, cols);
+                g_output_col = simulateCursorColEx(s + lastNL + 1, len - lastNL - 1, 0, cols, &at_margin);
             } else {
                 /* No newline: continue from current column */
-                g_output_col = simulateCursorCol(s, len, g_output_col, cols);
+                g_output_col = simulateCursorColEx(s, len, g_output_col, cols, &at_margin);
+            }
+
+            /* If delayed wrap is pending (cursor at right margin), we must resolve
+             * it NOW while OPOST is still ON. Emit a space to trigger the actual
+             * wrap, then CR to return to col 0 of the new line.
+             * Without this, the subsequent \r\n would move cursor to col 0 of the
+             * CURRENT line (before wrapping), and the next linenoiseWrite would
+             * restore cursor to col 0 of that line, overwriting its content. */
+            if (at_margin && s[len-1] != '\n' && s[len-1] != '\r') {
+                write(STDOUT_FILENO, " \r", 2);
+                fflush(stdout);
+                g_output_col = 0;
+            }
+        }
+
+        /* Restore raw mode (OPOST off) for linenoise */
+        {
+            struct termios tios;
+            if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+                tios.c_oflag &= ~OPOST;
+                tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
             }
         }
 
