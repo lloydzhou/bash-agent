@@ -2437,6 +2437,7 @@ static int g_output_col = 0;       /* physical cursor column at end of last outp
  *  - Wide chars that trigger wrap-before-write when they don't fit */
 static int simulateCursorCol(const char *s, size_t len, int start_col, int cols) {
     int col = start_col;
+    int at_margin = 0;  /* delayed wrap: cursor at right margin, not yet on next line */
     size_t i = 0;
     while (i < len) {
         unsigned char c = (unsigned char)s[i];
@@ -2445,8 +2446,10 @@ static int simulateCursorCol(const char *s, size_t len, int start_col, int cols)
             size_t skip = ansiEscapeLen(s + i, len - i);
             if (skip > 0) { i += skip; continue; }
         }
-        /* Newline / carriage return */
-        if (c == '\n' || c == '\r') { col = 0; i++; continue; }
+        /* Newline / carriage return: clears delayed wrap */
+        if (c == '\n' || c == '\r') { col = 0; at_margin = 0; i++; continue; }
+        /* Resolve pending delayed wrap */
+        if (at_margin) { col = 0; at_margin = 0; }
         /* Get UTF-8 character display width */
         size_t clen;
         uint32_t cp = utf8DecodeChar(s + i, &clen);
@@ -2456,13 +2459,14 @@ static int simulateCursorCol(const char *s, size_t len, int start_col, int cols)
         if (cols > 0 && cw > 0) {
             if (col + cw > cols) col = 0;   /* wide char doesn't fit → wrap */
             col += cw;
-            if (col >= cols) col = 0;        /* at exact edge → delayed wrap */
+            if (col == cols) at_margin = 1;  /* at exact edge → delayed wrap pending */
         } else {
             col += cw;
         }
         i += clen;
     }
-    return col;
+    /* If delayed wrap is pending, report col as 0 (cursor will wrap on next output) */
+    return at_margin ? 0 : col;
 }
 
 /* Internal: the core write logic. Caller must hold g_display_mutex.
@@ -2559,17 +2563,26 @@ void linenoiseWrite(const char *s, size_t len) {
 
 
 /* linenoisePrintf - printf-style convenience wrapper for linenoiseWrite.
- * Formats into a stack buffer and calls linenoiseWrite atomically. */
+ * Formats into a stack buffer (small) or heap (large) and calls linenoiseWrite. */
 void linenoisePrintf(const char *fmt, ...) {
-    char buf[256 * 1024];  /* 256KB — tool_result 等内容可能超过 100K */
+    char sbuf[4096];  /* small stack buffer for most output */
     va_list ap;
     va_start(ap, fmt);
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    int n = vsnprintf(sbuf, sizeof(sbuf), fmt, ap);
     va_end(ap);
-    if (n > 0) {
-        size_t len = (size_t)n;
-        if (len >= sizeof(buf)) len = sizeof(buf) - 1;
-        linenoiseWrite(buf, len);
+    if (n <= 0) return;
+    size_t len = (size_t)n;
+    if (len < sizeof(sbuf)) {
+        linenoiseWrite(sbuf, len);
+    } else {
+        /* Large output: format to heap */
+        char *hbuf = malloc(len + 1);
+        if (!hbuf) { linenoiseWrite(sbuf, sizeof(sbuf) - 1); return; }
+        va_start(ap, fmt);
+        vsnprintf(hbuf, len + 1, fmt, ap);
+        va_end(ap);
+        linenoiseWrite(hbuf, len);
+        free(hbuf);
     }
 }
 

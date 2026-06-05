@@ -1,7 +1,7 @@
 package linenoise
 
 /*
-#cgo CFLAGS: -Wall -O2
+#cgo CFLAGS: -Wall -O2 -Wno-unused-function
 #include "linenoise.h"
 #include <errno.h>
 #include <stdlib.h>

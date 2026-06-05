@@ -221,7 +221,7 @@ static ToolResult tool_edit(const char *input_json) {
             sb_init(&diffcmd);
             const char *label = path;
             if (label[0] == '/') label++;
-            sb_appendf(&diffcmd, "diff -u --label 'a/%s' --label 'b/%s' -- '%s' '%s' 2>/dev/null || true",
+            sb_appendf(&diffcmd, "diff -u --color=always --label 'a/%s' --label 'b/%s' -- '%s' '%s' 2>/dev/null || true",
                        label, label, tmppath_old, tmppath_new);
             FILE *dp = popen(diffcmd.data, "r");
             if (dp) {
@@ -229,9 +229,11 @@ static ToolResult tool_edit(const char *input_json) {
                 sb_init(&diffout);
                 char lbuf[65536];
                 while (fgets(lbuf, sizeof(lbuf), dp)) {
-                    /* 计数 added/removed 行 */
-                    if (lbuf[0] == '+' && lbuf[1] != '+') added++;
-                    else if (lbuf[0] == '-' && lbuf[1] != '-') removed++;
+                    /* 计数 added/removed 行 — 跳过 ANSI escape (\x1b[...m) */
+                    const char *p = lbuf;
+                    if (*p == '\x1b') { p++; if (*p == '[') { while (*p && !((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))) p++; if (*p) p++; } }
+                    if (*p == '+' && *(p+1) != '+') added++;
+                    else if (*p == '-' && *(p+1) != '-') removed++;
                     sb_append(&diffout, lbuf);
                 }
                 pclose(dp);
