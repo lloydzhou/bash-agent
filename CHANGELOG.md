@@ -8,16 +8,20 @@
 
 ---
 
-## [4.2.2] - 2026-06-05
+## [4.2.2] - 2026-06-06
 
-> **Bugfix 版本**：修复 Edit 工具 diff 输出颜色和行计数；修复 linenoise 光标位置延迟折行；优化 linenoisePrintf 内存使用。
+> **Bugfix + UX 版本**：iTerm2 进度波纹指示器；修复 Edit diff 颜色行计数；修复 linenoise 光标延迟折行覆盖。
+
+### Added
+
+- **iTerm2 进度波纹**：busy 时在标题栏下方显示波纹动画（`OSC 9;4;3`），idle 时清除（`OSC 9;4;0`）。与 OSC 0 标题在同一次 write 输出，非 iTerm2 终端静默忽略。
 
 ### Fixed
 
 - **Edit diff 颜色**：C/Go 版 Edit 工具调用 `diff -u --color=always`，输出带颜色高亮的统一格式 diff。
 - **Edit diff 行计数**：C/Go 版解析 `--color=always` 输出时正确跳过 ANSI 转义序列再统计 `+`/`-` 行数，修复之前显示 `[+0 -0 lines]` 导致 AI 误判编辑失败而重试的问题。
 - **Read 工具行计数**：统一四版本行计数为 awk NR 语义（`\n` 计数，末尾无 `\n` 则 +1），修复 `[0 lines]` 显示。
-- **simulateCursorCol 延迟折行**：当字符恰好填满最后一列时，终端进入延迟折行状态（光标停在行尾），下一个字符输出时才实际换行。新增 `at_margin` 标志正确跟踪此状态。
+- **linenoise 延迟折行覆盖**：当输出恰好填满终端宽度时，终端进入 delayed wrap 状态。`simulateCursorColEx` 检测 `at_margin` 标志，在 OPOST 仍开着时输出空格触发实际换行，避免后续光标恢复到错误位置覆盖已有内容。
 - **linenoisePrintf 内存**：256KB 栈缓冲改为 4KB 栈缓冲 + 堆分配回退，避免大格式化输出的栈浪费。
 
 ---
