@@ -2437,6 +2437,7 @@ static int g_output_col = 0;       /* physical cursor column at end of last outp
  *  - Wide chars that trigger wrap-before-write when they don't fit */
 static int simulateCursorCol(const char *s, size_t len, int start_col, int cols) {
     int col = start_col;
+    int at_margin = 0;  /* delayed wrap: cursor at right margin, not yet on next line */
     size_t i = 0;
     while (i < len) {
         unsigned char c = (unsigned char)s[i];
@@ -2445,8 +2446,10 @@ static int simulateCursorCol(const char *s, size_t len, int start_col, int cols)
             size_t skip = ansiEscapeLen(s + i, len - i);
             if (skip > 0) { i += skip; continue; }
         }
-        /* Newline / carriage return */
-        if (c == '\n' || c == '\r') { col = 0; i++; continue; }
+        /* Newline / carriage return: clears delayed wrap */
+        if (c == '\n' || c == '\r') { col = 0; at_margin = 0; i++; continue; }
+        /* Resolve pending delayed wrap */
+        if (at_margin) { col = 0; at_margin = 0; }
         /* Get UTF-8 character display width */
         size_t clen;
         uint32_t cp = utf8DecodeChar(s + i, &clen);
@@ -2456,13 +2459,14 @@ static int simulateCursorCol(const char *s, size_t len, int start_col, int cols)
         if (cols > 0 && cw > 0) {
             if (col + cw > cols) col = 0;   /* wide char doesn't fit → wrap */
             col += cw;
-            if (col >= cols) col = 0;        /* at exact edge → delayed wrap */
+            if (col == cols) at_margin = 1;  /* at exact edge → delayed wrap pending */
         } else {
             col += cw;
         }
         i += clen;
     }
-    return col;
+    /* If delayed wrap is pending, report col as 0 (cursor will wrap on next output) */
+    return at_margin ? 0 : col;
 }
 
 /* Internal: the core write logic. Caller must hold g_display_mutex.
