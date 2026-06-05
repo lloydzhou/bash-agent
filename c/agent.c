@@ -744,6 +744,8 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     /* 递增 turn 计数 — 对齐 bash 版 store_stats_update current_turn_count=+1 */
     store_stats_set_int_file(agent->paths.stats, "current_turn_count",
         store_stats_get_file_int(agent->paths.stats, "current_turn_count") + 1);
+    /* 对齐 bash 版: store_stats_update 末尾调 display_term_title */
+    agent_update_title(agent);
 
     /* 记录事件：新 session 时记录 session_start */
     {
@@ -1518,7 +1520,7 @@ int agent_main_loop(Agent *agent) {
                   agent->running = 0;
 
                 /* 对齐 bash 版: 每轮 agent_loop 完成后刷新终端标题 */
-                agent_update_title(agent);
+                agent_update_title_status(agent, "idle");
 
                 /* 如果有活跃的 sub-agent，继续处理它们的结果，
                  * 直到所有 sub-agent 完成才 signal done。
@@ -2836,6 +2838,10 @@ static void format_ll_commas(long long n, char *out, size_t out_size) {
 }
 
 void agent_update_title(Agent *agent) {
+    agent_update_title_status(agent, NULL);
+}
+
+void agent_update_title_status(Agent *agent, const char *status) {
     if (!agent->interactive) return;
     char *stats_content = store_stats_read(agent->paths.stats);
     if (!stats_content) return;
@@ -2860,8 +2866,9 @@ void agent_update_title(Agent *agent) {
     format_int_commas(ao, ao_s, sizeof(ao_s));
     format_int_commas(ct, ct_s, sizeof(ct_s));
 
-    fprintf(stderr, "\x1b]0;%s T:%s R:%s I:%s(%d%%) O:%s C:%s\x07",
-            agent->model, tc_s, ar_s, total_i_s, pct, ao_s, ct_s);
+    const char *prefix = (status && strcmp(status, "idle") == 0) ? "" : "\xe2\x8f\xb3 ";
+    fprintf(stderr, "\x1b]0;%s%s T:%s R:%s I:%s(%d%%) O:%s C:%s\x07",
+            prefix, agent->model, tc_s, ar_s, total_i_s, pct, ao_s, ct_s);
     fflush(stderr);
 
     free(stats_content);

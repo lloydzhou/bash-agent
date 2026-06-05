@@ -109,6 +109,7 @@ int agent_replay_events(Agent *agent, int max_turns);
 
 /* 更新终端标题 */
 void agent_update_title(Agent *agent);
+void agent_update_title_status(Agent *agent, const char *status);
 
 /* ============================================================
  * 图片占位符支持

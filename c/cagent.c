@@ -298,8 +298,9 @@ int main(int argc, char *argv[]) {
           /* 等待 display 线程消费完所有 replay 消息，
            * 防止 readline 线程启动后进入 raw mode 与 display 线程争抢终端 */
           if (!agent->output_format) display_flush(&display_queue);
-        /* 对齐 bash/Rust 版: replay 后更新终端标题 */
-        agent_update_title(agent);
+        /* 对齐 bash/Rust 版: replay 后更新终端标题 (idle) */
+        agent_update_title_status(agent, "idle");
+
 
         /* readline 线程 */
         pthread_t readline_thread;

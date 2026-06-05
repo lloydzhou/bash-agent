@@ -757,6 +757,8 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 
 	// 用户输入时递增 turn（与 bash 版一致：store_stats_update current_turn_count=+1）
 	_ = a.store.IncrementTurn()
+	// 对齐 bash版: store_stats_update 末尾调 display_term_title
+	a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, ""))
 
 	// 中断处理：用 context.WithCancel 包装，Ctrl+C 同时取消 context（取消 HTTP 请求）
 	var interrupted atomic.Bool
@@ -922,7 +924,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		_ = ctxTokens
 
 		// 更新终端标题（与 bash 版 store_stats_update 后调 display_term_title 一致）
-		a.display.SetTitle(a.store.FormatTitle(a.cfg.Model))
+		a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, ""))
 
 		if interrupted.Load() {
 			a.EmitDisplay(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})

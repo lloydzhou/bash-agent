@@ -859,7 +859,7 @@ impl Agent {
         self.info("bash-agent interactive mode (type 'exit' or Ctrl+D to quit)");
         self.replay_last_turns();
         // Show terminal title AFTER replay so it isn't overwritten by replayed output
-        self.update_term_title();
+        self.update_term_title_with_status("idle");
         let history_path = self.home.join(".bash-agent/history");
         if let Some(parent) = history_path.parent() {
             fs::create_dir_all(parent)?;
@@ -1039,6 +1039,7 @@ impl Agent {
                     }
                     self.running.store(false, Ordering::SeqCst);
                     self.flush_display();
+                    self.update_term_title_with_status("idle");
 
                     // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
                     // main_loop 在内部循环等待所有 AgentResult 并处理，
@@ -1911,6 +1912,10 @@ impl Agent {
 
     /// update_term_title updates the terminal title with current stats (matches bash stats_show_osc).
     fn update_term_title(&self) {
+        self.update_term_title_with_status("");
+    }
+
+    fn update_term_title_with_status(&self, status: &str) {
         let stats = store::store_stats_read(&self.paths.stats).unwrap_or_default();
         let tc = stats_get_f64(&stats, "current_turn_count") as usize;
         let ar = stats_get_f64(&stats, "agent_request_count") as usize;
@@ -1926,9 +1931,11 @@ impl Agent {
                 "—".to_string()
             }
         };
+        let prefix = if status == "idle" { "" } else { "⏳ " };
         let _ = write!(
             self.stderr.borrow_mut(),
-            "\x1b]0;{} T:{} R:{} I:{}({}) O:{} C:{}\x07",
+            "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{}\x07",
+            prefix,
             self.cfg.model,
             Self::fmt_num(tc),
             Self::fmt_num(ar),
