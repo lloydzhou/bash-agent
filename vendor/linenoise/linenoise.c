@@ -2563,17 +2563,26 @@ void linenoiseWrite(const char *s, size_t len) {
 
 
 /* linenoisePrintf - printf-style convenience wrapper for linenoiseWrite.
- * Formats into a stack buffer and calls linenoiseWrite atomically. */
+ * Formats into a stack buffer (small) or heap (large) and calls linenoiseWrite. */
 void linenoisePrintf(const char *fmt, ...) {
-    char buf[256 * 1024];  /* 256KB — tool_result 等内容可能超过 100K */
+    char sbuf[4096];  /* small stack buffer for most output */
     va_list ap;
     va_start(ap, fmt);
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    int n = vsnprintf(sbuf, sizeof(sbuf), fmt, ap);
     va_end(ap);
-    if (n > 0) {
-        size_t len = (size_t)n;
-        if (len >= sizeof(buf)) len = sizeof(buf) - 1;
-        linenoiseWrite(buf, len);
+    if (n <= 0) return;
+    size_t len = (size_t)n;
+    if (len < sizeof(sbuf)) {
+        linenoiseWrite(sbuf, len);
+    } else {
+        /* Large output: format to heap */
+        char *hbuf = malloc(len + 1);
+        if (!hbuf) { linenoiseWrite(sbuf, sizeof(sbuf) - 1); return; }
+        va_start(ap, fmt);
+        vsnprintf(hbuf, len + 1, fmt, ap);
+        va_end(ap);
+        linenoiseWrite(hbuf, len);
+        free(hbuf);
     }
 }
 
