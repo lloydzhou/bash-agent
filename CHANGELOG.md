@@ -19,7 +19,7 @@
 ### Fixed
 
 - **Edit diff 颜色**：C/Go 版 Edit 工具调用 `diff -u --color=always`，输出带颜色高亮的统一格式 diff。
-- **Edit diff 行计数**：C/Go 版解析 `--color=always` 输出时正确跳过 ANSI 转义序列再统计 `+`/`-` 行数，修复之前显示 `[+0 -0 lines]` 导致 AI 误判编辑失败而重试的问题。
+- **Edit diff 行计数**：`diff --color=always` 可能输出多个连续 ANSI escape（如 `\x1b[01m\x1b[32m`），改为循环跳过所有连续 escape 再统计 `+`/`-` 行数。修复 `[+0 -N lines]` 导致 AI 误判编辑失败而重试。
 - **Read 工具行计数**：统一四版本行计数为 awk NR 语义（`\n` 计数，末尾无 `\n` 则 +1），修复 `[0 lines]` 显示。
 - **linenoise 延迟折行覆盖**：当输出恰好填满终端宽度时，终端进入 delayed wrap 状态。`simulateCursorColEx` 检测 `at_margin` 标志，在 OPOST 仍开着时输出空格触发实际换行，避免后续光标恢复到错误位置覆盖已有内容。
 - **linenoisePrintf 内存**：256KB 栈缓冲改为 4KB 栈缓冲 + 堆分配回退，避免大格式化输出的栈浪费。
