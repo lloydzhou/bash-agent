@@ -973,6 +973,9 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		break
 	}
 
+	// RunLoop 结束：恢复 idle 标题 + 清除 progress indicator
+	a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
+
 	return nil
 }
 

@@ -637,6 +637,17 @@ int agent_replay_events(Agent *agent, int max_turns) {
 }
 
 /* ============================================================
+ * agent_run_loop — agent_loop wrapper: 结束后恢复 idle 标题
+ * 对齐 bash 版 agent_run_loop
+ * ============================================================ */
+
+int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) {
+    int rc = agent_loop(agent, user_input, turn_kind);
+    agent_update_title_status(agent, "idle");
+    return rc;
+}
+
+/* ============================================================
  * agent_loop — 单次 LLM 对话循环
  * ============================================================ */
 
@@ -1166,6 +1177,8 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         push_display_event(&agent->paths, agent->display_queue, dm);
     }
 
+    /* agent_loop 结束：恢复 idle 标题 + 清除 progress indicator */
+
     free(expanded_input);
     return 0;
 }
@@ -1522,12 +1535,9 @@ int agent_main_loop(Agent *agent) {
                   /* 标记 agent 正在运行，readline 线程的 Ctrl+C 可中断 */
                   agent->running = 1;
 
-                  agent_loop(agent, msg->data.user_input.text, "user_input");
+                  agent_run_loop(agent, msg->data.user_input.text, "user_input");
 
                   agent->running = 0;
-
-                /* 对齐 bash 版: 每轮 agent_loop 完成后刷新终端标题 */
-                agent_update_title_status(agent, "idle");
 
                 /* 如果有活跃的 sub-agent，继续处理它们的结果，
                  * 直到所有 sub-agent 完成才 signal done。
@@ -1563,11 +1573,11 @@ int agent_main_loop(Agent *agent) {
                                    sub_msg->data.agent_result.out_tokens,
                                    sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
                                    sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
-                        agent_loop(agent, ctx.data, "sub_agent_result");
+                        agent_run_loop(agent, ctx.data, "sub_agent_result");
                         sb_free(&ctx);
                     } else {
                         /* 简单处理：也执行它 */
-                        agent_loop(agent, sub_msg->data.user_input.text, "user_input");
+                        agent_run_loop(agent, sub_msg->data.user_input.text, "user_input");
                     }
                     input_message_free(sub_msg);
                     free(sub_msg);
@@ -1602,7 +1612,7 @@ int agent_main_loop(Agent *agent) {
                            msg->data.agent_result.out_tokens,
                            msg->data.agent_result.thinking ? msg->data.agent_result.thinking : "",
                            msg->data.agent_result.text ? msg->data.agent_result.text : "");
-                agent_loop(agent, ctx.data, "sub_agent_result");
+                agent_run_loop(agent, ctx.data, "sub_agent_result");
                 sb_free(&ctx);
                 break;
             }

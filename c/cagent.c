@@ -398,7 +398,7 @@ int main(int argc, char *argv[]) {
                                msg->data.agent_result.out_tokens,
                                msg->data.agent_result.thinking ? msg->data.agent_result.thinking : "",
                                msg->data.agent_result.text ? msg->data.agent_result.text : "");
-                    agent_loop(agent, ctx.data, "sub_agent_result");
+                    agent_run_loop(agent, ctx.data, "sub_agent_result");
                     sb_free(&ctx);
                 }
                 input_message_free(msg);

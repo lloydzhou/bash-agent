@@ -85,6 +85,8 @@ int agent_main_loop(Agent *agent);
 
 /* 单次 agent loop：用户输入 → LLM → 工具调用 → 循环 */
 int agent_loop(Agent *agent, const char *user_input, const char *turn_kind);
+/* agent_loop wrapper：结束后恢复 idle 标题 */
+int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind);
 
 /* SubAgent 处理：在子线程中执行独立 agent_loop */
 char *agent_handle_sub_agent(Agent *agent, const char *prompt,

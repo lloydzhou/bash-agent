@@ -263,7 +263,6 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		a.FlushDisplay()
-		display.SetTitle(store.FormatTitle(model, "idle"))
 	}
 
 	// 启动 readline goroutine
@@ -278,7 +277,6 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		a.FlushDisplay()
-		display.SetTitle(store.FormatTitle(model, "idle"))
 		// 不再调用 rl.Done() — readline goroutine 立即开始下一轮 EditStart
 	}
 

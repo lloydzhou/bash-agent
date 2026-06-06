@@ -1039,7 +1039,6 @@ impl Agent {
                     }
                     self.running.store(false, Ordering::SeqCst);
                     self.flush_display();
-                    self.update_term_title_with_status("idle");
 
                     // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
                     // main_loop 在内部循环等待所有 AgentResult 并处理，
@@ -1196,6 +1195,7 @@ impl Agent {
 
     pub(crate) fn agent_loop_with_kind(&mut self, user_input: String, turn_kind: &str) -> Result<()> {
         let result = self.agent_loop_stream(user_input, turn_kind);
+        self.update_term_title_with_status("idle");
         result
     }
 

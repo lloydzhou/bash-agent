@@ -1288,6 +1288,7 @@ agent_handle_sub_result() {
 agent_run_loop() {
     local turn_kind="${2:-user_input}"
     agent_loop "$1" "$turn_kind"
+    display_term_title "idle"
     if [[ "$INTERACTIVE" == true ]]; then
         printf '\033[32m>\033[0m '
     fi
@@ -1317,7 +1318,6 @@ agent_main_loop() {
                 ;;
             USER_INPUT)
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                display_term_title "idle"
                 ;;
             AGENT_RESULT)
                 if [[ "$INTERRUPT_REQUESTED" == true ]]; then
