@@ -1072,10 +1072,20 @@ pub mod conversation {
         let mut added = 0usize;
         let mut removed = 0usize;
         for line in diff.lines() {
-            if line.starts_with('+') && !line.starts_with("+++") {
+            // skip all consecutive ANSI CSI sequences
+            let p = line.as_bytes();
+            let mut i = 0usize;
+            while i + 1 < p.len() && p[i] == 0x1b && p[i + 1] == b'[' {
+                i += 2;
+                while i < p.len() && !(p[i].is_ascii_uppercase() || p[i].is_ascii_lowercase()) {
+                    i += 1;
+                }
+                if i < p.len() { i += 1; }
+            }
+            if i < p.len() && p[i] == b'+' && (i + 1 >= p.len() || p[i + 1] != b'+') {
                 added += 1;
             }
-            if line.starts_with('-') && !line.starts_with("---") {
+            if i < p.len() && p[i] == b'-' && (i + 1 >= p.len() || p[i + 1] != b'-') {
                 removed += 1;
             }
         }

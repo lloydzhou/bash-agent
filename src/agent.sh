@@ -917,8 +917,8 @@ tool_edit() {
     diff_output=$(diff -u --color=always --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
     [[ "$diff_output" == *"unsupported --color"* || "$diff_output" == *"unrecognized option '--color'"* ]] \
         && diff_output=$(diff -u --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
-    added=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)?\+[^+]') || added=0
-    removed=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)?-[^-]') || removed=0
+    added=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)*\+[^+]') || added=0
+    removed=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)*-[^-]') || removed=0
     cat "$tmp" > "$path"
     rm -f "$tmp"
     printf 'Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"

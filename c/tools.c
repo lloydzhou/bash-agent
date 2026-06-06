@@ -231,7 +231,12 @@ static ToolResult tool_edit(const char *input_json) {
                 while (fgets(lbuf, sizeof(lbuf), dp)) {
                     /* 计数 added/removed 行 — 跳过 ANSI escape (\x1b[...m) */
                     const char *p = lbuf;
-                    if (*p == '\x1b') { p++; if (*p == '[') { while (*p && !((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))) p++; if (*p) p++; } }
+                    /* skip all consecutive ANSI CSI sequences */
+                    while (*p == '\x1b' && *(p+1) == '[') {
+                        p += 2;
+                        while (*p && !(('A' <= *p && *p <= 'Z') || ('a' <= *p && *p <= 'z'))) p++;
+                        if (*p) p++;
+                    }
                     if (*p == '+' && *(p+1) != '+') added++;
                     else if (*p == '-' && *(p+1) != '-') removed++;
                     sb_append(&diffout, lbuf);
