@@ -23,6 +23,7 @@
 - **Read 工具行计数**：统一四版本行计数为 awk NR 语义（`\n` 计数，末尾无 `\n` 则 +1），修复 `[0 lines]` 显示。
 - **linenoise 延迟折行覆盖**：当输出恰好填满终端宽度时，终端进入 delayed wrap 状态。`simulateCursorColEx` 检测 `at_margin` 标志，在 OPOST 仍开着时输出空格触发实际换行，避免后续光标恢复到错误位置覆盖已有内容。
 - **linenoisePrintf 内存**：256KB 栈缓冲改为 4KB 栈缓冲 + 堆分配回退，避免大格式化输出的栈浪费。
+- **idle 标题时机**：将 `display_term_title("idle")` 从调用者移入 `agent_run_loop` wrapper 内部（对齐 Bash 版），确保所有退出路径（正常、中断、错误、子 agent 结果）都清除 iTerm2 进度波纹。
 
 ---
 
