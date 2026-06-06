@@ -929,6 +929,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		if interrupted.Load() {
 			a.EmitDisplay(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
 			a.emitJSON(map[string]interface{}{"type": "stop", "reason": "interrupted"})
+			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
 			return nil
 		}
 
@@ -938,6 +939,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 			if stopReason != "error" {
 				a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", "Response truncated (max_tokens reached)"}})
 			}
+			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
 			if loopErr != "" {
 				return fmt.Errorf("LLM error: %s", loopErr)
 			}
