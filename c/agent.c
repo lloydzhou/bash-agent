@@ -2487,11 +2487,26 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
     if (min_keep < 3) min_keep = 3;
     if (min_keep > n) min_keep = n;
 
+    /* max_keep ceiling = 1 - min_keep_ratio.
+     * Rationale: if k > 75% of NR, less than 25% is dropped — too little to
+     * justify the cost of an LLM summary call.  This also prevents pathological
+     * cases where turn-alignment would expand a small best_k backward past many
+     * tool_result lines, inflating the actual keep ratio far above min_keep
+     * (e.g. DP picks 25% but turn-alignment pushes it to 80%+), resulting in a
+     * compact that barely trims anything while still consuming a full LLM call. */
+    int max_keep = (int)((double)n * (1.0 - min_keep_ratio) + 0.5);
+    if (max_keep > n) max_keep = n;
+    /* When min_keep_ratio > 0.5, the ceiling drops below the floor and the
+     * for-loop can never execute.  The user set a high min_keep to be
+     * conservative — not to disable compression entirely — so fall back to
+     * no ceiling and let DP search up to n. */
+    if (max_keep < min_keep) max_keep = n;
+
     /* ── DP 遍历所有 k ── */
     int best_k = 0;
     double best_benefit = -1e18;
 
-    for (int k = min_keep; k <= n; k++) {
+    for (int k = min_keep; k <= max_keep; k++) {
         /* K = tokens in last k lines */
         int K = 0;
         for (int i = n - k; i < n; i++) K += sizes[i];
