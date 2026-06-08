@@ -11,8 +11,8 @@ MODEL=""
 API_KEY=""
 BASE_URL=""
 USER_INPUT=""
-MAX_TOKENS=4096
-MAX_TURNS=40
+MAX_TOKENS=16384
+MAX_TURNS=1000
 MAX_CONTEXT_TOKENS=200000
 TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
@@ -1458,10 +1458,10 @@ Usage: agent.sh [options] [prompt]
 Options:
   -p, --provider PROV     LLM provider: claude | openai (default: claude)
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
-  --max-tokens N          Max output tokens (default: 4096)
+  --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
-  --max-turns N           Max agent turns (default: 40)
+  --max-turns N           Max agent turns (default: 500)
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)

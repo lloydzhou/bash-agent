@@ -95,10 +95,25 @@ END {
     if (min_keep < 3) min_keep = 3
     if (min_keep > NR) min_keep = NR
 
+    # Maximum lines to keep (hard ceiling) = 1 - min_keep_ratio
+    # Rationale: if k > 75% of NR, less than 25% is dropped — too little to
+    # justify the cost of an LLM summary call.  This also prevents pathological
+    # cases where turn-alignment would expand a small best_k backward past many
+    # tool_result lines, inflating the actual keep ratio far above min_keep
+    # (e.g. DP picks 25% but turn-alignment pushes it to 80%+), resulting in a
+    # compact that barely trims anything while still consuming a full LLM call.
+    max_keep = int(NR * (1 - min_keep_ratio) + 0.5)
+    if (max_keep > NR) max_keep = NR
+    # When min_keep_ratio > 0.5, the ceiling drops below the floor and the
+    # for-loop can never execute.  The user set a high min_keep to be
+    # conservative — not to disable compression entirely — so fall back to
+    # no ceiling and let DP search up to NR.
+    if (max_keep < min_keep) max_keep = NR
+
     best_k = 0
     best_benefit = -1e18
 
-    for (k = min_keep; k <= NR; k++) {
+    for (k = min_keep; k <= max_keep; k++) {
         K = 0
         for (i = NR - k + 1; i <= NR; i++) K += sizes[i]
 

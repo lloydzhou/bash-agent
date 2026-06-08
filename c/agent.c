@@ -243,8 +243,8 @@ Agent *agent_create(const char *provider, const char *model,
     a->interactive = interactive;
     a->input_queue = input_queue;
     a->display_queue = display_queue;
-    a->max_tokens = 4096;
-    a->max_turns = 40;
+    a->max_tokens = 16384;
+    a->max_turns = 1000;
     a->max_context_tokens = 200000;
     a->tool_timeout_secs = 600;
     a->tool_result_max_bytes = 100000;
@@ -2487,11 +2487,26 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
     if (min_keep < 3) min_keep = 3;
     if (min_keep > n) min_keep = n;
 
+    /* max_keep ceiling = 1 - min_keep_ratio.
+     * Rationale: if k > 75% of NR, less than 25% is dropped — too little to
+     * justify the cost of an LLM summary call.  This also prevents pathological
+     * cases where turn-alignment would expand a small best_k backward past many
+     * tool_result lines, inflating the actual keep ratio far above min_keep
+     * (e.g. DP picks 25% but turn-alignment pushes it to 80%+), resulting in a
+     * compact that barely trims anything while still consuming a full LLM call. */
+    int max_keep = (int)((double)n * (1.0 - min_keep_ratio) + 0.5);
+    if (max_keep > n) max_keep = n;
+    /* When min_keep_ratio > 0.5, the ceiling drops below the floor and the
+     * for-loop can never execute.  The user set a high min_keep to be
+     * conservative — not to disable compression entirely — so fall back to
+     * no ceiling and let DP search up to n. */
+    if (max_keep < min_keep) max_keep = n;
+
     /* ── DP 遍历所有 k ── */
     int best_k = 0;
     double best_benefit = -1e18;
 
-    for (int k = min_keep; k <= n; k++) {
+    for (int k = min_keep; k <= max_keep; k++) {
         /* K = tokens in last k lines */
         int K = 0;
         for (int i = n - k; i < n; i++) K += sizes[i];
@@ -2716,7 +2731,12 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     sb_init(&req_body);
     sb_append(&req_body, "{\"model\":");
     sb_append_json_string(&req_body, agent->model);
-    sb_append(&req_body, ",\"max_tokens\":1024,\"messages\":[");
+    {
+        char mt_buf[32];
+        snprintf(mt_buf, sizeof(mt_buf), ",\"max_tokens\":%d,", agent->max_tokens);
+        sb_append(&req_body, mt_buf);
+    }
+    sb_append(&req_body, "\"messages\":[");
     for (int i = 0; i < drop; i++) {
         if (i > 0) sb_append(&req_body, ",");
         sb_append(&req_body, lines[i]);

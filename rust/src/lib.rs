@@ -61,7 +61,7 @@ pub mod config {
             Self {
                 provider: "claude".to_string(),
                 model: String::new(),
-                max_tokens: 4096,
+                max_tokens: 16384,
                 tool_timeout_secs: 600,
                 tool_result_max_bytes: 100_000,
                 file_write_max_bytes: 1_048_576,
@@ -70,7 +70,7 @@ pub mod config {
                 api_key: String::new(),
                 base_url: String::new(),
                 prompt: String::new(),
-                max_turns: 40,
+                max_turns: 1000,
                 max_context_tokens: 200_000,
                 max_context_keep_pct: 25,
                 max_turns_before_compact: 100,
@@ -722,10 +722,27 @@ pub mod compact_dp {
             k.max(3).min(n)
         };
 
+        // Maximum lines to keep (hard ceiling) = 1 - min_keep_ratio.
+        // Rationale: if k > 75% of NR, less than 25% is dropped — too little to
+        // justify the cost of an LLM summary call.  This also prevents pathological
+        // cases where turn-alignment would expand a small best_k backward past many
+        // tool_result lines, inflating the actual keep ratio far above min_keep
+        // (e.g. DP picks 25% but turn-alignment pushes it to 80%+), resulting in a
+        // compact that barely trims anything while still consuming a full LLM call.
+        let max_keep = {
+            let k = (n as f64 * (1.0 - cfg.min_keep_ratio) + 0.5) as usize;
+            let k = k.min(n);
+            // When min_keep_ratio > 0.5, the ceiling drops below the floor and the
+            // for-loop can never execute.  The user set a high min_keep to be
+            // conservative — not to disable compression entirely — so fall back to
+            // no ceiling and let DP search up to n.
+            if k < min_keep { n } else { k }
+        };
+
         let mut best_k = 0usize;
         let mut best_benefit = f64::NEG_INFINITY;
 
-        for k in min_keep..=n {
+        for k in min_keep..=max_keep {
             let k_tokens: usize = sizes[n - k..].iter().sum();
             let h = total_tokens as f64 - k_tokens as f64;
             if h <= 0.0 {

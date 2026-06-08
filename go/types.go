@@ -55,8 +55,8 @@ func DefaultConfig() Config {
 	return Config{
 		Provider:           "claude",
 		Model:              "",
-		MaxTokens:          4096,
-		MaxTurns:           40,
+		MaxTokens:          16384,
+		MaxTurns:           1000,
 		MaxContextTokens:   200000,
 		ToolTimeoutSecs:    600,
 		OutputFormat:       "human",

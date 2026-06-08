@@ -629,10 +629,29 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 		minKeep = n
 	}
 
+	// Maximum lines to keep (hard ceiling) = 1 - minRatio.
+	// Rationale: if k > 75% of NR, less than 25% is dropped — too little to
+	// justify the cost of an LLM summary call.  This also prevents pathological
+	// cases where turn-alignment would expand a small best_k backward past many
+	// tool_result lines, inflating the actual keep ratio far above min_keep
+	// (e.g. DP picks 25% but turn-alignment pushes it to 80%+), resulting in a
+	// compact that barely trims anything while still consuming a full LLM call.
+	maxKeep := int(float64(n)*(1.0-minRatio) + 0.5)
+	if maxKeep > n {
+		maxKeep = n
+	}
+	// When minRatio > 0.5, the ceiling drops below the floor and the
+	// for-loop can never execute.  The user set a high min_keep to be
+	// conservative — not to disable compression entirely — so fall back to
+	// no ceiling and let DP search up to n.
+	if maxKeep < minKeep {
+		maxKeep = n
+	}
+
 	bestK := 0
 	bestBenefit := -1e18
 
-	for k := minKeep; k <= n; k++ {
+	for k := minKeep; k <= maxKeep; k++ {
 		K := 0
 		for i := n - k; i < n; i++ {
 			K += sizes[i]

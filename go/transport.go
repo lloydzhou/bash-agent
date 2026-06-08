@@ -92,7 +92,7 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages string)
 
 	messagesJSON, _ := json.Marshal(msgs)
 
-	ch, err := t.Call(ctx, string(messagesJSON), "", "", 4096, "disabled")
+	ch, err := t.Call(ctx, string(messagesJSON), "", "", t.cfg.MaxTokens, "disabled")
 	if err != nil {
 		return "", Usage{}, err
 	}
