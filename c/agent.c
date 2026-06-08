@@ -243,8 +243,8 @@ Agent *agent_create(const char *provider, const char *model,
     a->interactive = interactive;
     a->input_queue = input_queue;
     a->display_queue = display_queue;
-    a->max_tokens = 4096;
-    a->max_turns = 40;
+    a->max_tokens = 16384;
+    a->max_turns = 1000;
     a->max_context_tokens = 200000;
     a->tool_timeout_secs = 600;
     a->tool_result_max_bytes = 100000;
@@ -2731,7 +2731,12 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     sb_init(&req_body);
     sb_append(&req_body, "{\"model\":");
     sb_append_json_string(&req_body, agent->model);
-    sb_append(&req_body, ",\"max_tokens\":1024,\"messages\":[");
+    {
+        char mt_buf[32];
+        snprintf(mt_buf, sizeof(mt_buf), ",\"max_tokens\":%d,", agent->max_tokens);
+        sb_append(&req_body, mt_buf);
+    }
+    sb_append(&req_body, "\"messages\":[");
     for (int i = 0; i < drop; i++) {
         if (i > 0) sb_append(&req_body, ",");
         sb_append(&req_body, lines[i]);

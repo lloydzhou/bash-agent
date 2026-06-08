@@ -61,7 +61,7 @@ pub mod config {
             Self {
                 provider: "claude".to_string(),
                 model: String::new(),
-                max_tokens: 4096,
+                max_tokens: 16384,
                 tool_timeout_secs: 600,
                 tool_result_max_bytes: 100_000,
                 file_write_max_bytes: 1_048_576,
@@ -70,7 +70,7 @@ pub mod config {
                 api_key: String::new(),
                 base_url: String::new(),
                 prompt: String::new(),
-                max_turns: 40,
+                max_turns: 1000,
                 max_context_tokens: 200_000,
                 max_context_keep_pct: 25,
                 max_turns_before_compact: 100,

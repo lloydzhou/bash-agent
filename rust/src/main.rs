@@ -163,14 +163,14 @@ fn print_usage() {
     println!("Options:");
     println!("  -p, --provider PROV     LLM provider: claude | openai (default: claude)");
     println!("  -m, --model MODEL       Model name");
-    println!("  --max-tokens N          Max output tokens (default: 4096)");
+    println!("  --max-tokens N          Max output tokens (default: 16384)");
     println!("  --tool-timeout N        Tool execution timeout in seconds (default: 600)");
     println!("  --effort LEVEL          Thinking effort: low|medium|high|xhigh|max (default: high)");
     println!("  --thinking MODE         Thinking mode: adaptive|enabled|disabled (default: adaptive)");
     println!(
         "  --skill NAME            Load skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)"
     );
-    println!("  --max-turns N           Max agent turns (default: 40)");
+    println!("  --max-turns N           Max agent turns (default: 500)");
     println!("  --max-context N         Max stored context bytes before compact (default: 200000)");
     println!("  --api-key KEY           API key (default from env)");
     println!("  --base-url URL          Override API base URL");
