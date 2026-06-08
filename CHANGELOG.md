@@ -8,6 +8,25 @@
 
 ---
 
+## [4.2.3] - 2026-06-07
+
+> **Bugfix + DP 优化版本**：修复 summary 调用硬编码 max_tokens；DP 压缩添加 max_keep 上限防止无效压缩；统一默认配置值。
+
+### Changed
+
+- **默认配置值统一**：四版本 `MAX_TOKENS` 从 `4096` 调整为 `16384`，`MAX_TURNS` 从 `40`/`500` 统一为 `1000`。
+
+### Fixed
+
+- **Go summary 调用 max_tokens 硬编码**：`transport.go` 中 summary LLM 调用的 `max_tokens` 硬编码为 `4096`，改为使用配置值 `t.cfg.MaxTokens`。
+- **C summary 调用 max_tokens 硬编码**：`agent.c` 中 summary 调用的 `max_tokens` 硬编码为 `1024`，改为使用配置值 `agent->max_tokens`。
+
+### Added
+
+- **DP 压缩 max_keep 上限**：为 DP 压缩决策算法添加 `max_keep` 上限（`NR × (1 - min_keep_ratio)`），当保留行数超过上限时压缩收益太低，不值得消耗一次 LLM summary 调用。防止 turn-alignment 将实际保留率膨胀到 80%+。当 `min_keep_ratio > 0.5` 时自动退回无上限，尊重用户保守偏好。四版本（AWK/Go/Rust/C）同步实现。
+
+---
+
 ## [4.2.2] - 2026-06-06
 
 > **Bugfix + UX 版本**：iTerm2 进度波纹指示器；修复 Edit diff 颜色行计数；修复 linenoise 光标延迟折行覆盖。
