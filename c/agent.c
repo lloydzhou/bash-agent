@@ -433,19 +433,27 @@ static char *display_msg_to_event(DisplayMessage *msg) {
     return buf.data;
 }
 
-/* 推送 display 消息并同步记录事件 */
+/* 推送 display 队列 + 写入 events.jsonl。msg 所有权转移给 display 线程。 */
 static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayMessage *msg) {
     if (!msg) return;
-    /* 先记录事件（读取 msg 字段），再推送（交出 msg 所有权给 display 线程）。
-     * 顺序很重要：mq_push 后 display 线程可能异步 free(msg)，
-     * 此时再读取 msg->content 等字段就是 use-after-free。 */
-    if (paths) {
-        char *evt = display_msg_to_event(msg);
-        if (evt) {
-            store_event_append(paths, evt);
-            free(evt);
-        }
+    /* 写入 events.jsonl */
+    char *evt = display_msg_to_event(msg);
+    if (evt) {
+        store_event_append(paths, evt);
+        free(evt);
     }
+    /* 推送 display 队列（stream-json 模式由 display 线程输出事件，否则交互式渲染） */
+    if (dq && !store_event_stream_json_enabled()) {
+        mq_push(dq, msg);
+    } else {
+        display_message_free(msg);
+        free(msg);
+    }
+}
+
+/* 仅推送 display 队列（不写事件）。msg 所有权转移给 display 线程。 */
+static void display_only_push(MsgQueue *dq, DisplayMessage *msg) {
+    if (!msg) return;
     if (dq && !store_event_stream_json_enabled()) {
         mq_push(dq, msg);
     } else {
@@ -1761,10 +1769,15 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
         sb_free(&evt);
     }
 
-    /* 显示启动通知 */
+    /* 显示启动通知（事件已手动写入，只推显示队列不重复写事件） */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_start(sub_session_id, description);
-    push_display_event(&agent->paths, agent->display_queue, dm);
+    if (!store_event_stream_json_enabled()) {
+        mq_push(agent->display_queue, dm);
+    } else {
+        display_message_free(dm);
+        free(dm);
+    }
 
     /* 增加活跃子 agent 计数 */
     agent->active_sub_count++;
@@ -1806,11 +1819,16 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
                                    int request_count) {
     agent->active_sub_count--;
 
-    /* 显示结果 */
+    /* 显示结果（事件已手动写入，只推显示队列不重复写事件） */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_result(session_id, status, thinking,
                                        text, in_tokens, out_tokens);
-    push_display_event(&agent->paths, agent->display_queue, dm);
+    if (!store_event_stream_json_enabled()) {
+        mq_push(agent->display_queue, dm);
+    } else {
+        display_message_free(dm);
+        free(dm);
+    }
 
     /* 记录 usage 事件（kind=sub_agent, sub_session_id） */
     {
