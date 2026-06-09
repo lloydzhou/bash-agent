@@ -8,12 +8,15 @@
 # 编译所有版本
 make build
 
-# 运行所有测试
-make test
-
 # 清理构建产物
 make clean
 ```
+
+### ⚠ 测试规则
+
+1. **不要默认跑 Bash 测试**（`make test-bash` / `make test`）。Bash 测试非常慢（源码级测试），只在明确修改了 Bash 相关代码时才跑。
+2. **不同版本的测试不要同时跑**，会冲突（共享临时文件、端口等）。一个跑完再跑下一个。
+3. **优先跑对应版本的 e2e 测试**，而非 `make test`（后者会依次触发所有版本包括 Bash）。
 
 ### 分项命令
 
@@ -22,45 +25,26 @@ make clean
 | `make build-bash` | 编译 Bash 版本到 dist/agent.sh |
 | `make build-go` | 编译 Go 版本到 dist/goagent |
 | `make build-rust` | 编译 Rust 版本到 dist/rustagent |
-| `make test-bash` | 运行 Bash 测试 (tests/test.sh) |
-| `make test-go` | 运行 Go 单元测试 |
-| `make test-go-e2e` | 运行 Go 版本集成测试 (build + test.sh) |
-| `make test-rust` | 运行 Rust 编译检查 |
-| `make test-rust-e2e` | 运行 Rust 版本集成测试 (build + test.sh) |
-
-### 测试覆盖
-
-- **tests/test.sh** — 主要的集成测试，覆盖：
-  - 工具函数 (agent.sh 中的辅助函数)
-  - SubAgent 正常/失败/fork/隔离场景
-  - JSON 解析、配置解析
-  - 压缩决策 (compact_dp)
-  - 统计更新 (stats.awk)
-
-- **go/** — Go 版本单元测试：
-  - app_test.go — 核心应用逻辑测试
-
-- **rust/** — Rust 版本检查：
-  - cargo check — 编译验证 + 类型检查
+| `make test-bash` | ⚠ 很慢，仅在改了 Bash 代码时使用 |
+| `make test-go` | Go 单元测试（仅 go/ 目录内的 _test.go） |
+| `make test-go-e2e` | Go 集成测试：build + test.sh（推荐） |
+| `make test-rust` | Rust 编译检查 (cargo check) |
+| `make test-rust-e2e` | Rust 集成测试：build + test.sh（推荐） |
 
 ### 日常开发测试
-
-修改某个版本时，只需运行该版本的 e2e 测试，无需每次都跑 `make test`（会触发较慢的 Bash 测试）。
 
 | 改动范围 | 推荐命令 | 说明 |
 |----------|----------|------|
 | 仅 Go | `make test-go-e2e` | 编译 + 集成测试 |
 | 仅 Rust | `make test-rust-e2e` | 编译 + 集成测试 |
 | 仅 C | `make build-c && AGENT=./dist/cagent bash tests/test.sh` | 编译 + 集成测试 |
-| 仅 Bash | `make test-bash` | Bash 单元/集成测试 |
-| 全部版本 | `make test` | 跑所有版本测试 |
-
-> **提示**：`make test-bash` 是最慢的（涉及 agent.sh 源码级测试）。如果只改了 Go/Rust/C，直接用对应 e2e 命令即可，节省时间。
+| 仅 Bash | `make test-bash` | ⚠ 最慢，仅在必要时跑 |
+| 多个版本 | 逐个跑对应 e2e | **不要并行**，一个跑完再跑下一个 |
 
 ### CI 推荐流程
 
 ```bash
-# 完整检查
+# 完整检查（CI 环境，本地开发不建议）
 make build && make test
 ```
 
