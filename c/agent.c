@@ -2520,6 +2520,10 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
      * no ceiling and let DP search up to n. */
     if (max_keep < min_keep) max_keep = n;
 
+    /* H_min: minimum tokens to drop — must be several × summary output cost (S)
+     * Dropping less than H_min means compact costs more than it saves. */
+    int h_min = (int)(5.0 * S);
+
     /* ── DP 遍历所有 k ── */
     int best_k = 0;
     double best_benefit = -1e18;
@@ -2556,7 +2560,7 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
 
     int result = 0;
     if (best_benefit > 0.0) {
-        /* 对齐到 user message 边界 */
+        /* Align to user-message (turn) boundary — must cut at user turn */
         int adj = best_k;
         int cut = n - adj;
         while (cut > 0 && !is_user[cut]) {
@@ -2564,7 +2568,21 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
         }
         adj = n - cut;
         if (adj < 1) adj = 1;
-        result = adj;
+
+        /* Post-alignment guards — alignment result must satisfy both:
+         *   1. adj <= max_keep (alignment must not exceed ceiling)
+         *   2. H_actual >= h_min  (tokens dropped must justify summary cost)
+         * Cannot fall back to best_k — it is not on a user-message boundary. */
+        int abort = 0;
+        if (adj > max_keep) abort = 1;
+        if (!abort) {
+            int k_tokens = 0;
+            for (int i = n - adj; i < n; i++) k_tokens += sizes[i];
+            int h_actual = total_tokens - k_tokens;
+            if (h_actual < h_min) abort = 1;
+        }
+        if (!abort) result = adj;
+        /* else result stays 0 → no compact */
     }
 
     free(sizes);

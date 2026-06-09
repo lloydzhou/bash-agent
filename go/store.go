@@ -648,6 +648,10 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 		maxKeep = n
 	}
 
+	// H_min: minimum tokens to drop — must be several × summary output cost (S)
+	// Dropping less than H_min means compact costs more than it saves.
+	hMin := 5.0 * S
+
 	bestK := 0
 	bestBenefit := -1e18
 
@@ -694,7 +698,7 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 	}
 
 	if bestBenefit > 0 {
-		// 对齐到 user message 边界
+		// Align to user-message (turn) boundary — must cut at user turn
 		adj := bestK
 		cut := n - adj
 		for cut > 0 && roles[cut] != "user" {
@@ -703,6 +707,22 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 		adj = n - cut
 		if adj < 1 {
 			adj = 1
+		}
+
+		// Post-alignment guards — alignment result must satisfy both:
+		//   1. adj <= maxKeep (alignment must not exceed ceiling)
+		//   2. H_actual >= hMin  (tokens dropped must justify summary cost)
+		// Cannot fall back to bestK — it is not on a user-message boundary.
+		if adj > maxKeep {
+			return 0, nil
+		}
+		kTokens := 0
+		for i := n - adj; i < n; i++ {
+			kTokens += sizes[i]
+		}
+		hActual := totalTokens - kTokens
+		if hActual < int(hMin) {
+			return 0, nil
 		}
 		return adj, nil
 	}
