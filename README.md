@@ -4,6 +4,15 @@
 
 # bash-agent
 
+<p align="center">
+  <img alt="bash 4.0+" src="https://img.shields.io/badge/bash-4.0%2B-4EAA25?logo=gnubash&logoColor=white">
+  <img alt="platform Linux | macOS | WSL | Termux | iSH" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Termux%20%7C%20iSH-blue">
+  <img alt="lines 1,689" src="https://img.shields.io/badge/lines-1%2C689-informational">
+  <img alt="functions 112" src="https://img.shields.io/badge/functions-112-informational">
+  <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-green">
+  <img alt="status preview" src="https://img.shields.io/badge/status-preview-orange">
+</p>
+
 [🌐 官网](https://lloydzhou.github.io/bash-agent/) · [English](README.en.md)
 
 极简 AI coding agent runtime。纯 `bash + awk`，零运行时依赖。
