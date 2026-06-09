@@ -1647,12 +1647,9 @@ test_compact_dp_awk() {
     gen_conv 2 5000 "$conv_file"
     check "compact_dp: tiny conv -> 0" "$(dp_run 8 3 0)" "0"
 
-    # --- 37c: Medium (30k tokens, R=40) — compact is now worth it with corrected formula ---
+    # --- 37c: Medium (30k tokens, R=40) — too small to justify compact with H_min=20S=10k ---
     gen_conv 10 30000 "$conv_file"
-    result=$(dp_run 8 5 0)
-    [[ -n "$result" && "$result" != "0" ]] \
-        && { green "compact_dp: medium R=40 -> $result"; ((PASS++)); } \
-        || { red "compact_dp: medium R=40 -> $result"; ((FAIL++)); }
+    check "compact_dp: medium R=40 -> 0 (H_min guard)" "$(dp_run 8 5 0)" "0"
     # R=5 with small context should not compact
     gen_conv 3 5000 "$conv_file"
     check "compact_dp: small R=5 -> 0" "$(dp_run 1 5 0)" "0"

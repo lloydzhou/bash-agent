@@ -2521,8 +2521,10 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
     if (max_keep < min_keep) max_keep = n;
 
     /* H_min: minimum tokens to drop — must be several × summary output cost (S)
-     * Dropping less than H_min means compact costs more than it saves. */
-    int h_min = (int)(5.0 * S);
+     * Dropping less than H_min means compact costs more than it saves.
+     * 20×S: with S=500, requires dropping ≥10k tokens to justify a compact call.
+     * At R≈20 remaining calls, 10k drop saves $0.06 vs $0.04 cost — clear margin. */
+    int h_min = (int)(20.0 * S);
 
     /* ── DP 遍历所有 k ── */
     int best_k = 0;

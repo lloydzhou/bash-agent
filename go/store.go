@@ -650,7 +650,9 @@ func (s *FileStore) CompactDPDecision(cfg Config) (int, error) {
 
 	// H_min: minimum tokens to drop — must be several × summary output cost (S)
 	// Dropping less than H_min means compact costs more than it saves.
-	hMin := 5.0 * S
+	// 20×S: with S=500, requires dropping ≥10k tokens to justify a compact call.
+	// At R≈20 remaining calls, 10k drop saves $0.06 vs $0.04 cost — clear margin.
+	hMin := 20.0 * S
 
 	bestK := 0
 	bestBenefit := -1e18

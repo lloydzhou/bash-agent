@@ -741,7 +741,9 @@ pub mod compact_dp {
 
         // H_min: minimum tokens to drop — must be several × summary output cost (S)
         // Dropping less than H_min means compact costs more than it saves.
-        let h_min = (5.0 * cfg.s as f64) as usize;
+        // 20×S: with S=500, requires dropping ≥10k tokens to justify a compact call.
+        // At R≈20 remaining calls, 10k drop saves $0.06 vs $0.04 cost — clear margin.
+        let h_min = (20.0 * cfg.s as f64) as usize;
 
         let mut best_k = 0usize;
         let mut best_benefit = f64::NEG_INFINITY;
