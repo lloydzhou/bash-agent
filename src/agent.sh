@@ -629,7 +629,7 @@ llm_call() {
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(util_json_escape "$system_prompt")\""
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
     body+=",\"messages\":${messages}}"
-    $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %.200s...\033[0m\n' "$((${#body} / 1024))" "$body" >&2
+    $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %s...\033[0m\n' "$((${#body} / 1024))" "${body:0:200}" >&2
     printf '%s' "$body" | util_body_convert | llm_stream_curl | sse_convert | sse_parse
 }
 
