@@ -110,6 +110,10 @@ END {
     # no ceiling and let DP search up to NR.
     if (max_keep < min_keep) max_keep = NR
 
+    # H_min: minimum tokens to drop — must be several × summary output cost (S)
+    # Dropping less than H_min means compact costs more than it saves.
+    H_min = 5 * S
+
     best_k = 0
     best_benefit = -1e18
 
@@ -150,7 +154,7 @@ END {
     }
 
     if (best_benefit > 0) {
-        # Align to user-message (turn) boundary
+        # Align to user-message (turn) boundary — must cut at user turn
         adj = best_k
         cut = NR - adj + 1
         while (cut > 1 && role[cut] != "user") {
@@ -158,7 +162,19 @@ END {
             adj = NR - cut + 1
         }
         if (adj < 1) adj = 1
-        print adj
+
+        # Post-alignment guards — alignment result must satisfy both:
+        #   1. adj <= max_keep (alignment must not exceed ceiling)
+        #   2. H_actual >= H_min  (tokens dropped must justify summary cost)
+        # Cannot fall back to best_k — it is not on a user-message boundary.
+        abort = 0
+        if (adj > max_keep) abort = 1
+        if (!abort) {
+            H_actual = total_tokens
+            for (i = 1; i <= NR - adj; i++) H_actual -= sizes[i]
+            if (H_actual < H_min) abort = 1
+        }
+        if (abort) print "0"; else print adj
     } else {
         print "0"
     }
