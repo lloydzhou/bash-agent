@@ -489,7 +489,7 @@ test_agent_openai_tool_write() {
     target_file="/tmp/bash-agent-write-test.txt"
     rm -f "$target_file"
     output=$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test -v 'WRITE_FILE_MARKER' 2>&1) || true
-    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
     if [[ -f "$target_file" ]] && \
        grep -q $'line1\nline2\nline3' "$target_file" && \
        echo "$plain_output" | grep -Fq 'Write(/tmp/bash-agent-write-test.txt) [' && \
@@ -860,7 +860,7 @@ test_agent_edit_file() {
     printf 'prefix old-value suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_FILE_MARKER' 2>&1) || true
     local plain_output
-    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
     if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-test.txt) [+' && \
        grep -q 'new-value' "$target_file" && ! grep -q 'old-value' "$target_file"; then
         green "Agent edit_file"; ((PASS++)) || true
@@ -1029,6 +1029,17 @@ test_agent_bash_long_result() {
     fi
 }
 
+test_agent_bash_utf8_sanitize() {
+    info "Test 25c: Agent.sh bash UTF-8 sanitize (illegal bytes -> \\ufffd)"
+    local output
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_UTF8_SANITIZE_MARKER' 2>&1) || true
+    if [[ "$output" == *"UTF-8 sanitized OK."* ]]; then
+        green "Agent bash UTF-8 sanitize"; ((PASS++)) || true
+    else
+        red "Agent bash UTF-8 sanitize"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 test_agent_stream_tool_call() {
     info "Test 26: Agent.sh stream-json tool call"
     local output
@@ -1147,7 +1158,7 @@ test_agent_edit_unicode() {
     target_file="/tmp/bash-agent-edit-unicode.txt"
     printf 'prefix old-text suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_UNICODE_MARKER' 2>&1) || true
-    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
     if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-unicode.txt) [+' && grep -q '中文' "$target_file" && grep -q '日本語' "$target_file" && grep -q '한국어' "$target_file" && ! grep -q 'old-text' "$target_file"; then
         green "Agent edit_file unicode"; ((PASS++)) || true
     else
@@ -1162,7 +1173,7 @@ test_agent_edit_special_chars() {
     target_file="/tmp/bash-agent-edit-special.txt"
     printf 'prefix plain suffix\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_SPECIAL_CHARS_MARKER' 2>&1) || true
-    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
     if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-special.txt) [+' && grep -q 'quotes' "$target_file" && grep -q 'dollar' "$target_file" && grep -q '<html>' "$target_file" && grep -q 'apos' "$target_file" && ! grep -q 'plain' "$target_file"; then
         green "Agent edit_file special chars"; ((PASS++)) || true
     else
@@ -1182,7 +1193,7 @@ test_agent_edit_multiline() {
     # Lines 1-3 unchanged, lines 4-11 replaced (was 4-8), lines 12-15 (was 9-15) unchanged
     local line_count
     line_count=$(wc -l < "$target_file" | tr -d ' ')
-    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
     if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-multiline.txt) [+' \
        && grep -q 'line4_replaced_a' "$target_file" \
         && grep -q 'line11_new_h' "$target_file" \
@@ -1203,7 +1214,7 @@ test_agent_edit_code_snippet() {
     # Simulate a Go source file with tabs, braces, %v, %w format strings
     printf 'func main() {\n\tif err != nil {\n\t\treturn err\n\t}\n}\n' > "$target_file"
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'EDIT_CODE_SNIPPET_MARKER' 2>&1) || true
-    plain_output=$(printf '%s' "$output" | sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
     if echo "$plain_output" | grep -Fq 'Edit(/tmp/bash-agent-edit-code.txt) [+' \
        && grep -q 'log.Printf' "$target_file" \
         && grep -q 'fmt.Errorf' "$target_file" \
@@ -1636,12 +1647,9 @@ test_compact_dp_awk() {
     gen_conv 2 5000 "$conv_file"
     check "compact_dp: tiny conv -> 0" "$(dp_run 8 3 0)" "0"
 
-    # --- 37c: Medium (30k tokens, R=40) — compact is now worth it with corrected formula ---
+    # --- 37c: Medium (30k tokens, R=40) — too small to justify compact with H_min=20S=10k ---
     gen_conv 10 30000 "$conv_file"
-    result=$(dp_run 8 5 0)
-    [[ -n "$result" && "$result" != "0" ]] \
-        && { green "compact_dp: medium R=40 -> $result"; ((PASS++)); } \
-        || { red "compact_dp: medium R=40 -> $result"; ((FAIL++)); }
+    check "compact_dp: medium R=40 -> 0 (H_min guard)" "$(dp_run 8 5 0)" "0"
     # R=5 with small context should not compact
     gen_conv 3 5000 "$conv_file"
     check "compact_dp: small R=5 -> 0" "$(dp_run 1 5 0)" "0"
@@ -2023,6 +2031,23 @@ test_agent_compact_context() {
         green "agent_compact_context: remaining conv is valid JSONL"; ((PASS++)) || true
     else
         red "agent_compact_context: $bad_lines invalid JSONL lines after compact"; ((FAIL++)) || true
+    fi
+
+    # Verify: events.jsonl contains kind=compact usage event
+    local events_file="${session_dir}/events.jsonl"
+    if grep -q '"type":"usage"' "$events_file" 2>/dev/null && grep '"type":"usage"' "$events_file" | grep -q '"kind":"compact"'; then
+        green "agent_compact_context: usage event kind=compact recorded in events.jsonl"; ((PASS++)) || true
+    else
+        red "agent_compact_context: missing usage event kind=compact in events.jsonl"; echo "  Events: $(cat "$events_file" 2>/dev/null || echo 'N/A')"; ((FAIL++)) || true
+    fi
+
+    # Verify: compact usage event has non-zero token fields
+    local compact_evt
+    compact_evt=$(grep '"kind":"compact"' "$events_file" 2>/dev/null | head -1)
+    if [[ -n "$compact_evt" ]] && echo "$compact_evt" | grep -q '"input_tokens":[1-9]' && echo "$compact_evt" | grep -q '"output_tokens":[1-9]'; then
+        green "agent_compact_context: compact usage event has non-zero tokens"; ((PASS++)) || true
+    else
+        red "agent_compact_context: compact usage event missing or zero tokens"; echo "  Event: ${compact_evt:-N/A}"; ((FAIL++)) || true
     fi
 
     rm -rf "$home_dir"
@@ -2508,6 +2533,7 @@ test_agent_bash_invalid_mode_fails_closed
 test_agent_bash_custom_mode_allows_system_read
 test_agent_bash_allows_dev_null_redirection
 test_agent_bash_long_result
+test_agent_bash_utf8_sanitize
 test_agent_stream_tool_call
 test_agent_stream_usage_event
 test_agent_tool_result_multiline_url

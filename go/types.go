@@ -224,7 +224,7 @@ type Transport interface {
 	// Call 发起流式 LLM 调用，通过 channel 返回 Event
 	Call(ctx context.Context, messages, systemPrompt, toolDefs string, maxTokens int, thinking string) (<-chan Event, error)
 	// SummaryCall 压缩用的摘要调用
-	SummaryCall(ctx context.Context, droppedMessages string) (string, Usage, error)
+	SummaryCall(ctx context.Context, droppedMessages, systemPrompt, toolDefs string) (string, Usage, error)
 }
 
 // Display 输出显示接口（display_* 4 个方法）

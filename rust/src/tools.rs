@@ -316,9 +316,7 @@ use crate::config::Config;
                         _ => break, // EBADF（FD 被关）/ 其他错误
                     }
                 }
-                if let Ok(s) = String::from_utf8(tmp) {
-                    *sbuf.lock().unwrap() = s;
-                }
+                *sbuf.lock().unwrap() = sanitize_utf8(&tmp);
             });
 
             let ebuf = stderr_buf.clone();
@@ -333,9 +331,7 @@ use crate::config::Config;
                         _ => break,
                     }
                 }
-                if let Ok(s) = String::from_utf8(tmp) {
-                    *ebuf.lock().unwrap() = s;
-                }
+                *ebuf.lock().unwrap() = sanitize_utf8(&tmp);
             });
 
             // 使用 kqueue 事件驱动等待子进程退出 / cancel 信号 / 超时 — 零轮询
@@ -1083,6 +1079,61 @@ use crate::config::Config;
                 i = j;
             } else {
                 out.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// sanitize_utf8: replace illegal UTF-8 bytes with literal `\ufffd` text.
+    /// Ported from src/awk/sanitize_utf8.awk — ensures JSON serialization won't
+    /// fail on illegal bytes and produces the same `\ufffd` text the mock server checks for.
+    fn sanitize_utf8(data: &[u8]) -> String {
+        let mut out = String::with_capacity(data.len());
+        let mut i = 0;
+        let n = data.len();
+        while i < n {
+            let b = data[i];
+            if b < 0x80 {
+                // ASCII
+                out.push(b as char);
+                i += 1;
+            } else if b >= 0xC2 && b <= 0xDF {
+                // 2-byte: C2-DF + 80-BF
+                if i + 1 < n && data[i + 1] >= 0x80 && data[i + 1] <= 0xBF {
+                    out.push(b as char);
+                    out.push(data[i + 1] as char);
+                    i += 2;
+                } else {
+                    out.push_str("\\ufffd");
+                    i += 1;
+                }
+            } else if b >= 0xE0 && b <= 0xEF {
+                // 3-byte: E0-EF + 80-BF + 80-BF
+                if i + 2 < n && data[i + 1] >= 0x80 && data[i + 1] <= 0xBF && data[i + 2] >= 0x80 && data[i + 2] <= 0xBF {
+                    out.push(b as char);
+                    out.push(data[i + 1] as char);
+                    out.push(data[i + 2] as char);
+                    i += 3;
+                } else {
+                    out.push_str("\\ufffd");
+                    i += 1;
+                }
+            } else if b >= 0xF0 && b <= 0xF4 {
+                // 4-byte: F0-F4 + 80-BF + 80-BF + 80-BF
+                if i + 3 < n && data[i + 1] >= 0x80 && data[i + 1] <= 0xBF && data[i + 2] >= 0x80 && data[i + 2] <= 0xBF && data[i + 3] >= 0x80 && data[i + 3] <= 0xBF {
+                    out.push(b as char);
+                    out.push(data[i + 1] as char);
+                    out.push(data[i + 2] as char);
+                    out.push(data[i + 3] as char);
+                    i += 4;
+                } else {
+                    out.push_str("\\ufffd");
+                    i += 1;
+                }
+            } else {
+                // Illegal byte: C0-C1 (overlong), 80-BF (orphan continuation), F5-FF (out of range)
+                out.push_str("\\ufffd");
                 i += 1;
             }
         }

@@ -433,19 +433,27 @@ static char *display_msg_to_event(DisplayMessage *msg) {
     return buf.data;
 }
 
-/* 推送 display 消息并同步记录事件 */
+/* 推送 display 队列 + 写入 events.jsonl。msg 所有权转移给 display 线程。 */
 static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayMessage *msg) {
     if (!msg) return;
-    /* 先记录事件（读取 msg 字段），再推送（交出 msg 所有权给 display 线程）。
-     * 顺序很重要：mq_push 后 display 线程可能异步 free(msg)，
-     * 此时再读取 msg->content 等字段就是 use-after-free。 */
-    if (paths) {
-        char *evt = display_msg_to_event(msg);
-        if (evt) {
-            store_event_append(paths, evt);
-            free(evt);
-        }
+    /* 写入 events.jsonl */
+    char *evt = display_msg_to_event(msg);
+    if (evt) {
+        store_event_append(paths, evt);
+        free(evt);
     }
+    /* 推送 display 队列（stream-json 模式由 display 线程输出事件，否则交互式渲染） */
+    if (dq && !store_event_stream_json_enabled()) {
+        mq_push(dq, msg);
+    } else {
+        display_message_free(msg);
+        free(msg);
+    }
+}
+
+/* 仅推送 display 队列（不写事件）。msg 所有权转移给 display 线程。 */
+static void display_only_push(MsgQueue *dq, DisplayMessage *msg) {
+    if (!msg) return;
     if (dq && !store_event_stream_json_enabled()) {
         mq_push(dq, msg);
     } else {
@@ -1761,10 +1769,15 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
         sb_free(&evt);
     }
 
-    /* 显示启动通知 */
+    /* 显示启动通知（事件已手动写入，只推显示队列不重复写事件） */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_start(sub_session_id, description);
-    push_display_event(&agent->paths, agent->display_queue, dm);
+    if (!store_event_stream_json_enabled()) {
+        mq_push(agent->display_queue, dm);
+    } else {
+        display_message_free(dm);
+        free(dm);
+    }
 
     /* 增加活跃子 agent 计数 */
     agent->active_sub_count++;
@@ -1806,11 +1819,16 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
                                    int request_count) {
     agent->active_sub_count--;
 
-    /* 显示结果 */
+    /* 显示结果（事件已手动写入，只推显示队列不重复写事件） */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_result(session_id, status, thinking,
                                        text, in_tokens, out_tokens);
-    push_display_event(&agent->paths, agent->display_queue, dm);
+    if (!store_event_stream_json_enabled()) {
+        mq_push(agent->display_queue, dm);
+    } else {
+        display_message_free(dm);
+        free(dm);
+    }
 
     /* 记录 usage 事件（kind=sub_agent, sub_session_id） */
     {
@@ -2502,6 +2520,12 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
      * no ceiling and let DP search up to n. */
     if (max_keep < min_keep) max_keep = n;
 
+    /* H_min: minimum tokens to drop — must be several × summary output cost (S)
+     * Dropping less than H_min means compact costs more than it saves.
+     * 20×S: with S=500, requires dropping ≥10k tokens to justify a compact call.
+     * At R≈20 remaining calls, 10k drop saves $0.06 vs $0.04 cost — clear margin. */
+    int h_min = (int)(20.0 * S);
+
     /* ── DP 遍历所有 k ── */
     int best_k = 0;
     double best_benefit = -1e18;
@@ -2538,7 +2562,7 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
 
     int result = 0;
     if (best_benefit > 0.0) {
-        /* 对齐到 user message 边界 */
+        /* Align to user-message (turn) boundary — must cut at user turn */
         int adj = best_k;
         int cut = n - adj;
         while (cut > 0 && !is_user[cut]) {
@@ -2546,7 +2570,21 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
         }
         adj = n - cut;
         if (adj < 1) adj = 1;
-        result = adj;
+
+        /* Post-alignment guards — alignment result must satisfy both:
+         *   1. adj <= max_keep (alignment must not exceed ceiling)
+         *   2. H_actual >= h_min  (tokens dropped must justify summary cost)
+         * Cannot fall back to best_k — it is not on a user-message boundary. */
+        int abort = 0;
+        if (adj > max_keep) abort = 1;
+        if (!abort) {
+            int k_tokens = 0;
+            for (int i = n - adj; i < n; i++) k_tokens += sizes[i];
+            int h_actual = total_tokens - k_tokens;
+            if (h_actual < h_min) abort = 1;
+        }
+        if (!abort) result = adj;
+        /* else result stays 0 → no compact */
     }
 
     free(sizes);
@@ -2717,7 +2755,10 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         sb_append_char(&dropped, '\n');
     }
 
-    /* 调用 LLM 做 summary */
+    /* 调用 LLM 做 summary — Cache-Aligned: 复用 build_claude_request 保持前缀一致
+     * 对齐 bash 版: llm_summary_call → llm_call（含 system prompt + tools）
+     * 对齐 Rust 版: run_summary_call → build_claude_request（含 system prompt + tools）
+     * system prompt 和 tools 虽然本次调用用不到，但必须包含以命中 KV cache */
     const char *summary_instruction =
         "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. "
         "Do NOT think. Just output the summary directly as plain text. "
@@ -2725,27 +2766,30 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         "Update the existing summary snapshot using the messages above. "
         "Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:";
 
-    /* 构造 summary 请求体 */
-    /* messages 数组包含丢弃的消息 + summary 指令 */
-    StrBuf req_body;
-    sb_init(&req_body);
-    sb_append(&req_body, "{\"model\":");
-    sb_append_json_string(&req_body, agent->model);
-    {
-        char mt_buf[32];
-        snprintf(mt_buf, sizeof(mt_buf), ",\"max_tokens\":%d,", agent->max_tokens);
-        sb_append(&req_body, mt_buf);
-    }
-    sb_append(&req_body, "\"messages\":[");
-    for (int i = 0; i < drop; i++) {
-        if (i > 0) sb_append(&req_body, ",");
-        sb_append(&req_body, lines[i]);
-    }
-    sb_append(&req_body, ",{\"role\":\"user\",\"content\":");
-    sb_append_json_string(&req_body, summary_instruction);
-    sb_append(&req_body, "}]}");
+    /* 构造 conv_lines: 丢弃的消息行 + summary 指令行 */
+    StrBuf instr_line;
+    sb_init(&instr_line);
+    sb_append(&instr_line, "{\"role\":\"user\",\"content\":");
+    sb_append_json_string(&instr_line, summary_instruction);
+    sb_append(&instr_line, "}");
 
-    char *summary_body = req_body.data;
+    int summary_line_count = drop + 1;
+    char **summary_lines = malloc(sizeof(char*) * summary_line_count);
+    for (int i = 0; i < drop; i++) summary_lines[i] = lines[i];
+    summary_lines[drop] = instr_line.data;
+
+    /* 构建 system prompt（与正常 agent 请求一致） */
+    char *system_prompt = agent_build_prompt(agent);
+
+    /* 复用 build_claude_request，与正常 agent 请求保持前缀一致 */
+    char *summary_body = build_claude_request(
+        agent->model, system_prompt, embedded_tools_json,
+        summary_lines, summary_line_count,
+        agent->max_tokens, "disabled", agent->effort);
+    free(system_prompt);
+    free(instr_line.data);
+    free(summary_lines);
+
     if (strcmp(agent->provider, "openai") == 0) {
         char *openai_body = convert_to_openai(summary_body);
         free(summary_body);
@@ -2803,6 +2847,18 @@ int agent_compact_context(Agent *agent, const char *trigger) {
             store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + compact_cr);
         store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
             store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + compact_cc);
+    }
+    /* 写入 usage 事件（kind=compact），对齐 bash 版 agent_record_usage */
+    {
+        StrBuf evt;
+        sb_init(&evt);
+        sb_appendf(&evt, "{\"type\":\"usage\",\"input_tokens\":%d,\"output_tokens\":%d",
+                   compact_in, compact_out);
+        sb_appendf(&evt, ",\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d",
+                   compact_cr, compact_cc);
+        sb_append(&evt, ",\"kind\":\"compact\"}");
+        store_event_append(&agent->paths, evt.data);
+        sb_free(&evt);
     }
     /* 对齐 bash 版: store_stats_update 末尾调 display_term_title */
     agent_update_title(agent);

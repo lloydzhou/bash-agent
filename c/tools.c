@@ -592,7 +592,10 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
         r.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
     }
 
-    r.output = buf.data;
+    /* UTF-8 sanitize：与 bash 版 awk/sanitize_utf8.awk 对齐 */
+    char *sanitized = util_sanitize_utf8(buf.data);
+    free(buf.data);
+    r.output = sanitized;
     free(cmd);
     return r;
 }

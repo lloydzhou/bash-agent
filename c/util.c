@@ -80,21 +80,26 @@ void sb_truncate(StrBuf *sb, size_t len) {
 void sb_append_json_string(StrBuf *sb, const char *src) {
     if (!src) { sb_append(sb, "null"); return; }
     sb_append_char(sb, '"');
-    for (; *src; src++) {
+    while (*src) {
         unsigned char c = (unsigned char)*src;
         switch (c) {
-            case '"':  sb_append(sb, "\\\""); break;
-            case '\\': sb_append(sb, "\\\\"); break;
-            case '\b': sb_append(sb, "\\b"); break;
-            case '\f': sb_append(sb, "\\f"); break;
-            case '\n': sb_append(sb, "\\n"); break;
-            case '\r': sb_append(sb, "\\r"); break;
-            case '\t': sb_append(sb, "\\t"); break;
+            case '"':  sb_append(sb, "\\\""); src++; break;
+            case '\\': sb_append(sb, "\\\\"); src++; break;
+            case '\b': sb_append(sb, "\\b"); src++; break;
+            case '\f': sb_append(sb, "\\f"); src++; break;
+            case '\n': sb_append(sb, "\\n"); src++; break;
+            case '\r': sb_append(sb, "\\r"); src++; break;
+            case '\t': sb_append(sb, "\\t"); src++; break;
             default:
                 if (c < 0x20) {
+                    /* 控制字符 → \uXXXX（JSON 规范要求） */
                     sb_appendf(sb, "\\u%04x", c);
+                    src++;
                 } else {
+                    /* ASCII 可打印 + 所有非控制字节（含 UTF-8 多字节）原样输出
+                     * UTF-8 非法字节由上游 util_sanitize_utf8 在源头处理 */
                     sb_append_char(sb, c);
+                    src++;
                 }
                 break;
         }
@@ -113,6 +118,63 @@ void sb_append_shell_arg(StrBuf *sb, const char *src) {
         else sb_append_char(sb, *src);
     }
     sb_append_char(sb, '\'');
+}
+
+/* UTF-8 sanitize：与 awk/sanitize_utf8.awk 完全一致的逻辑
+ * 逐字节扫描，非法 UTF-8 字节替换为字面文本 \ufffd（6 个 ASCII 字符）
+ * 返回新 malloc'd 字符串，调用者负责 free
+ */
+char *util_sanitize_utf8(const char *src) {
+    if (!src) return util_strdup("");
+    size_t len = strlen(src);
+    /* 最坏情况：每个字节都非法，替换为 6 字符 \ufffd */
+    StrBuf sb;
+    sb_init(&sb);
+    sb_ensure(&sb, len * 6 + 1);
+
+    const unsigned char *p = (const unsigned char *)src;
+    const unsigned char *end = p + len;
+
+    while (p < end) {
+        unsigned char b = *p;
+        if (b < 0x80) {
+            /* ASCII (0x00-0x7F): 直接输出 */
+            sb_append_char(&sb, b);
+            p++;
+        } else if (b >= 0xC2 && b <= 0xDF) {
+            /* 2 字节序列: C2-DF + 80-BF */
+            if (p + 1 < end && p[1] >= 0x80 && p[1] <= 0xBF) {
+                sb_appendn(&sb, (const char *)p, 2);
+                p += 2;
+            } else {
+                sb_append(&sb, "\\ufffd");
+                p++;
+            }
+        } else if (b >= 0xE0 && b <= 0xEF) {
+            /* 3 字节序列: E0-EF + 80-BF + 80-BF */
+            if (p + 2 < end && p[1] >= 0x80 && p[1] <= 0xBF && p[2] >= 0x80 && p[2] <= 0xBF) {
+                sb_appendn(&sb, (const char *)p, 3);
+                p += 3;
+            } else {
+                sb_append(&sb, "\\ufffd");
+                p++;
+            }
+        } else if (b >= 0xF0 && b <= 0xF4) {
+            /* 4 字节序列: F0-F4 + 80-BF + 80-BF + 80-BF */
+            if (p + 3 < end && p[1] >= 0x80 && p[1] <= 0xBF && p[2] >= 0x80 && p[2] <= 0xBF && p[3] >= 0x80 && p[3] <= 0xBF) {
+                sb_appendn(&sb, (const char *)p, 4);
+                p += 4;
+            } else {
+                sb_append(&sb, "\\ufffd");
+                p++;
+            }
+        } else {
+            /* 非法字节: C0-C1(过长编码), 80-BF(孤立 continuation), F5-FF(超范围) */
+            sb_append(&sb, "\\ufffd");
+            p++;
+        }
+    }
+    return sb.data;
 }
 
 /* ============================================================

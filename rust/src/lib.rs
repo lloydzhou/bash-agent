@@ -739,6 +739,12 @@ pub mod compact_dp {
             if k < min_keep { n } else { k }
         };
 
+        // H_min: minimum tokens to drop — must be several × summary output cost (S)
+        // Dropping less than H_min means compact costs more than it saves.
+        // 20×S: with S=500, requires dropping ≥10k tokens to justify a compact call.
+        // At R≈20 remaining calls, 10k drop saves $0.06 vs $0.04 cost — clear margin.
+        let h_min = (20.0 * cfg.s as f64) as usize;
+
         let mut best_k = 0usize;
         let mut best_benefit = f64::NEG_INFINITY;
 
@@ -781,6 +787,7 @@ pub mod compact_dp {
             return None;
         }
 
+        // Align to user-message (turn) boundary — must cut at user turn
         let mut adj = best_k;
         let mut cut = n - adj;
         while cut > 0 && !role_user[cut] {
@@ -789,6 +796,19 @@ pub mod compact_dp {
         }
         if adj < 1 {
             adj = 1;
+        }
+
+        // Post-alignment guards — alignment result must satisfy both:
+        //   1. adj <= max_keep (alignment must not exceed ceiling)
+        //   2. H_actual >= h_min  (tokens dropped must justify summary cost)
+        // Cannot fall back to best_k — it is not on a user-message boundary.
+        if adj > max_keep {
+            return None;
+        }
+        let k_tokens: usize = sizes[n - adj..].iter().sum();
+        let h_actual = total_tokens - k_tokens;
+        if h_actual < h_min {
+            return None;
         }
         Some(adj)
     }

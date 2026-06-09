@@ -523,12 +523,13 @@ func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr string) 
 	}()
 
 	err := execCmd.Run()
-	output := stdout.String()
+	// Sanitize: replace illegal UTF-8 bytes with literal \ufffd (matches bash sanitize_utf8.awk)
+	output := sanitizeUTF8(stdout.Bytes())
 	if stderr.Len() > 0 {
 		if output != "" {
 			output += "\n"
 		}
-		output += stderr.String()
+		output += sanitizeUTF8(stderr.Bytes())
 	}
 
 	if cmdCtx.Err() == context.DeadlineExceeded {
@@ -725,6 +726,61 @@ func (td *ToolDispatcher) toolSubAgent(ctx context.Context, prompt, description,
 		return td.launcher(ctx, prompt, description, fork)
 	}
 	return "", fmt.Errorf("sub-agent launcher not configured")
+}
+
+// ─── sanitizeUTF8: 过滤非法 UTF-8 字节，替换为字面 \ufffd ───
+// 移植自 src/awk/sanitize_utf8.awk，确保 JSON 序列化不会因非法字节失败。
+func sanitizeUTF8(data []byte) string {
+	var buf strings.Builder
+	buf.Grow(len(data))
+	i := 0
+	n := len(data)
+	for i < n {
+		b := data[i]
+		if b < 0x80 {
+			// ASCII (0x00-0x7F): 直接输出
+			buf.WriteByte(b)
+			i++
+		} else if b >= 0xC2 && b <= 0xDF {
+			// 2 字节序列: C2-DF + 80-BF
+			if i+1 < n && data[i+1] >= 0x80 && data[i+1] <= 0xBF {
+				buf.WriteByte(b)
+				buf.WriteByte(data[i+1])
+				i += 2
+			} else {
+				buf.WriteString(`\ufffd`)
+				i++
+			}
+		} else if b >= 0xE0 && b <= 0xEF {
+			// 3 字节序列: E0-EF + 80-BF + 80-BF
+			if i+2 < n && data[i+1] >= 0x80 && data[i+1] <= 0xBF && data[i+2] >= 0x80 && data[i+2] <= 0xBF {
+				buf.WriteByte(b)
+				buf.WriteByte(data[i+1])
+				buf.WriteByte(data[i+2])
+				i += 3
+			} else {
+				buf.WriteString(`\ufffd`)
+				i++
+			}
+		} else if b >= 0xF0 && b <= 0xF4 {
+			// 4 字节序列: F0-F4 + 80-BF + 80-BF + 80-BF
+			if i+3 < n && data[i+1] >= 0x80 && data[i+1] <= 0xBF && data[i+2] >= 0x80 && data[i+2] <= 0xBF && data[i+3] >= 0x80 && data[i+3] <= 0xBF {
+				buf.WriteByte(b)
+				buf.WriteByte(data[i+1])
+				buf.WriteByte(data[i+2])
+				buf.WriteByte(data[i+3])
+				i += 4
+			} else {
+				buf.WriteString(`\ufffd`)
+				i++
+			}
+		} else {
+			// 非法字节: C0-C1(过长编码), 80-BF(孤立 continuation), F5-FF(超范围)
+			buf.WriteString(`\ufffd`)
+			i++
+		}
+	}
+	return buf.String()
 }
 
 // ─── FormatToolResult 截断过长输出 ───
