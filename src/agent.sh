@@ -946,7 +946,7 @@ tool_bash() {
         bash -lc "$cmd" > "$tmpout" 2>&1
         tool_rc=$?
     fi
-    cat "$tmpout"
+    util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$tmpout"
     rm -f "$tmpout"
     return "$tool_rc"
 }

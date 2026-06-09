@@ -316,9 +316,7 @@ use crate::config::Config;
                         _ => break, // EBADF（FD 被关）/ 其他错误
                     }
                 }
-                if let Ok(s) = String::from_utf8(tmp) {
-                    *sbuf.lock().unwrap() = s;
-                }
+                *sbuf.lock().unwrap() = String::from_utf8_lossy(&tmp).to_string();
             });
 
             let ebuf = stderr_buf.clone();
@@ -333,9 +331,7 @@ use crate::config::Config;
                         _ => break,
                     }
                 }
-                if let Ok(s) = String::from_utf8(tmp) {
-                    *ebuf.lock().unwrap() = s;
-                }
+                *ebuf.lock().unwrap() = String::from_utf8_lossy(&tmp).to_string();
             });
 
             // 使用 kqueue 事件驱动等待子进程退出 / cancel 信号 / 超时 — 零轮询

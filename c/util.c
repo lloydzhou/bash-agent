@@ -80,21 +80,52 @@ void sb_truncate(StrBuf *sb, size_t len) {
 void sb_append_json_string(StrBuf *sb, const char *src) {
     if (!src) { sb_append(sb, "null"); return; }
     sb_append_char(sb, '"');
-    for (; *src; src++) {
+    while (*src) {
         unsigned char c = (unsigned char)*src;
         switch (c) {
-            case '"':  sb_append(sb, "\\\""); break;
-            case '\\': sb_append(sb, "\\\\"); break;
-            case '\b': sb_append(sb, "\\b"); break;
-            case '\f': sb_append(sb, "\\f"); break;
-            case '\n': sb_append(sb, "\\n"); break;
-            case '\r': sb_append(sb, "\\r"); break;
-            case '\t': sb_append(sb, "\\t"); break;
+            case '"':  sb_append(sb, "\\\""); src++; break;
+            case '\\': sb_append(sb, "\\\\"); src++; break;
+            case '\b': sb_append(sb, "\\b"); src++; break;
+            case '\f': sb_append(sb, "\\f"); src++; break;
+            case '\n': sb_append(sb, "\\n"); src++; break;
+            case '\r': sb_append(sb, "\\r"); src++; break;
+            case '\t': sb_append(sb, "\\t"); src++; break;
             default:
                 if (c < 0x20) {
+                    /* 控制字符 → \uXXXX */
                     sb_appendf(sb, "\\u%04x", c);
-                } else {
+                    src++;
+                } else if (c < 0x80) {
+                    /* ASCII 可打印 */
                     sb_append_char(sb, c);
+                    src++;
+                } else {
+                    /* 多字节 UTF-8：验证合法性 */
+                    int seq_len, i;
+                    uint32_t cp;
+                    if      (c >= 0xF0) { seq_len = 4; cp = c & 0x07; }
+                    else if (c >= 0xE0) { seq_len = 3; cp = c & 0x0F; }
+                    else if (c >= 0xC2) { seq_len = 2; cp = c & 0x1F; }
+                    else { seq_len = 0; cp = 0; } /* 0xC0,0xC1 或 0x80-0xBF → 非法 */
+
+                    /* 检查后续字节是否都是 10xxxxxx */
+                    if (seq_len > 0) {
+                        for (i = 1; i < seq_len; i++) {
+                            if (((unsigned char)src[i] & 0xC0) != 0x80)
+                                break;
+                            cp = (cp << 6) | ((unsigned char)src[i] & 0x3F);
+                        }
+                        if (i == seq_len) {
+                            /* 合法 UTF-8 序列 → 原样输出 */
+                            for (i = 0; i < seq_len; i++)
+                                sb_append_char(sb, src[i]);
+                            src += seq_len;
+                            continue;
+                        }
+                    }
+                    /* 非法 UTF-8 字节 → \uXXXX 转义 */
+                    sb_appendf(sb, "\\u%04x", c);
+                    src++;
                 }
                 break;
         }
