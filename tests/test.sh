@@ -2025,6 +2025,23 @@ test_agent_compact_context() {
         red "agent_compact_context: $bad_lines invalid JSONL lines after compact"; ((FAIL++)) || true
     fi
 
+    # Verify: events.jsonl contains kind=compact usage event
+    local events_file="${session_dir}/events.jsonl"
+    if grep -q '"type":"usage".*"kind":"compact"' "$events_file" 2>/dev/null; then
+        green "agent_compact_context: usage event kind=compact recorded in events.jsonl"; ((PASS++)) || true
+    else
+        red "agent_compact_context: missing usage event kind=compact in events.jsonl"; echo "  Events: $(cat "$events_file" 2>/dev/null || echo 'N/A')"; ((FAIL++)) || true
+    fi
+
+    # Verify: compact usage event has non-zero token fields
+    local compact_evt
+    compact_evt=$(grep '"kind":"compact"' "$events_file" 2>/dev/null | head -1)
+    if [[ -n "$compact_evt" ]] && echo "$compact_evt" | grep -q '"input_tokens":[1-9]' && echo "$compact_evt" | grep -q '"output_tokens":[1-9]'; then
+        green "agent_compact_context: compact usage event has non-zero tokens"; ((PASS++)) || true
+    else
+        red "agent_compact_context: compact usage event missing or zero tokens"; echo "  Event: ${compact_evt:-N/A}"; ((FAIL++)) || true
+    fi
+
     rm -rf "$home_dir"
 }
 
