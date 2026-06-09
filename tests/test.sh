@@ -1029,6 +1029,17 @@ test_agent_bash_long_result() {
     fi
 }
 
+test_agent_bash_utf8_sanitize() {
+    info "Test 25c: Agent.sh bash UTF-8 sanitize (illegal bytes -> \\ufffd)"
+    local output
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_UTF8_SANITIZE_MARKER' 2>&1) || true
+    if [[ "$output" == *"UTF-8 sanitized OK."* ]]; then
+        green "Agent bash UTF-8 sanitize"; ((PASS++)) || true
+    else
+        red "Agent bash UTF-8 sanitize"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 test_agent_stream_tool_call() {
     info "Test 26: Agent.sh stream-json tool call"
     local output
@@ -2525,6 +2536,7 @@ test_agent_bash_invalid_mode_fails_closed
 test_agent_bash_custom_mode_allows_system_read
 test_agent_bash_allows_dev_null_redirection
 test_agent_bash_long_result
+test_agent_bash_utf8_sanitize
 test_agent_stream_tool_call
 test_agent_stream_usage_event
 test_agent_tool_result_multiline_url
