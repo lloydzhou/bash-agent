@@ -2484,23 +2484,44 @@ static void linenoiseWriteInternal(const char *s, size_t len) {
     if (g_ls_active && g_current_ls) {
         linenoiseHide(g_current_ls);
 
-        /* If previous output didn't end with \n, the prompt was pushed to
-         * a separate line below the output. After Hide clears that line,
-         * cursor is on a blank line. Move back up to where output ended. */
-        if (g_prompt_detached) {
-            write(STDOUT_FILENO, "\x1b[1A\r", 5);
-            if (g_output_col > 0) {
-                char seq[16];
-                int n = snprintf(seq, sizeof(seq), "\x1b[%dC", g_output_col);
-                write(STDOUT_FILENO, seq, n);
-            }
+        /* Detect terminal resize: if current width differs from cached l->cols,
+         * the terminal has reflowed its contents since last write. Our
+         * g_output_col is no longer valid. Emit \r\n to start from a known
+         * position and reset all derived state. */
+        int new_cols = getColumns(g_current_ls->ifd, g_current_ls->ofd);
+        if (new_cols != (int)g_current_ls->cols) {
+            g_current_ls->cols = new_cols;
+            g_output_col = 0;
             g_prompt_detached = 0;
-        }
+            g_current_ls->oldrows = 0;
+            g_current_ls->oldrpos = 1;
+            /* Turn OPOST on so the \r\n is processed correctly. */
+            struct termios tios;
+            if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+                tios.c_oflag |= OPOST;
+                tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+            }
+            write(STDOUT_FILENO, "\r\n", 2);
+            fflush(stdout);
+        } else {
+            /* If previous output didn't end with \n, the prompt was pushed to
+             * a separate line below the output. After Hide clears that line,
+             * cursor is on a blank line. Move back up to where output ended. */
+            if (g_prompt_detached) {
+                write(STDOUT_FILENO, "\x1b[1A\r", 5);
+                if (g_output_col > 0) {
+                    char seq[16];
+                    int n = snprintf(seq, sizeof(seq), "\x1b[%dC", g_output_col);
+                    write(STDOUT_FILENO, seq, n);
+                }
+                g_prompt_detached = 0;
+            }
 
-        struct termios tios;
-        if (tcgetattr(STDIN_FILENO, &tios) == 0) {
-            tios.c_oflag |= OPOST;
-            tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+            struct termios tios;
+            if (tcgetattr(STDIN_FILENO, &tios) == 0) {
+                tios.c_oflag |= OPOST;
+                tcsetattr(STDIN_FILENO, TCSADRAIN, &tios);
+            }
         }
     }
 
