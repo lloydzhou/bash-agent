@@ -2804,6 +2804,18 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
             store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + compact_cc);
     }
+    /* 写入 usage 事件（kind=compact），对齐 bash 版 agent_record_usage */
+    {
+        StrBuf evt;
+        sb_init(&evt);
+        sb_appendf(&evt, "{\"type\":\"usage\",\"input_tokens\":%d,\"output_tokens\":%d",
+                   compact_in, compact_out);
+        sb_appendf(&evt, ",\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d",
+                   compact_cr, compact_cc);
+        sb_append(&evt, ",\"kind\":\"compact\"}");
+        store_event_append(&agent->paths, evt.data);
+        sb_free(&evt);
+    }
     /* 对齐 bash 版: store_stats_update 末尾调 display_term_title */
     agent_update_title(agent);
 
