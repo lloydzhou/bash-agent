@@ -630,7 +630,8 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 		return false, fmt.Errorf("read dropped messages: %w", err)
 	}
 
-	summaryResponse, summaryUsage, err := a.llm.SummaryCall(ctx, droppedMessages)
+	systemPrompt := a.BuildPrompt()
+	summaryResponse, summaryUsage, err := a.llm.SummaryCall(ctx, droppedMessages, systemPrompt, a.toolDefs)
 	if err != nil {
 		return false, fmt.Errorf("summary call failed: %w", err)
 	}

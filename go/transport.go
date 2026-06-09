@@ -74,7 +74,7 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 
 // ─── SummaryCall: 压缩用的摘要调用（返回纯文本）───
 
-func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages string) (string, Usage, error) {
+func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, systemPrompt, toolDefs string) (string, Usage, error) {
 	// 将 JSONL 转成 JSON 数组，并追加 summary instruction
 	summaryInstruction := "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:"
 
@@ -92,7 +92,7 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages string)
 
 	messagesJSON, _ := json.Marshal(msgs)
 
-	ch, err := t.Call(ctx, string(messagesJSON), "", "", t.cfg.MaxTokens, "disabled")
+	ch, err := t.Call(ctx, string(messagesJSON), systemPrompt, toolDefs, t.cfg.MaxTokens, "disabled")
 	if err != nil {
 		return "", Usage{}, err
 	}

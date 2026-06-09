@@ -2753,7 +2753,10 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         sb_append_char(&dropped, '\n');
     }
 
-    /* 调用 LLM 做 summary */
+    /* 调用 LLM 做 summary — Cache-Aligned: 复用 build_claude_request 保持前缀一致
+     * 对齐 bash 版: llm_summary_call → llm_call（含 system prompt + tools）
+     * 对齐 Rust 版: run_summary_call → build_claude_request（含 system prompt + tools）
+     * system prompt 和 tools 虽然本次调用用不到，但必须包含以命中 KV cache */
     const char *summary_instruction =
         "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. "
         "Do NOT think. Just output the summary directly as plain text. "
@@ -2761,27 +2764,30 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         "Update the existing summary snapshot using the messages above. "
         "Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:";
 
-    /* 构造 summary 请求体 */
-    /* messages 数组包含丢弃的消息 + summary 指令 */
-    StrBuf req_body;
-    sb_init(&req_body);
-    sb_append(&req_body, "{\"model\":");
-    sb_append_json_string(&req_body, agent->model);
-    {
-        char mt_buf[32];
-        snprintf(mt_buf, sizeof(mt_buf), ",\"max_tokens\":%d,", agent->max_tokens);
-        sb_append(&req_body, mt_buf);
-    }
-    sb_append(&req_body, "\"messages\":[");
-    for (int i = 0; i < drop; i++) {
-        if (i > 0) sb_append(&req_body, ",");
-        sb_append(&req_body, lines[i]);
-    }
-    sb_append(&req_body, ",{\"role\":\"user\",\"content\":");
-    sb_append_json_string(&req_body, summary_instruction);
-    sb_append(&req_body, "}]}");
+    /* 构造 conv_lines: 丢弃的消息行 + summary 指令行 */
+    StrBuf instr_line;
+    sb_init(&instr_line);
+    sb_append(&instr_line, "{\"role\":\"user\",\"content\":");
+    sb_append_json_string(&instr_line, summary_instruction);
+    sb_append(&instr_line, "}");
 
-    char *summary_body = req_body.data;
+    int summary_line_count = drop + 1;
+    char **summary_lines = malloc(sizeof(char*) * summary_line_count);
+    for (int i = 0; i < drop; i++) summary_lines[i] = lines[i];
+    summary_lines[drop] = instr_line.data;
+
+    /* 构建 system prompt（与正常 agent 请求一致） */
+    char *system_prompt = agent_build_prompt(agent);
+
+    /* 复用 build_claude_request，与正常 agent 请求保持前缀一致 */
+    char *summary_body = build_claude_request(
+        agent->model, system_prompt, embedded_tools_json,
+        summary_lines, summary_line_count,
+        agent->max_tokens, "disabled", agent->effort);
+    free(system_prompt);
+    free(instr_line.data);
+    free(summary_lines);
+
     if (strcmp(agent->provider, "openai") == 0) {
         char *openai_body = convert_to_openai(summary_body);
         free(summary_body);
