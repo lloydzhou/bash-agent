@@ -6,9 +6,19 @@
 
 ## [Unreleased]
 
-### Changed
+---
 
-- **DP 压缩 H_min 从 5×S 调整为 20×S**：最低丢弃量阈值从 2500 提升至 10000 tokens（S=500）。原来的 5×S 在边界情况下"刚好划算"就触发压缩（回本仅 ~5 次请求），不够保守。20×S 确保只有丢弃量足够大（≥10k tokens）时才触发压缩，避免在 30k tokens 以下的小对话中执行不必要的压缩。四版本（AWK/Go/Rust/C）同步修改。
+## [4.2.4] - 2025-06-08
+
+> **Bugfix + 一致性版本**：修复 compact 错误处理缺失守卫导致全零 usage 事件；Go 版补充 SSE RETRY 事件处理。
+
+### Fixed
+
+- **C compact ConvTrimTail 缺少条件守卫**：`store_conv_trim_tail` 在 `keep >= line_count` 时仍然执行截断（可能清空整个文件）。添加 `if (keep < line_count)` 条件守卫，对齐 Go/Rust/Bash 版本。
+- **C compact usage 写入缺少守卫**：compact LLM 调用失败时可能产生全零 token 数据，仍写入 stats 和 usage 事件。添加 `if (compact_in > 0 || compact_out > 0 || compact_cr > 0 || compact_cc > 0)` 条件守卫，对齐 Go 版。
+- **C SSE RETRY token 重置不完整**：`sse_accum_callback` 处理 `SSE_RETRY` 时未重置 `in_tokens`/`out_tokens`/`cache_read_tokens`/`cache_creation_tokens`，导致 RETRY 后累积了错误的 token 计数。补充四个字段重置，对齐 `stream_display_callback`。
+- **Go SSE 解析器缺少 retry 事件处理**：`parseSSEStream` 未处理 `event: retry` 类型的 SSE 事件。新增 `case "retry":` 重置所有解析层局部状态（blockType/toolName/toolID/partialJSON/stopReason/token 计数），并发送 `EventRetry`。
+- **Go Agent 层缺少 EventRetry 处理**：RunLoop 事件循环未处理 `EventRetry` 事件，导致 RETRY 后旧的 text/thinking/toolCalls/toolResults 残留。新增 `case EventRetry:` 清空所有累积状态，对齐 Rust 版。
 
 ---
 

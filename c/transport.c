@@ -780,7 +780,7 @@ void sse_accum_callback(void *ctx, const SseEvent *evt) {
         break;
 
     case SSE_RETRY:
-        /* 清空当前累积 */
+        /* 清空当前累积（对齐 stream_display_callback） */
         sb_truncate(&acc->text, 0);
         sb_truncate(&acc->thinking, 0);
         for (int i = 0; i < acc->tool_count; i++) {
@@ -791,6 +791,10 @@ void sse_accum_callback(void *ctx, const SseEvent *evt) {
         acc->tool_count = 0;
         acc->stopped = 0;
         FREE_PTR(acc->stop_reason);
+        acc->in_tokens = 0;
+        acc->out_tokens = 0;
+        acc->cache_read_tokens = 0;
+        acc->cache_creation_tokens = 0;
         break;
     }
 }

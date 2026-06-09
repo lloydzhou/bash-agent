@@ -2819,10 +2819,24 @@ int agent_compact_context(Agent *agent, const char *trigger) {
                            sse_accum_callback, &accum,
                            &agent->interrupted);
 
-    if (rc == 0 && accum.text.len > 0) {
-        /* 保存 summary */
-        store_summary_set(&agent->paths, accum.text.data);
+    /* 对齐 bash 版 llm_summary_call: text 为空时报错退出，不 trim 不写 usage
+     * bash: [[ -n "$text" ]] || util_die "Failed to generate context summary..." */
+    if (rc != 0 || accum.text.len == 0) {
+        fprintf(stderr, "[compact] Failed to generate summary: rc=%d text_len=%zu stop=%s error=%s\n",
+                rc, accum.text.len,
+                accum.stop_reason ? accum.stop_reason : "none",
+                accum.error ? accum.error : "none");
+        sse_accum_free(&accum);
+        free(summary_body);
+        sb_free(&dropped);
+        for (int i = 0; i < line_count; i++) free(lines[i]);
+        free(lines);
+        return -1;
     }
+
+    /* 保存 summary */
+    store_summary_set(&agent->paths, accum.text.data);
+
     /* 保存 compact 的 token 消耗（sse_accum_free 前提取） */
     int compact_in = accum.in_tokens, compact_out = accum.out_tokens;
     int compact_cr = accum.cache_read_tokens, compact_cc = accum.cache_creation_tokens;
@@ -2830,12 +2844,14 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     free(summary_body);
     sb_free(&dropped);
 
-    /* 截断 conversation */
-    store_conv_trim_tail(agent->paths.conversation, keep);
+    /* 截断 conversation（对齐 Go 版: keepLines < totalLines 才 trim） */
+    if (keep < line_count) {
+        store_conv_trim_tail(agent->paths.conversation, keep);
+    }
 
-    /* 更新 stats（compact_request_count+1，累加 compact 的 token 消耗到 total_*）
+    /* 更新 stats + 写入 usage 事件（对齐 Go 版: tokens > 0 才写）
      * 注意：不再重置 current_turn_count — 它应始终保持 session 累计计数 */
-    {
+    if (compact_in > 0 || compact_out > 0 || compact_cr > 0 || compact_cc > 0) {
         store_stats_set_int_file(agent->paths.stats, "compact_request_count",
             store_stats_get_file_int(agent->paths.stats, "compact_request_count") + 1);
         /* 累加 compact 的 token 消耗（对齐 bash 版 agent_record_usage） */
@@ -2847,18 +2863,18 @@ int agent_compact_context(Agent *agent, const char *trigger) {
             store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + compact_cr);
         store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
             store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + compact_cc);
-    }
-    /* 写入 usage 事件（kind=compact），对齐 bash 版 agent_record_usage */
-    {
-        StrBuf evt;
-        sb_init(&evt);
-        sb_appendf(&evt, "{\"type\":\"usage\",\"input_tokens\":%d,\"output_tokens\":%d",
-                   compact_in, compact_out);
-        sb_appendf(&evt, ",\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d",
-                   compact_cr, compact_cc);
-        sb_append(&evt, ",\"kind\":\"compact\"}");
-        store_event_append(&agent->paths, evt.data);
-        sb_free(&evt);
+        /* 写入 usage 事件（kind=compact），对齐 bash 版 agent_record_usage */
+        {
+            StrBuf evt;
+            sb_init(&evt);
+            sb_appendf(&evt, "{\"type\":\"usage\",\"input_tokens\":%d,\"output_tokens\":%d",
+                       compact_in, compact_out);
+            sb_appendf(&evt, ",\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d",
+                       compact_cr, compact_cc);
+            sb_append(&evt, ",\"kind\":\"compact\"}");
+            store_event_append(&agent->paths, evt.data);
+            sb_free(&evt);
+        }
     }
     /* 对齐 bash 版: store_stats_update 末尾调 display_term_title */
     agent_update_title(agent);

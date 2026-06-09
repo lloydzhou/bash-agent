@@ -235,6 +235,19 @@ func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
 			case "error":
 				msg := t.extractJSONValue(data, "message")
 				ch <- Event{Type: EventError, Fields: []string{"ERROR", msg}}
+
+			case "retry":
+				// 对齐 Rust/C: 重置所有累积状态
+				blockType = ""
+				toolName = ""
+				toolID = ""
+				partialJSON = ""
+				stopReason = ""
+				inputTokens = 0
+				outputTokens = 0
+				cacheRead = 0
+				cacheCreate = 0
+				ch <- Event{Type: EventRetry}
 			}
 		}
 	}

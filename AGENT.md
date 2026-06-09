@@ -163,6 +163,27 @@ Summary 调用不复用独立函数，而是直接调用 `llm_call`，传入 `di
 
 > **原则**：凡是会改变下一次 LLM 请求前缀的操作（写 plan、写 summary、trim conversation），都必须在**正确的时机**执行。过早写入 = 前缀提前变化 = cache miss；过晚写入 = 数据不一致。顺序即缓存，缓存即成本。
 
+### Compact 错误处理一致性
+
+Compact 流程中的错误处理和条件守卫必须在所有版本间保持一致。缺少守卫会导致全零 usage 事件、不必要的 trim 等问题。
+
+**三版本对齐要点**：
+
+| 检查项 | Bash/Go/Rust 行为 | C 必须对齐 |
+|--------|-------------------|------------|
+| Summary 失败 | 报错退出，不 trim 不写 usage | `rc != 0 \|\| text.len == 0` → return |
+| ConvTrimTail | `if keepLines < totalLines` 才 trim | `if (keep < line_count)` |
+| Compact usage 写入 | `if tokens > 0` 才写 | `if (compact_in > 0 \|\| ...)` |
+| SSE RETRY token 重置 | Rust/C: 重置 in/out/cache_read/cache_creation | Go 也必须重置 |
+
+#### 检查清单（修改 compact 逻辑时）
+
+- [ ] Summary 失败时是否立即退出（不 trim、不写 usage）？四版本是否一致？
+- [ ] `ConvTrimTail` / `store_conv_trim_tail` 是否有 `keep < totalLines` 条件守卫？四版本是否一致？
+- [ ] Compact usage 事件写入是否有 `tokens > 0` 条件守卫？四版本是否一致？
+- [ ] SSE RETRY 事件处理是否重置了所有累积 token 计数？四版本是否一致？
+- [ ] Agent 层收到 RETRY 事件是否清空了 text/thinking/toolCalls 累积？四版本是否一致？
+
 ### 架构逻辑一致性
 
 C / Go / Rust 是 Bash 版的 **Port 版本**，整体架构必须完全复刻 Bash 版。Bash 版是主线，所有架构决策以 Bash 版为准。三个 Port 版本在 Bash 版因语言限制做不到的地方可以超越（如多线程、原子操作等），但 **Port 版本之间的差异也必须保持一致**——不允许某个 Port 版本有独有行为而其他版本没有。

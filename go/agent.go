@@ -915,6 +915,14 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 				a.emitJSON(map[string]interface{}{"type": "error", "message": loopErr})
 				// 与 bash 版对齐：ERROR 立即 break 出事件循环
 				break
+			case EventRetry:
+				// 对齐 Rust: 清空当前累积状态
+				text = ""
+				thinking = ""
+				toolCalls = nil
+				toolResults = nil
+				usage = Usage{}
+				a.emitJSON(map[string]interface{}{"type": "retry"})
 			default:
 				a.EmitDisplay(ev)
 			}
