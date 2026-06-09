@@ -2038,7 +2038,7 @@ test_agent_compact_context() {
 
     # Verify: events.jsonl contains kind=compact usage event
     local events_file="${session_dir}/events.jsonl"
-    if grep -q '"type":"usage".*"kind":"compact"' "$events_file" 2>/dev/null; then
+    if grep -q '"type":"usage"' "$events_file" 2>/dev/null && grep '"type":"usage"' "$events_file" | grep -q '"kind":"compact"'; then
         green "agent_compact_context: usage event kind=compact recorded in events.jsonl"; ((PASS++)) || true
     else
         red "agent_compact_context: missing usage event kind=compact in events.jsonl"; echo "  Events: $(cat "$events_file" 2>/dev/null || echo 'N/A')"; ((FAIL++)) || true

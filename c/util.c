@@ -92,39 +92,13 @@ void sb_append_json_string(StrBuf *sb, const char *src) {
             case '\t': sb_append(sb, "\\t"); src++; break;
             default:
                 if (c < 0x20) {
-                    /* 控制字符 → \uXXXX */
+                    /* 控制字符 → \uXXXX（JSON 规范要求） */
                     sb_appendf(sb, "\\u%04x", c);
-                    src++;
-                } else if (c < 0x80) {
-                    /* ASCII 可打印 */
-                    sb_append_char(sb, c);
                     src++;
                 } else {
-                    /* 多字节 UTF-8：验证合法性 */
-                    int seq_len, i;
-                    uint32_t cp;
-                    if      (c >= 0xF0) { seq_len = 4; cp = c & 0x07; }
-                    else if (c >= 0xE0) { seq_len = 3; cp = c & 0x0F; }
-                    else if (c >= 0xC2) { seq_len = 2; cp = c & 0x1F; }
-                    else { seq_len = 0; cp = 0; } /* 0xC0,0xC1 或 0x80-0xBF → 非法 */
-
-                    /* 检查后续字节是否都是 10xxxxxx */
-                    if (seq_len > 0) {
-                        for (i = 1; i < seq_len; i++) {
-                            if (((unsigned char)src[i] & 0xC0) != 0x80)
-                                break;
-                            cp = (cp << 6) | ((unsigned char)src[i] & 0x3F);
-                        }
-                        if (i == seq_len) {
-                            /* 合法 UTF-8 序列 → 原样输出 */
-                            for (i = 0; i < seq_len; i++)
-                                sb_append_char(sb, src[i]);
-                            src += seq_len;
-                            continue;
-                        }
-                    }
-                    /* 非法 UTF-8 字节 → \uXXXX 转义 */
-                    sb_appendf(sb, "\\u%04x", c);
+                    /* ASCII 可打印 + 所有非控制字节（含 UTF-8 多字节）原样输出
+                     * UTF-8 非法字节由上游 util_sanitize_utf8 在源头处理 */
+                    sb_append_char(sb, c);
                     src++;
                 }
                 break;
@@ -144,6 +118,63 @@ void sb_append_shell_arg(StrBuf *sb, const char *src) {
         else sb_append_char(sb, *src);
     }
     sb_append_char(sb, '\'');
+}
+
+/* UTF-8 sanitize：与 awk/sanitize_utf8.awk 完全一致的逻辑
+ * 逐字节扫描，非法 UTF-8 字节替换为字面文本 \ufffd（6 个 ASCII 字符）
+ * 返回新 malloc'd 字符串，调用者负责 free
+ */
+char *util_sanitize_utf8(const char *src) {
+    if (!src) return util_strdup("");
+    size_t len = strlen(src);
+    /* 最坏情况：每个字节都非法，替换为 6 字符 \ufffd */
+    StrBuf sb;
+    sb_init(&sb);
+    sb_ensure(&sb, len * 6 + 1);
+
+    const unsigned char *p = (const unsigned char *)src;
+    const unsigned char *end = p + len;
+
+    while (p < end) {
+        unsigned char b = *p;
+        if (b < 0x80) {
+            /* ASCII (0x00-0x7F): 直接输出 */
+            sb_append_char(&sb, b);
+            p++;
+        } else if (b >= 0xC2 && b <= 0xDF) {
+            /* 2 字节序列: C2-DF + 80-BF */
+            if (p + 1 < end && p[1] >= 0x80 && p[1] <= 0xBF) {
+                sb_appendn(&sb, (const char *)p, 2);
+                p += 2;
+            } else {
+                sb_append(&sb, "\\ufffd");
+                p++;
+            }
+        } else if (b >= 0xE0 && b <= 0xEF) {
+            /* 3 字节序列: E0-EF + 80-BF + 80-BF */
+            if (p + 2 < end && p[1] >= 0x80 && p[1] <= 0xBF && p[2] >= 0x80 && p[2] <= 0xBF) {
+                sb_appendn(&sb, (const char *)p, 3);
+                p += 3;
+            } else {
+                sb_append(&sb, "\\ufffd");
+                p++;
+            }
+        } else if (b >= 0xF0 && b <= 0xF4) {
+            /* 4 字节序列: F0-F4 + 80-BF + 80-BF + 80-BF */
+            if (p + 3 < end && p[1] >= 0x80 && p[1] <= 0xBF && p[2] >= 0x80 && p[2] <= 0xBF && p[3] >= 0x80 && p[3] <= 0xBF) {
+                sb_appendn(&sb, (const char *)p, 4);
+                p += 4;
+            } else {
+                sb_append(&sb, "\\ufffd");
+                p++;
+            }
+        } else {
+            /* 非法字节: C0-C1(过长编码), 80-BF(孤立 continuation), F5-FF(超范围) */
+            sb_append(&sb, "\\ufffd");
+            p++;
+        }
+    }
+    return sb.data;
 }
 
 /* ============================================================
