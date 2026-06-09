@@ -5,8 +5,8 @@
 # bash-agent
 
 <p align="center">
-  <img alt="bash 4.0+" src="https://img.shields.io/badge/bash-4.0%2B-4EAA25?logo=gnubash&logoColor=white">
-  <img alt="platform Linux | macOS | WSL | Termux | iSH" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Termux%20%7C%20iSH-blue">
+  <img alt="bash 5.0+" src="https://img.shields.io/badge/bash-5.0%2B-4EAA25?logo=gnubash&logoColor=white">
+  <img alt="platform Linux | macOS | WSL" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-blue">
   <img alt="lines 1,689" src="https://img.shields.io/badge/lines-1%2C689-informational">
   <img alt="functions 112" src="https://img.shields.io/badge/functions-112-informational">
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-green">
