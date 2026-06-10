@@ -162,13 +162,13 @@ use crate::config::Config;
                     let args: Args = serde_json::from_value(input.clone())?;
                     self.web_fetch(&args.url)
                 }
-                _ => bail!("Error: unknown tool: {name}"),
+                _ => bail!("unknown tool: {name}"),
             }
         }
 
         fn read(&self, path: &str, offset: Option<usize>, limit: Option<usize>) -> Result<String> {
             if path.is_empty() {
-                bail!("Error: no path provided");
+                bail!("no path provided");
             }
             let data = fs::read_to_string(path)
                 .map_err(|_| anyhow!("Error: file not found or unreadable: {path}"))?;
@@ -208,7 +208,7 @@ use crate::config::Config;
 
         fn write(&self, path: &str, content: &str) -> Result<String> {
             if path.is_empty() {
-                bail!("Error: no path provided");
+                bail!("no path provided");
             }
             if content.len() > self.config.file_write_max_bytes {
                 bail!(
@@ -227,10 +227,10 @@ use crate::config::Config;
 
         fn edit(&self, path: &str, old_s: &str, new_s: &str) -> Result<String> {
             if path.is_empty() {
-                bail!("Error: no path provided");
+                bail!("no path provided");
             }
             if old_s.is_empty() {
-                bail!("Error: empty old_string");
+                bail!("empty old_string");
             }
             let content =
                 fs::read_to_string(path).map_err(|_| anyhow!("Error: file not found: {path}"))?;
@@ -248,7 +248,7 @@ use crate::config::Config;
             }
             let updated = content.replacen(old_s, new_s, 1);
             if updated.is_empty() {
-                bail!("Error: edit produced empty result");
+                bail!("edit produced empty result");
             }
             let diff = unified_diff_color(path, &content, &updated)?;
             fs::write(path, updated)?;
@@ -259,7 +259,7 @@ use crate::config::Config;
 
         fn bash(&self, command: &str, timeout_secs: Option<u64>) -> Result<String> {
             if command.trim().is_empty() {
-                bail!("Error: no command provided");
+                bail!("no command provided");
             }
             let allowed_mode = bash_mode_normalize(
                 &std::env::var("BASH_AGENT_BASH_MODE").unwrap_or_else(|_| "0467".to_string()),
@@ -354,7 +354,7 @@ use crate::config::Config;
                     // 先关闭 FD 再返回错误
                     unsafe { libc::close(stdout_fd); }
                     unsafe { libc::close(stderr_fd); }
-                    bail!("Error: wait failed: {e}");
+                    bail!("wait failed: {e}");
                 }
             }
 
@@ -382,7 +382,7 @@ use crate::config::Config;
 
         fn glob(&self, pattern: &str, path: &str) -> Result<String> {
             if pattern.is_empty() {
-                bail!("Error: no pattern provided");
+                bail!("no pattern provided");
             }
             let _ = Command::new("rg")
                 .arg("--version")
@@ -404,7 +404,7 @@ use crate::config::Config;
             context: Option<usize>,
         ) -> Result<String> {
             if pattern.is_empty() {
-                bail!("Error: no pattern provided");
+                bail!("no pattern provided");
             }
             let _ = Command::new("rg")
                 .arg("--version")
@@ -437,7 +437,7 @@ use crate::config::Config;
                 let content = t.content.as_str();
                 let status = t.status.as_str();
                 if content.is_empty() {
-                    bail!("Error: todo item content is required");
+                    bail!("todo item content is required");
                 }
                 match status {
                     "pending" => lines.push(format!("- [ ] {content}")),
@@ -445,7 +445,7 @@ use crate::config::Config;
                         lines.push(format!("- [ ] {content}"));
                     }
                     "completed" => lines.push(format!("- [x] {content}")),
-                    _ => bail!("Error: invalid todo status: {status}"),
+                    _ => bail!("invalid todo status: {status}"),
                 }
             }
             Ok(lines.join("\n"))
@@ -454,10 +454,10 @@ use crate::config::Config;
         fn tool_skill(&self, name: &str) -> Result<String> {
             let name = name.trim();
             if name.is_empty() {
-                bail!("Error: no skill name provided");
+                bail!("no skill name provided");
             }
             let Some(skill_file) = prompt::resolve_skill_file(&self.cwd, &self.home, name) else {
-                bail!("Error: skill not found: {name}");
+                bail!("skill not found: {name}");
             };
             let base_dir = skill_file.parent().unwrap_or(Path::new(""));
             let content = fs::read_to_string(&skill_file)?
@@ -470,7 +470,7 @@ use crate::config::Config;
 
         fn web_search(&self, query: &str) -> Result<String> {
             if query.is_empty() {
-                bail!("Error: no query provided");
+                bail!("no query provided");
             }
             let rt = crate::agent::tokio_runtime();
             let client = reqwest::Client::new();
@@ -495,7 +495,7 @@ use crate::config::Config;
 
         fn web_fetch(&self, url: &str) -> Result<String> {
             if url.is_empty() {
-                bail!("Error: no url provided");
+                bail!("no url provided");
             }
             let rt = crate::agent::tokio_runtime();
             let client = reqwest::Client::new();
@@ -1028,16 +1028,16 @@ use crate::config::Config;
                             Ok(o) if o.status.success() || o.status.code() == Some(1) => {
                                 Ok(String::from_utf8_lossy(&o.stdout).to_string())
                             }
-                            _ => bail!("Error: diff failed"),
+                            _ => bail!("diff failed"),
                         }
                     } else {
                         Ok(stdout)
                     }
                 } else {
-                    bail!("Error: diff failed")
+                    bail!("diff failed")
                 }
             }
-            Err(_) => bail!("Error: diff failed"),
+            Err(_) => bail!("diff failed"),
         }
     }
 

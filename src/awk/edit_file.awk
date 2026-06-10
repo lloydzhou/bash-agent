@@ -11,24 +11,24 @@ BEGIN {
     new = extract_str(json_input, "new_string")
 
     if (path == "") {
-        print "Error: no path provided" > "/dev/stderr"
+        print "no path provided" > "/dev/stderr"
         exit 2
     }
     if (old == "") {
-        print "Error: empty old_string" > "/dev/stderr"
+        print "empty old_string" > "/dev/stderr"
         exit 2
     }
 
     rc = (getline data < path)
     close(path)
     if (rc < 0) {
-        print "Error: file not found: " path > "/dev/stderr"
+        print "file not found: " path > "/dev/stderr"
         exit 2
     }
 
     i = index(data, old)
     if (i == 0) {
-        print "Error: old_string not found in " path ". Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit." > "/dev/stderr"
+        print "old_string not found in " path ". Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit." > "/dev/stderr"
         exit 2
     }
 
