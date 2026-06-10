@@ -252,13 +252,9 @@ use crate::config::Config;
             }
             let diff = unified_diff_color(path, &content, &updated)?;
             fs::write(path, updated)?;
-            if diff.is_empty() {
-                Ok(format!("Edit({path}) [no changes]"))
-            } else {
-                let (added, removed) = count_diff_lines(&diff);
-                let summary = format!("Edit({path}) [+{added} -{removed} lines]");
-                Ok(format!("{summary}\n{diff}\n"))
-            }
+            let (added, removed) = count_diff_lines(&diff);
+            let summary = format!("Success: Edit({path}) [+{added} -{removed} lines]");
+            Ok(format!("{summary}\n{diff}"))
         }
 
         fn bash(&self, command: &str, timeout_secs: Option<u64>) -> Result<String> {

@@ -323,7 +323,7 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 		}
 	}
 
-	result := fmt.Sprintf("Edit(%s) [+%d -%d lines]", p, added, removed)
+	result := fmt.Sprintf("Success: Edit(%s) [+%d -%d lines]", p, added, removed)
 	if diffOutput != "" {
 		result += "\n" + diffOutput
 	}

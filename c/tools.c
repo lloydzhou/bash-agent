@@ -203,12 +203,12 @@ static ToolResult tool_edit(const char *input_json) {
 
     /* 生成 diff 摘要 — 对齐 bash 版: diff -u --label a/$label --label b/$label */
     int added = 0, removed = 0;
+    StrBuf diffout;
+    sb_init(&diffout);
     {
-        /* 用临时文件做 diff - 先保存旧内容，再保存新内容 */
         char tmppath_old[256], tmppath_new[256];
         snprintf(tmppath_old, sizeof(tmppath_old), "/tmp/edit_diff_old_%d.tmp", (int)getpid());
         snprintf(tmppath_new, sizeof(tmppath_new), "/tmp/edit_diff_new_%d.tmp", (int)getpid());
-        
         FILE *tmpf_old = fopen(tmppath_old, "w");
         FILE *tmpf_new = fopen(tmppath_new, "w");
         if (tmpf_old && tmpf_new) {
@@ -216,7 +216,6 @@ static ToolResult tool_edit(const char *input_json) {
             fclose(tmpf_old);
             fputs(new_content, tmpf_new);
             fclose(tmpf_new);
-
             StrBuf diffcmd;
             sb_init(&diffcmd);
             const char *label = path;
@@ -225,13 +224,9 @@ static ToolResult tool_edit(const char *input_json) {
                        label, label, tmppath_old, tmppath_new);
             FILE *dp = popen(diffcmd.data, "r");
             if (dp) {
-                StrBuf diffout;
-                sb_init(&diffout);
                 char lbuf[65536];
                 while (fgets(lbuf, sizeof(lbuf), dp)) {
-                    /* 计数 added/removed 行 — 跳过 ANSI escape (\x1b[...m) */
                     const char *p = lbuf;
-                    /* skip all consecutive ANSI CSI sequences */
                     while (*p == '\x1b' && *(p+1) == '[') {
                         p += 2;
                         while (*p && !(('A' <= *p && *p <= 'Z') || ('a' <= *p && *p <= 'z'))) p++;
@@ -242,21 +237,6 @@ static ToolResult tool_edit(const char *input_json) {
                     sb_append(&diffout, lbuf);
                 }
                 pclose(dp);
-
-                /* 输出: Edit(path) [+N -N lines]\n<diff> */
-                StrBuf buf;
-                sb_init(&buf);
-                sb_appendf(&buf, "Edit(%s) [+%d -%d lines]\n", path, added, removed);
-                if (diffout.len > 0) {
-                    sb_append(&buf, diffout.data);
-                }
-                r.output = buf.data;
-                sb_free(&diffout);
-            } else {
-                StrBuf buf;
-                sb_init(&buf);
-                sb_appendf(&buf, "Edit(%s) [+%d -%d lines]", path, 0, 0);
-                r.output = buf.data;
             }
             sb_free(&diffcmd);
             remove(tmppath_old);
@@ -264,12 +244,19 @@ static ToolResult tool_edit(const char *input_json) {
         } else {
             if (tmpf_old) fclose(tmpf_old);
             if (tmpf_new) fclose(tmpf_new);
-            StrBuf buf;
-            sb_init(&buf);
-            sb_appendf(&buf, "Edit(%s) [diff unavailable]", path);
-            r.output = buf.data;
         }
     }
+    /* 统一输出（对齐 bash 版：只有一个 Success 输出点） */
+    {
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Success: Edit(%s) [+%d -%d lines]\n", path, added, removed);
+        if (diffout.len > 0) {
+            sb_append(&buf, diffout.data);
+        }
+        r.output = buf.data;
+    }
+    sb_free(&diffout);
 
     if (util_write_file(path, new_content) != 0) {
         r.output = util_strdup("Error: cannot write file");

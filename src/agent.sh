@@ -921,7 +921,7 @@ tool_edit() {
     removed=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)*-[^-]') || removed=0
     cat "$tmp" > "$path"
     rm -f "$tmp"
-    printf 'Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"
+    printf 'Success: Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"
     [[ -n "$diff_output" ]] && printf '%s\n' "$diff_output"
 }
 
