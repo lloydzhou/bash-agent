@@ -9,6 +9,26 @@
 #include "json.h"
 #include "util.h"
 
+/* DP Compact 配置结构体 */
+typedef struct {
+    int baseline_e;
+    int e_fixed;
+    double L_fixed;
+    double V;
+    double p_input;
+    double p_cache;
+    double p_out;
+    double S;
+    double min_keep_ratio;
+    double r;
+    double beta;
+    double quality_penalty;
+    int max_context;
+} DPConfig;
+
+/* 初始化 DP 配置（从环境变量读取，默认值对齐 bash 版） */
+DPConfig dp_config_init(int max_context_tokens);
+
 /*
  * Agent — 核心逻辑层
  *
@@ -32,6 +52,9 @@ typedef struct {
     int interactive;
     char *thinking;
     char *effort;
+
+    /* DP Compact 配置 */
+    DPConfig dp_cfg;
 
     /* Skills */
     char **skill_names;

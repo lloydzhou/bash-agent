@@ -926,7 +926,7 @@ pub mod compact_dp {
                 v: 0,
                 s: 0,
                 beta: 0.001,
-                min_keep_ratio: 0.12,
+                min_keep_ratio: 0.25,
                 max_context: 200000,
                 ..DPCompactConfig::default()
             };
@@ -970,7 +970,7 @@ pub mod compact_dp {
                 v: 0,
                 s: 0,
                 beta: 0.001,
-                min_keep_ratio: 0.12,
+                min_keep_ratio: 0.25,
                 max_context: 200000,
                 ..DPCompactConfig::default()
             };

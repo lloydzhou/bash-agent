@@ -229,7 +229,7 @@ DP 算法相关环境变量：
 | `DP_R` | `0.8` | 单次摘要信息保留率 |
 | `DP_BETA` | `0.03` | 信息损失惩罚系数 |
 | `DP_QUALITY_PENALTY` | `0.2` | 质量衰减惩罚系数（基于"Lost in the Middle"等研究） |
-| `DP_MIN_KEEP_RATIO` | `0.12` | 最少保留消息比例 |
+| `DP_MIN_KEEP_RATIO` | `0.25` | 最少保留消息比例 |
 
 ## Context 压缩
 
