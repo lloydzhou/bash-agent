@@ -1,5 +1,13 @@
 #include "tools.h"
 #include "util.h"
+
+/* When building test_classify, expose static functions */
+#ifdef TEST_CLASSIFY
+#define STATIC
+#else
+#define STATIC static
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -312,11 +320,11 @@ static ToolResult tool_edit(const char *input_json) {
     return r;
 }
 
-static int bash_starts_with(const char *s, const char *prefix) {
+STATIC int bash_starts_with(const char *s, const char *prefix) {
     return s && prefix && strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
-static int bash_contains(const char *s, const char *needle) {
+STATIC int bash_contains(const char *s, const char *needle) {
     return s && needle && strstr(s, needle) != NULL;
 }
 
@@ -334,14 +342,16 @@ static void bash_mode_normalize(const char *mode, char out[5]) {
     memcpy(out, "0000", 5);
 }
 
-static void bash_add_mode(unsigned short *mask, int scopes, int perms) {
+static char g_cwd[1024] = "";
+
+STATIC void bash_add_mode(unsigned short *mask, int scopes, int perms) {
     if (scopes & 8) *mask |= (unsigned short)(perms << 9);
     if (scopes & 4) *mask |= (unsigned short)(perms << 6);
     if (scopes & 2) *mask |= (unsigned short)(perms << 3);
     if (scopes & 1) *mask |= (unsigned short)perms;
 }
 
-static int bash_is_system_path(const char *path) {
+STATIC int bash_is_system_path(const char *path) {
     const char *sys[] = {"/etc", "/usr", "/bin", "/sbin", "/var", "/library", "/system", "/dev", NULL};
     for (int i = 0; sys[i]; i++) {
         size_t n = strlen(sys[i]);
@@ -350,7 +360,7 @@ static int bash_is_system_path(const char *path) {
     return 0;
 }
 
-static int bash_is_sensitive_path(const char *path) {
+STATIC int bash_is_sensitive_path(const char *path) {
     size_t len = strlen(path);
     return strstr(path, "/.ssh") || strstr(path, "/.gnupg") || strstr(path, "/.aws") ||
            strstr(path, "/.docker") || (len >= 4 && strcmp(path + len - 4, ".env") == 0) ||
@@ -358,7 +368,7 @@ static int bash_is_sensitive_path(const char *path) {
            strstr(path, "token") || strstr(path, "credential") || strstr(path, "secret");
 }
 
-static void bash_add_path(unsigned short *mask, const char *path, int perms) {
+STATIC void bash_add_path(unsigned short *mask, const char *path, int perms) {
     char buf[1024];
     size_t len;
     int scope = 1;
@@ -371,11 +381,12 @@ static void bash_add_path(unsigned short *mask, const char *path, int perms) {
     if (!buf[0] || strcmp(buf, "/tmp") == 0 || strncmp(buf, "/tmp/", 5) == 0 || strcmp(buf, "/dev/null") == 0 || buf[0] == '&') return;
     if (strncmp(buf, "/dev/tcp", 8) == 0) scope = 2;
     else if (bash_is_sensitive_path(buf) || bash_is_system_path(buf)) scope = 8;
+    else if (g_cwd[0] != '\0' && (strcmp(buf, g_cwd) == 0 || (strncmp(buf, g_cwd, strlen(g_cwd)) == 0 && buf[strlen(g_cwd)] == '/'))) scope = 1;
     else if ((buf[0] == '/' && buf[1]) || strncmp(buf, "~/", 2) == 0 || strncmp(buf, "$home", 5) == 0 || strstr(buf, "..")) scope = 4;
     bash_add_mode(mask, scope, perms);
 }
 
-static int bash_is_block_device_path(const char *path) {
+STATIC int bash_is_block_device_path(const char *path) {
     const char *dev = strstr(path, "/dev/");
     if (!dev) return 0;
     dev += 5;
@@ -384,7 +395,7 @@ static int bash_is_block_device_path(const char *path) {
            strncmp(dev, "nvme", 4) == 0;
 }
 
-static void bash_scan_segment(unsigned short *mask, const char *seg) {
+STATIC void bash_scan_segment(unsigned short *mask, const char *seg) {
     char *copy, *save = NULL, *tok;
     int redir = 0, path_bits = 4, flags = 0;
     if (bash_starts_with(seg, "sudo ") || bash_starts_with(seg, "su ") || bash_starts_with(seg, "doas ") ||
@@ -410,6 +421,9 @@ static void bash_scan_segment(unsigned short *mask, const char *seg) {
         bash_starts_with(seg, "python") || bash_starts_with(seg, "node ") || bash_starts_with(seg, "ruby ") || bash_starts_with(seg, "perl ") ||
         bash_starts_with(seg, "npm test") || bash_starts_with(seg, "npm run") || bash_starts_with(seg, "make") ||
         bash_starts_with(seg, "cargo test") || bash_starts_with(seg, "cargo build") || bash_starts_with(seg, "go test") ||
+          bash_starts_with(seg, "git commit") || bash_starts_with(seg, "git add") || bash_starts_with(seg, "git checkout") ||
+          bash_starts_with(seg, "git merge") || bash_starts_with(seg, "git rebase") || bash_starts_with(seg, "git stash") ||
+          bash_starts_with(seg, "git cherry-pick") ||
         bash_contains(seg, "function ") || bash_contains(seg, "()") || bash_contains(seg, "{") || bash_contains(seg, " if ") ||
         bash_starts_with(seg, "if ") || bash_contains(seg, " for ") || bash_starts_with(seg, "for ") || bash_contains(seg, " while ") ||
         bash_starts_with(seg, "while ") || bash_contains(seg, " case ") || bash_starts_with(seg, "case ") || bash_contains(seg, ":(){:|:&};:"))
@@ -419,6 +433,8 @@ static void bash_scan_segment(unsigned short *mask, const char *seg) {
         bash_contains(seg, "sed -i") || bash_contains(seg, " -delete") || bash_starts_with(seg, "git fetch") ||
         bash_starts_with(seg, "git pull") || bash_starts_with(seg, "git clone") || bash_starts_with(seg, "npm install") ||
         bash_starts_with(seg, "pnpm install") || bash_starts_with(seg, "yarn install") || bash_starts_with(seg, "cargo build") ||
+          bash_starts_with(seg, "git commit") || bash_starts_with(seg, "git add") || bash_starts_with(seg, "git checkout") ||
+          bash_starts_with(seg, "git merge") || bash_starts_with(seg, "git rebase") || bash_starts_with(seg, "git stash") ||
         bash_starts_with(seg, "go test") || bash_starts_with(seg, "npm test")) {
         path_bits = 6;
         flags = 1;
@@ -455,10 +471,16 @@ static void bash_scan_segment(unsigned short *mask, const char *seg) {
     if (flags == 1 && !bash_contains(seg, "/tmp/")) bash_add_mode(mask, 1, 2);
 }
 
-static void bash_classify_required_mode(const char *cmd, char out[5]) {
+STATIC void bash_classify_required_mode(const char *cmd, char out[5]) {
     char *lower, *cursor, *segment, *save = NULL;
     unsigned short mask = 0;
     size_t n;
+    /* Set CWD for path classification */
+    if (getcwd(g_cwd, sizeof(g_cwd) - 1)) {
+        for (cursor = g_cwd; *cursor; cursor++) *cursor = (char)tolower((unsigned char)*cursor);
+    } else {
+        g_cwd[0] = '\0';
+    }
     if (!cmd || !*cmd) {
         memcpy(out, "0000", 5);
         return;

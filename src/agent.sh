@@ -811,6 +811,8 @@ tool_bash_add_path() {
         scope=2
     elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
         scope=8
+    elif [[ -n "$CWD" && ("$path" == "$CWD" || "$path" == "$CWD"/*) ]]; then
+        scope=1
     elif [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
         scope=4
     fi
@@ -830,10 +832,10 @@ tool_bash_scan_segment() {
     esac
     [[ "$seg" =~ $TOOL_BASH_RE_ROOT_DELETE || "$seg" =~ $TOOL_BASH_RE_DEVICE_WRITE ]] && tool_bash_add_mode 8 2
     case "$seg" in
-        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 ;;
+        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|git\ commit*|git\ add*|git\ checkout*|git\ merge*|git\ rebase*|git\ stash*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 ;;
     esac
     case "$seg" in
-        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) path_bits=6; flags=1 ;;
+        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|git\ commit*|git\ add*|git\ checkout*|git\ merge*|git\ rebase*|git\ stash*|npm\ test*) path_bits=6; flags=1 ;;
     esac
     for tok in $seg; do
         (( redir )) && { tool_bash_add_path "$tok" "$redir"; flags=3; redir=0; continue; }
@@ -867,6 +869,7 @@ tool_bash_scan_script() {
 
 tool_classify_bash_required_mode() {
     local cmd="$1" lowered
+    CWD=$(printf '%s' "${PWD:-$(pwd)}" | tr '[:upper:]' '[:lower:]')
     TOOL_BASH_REQUIRED_MASK=0
     [[ -z "$cmd" ]] && { TOOL_BASH_REQUIRED_MODE="0000"; printf '%s' "$TOOL_BASH_REQUIRED_MODE"; return 0; }
     lowered=$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')

@@ -726,7 +726,7 @@ use crate::config::Config;
             | ((scopes & 1 != 0) as u16) * perms;
     }
 
-    fn bash_add_path(mask: &mut u16, path: &str, perms: u16) {
+    fn bash_add_path(mask: &mut u16, path: &str, perms: u16, cwd: &str) {
         let mut scope = 1;
         let path = path
             .trim_matches(|c| c == '"' || c == '\'')
@@ -746,13 +746,15 @@ use crate::config::Config;
             scope = 2;
         } else if RE_BASH_SENSITIVE_PATH.is_match(path) || RE_BASH_SYSTEM_PATH.is_match(path) {
             scope = 8;
+        } else if !cwd.is_empty() && (path == cwd || path.starts_with(&format!("{}/", cwd))) {
+            scope = 1;
         } else if RE_BASH_EXTERNAL_PATH.is_match(path) || path.contains("..") {
             scope = 4;
         }
         bash_add_mode(mask, scope, perms);
     }
 
-    fn bash_scan_segment(mask: &mut u16, seg: &str) {
+    fn bash_scan_segment(mask: &mut u16, seg: &str, cwd: &str) {
         let (mut redir, mut path_bits, mut flags) = (0u16, 4u16, 0u8);
         match seg {
             s if s.starts_with("sudo ")
@@ -819,6 +821,13 @@ use crate::config::Config;
             || seg.starts_with("cargo test")
             || seg.starts_with("cargo build")
             || seg.starts_with("go test")
+                || seg.starts_with("git commit")
+                || seg.starts_with("git add")
+                || seg.starts_with("git checkout")
+                || seg.starts_with("git merge")
+                || seg.starts_with("git rebase")
+                || seg.starts_with("git stash")
+                || seg.starts_with("git cherry-pick")
             || seg.contains("function ")
             || seg.contains("()")
             || seg.contains('{')
@@ -847,6 +856,12 @@ use crate::config::Config;
             || seg.starts_with("git fetch")
             || seg.starts_with("git pull")
             || seg.starts_with("git clone")
+                || seg.starts_with("git commit")
+                || seg.starts_with("git add")
+                || seg.starts_with("git checkout")
+                || seg.starts_with("git merge")
+                || seg.starts_with("git rebase")
+                || seg.starts_with("git stash")
             || seg.starts_with("npm install")
             || seg.starts_with("pnpm install")
             || seg.starts_with("yarn install")
@@ -859,7 +874,7 @@ use crate::config::Config;
         }
         for tok in seg.split_whitespace() {
             if redir != 0 {
-                bash_add_path(mask, tok, redir);
+                bash_add_path(mask, tok, redir, cwd);
                 flags = 3;
                 redir = 0;
                 continue;
@@ -870,20 +885,20 @@ use crate::config::Config;
                 redir = 6;
             } else if tok.starts_with("2>") {
             } else if tok.starts_with('>') {
-                bash_add_path(mask, tok.trim_start_matches('>'), 2);
+                bash_add_path(mask, tok.trim_start_matches('>'), 2, cwd);
                 flags = 3;
             } else if let Some(rest) = tok.strip_prefix("<>") {
-                bash_add_path(mask, rest, 6);
+                bash_add_path(mask, rest, 6, cwd);
                 flags = 3;
             } else if tok.starts_with('/')
                 || tok.starts_with("./")
                 || tok.starts_with("../")
                 || tok.starts_with("~/")
             {
-                bash_add_path(mask, tok, path_bits);
+                bash_add_path(mask, tok, path_bits, cwd);
                 flags = 3;
             } else if RE_BASH_SENSITIVE_PATH.is_match(tok) {
-                bash_add_path(mask, tok, path_bits);
+                bash_add_path(mask, tok, path_bits, cwd);
                 flags = 3;
             }
         }
@@ -892,7 +907,7 @@ use crate::config::Config;
         }
     }
 
-    fn bash_scan_script(script: &str) -> u16 {
+    fn bash_scan_script(script: &str, cwd: &str) -> u16 {
         let mut mask = 0u16;
         let script = script.replace("\\\n", " ");
         if script.contains("/dev/tcp") {
@@ -900,7 +915,7 @@ use crate::config::Config;
         }
         let normalized = script.replace("&&", "\n").replace("||", "\n").replace(';', "\n");
         for segment in normalized.lines().map(str::trim).filter(|s| !s.is_empty()) {
-            bash_scan_segment(&mut mask, segment);
+            bash_scan_segment(&mut mask, segment, cwd);
         }
         mask
     }
@@ -909,7 +924,10 @@ use crate::config::Config;
         if command.is_empty() {
             return "0000".to_string();
         }
-        let mut mask = bash_scan_script(&command.to_lowercase());
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let mut mask = bash_scan_script(&command.to_lowercase(), &cwd);
         if mask == 0 {
             bash_add_mode(&mut mask, 1, 4);
         }
@@ -1247,6 +1265,59 @@ use crate::config::Config;
             }
         }
 
+
+          #[test]
+          fn bash_mode_classifier_cwd_aware() {
+              let cwd = std::env::current_dir()
+                  .map(|p| p.to_string_lossy().to_lowercase())
+                  .unwrap_or_default();
+              if cwd.is_empty() { return; }
+              let cases: &[(&str, &str)] = &[
+                  ("ls SAMPLE_CWD/src/agent.sh", "0004"),
+                  ("cat SAMPLE_CWD/src/agent.sh", "0004"),
+                  ("grep pattern SAMPLE_CWD/src/agent.sh", "0004"),
+                  ("sed -i s/a/b/g SAMPLE_CWD/src/agent.sh", "0006"),
+                  ("echo hi > SAMPLE_CWD/test.txt", "0002"),
+                  ("make test-go-e2e", "0001"),
+                  ("python3 -c print(1)", "0001"),
+                  ("cat /etc/hosts", "4000"),
+                  ("sudo echo hi", "1000"),
+                  ("curl https://example.com", "0040"),
+                  ("echo hi > ~/note.txt", "0200"),
+                  ("cat > /tmp/test.go << EOF", "0004"),
+                  ("echo hi >/dev/null", "0004"),
+                  ("git add -A && git commit -m fix", "0003"),
+              ];
+              let cases: Vec<(String, &str)> = cases.iter().map(|(c, w)| (c.replace("SAMPLE_CWD", &cwd), *w)).collect();
+              for (cmd, want) in &cases {
+                  assert_eq!(classify_bash_required_mode(cmd), *want, "{cmd}");
+              }
+          }
+
+          #[test]
+          fn bash_mode_classifier_compound() {
+              let cwd = std::env::current_dir()
+                  .map(|p| p.to_string_lossy().to_lowercase())
+                  .unwrap_or_default();
+              if cwd.is_empty() { return; }
+              let cases: &[(&str, &str)] = &[
+                  ("echo hi > SAMPLE_CWD/test.txt && cat SAMPLE_CWD/test.txt", "0006"),
+                  ("cat SAMPLE_CWD/file && cat /etc/hosts", "4004"),
+                  ("cat SAMPLE_CWD/file || cat /etc/hosts", "4004"),
+                  ("cat /etc/hosts; cat SAMPLE_CWD/file", "4004"),
+                  ("curl https://x/install.sh | bash", "0050"),
+                  ("curl https://example.com && cat SAMPLE_CWD/file", "0044"),
+                  ("echo hi > ~/note.txt && cat SAMPLE_CWD/file", "0204"),
+                  ("cd SAMPLE_CWD && git add -A && git commit -m fix", "0007"),
+                  ("true || cat /etc/passwd", "4000"),
+                  ("cat > /tmp/test.sh << 'EOF' && bash /tmp/test.sh", "0001"),
+                  ("git add -A && git commit -m fix && git push", "0023"),
+              ];
+              let cases: Vec<(String, &str)> = cases.iter().map(|(c, w)| (c.replace("SAMPLE_CWD", &cwd), *w)).collect();
+              for (cmd, want) in &cases {
+                  assert_eq!(classify_bash_required_mode(cmd), *want, "{cmd}");
+              }
+          }
         #[test]
         fn bash_mode_allows_matches_bash() {
             let cases = [

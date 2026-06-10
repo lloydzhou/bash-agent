@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e update-system-prompt-golden clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify update-system-prompt-golden clean
 
 build: build-bash build-go build-rust build-tcode build-c
 
@@ -50,6 +50,9 @@ test-rust-e2e: build-rust
 
 test-c-e2e: build-c
 	AGENT=./dist/cagent bash tests/test.sh
+
+test-c-classify: build-c
+	$(MAKE) -C c test-classify
 
 update-system-prompt-golden: build-bash
 	bash scripts/update-system-prompt-golden.sh
