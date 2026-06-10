@@ -252,6 +252,10 @@ jobs:
       - name: Show artifacts
         run: ls -lh dist
 
+
+      - name: Build .deb packages
+        run: bash scripts/build-deb.sh "${{ github.ref_name }}" dist dist
+
       - name: Generate checksums
         env:
           ARCHIVE_URL: https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.ref_name }}.tar.gz
@@ -274,7 +278,10 @@ jobs:
               cagent-linux-arm64 \
               cagent-darwin-amd64 \
               cagent-darwin-arm64 \
-              tcode > checksums.txt
+              tcode \
+              bash-agent_*_all.deb \
+              bash-agent_*_amd64.deb \
+              bash-agent_*_arm64.deb > checksums.txt
           )
 
       - name: Publish release assets
@@ -296,3 +303,6 @@ jobs:
             dist/cagent-darwin-amd64
             dist/cagent-darwin-arm64
             dist/tcode
+            dist/bash-agent_*_all.deb
+            dist/bash-agent_*_amd64.deb
+            dist/bash-agent_*_arm64.deb

@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify update-system-prompt-golden clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c build-deb test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify update-system-prompt-golden clean
 
 build: build-bash build-go build-rust build-tcode build-c
 
@@ -28,6 +28,9 @@ build-tcode:
 
 build-c:
 	$(MAKE) -C c
+
+build-deb:
+	bash scripts/build-deb.sh "$${VERSION:-$$(git describe --tags --always 2>/dev/null || echo 0.0.0)}" dist dist
 
 test: test-bash test-go test-rust test-c-e2e
 
