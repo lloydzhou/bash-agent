@@ -8,6 +8,24 @@
 
 ---
 
+## [4.2.5] - 2025-06-10
+
+> **Bugfix + 一致性版本**：修复 bash 权限扫描器将 workspace 绝对路径误判为 external；统一 tool 错误信息格式消除双重 Error 前缀；统一 Edit 成功输出格式。
+
+### Fixed
+
+- **Bash 权限扫描器 CWD 误判（核心修复）**：`tool_bash_add_path()` 无 CWD 概念，`TOOL_BASH_RE_EXTERNAL_PATH` 的 `/[A-Za-z0-9._-]` 匹配所有绝对路径，导致 workspace 内路径（如 `/Users/.../src/agent.sh`）全部被判为 external scope=4。修复：`tool_classify_bash_required_mode` 从 `$PWD` 初始化 CWD（转小写），`tool_bash_add_path` 在 external 正则前加 `path == CWD || path.starts_with(CWD+"/")` 判断。Bash/Go/Rust/C 四版本同步。
+- **git 命令缺少 exec/write 分类**：`git commit/add/checkout/merge/rebase/stash/cherry-pick` 未被识别为 workspace exec+write，导致权限判断不完整。已加入四版本扫描器的 exec 和 write 列表。
+- **双重 Error 前缀**：tool 函数返回 `"Error: xxx"`，agent 层再加 `"Error: tool execution failed: "` → 最终显示 `"Error: tool execution failed: Error: xxx"`。修复：tool 函数返回裸消息（如 `file not found: xxx`），agent 层统一加 `"Error: "` 前缀。四版本同步。
+- **Edit 成功输出不统一**：Bash 版输出 `Edit(path) [+N -N lines]`，缺少 `Success:` 前缀，与 Read/Write 风格不一致。统一为 `Success: Edit(path) [+N -N lines]`。四版本同步。
+- **Edit Hint 改进**：`old_string not found` 的提示从 "Read the file and copy exact bytes" 改为 "use Grep to locate the target lines, then Read the relevant portion (with offset/limit)"，更具体地引导 LLM 正确操作。
+
+### Added
+
+- **扫描器单元测试**：Bash (test.sh Test 51, 35 用例)、Go (agent_test.go, 30 用例)、Rust (tools.rs, 25 用例)、C (test_classify.c, 24 用例)，覆盖基本路径、CWD 绝对路径、复合命令（`&&`/`||`/`;`/`|`）、三段复合、heredoc+exec、git push 等场景。
+
+---
+
 ## [4.2.4] - 2025-06-08
 
 > **Bugfix + 一致性版本**：修复 compact 错误处理缺失守卫导致全零 usage 事件；Go 版补充 SSE RETRY 事件处理。
