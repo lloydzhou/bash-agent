@@ -32,7 +32,15 @@ $(BUILDDIR)/%.o: %.c tools_embed.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -rf $(BUILDDIR) $(TARGET) tools_embed.h
+	rm -rf $(BUILDDIR) $(TARGET) tools_embed.h test_classify
+
+test-classify: test_classify.c
+	$(MAKE) $(BUILDDIR)/tools_test.o CFLAGS="$(CFLAGS) -DTEST_CLASSIFY" OBJS="$(filter-out $(BUILDDIR)/cagent.o $(BUILDDIR)/tools.o,$(OBJS)) $(BUILDDIR)/tools_test.o"
+	$(CC) $(CFLAGS) -DTEST_CLASSIFY -o test_classify test_classify.c $(filter-out $(BUILDDIR)/cagent.o $(BUILDDIR)/tools.o,$(OBJS)) $(BUILDDIR)/tools_test.o $(LDFLAGS)
+	@./test_classify
+
+$(BUILDDIR)/tools_test.o: tools.c tools.h agent.h msgqueue.h protocol.h json.h util.h
+	$(CC) $(CFLAGS) -DTEST_CLASSIFY -c -o $@ tools.c
 
 # 依赖关系
 $(BUILDDIR)/cagent.o: cagent.c agent.h store.h transport.h tools.h display.h msgqueue.h readline.h protocol.h util.h

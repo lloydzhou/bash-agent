@@ -1105,30 +1105,6 @@ pub mod conversation {
         s.lines().next().unwrap_or(s)
     }
 
-    pub fn edit_diff_summary(path: &str, diff: &str) -> String {
-        let mut added = 0usize;
-        let mut removed = 0usize;
-        for line in diff.lines() {
-            // skip all consecutive ANSI CSI sequences
-            let p = line.as_bytes();
-            let mut i = 0usize;
-            while i + 1 < p.len() && p[i] == 0x1b && p[i + 1] == b'[' {
-                i += 2;
-                while i < p.len() && !(p[i].is_ascii_uppercase() || p[i].is_ascii_lowercase()) {
-                    i += 1;
-                }
-                if i < p.len() { i += 1; }
-            }
-            if i < p.len() && p[i] == b'+' && (i + 1 >= p.len() || p[i + 1] != b'+') {
-                added += 1;
-            }
-            if i < p.len() && p[i] == b'-' && (i + 1 >= p.len() || p[i + 1] != b'-') {
-                removed += 1;
-            }
-        }
-        format!("Edit({path}) [+{added} -{removed} lines]")
-    }
-
     fn line_count(s: &[u8]) -> usize {
         if s.is_empty() {
             0

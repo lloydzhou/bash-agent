@@ -1,5 +1,13 @@
 #include "tools.h"
 #include "util.h"
+
+/* When building test_classify, expose static functions */
+#ifdef TEST_CLASSIFY
+#define STATIC
+#else
+#define STATIC static
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,8 +75,8 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
         return r;
     }
     char *path = json_get_string(jp.val, "path");
-    if (!path) {
-        r.output = util_strdup("Error: missing 'path' parameter");
+    if (!path || !path[0]) {
+        r.output = util_strdup("Error: no path provided");
         r.exit_code = 1;
         return r;
     }
@@ -78,7 +86,10 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
     /* 读取文件 */
     char *content = util_read_file(path);
     if (!content) {
-        r.output = util_strdup("Error: file not found or cannot read");
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Error: file not found: %s", path);
+        r.output = buf.data;
         r.exit_code = 1;
         free(path);
         return r;
@@ -124,15 +135,22 @@ static ToolResult tool_write(const char *input_json) {
     }
     char *path = json_get_string(jp.val, "path");
     char *content = json_get_string(jp.val, "content");
-    if (!path || !content) {
-        r.output = util_strdup("Error: missing 'path' or 'content'");
+    if (!path || !path[0]) {
+        r.output = util_strdup("Error: no path provided");
+        r.exit_code = 1;
+        free(path);
+        free(content);
+        return r;
+    }
+    if (!content) {
+        r.output = util_strdup("Error: no content provided");
         r.exit_code = 1;
         free(path);
         free(content);
         return r;
     }
     if (util_write_file(path, content) != 0) {
-        r.output = util_strdup("Error: cannot write file");
+        r.output = util_strdup("Error: write failed");
         r.exit_code = 1;
     } else {
         /* 输出格式: OK: wrote N bytes to path */
@@ -158,8 +176,20 @@ static ToolResult tool_edit(const char *input_json) {
     char *path = json_get_string(jp.val, "path");
     char *old_str = json_get_string(jp.val, "old_string");
     char *new_str = json_get_string(jp.val, "new_string");
-    if (!path || !old_str || !new_str) {
-        r.output = util_strdup("Error: missing parameters");
+    if (!path || !path[0]) {
+        r.output = util_strdup("Error: no path provided");
+        r.exit_code = 1;
+        free(path); free(old_str); free(new_str);
+        return r;
+    }
+    if (!old_str || !old_str[0]) {
+        r.output = util_strdup("Error: empty old_string");
+        r.exit_code = 1;
+        free(path); free(old_str); free(new_str);
+        return r;
+    }
+    if (!new_str) {
+        r.output = util_strdup("Error: no new_string provided");
         r.exit_code = 1;
         free(path); free(old_str); free(new_str);
         return r;
@@ -167,7 +197,10 @@ static ToolResult tool_edit(const char *input_json) {
 
     char *content = util_read_file(path);
     if (!content) {
-        r.output = util_strdup("Error: file not found");
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Error: file not found: %s", path);
+        r.output = buf.data;
         r.exit_code = 1;
         free(path); free(old_str); free(new_str);
         return r;
@@ -176,7 +209,10 @@ static ToolResult tool_edit(const char *input_json) {
     /* 查找 old_string */
     char *pos = strstr(content, old_str);
     if (!pos) {
-        r.output = util_strdup("Error: old_string not found in file");
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Error: old_string not found in %s. Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit.", path);
+        r.output = buf.data;
         r.exit_code = 1;
         free(content); free(path); free(old_str); free(new_str);
         return r;
@@ -201,14 +237,21 @@ static ToolResult tool_edit(const char *input_json) {
     memcpy(new_content + prefix_len, new_str, new_len);
     memcpy(new_content + prefix_len + new_len, pos + old_len, suffix_len + 1);
 
+    if (new_content[0] == '\0') {
+        r.output = util_strdup("Error: edit produced empty result");
+        r.exit_code = 1;
+        free(content); free(new_content); free(path); free(old_str); free(new_str);
+        return r;
+    }
+
     /* 生成 diff 摘要 — 对齐 bash 版: diff -u --label a/$label --label b/$label */
     int added = 0, removed = 0;
+    StrBuf diffout;
+    sb_init(&diffout);
     {
-        /* 用临时文件做 diff - 先保存旧内容，再保存新内容 */
         char tmppath_old[256], tmppath_new[256];
         snprintf(tmppath_old, sizeof(tmppath_old), "/tmp/edit_diff_old_%d.tmp", (int)getpid());
         snprintf(tmppath_new, sizeof(tmppath_new), "/tmp/edit_diff_new_%d.tmp", (int)getpid());
-        
         FILE *tmpf_old = fopen(tmppath_old, "w");
         FILE *tmpf_new = fopen(tmppath_new, "w");
         if (tmpf_old && tmpf_new) {
@@ -216,7 +259,6 @@ static ToolResult tool_edit(const char *input_json) {
             fclose(tmpf_old);
             fputs(new_content, tmpf_new);
             fclose(tmpf_new);
-
             StrBuf diffcmd;
             sb_init(&diffcmd);
             const char *label = path;
@@ -225,13 +267,9 @@ static ToolResult tool_edit(const char *input_json) {
                        label, label, tmppath_old, tmppath_new);
             FILE *dp = popen(diffcmd.data, "r");
             if (dp) {
-                StrBuf diffout;
-                sb_init(&diffout);
                 char lbuf[65536];
                 while (fgets(lbuf, sizeof(lbuf), dp)) {
-                    /* 计数 added/removed 行 — 跳过 ANSI escape (\x1b[...m) */
                     const char *p = lbuf;
-                    /* skip all consecutive ANSI CSI sequences */
                     while (*p == '\x1b' && *(p+1) == '[') {
                         p += 2;
                         while (*p && !(('A' <= *p && *p <= 'Z') || ('a' <= *p && *p <= 'z'))) p++;
@@ -242,21 +280,6 @@ static ToolResult tool_edit(const char *input_json) {
                     sb_append(&diffout, lbuf);
                 }
                 pclose(dp);
-
-                /* 输出: Edit(path) [+N -N lines]\n<diff> */
-                StrBuf buf;
-                sb_init(&buf);
-                sb_appendf(&buf, "Edit(%s) [+%d -%d lines]\n", path, added, removed);
-                if (diffout.len > 0) {
-                    sb_append(&buf, diffout.data);
-                }
-                r.output = buf.data;
-                sb_free(&diffout);
-            } else {
-                StrBuf buf;
-                sb_init(&buf);
-                sb_appendf(&buf, "Edit(%s) [+%d -%d lines]", path, 0, 0);
-                r.output = buf.data;
             }
             sb_free(&diffcmd);
             remove(tmppath_old);
@@ -264,12 +287,19 @@ static ToolResult tool_edit(const char *input_json) {
         } else {
             if (tmpf_old) fclose(tmpf_old);
             if (tmpf_new) fclose(tmpf_new);
-            StrBuf buf;
-            sb_init(&buf);
-            sb_appendf(&buf, "Edit(%s) [diff unavailable]", path);
-            r.output = buf.data;
         }
     }
+    /* 统一输出（对齐 bash 版：只有一个 Success 输出点） */
+    {
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Success: Edit(%s) [+%d -%d lines]\n", path, added, removed);
+        if (diffout.len > 0) {
+            sb_append(&buf, diffout.data);
+        }
+        r.output = buf.data;
+    }
+    sb_free(&diffout);
 
     if (util_write_file(path, new_content) != 0) {
         r.output = util_strdup("Error: cannot write file");
@@ -290,11 +320,11 @@ static ToolResult tool_edit(const char *input_json) {
     return r;
 }
 
-static int bash_starts_with(const char *s, const char *prefix) {
+STATIC int bash_starts_with(const char *s, const char *prefix) {
     return s && prefix && strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
-static int bash_contains(const char *s, const char *needle) {
+STATIC int bash_contains(const char *s, const char *needle) {
     return s && needle && strstr(s, needle) != NULL;
 }
 
@@ -312,14 +342,16 @@ static void bash_mode_normalize(const char *mode, char out[5]) {
     memcpy(out, "0000", 5);
 }
 
-static void bash_add_mode(unsigned short *mask, int scopes, int perms) {
+static char g_cwd[1024] = "";
+
+STATIC void bash_add_mode(unsigned short *mask, int scopes, int perms) {
     if (scopes & 8) *mask |= (unsigned short)(perms << 9);
     if (scopes & 4) *mask |= (unsigned short)(perms << 6);
     if (scopes & 2) *mask |= (unsigned short)(perms << 3);
     if (scopes & 1) *mask |= (unsigned short)perms;
 }
 
-static int bash_is_system_path(const char *path) {
+STATIC int bash_is_system_path(const char *path) {
     const char *sys[] = {"/etc", "/usr", "/bin", "/sbin", "/var", "/library", "/system", "/dev", NULL};
     for (int i = 0; sys[i]; i++) {
         size_t n = strlen(sys[i]);
@@ -328,7 +360,7 @@ static int bash_is_system_path(const char *path) {
     return 0;
 }
 
-static int bash_is_sensitive_path(const char *path) {
+STATIC int bash_is_sensitive_path(const char *path) {
     size_t len = strlen(path);
     return strstr(path, "/.ssh") || strstr(path, "/.gnupg") || strstr(path, "/.aws") ||
            strstr(path, "/.docker") || (len >= 4 && strcmp(path + len - 4, ".env") == 0) ||
@@ -336,7 +368,7 @@ static int bash_is_sensitive_path(const char *path) {
            strstr(path, "token") || strstr(path, "credential") || strstr(path, "secret");
 }
 
-static void bash_add_path(unsigned short *mask, const char *path, int perms) {
+STATIC void bash_add_path(unsigned short *mask, const char *path, int perms) {
     char buf[1024];
     size_t len;
     int scope = 1;
@@ -349,11 +381,12 @@ static void bash_add_path(unsigned short *mask, const char *path, int perms) {
     if (!buf[0] || strcmp(buf, "/tmp") == 0 || strncmp(buf, "/tmp/", 5) == 0 || strcmp(buf, "/dev/null") == 0 || buf[0] == '&') return;
     if (strncmp(buf, "/dev/tcp", 8) == 0) scope = 2;
     else if (bash_is_sensitive_path(buf) || bash_is_system_path(buf)) scope = 8;
+    else if (g_cwd[0] != '\0' && (strcmp(buf, g_cwd) == 0 || (strncmp(buf, g_cwd, strlen(g_cwd)) == 0 && buf[strlen(g_cwd)] == '/'))) scope = 1;
     else if ((buf[0] == '/' && buf[1]) || strncmp(buf, "~/", 2) == 0 || strncmp(buf, "$home", 5) == 0 || strstr(buf, "..")) scope = 4;
     bash_add_mode(mask, scope, perms);
 }
 
-static int bash_is_block_device_path(const char *path) {
+STATIC int bash_is_block_device_path(const char *path) {
     const char *dev = strstr(path, "/dev/");
     if (!dev) return 0;
     dev += 5;
@@ -362,7 +395,7 @@ static int bash_is_block_device_path(const char *path) {
            strncmp(dev, "nvme", 4) == 0;
 }
 
-static void bash_scan_segment(unsigned short *mask, const char *seg) {
+STATIC void bash_scan_segment(unsigned short *mask, const char *seg) {
     char *copy, *save = NULL, *tok;
     int redir = 0, path_bits = 4, flags = 0;
     if (bash_starts_with(seg, "sudo ") || bash_starts_with(seg, "su ") || bash_starts_with(seg, "doas ") ||
@@ -388,6 +421,9 @@ static void bash_scan_segment(unsigned short *mask, const char *seg) {
         bash_starts_with(seg, "python") || bash_starts_with(seg, "node ") || bash_starts_with(seg, "ruby ") || bash_starts_with(seg, "perl ") ||
         bash_starts_with(seg, "npm test") || bash_starts_with(seg, "npm run") || bash_starts_with(seg, "make") ||
         bash_starts_with(seg, "cargo test") || bash_starts_with(seg, "cargo build") || bash_starts_with(seg, "go test") ||
+          bash_starts_with(seg, "git commit") || bash_starts_with(seg, "git add") || bash_starts_with(seg, "git checkout") ||
+          bash_starts_with(seg, "git merge") || bash_starts_with(seg, "git rebase") || bash_starts_with(seg, "git stash") ||
+          bash_starts_with(seg, "git cherry-pick") ||
         bash_contains(seg, "function ") || bash_contains(seg, "()") || bash_contains(seg, "{") || bash_contains(seg, " if ") ||
         bash_starts_with(seg, "if ") || bash_contains(seg, " for ") || bash_starts_with(seg, "for ") || bash_contains(seg, " while ") ||
         bash_starts_with(seg, "while ") || bash_contains(seg, " case ") || bash_starts_with(seg, "case ") || bash_contains(seg, ":(){:|:&};:"))
@@ -397,6 +433,8 @@ static void bash_scan_segment(unsigned short *mask, const char *seg) {
         bash_contains(seg, "sed -i") || bash_contains(seg, " -delete") || bash_starts_with(seg, "git fetch") ||
         bash_starts_with(seg, "git pull") || bash_starts_with(seg, "git clone") || bash_starts_with(seg, "npm install") ||
         bash_starts_with(seg, "pnpm install") || bash_starts_with(seg, "yarn install") || bash_starts_with(seg, "cargo build") ||
+          bash_starts_with(seg, "git commit") || bash_starts_with(seg, "git add") || bash_starts_with(seg, "git checkout") ||
+          bash_starts_with(seg, "git merge") || bash_starts_with(seg, "git rebase") || bash_starts_with(seg, "git stash") ||
         bash_starts_with(seg, "go test") || bash_starts_with(seg, "npm test")) {
         path_bits = 6;
         flags = 1;
@@ -433,10 +471,16 @@ static void bash_scan_segment(unsigned short *mask, const char *seg) {
     if (flags == 1 && !bash_contains(seg, "/tmp/")) bash_add_mode(mask, 1, 2);
 }
 
-static void bash_classify_required_mode(const char *cmd, char out[5]) {
+STATIC void bash_classify_required_mode(const char *cmd, char out[5]) {
     char *lower, *cursor, *segment, *save = NULL;
     unsigned short mask = 0;
     size_t n;
+    /* Set CWD for path classification */
+    if (getcwd(g_cwd, sizeof(g_cwd) - 1)) {
+        for (cursor = g_cwd; *cursor; cursor++) *cursor = (char)tolower((unsigned char)*cursor);
+    } else {
+        g_cwd[0] = '\0';
+    }
     if (!cmd || !*cmd) {
         memcpy(out, "0000", 5);
         return;
@@ -616,8 +660,8 @@ static ToolResult tool_glob(const char *input_json, const char *cwd) {
     }
     char *pattern = json_get_string(jp.val, "pattern");
     char *path = json_get_string(jp.val, "path");
-    if (!pattern) {
-        r.output = util_strdup("Error: missing 'pattern'");
+    if (!pattern || !pattern[0]) {
+        r.output = util_strdup("Error: no pattern provided");
         r.exit_code = 1;
         free(path);
         return r;
@@ -666,8 +710,8 @@ static ToolResult tool_grep(const char *input_json, const char *cwd) {
         return r;
     }
     char *pattern = json_get_string(jp.val, "pattern");
-    if (!pattern) {
-        r.output = util_strdup("Error: missing 'pattern'");
+    if (!pattern || !pattern[0]) {
+        r.output = util_strdup("Error: no pattern provided");
         r.exit_code = 1;
         return r;
     }
@@ -762,9 +806,9 @@ static ToolResult tool_plan_confirm(const SessionPaths *paths) {
      * 对齐 bash 版: agent_compact_context(plan_confirm) → store_plan_confirm(mv) */
     char *draft = paths ? store_plan_draft_read(paths) : NULL;
     if (draft && draft[0]) {
-        r.output = util_strdup("Plan confirmed.");
+        r.output = util_strdup("Plan confirmed and locked in.");
     } else {
-        r.output = util_strdup("No plan draft to confirm.");
+        r.output = util_strdup("Error: no plan draft found to confirm.");
     }
     free(draft);
     return r;
@@ -788,8 +832,8 @@ static ToolResult tool_skill(const char *input_json, const char *home, const cha
         return r;
     }
     char *name = json_get_string(jp.val, "name");
-    if (!name) {
-        r.output = util_strdup("Error: missing 'name'");
+    if (!name || !name[0]) {
+        r.output = util_strdup("Error: no skill name provided");
         r.exit_code = 1;
         return r;
     }
@@ -820,7 +864,7 @@ static ToolResult tool_skill(const char *input_json, const char *home, const cha
     } else {
         StrBuf buf;
         sb_init(&buf);
-        sb_appendf(&buf, "Skill '%s' not found", name);
+        sb_appendf(&buf, "Error: skill not found: %s", name);
         r.output = buf.data;
         r.exit_code = 1;
     }
@@ -892,8 +936,8 @@ static ToolResult tool_web_search(const char *input_json) {
         return r;
     }
     char *query = json_get_string(jp.val, "query");
-    if (!query) {
-        r.output = util_strdup("Error: missing 'query'");
+    if (!query || !query[0]) {
+        r.output = util_strdup("Error: no query provided");
         r.exit_code = 1;
         return r;
     }
@@ -941,8 +985,8 @@ static ToolResult tool_web_fetch(const char *input_json) {
         return r;
     }
     char *url = json_get_string(jp.val, "url");
-    if (!url) {
-        r.output = util_strdup("Error: missing 'url'");
+    if (!url || !url[0]) {
+        r.output = util_strdup("Error: no url provided");
         r.exit_code = 1;
         return r;
     }

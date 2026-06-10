@@ -178,3 +178,51 @@
 
 - 子 shell 中 `history -s/-a/-w` 无效，改用 `printf >>` 追加写入
 - `history -w` 是覆盖写入，父 shell 退出时会覆盖子 shell 的追加内容，已修复为正确的追加策略
+
+### C 运行时
+
+**适用范围**：c
+
+**状态**：✅ 已完成
+
+- 纯 C 实现（`c/agent.c`），使用 `vendor/linenoise/linenoise.c` 作为交互输入库
+- 支持 SSE 流式解析、所有 13 个内置工具、compact 压缩、SubAgent、Plan/Todo 等
+- 四版本（Bash/Go/Rust/C）system prompt 和 tools.json 完全一致
+
+### 统一 linenoise 输入体验
+
+**适用范围**：c / go / rust
+
+**状态**：✅ 已完成（v4.2.0）
+
+- 统一 `linenoiseWrite`/`linenoisePrintf` 原子显示架构，C/Go/Rust 共用
+- 支持 Ctrl+V 图片粘贴、Ctrl+C 中断 agent、iTerm2 进度波纹指示器
+- 修复 delayed wrap 覆盖、栈内存浪费等问题
+
+### 图片粘贴
+
+**适用范围**：三端
+
+**状态**：✅ 已完成
+
+- 交互模式下 Ctrl+V 从剪贴板粘贴图片，自动插入 `[Image #N]` 占位符
+- 调用 GLM-4V-Flash（免费）转录文字描述，支持 macOS/Linux
+- 无 API key 时仍可粘贴（跳过描述步骤）
+
+### 终端状态指示
+
+**适用范围**：三端
+
+**状态**：✅ 已完成（v4.2.1 / v4.2.2）
+
+- OSC 标题 ⏳ busy / idle 指示
+- iTerm2 进度波纹（`OSC 9;4;3`），非 iTerm2 终端静默忽略
+
+### 默认配置统一
+
+**适用范围**：三端
+
+**状态**：✅ 已完成（v4.2.3）
+
+- `MAX_TOKENS` 从 `4096` 统一为 `16384`
+- `MAX_TURNS` 从 `40`/`500` 统一为 `1000`

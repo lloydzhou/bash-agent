@@ -666,7 +666,7 @@ tool_dispatch() {
         WebFetch)  tool_web_fetch "$1" ;;
         SubAgent)  tool_sub_agent "$1" "$2" "$3" ;;
         *)
-            echo "Error: unknown tool: $name"
+            echo "unknown tool: $name"
             return 1
             ;;
     esac
@@ -811,6 +811,8 @@ tool_bash_add_path() {
         scope=2
     elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
         scope=8
+    elif [[ -n "$CWD" && ("$path" == "$CWD" || "$path" == "$CWD"/*) ]]; then
+        scope=1
     elif [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
         scope=4
     fi
@@ -830,10 +832,10 @@ tool_bash_scan_segment() {
     esac
     [[ "$seg" =~ $TOOL_BASH_RE_ROOT_DELETE || "$seg" =~ $TOOL_BASH_RE_DEVICE_WRITE ]] && tool_bash_add_mode 8 2
     case "$seg" in
-        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 ;;
+        ./*|bash\ *|sh\ *|zsh\ *|python*|node\ *|ruby\ *|perl\ *|npm\ test*|npm\ run*|make*|cargo\ test*|cargo\ build*|go\ test*|git\ commit*|git\ add*|git\ checkout*|git\ merge*|git\ rebase*|git\ stash*|*'function '*|*'()'*|*'{'*|*' if '*|if\ *|*' for '*|for\ *|*' while '*|while\ *|*' case '*|case\ *|*':(){:|:&};:'*) tool_bash_add_mode 1 1 ;;
     esac
     case "$seg" in
-        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|npm\ test*) path_bits=6; flags=1 ;;
+        *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|git\ commit*|git\ add*|git\ checkout*|git\ merge*|git\ rebase*|git\ stash*|npm\ test*) path_bits=6; flags=1 ;;
     esac
     for tok in $seg; do
         (( redir )) && { tool_bash_add_path "$tok" "$redir"; flags=3; redir=0; continue; }
@@ -867,6 +869,7 @@ tool_bash_scan_script() {
 
 tool_classify_bash_required_mode() {
     local cmd="$1" lowered
+    CWD=$(printf '%s' "${PWD:-$(pwd)}" | tr '[:upper:]' '[:lower:]')
     TOOL_BASH_REQUIRED_MASK=0
     [[ -z "$cmd" ]] && { TOOL_BASH_REQUIRED_MODE="0000"; printf '%s' "$TOOL_BASH_REQUIRED_MODE"; return 0; }
     lowered=$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')
@@ -885,9 +888,9 @@ tool_bash_mode_allows() {
 
 tool_read() {
     local path="$1" offset="${2:-1}" limit="${3:-0}"
-    [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
-    [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
-    [[ ! -r "$path" ]] && { echo "Error: permission denied: $path"; return 1; }
+    [[ -z "$path" ]] && { echo "no path provided"; return 1; }
+    [[ ! -f "$path" ]] && { echo "file not found: $path"; return 1; }
+    [[ ! -r "$path" ]] && { echo "permission denied: $path"; return 1; }
     if (( limit > 0 )); then
         sed -n "${offset},$((offset + limit - 1))p" "$path"
     else
@@ -897,7 +900,7 @@ tool_read() {
 
 tool_write() {
     local path="$1" content="$2"
-    [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
+    [[ -z "$path" ]] && { echo "no path provided"; return 1; }
     mkdir -p "$(dirname "$path")" 2>/dev/null
     printf '%s' "$content" > "$path"
     echo "OK: wrote $(wc -c < "$path" 2>/dev/null || echo '?') bytes to $path"
@@ -905,15 +908,15 @@ tool_write() {
 
 tool_edit() {
     local path="$1" old_string="$2" new_string="$3" tmp diff_output added removed label="${1#/}"
-    [[ -z "$path" ]] && { echo "Error: no path provided"; return 1; }
-    [[ ! -f "$path" ]] && { echo "Error: file not found: $path"; return 1; }
+    [[ -z "$path" ]] && { echo "no path provided"; return 1; }
+    [[ ! -f "$path" ]] && { echo "file not found: $path"; return 1; }
     tmp=$(mktemp "${TMPDIR:-/tmp}/edit.XXXXXX")
     if ! printf '{"path":"%s","old_string":"%s","new_string":"%s"}' \
             "$(util_json_escape "$path")" "$(util_json_escape "$old_string")" "$(util_json_escape "$new_string")" \
          | util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk" > "$tmp" 2>&1; then
         cat "$tmp"; rm -f "$tmp"; return 1
     fi
-    (( $(wc -c < "$tmp") > 0 )) || { echo "Error: edit produced empty result"; rm -f "$tmp"; return 1; }
+    (( $(wc -c < "$tmp") > 0 )) || { echo "edit produced empty result"; rm -f "$tmp"; return 1; }
     diff_output=$(diff -u --color=always --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
     [[ "$diff_output" == *"unsupported --color"* || "$diff_output" == *"unrecognized option '--color'"* ]] \
         && diff_output=$(diff -u --label "a/$label" --label "b/$label" "$path" "$tmp" 2>&1) || true
@@ -921,18 +924,18 @@ tool_edit() {
     removed=$(printf '%s\n' "$diff_output" | grep -cE $'^(\033\[[0-9;]*m)*-[^-]') || removed=0
     cat "$tmp" > "$path"
     rm -f "$tmp"
-    printf 'Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"
+    printf 'Success: Edit(%s) [+%s -%s lines]\n' "$path" "$added" "$removed"
     [[ -n "$diff_output" ]] && printf '%s\n' "$diff_output"
 }
 
 tool_bash() {
     local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" allowed_mode required_mode tool_rc tmpout
-    [[ -z "$cmd" ]] && { echo "Error: no command provided"; return 1; }
+    [[ -z "$cmd" ]] && { echo "no command provided"; return 1; }
     allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
     tool_classify_bash_required_mode "$cmd" >/dev/null
     required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
     if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
-        echo "Error: command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
+        echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
         return 1
     fi
     tmpout=$(mktemp)
@@ -953,19 +956,19 @@ tool_bash() {
 
 tool_glob() {
     local pattern="$1" path="$2"
-    [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
+    [[ -z "$pattern" ]] && { echo "no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
-    [[ -d "$path" ]] || { echo "Error: directory not found: $path"; return 1; }
-    command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for glob"; return 1; }
+    [[ -d "$path" ]] || { echo "directory not found: $path"; return 1; }
+    command -v rg >/dev/null 2>&1 || { echo "rg is required for glob"; return 1; }
     rg --files "$path" -g "$pattern" 2>/dev/null || true
 }
 
 tool_grep() {
     local pattern="$1" path="$2" glob="$3" context="$4" args=(-n --color never --heading)
-    [[ -z "$pattern" ]] && { echo "Error: no pattern provided"; return 1; }
+    [[ -z "$pattern" ]] && { echo "no pattern provided"; return 1; }
     [[ -n "$path" ]] || path="."
-    [[ -e "$path" ]] || { echo "Error: path not found: $path"; return 1; }
-    command -v rg >/dev/null 2>&1 || { echo "Error: rg is required for grep"; return 1; }
+    [[ -e "$path" ]] || { echo "path not found: $path"; return 1; }
+    command -v rg >/dev/null 2>&1 || { echo "rg is required for grep"; return 1; }
     [[ -n "$context" && "$context" =~ ^[0-9]+$ ]] && args+=(-C "$context")
     [[ -n "$glob" ]] && args+=(--glob "$glob")
     args+=("--" "$pattern" "$path")
@@ -976,8 +979,8 @@ tool_skill() {
     local skill_name="$1" skill_content=""
     skill_name="${skill_name#"${skill_name%%[![:space:]]*}"}"
     skill_name="${skill_name%"${skill_name##*[![:space:]]}"}"
-    [[ -n "$skill_name" ]] || { echo "Error: no skill name provided"; return 1; }
-    skill_content=$(util_load_skill_content "$skill_name") || { echo "Error: skill not found: $skill_name"; return 1; }
+    [[ -n "$skill_name" ]] || { echo "no skill name provided"; return 1; }
+    skill_content=$(util_load_skill_content "$skill_name") || { echo "skill not found: $skill_name"; return 1; }
     printf 'Skill: %s\n%s' "$skill_name" "$skill_content"
 }
 
@@ -988,7 +991,8 @@ tool_plan_confirm() {
         store_plan_confirm
         printf 'Plan confirmed and locked in.'
     else
-        printf 'Error: no plan draft found to confirm.'
+        printf 'no plan draft found to confirm.'
+        return 1
     fi
 }
 
@@ -1007,7 +1011,7 @@ tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -H "Authorization
 tool_sub_agent() {
     local prompt="$1" description="${2:-}" fork="${3:-}" sub_session_id="sub_$(util_new_session_id)"
 
-    [[ -z "$prompt" ]] && { echo "Error: no prompt provided for sub-agent"; return 1; }
+    [[ -z "$prompt" ]] && { echo "no prompt provided for sub-agent"; return 1; }
 
     store_event_append "{\"type\":\"sub_agent_start\",\"session_id\":\"$(util_json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(util_json_escape "$prompt")\",\"description\":\"$(util_json_escape "$description")\",\"fork\":$fork}"
 
@@ -1362,7 +1366,7 @@ agent_loop_stream() {
                     tool_calls+="${cur_tool_name}"$'\t'"${cur_tool_id}"$'\t'"${input}"$'\n'
                     tool_args_from_msg "$cur_tool_name"
                     output=$(tool_dispatch "$cur_tool_name" ${_TOOL_ARGS[@]+"${_TOOL_ARGS[@]}"} 2>&1) || {
-                        output="Error: tool execution failed: $output"
+                        output="Error: $output"
                     }
                     output=$(tool_format_result "$output")
                     result_for_conv="$output"

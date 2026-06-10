@@ -8,3 +8,5 @@ go/bash-agent
 c/*.o
 c/build/
 c/tools_embed.h
+c/test_classify
+c/test_classify.dSYM/

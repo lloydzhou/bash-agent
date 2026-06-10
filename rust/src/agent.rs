@@ -1345,7 +1345,7 @@ impl Agent {
                             }
                             let mut output = match dispatch_result {
                                 Ok(v) => v,
-                                Err(e) => format!("Error: tool execution failed: {e}"),
+                                Err(e) => format!("Error: {e}"),
                             };
                             output =
                                 tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);

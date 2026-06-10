@@ -198,7 +198,7 @@ func (td *ToolDispatcher) toolRead(p, offsetStr, limitStr string) (string, error
 
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return "", fmt.Errorf("read error: %w", err)
+		return "", fmt.Errorf("read error: %v", err)
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -241,10 +241,10 @@ func (td *ToolDispatcher) toolWrite(p, content string) (string, error) {
 	}
 	dir := filepath.Dir(p)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("create directory: %w", err)
+		return "", fmt.Errorf("create directory: %v", err)
 	}
 	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
-		return "", err
+		return "", fmt.Errorf("write failed: %v", err)
 	}
 	return "OK", nil
 }
@@ -254,6 +254,9 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("no path provided")
 	}
+	if oldStr == "" {
+		return "", fmt.Errorf("empty old_string")
+	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return "", fmt.Errorf("file not found: %s", p)
@@ -261,10 +264,13 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 
 	content := string(data)
 	if !strings.Contains(content, oldStr) {
-		return "", fmt.Errorf("old_string not found in %s", p)
+		return "", fmt.Errorf("old_string not found in %s. Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit.", p)
 	}
 
 	newContent := strings.Replace(content, oldStr, newStr, 1)
+	if len(newContent) == 0 {
+		return "", fmt.Errorf("edit produced empty result")
+	}
 
 	// 生成 diff — 对齐 bash 版: diff -u --color=always
 	label := p
@@ -323,7 +329,7 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 		}
 	}
 
-	result := fmt.Sprintf("Edit(%s) [+%d -%d lines]", p, added, removed)
+	result := fmt.Sprintf("Success: Edit(%s) [+%d -%d lines]", p, added, removed)
 	if diffOutput != "" {
 		result += "\n" + diffOutput
 	}
@@ -337,6 +343,13 @@ var (
 	toolBashReExternalPath = regexp.MustCompile(`(^|[\s"'` + "`" + `])(~|\$home)(/|[\s"'` + "`" + `]|$)|(^|[\s"'` + "`" + `])/[A-Za-z0-9._-]`)
 	toolBashReDeviceWrite  = regexp.MustCompile(`(^|[\s])(of=|>|1>|>>|1>>)\s*/dev/(sd[a-z][0-9]*|disk[0-9]+|rdisk[0-9]+|nvme[0-9]+n[0-9]+(p[0-9]+)?|vd[a-z][0-9]*|xvd[a-z][0-9]*|hd[a-z][0-9]*)([\s]|$)`)
 )
+
+func getWd() string {
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return ""
+}
 
 func toolBashModeNormalize(mode string) string {
 	if mode == "" {
@@ -368,7 +381,7 @@ func toolBashAddMode(mask *int, scopes, perms int) {
 	}
 }
 
-func toolBashAddPath(mask *int, path string, perms int) {
+func toolBashAddPath(mask *int, path string, perms int, cwd string) {
 	scope := 1
 	path = strings.Trim(path, `"'`)
 	path = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(path, ";"), ","), ")")
@@ -380,13 +393,15 @@ func toolBashAddPath(mask *int, path string, perms int) {
 		scope = 2
 	} else if toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path) {
 		scope = 8
+	} else if cwd != "" && (path == cwd || strings.HasPrefix(path, cwd+"/")) {
+		scope = 1
 	} else if toolBashReExternalPath.MatchString(path) || strings.Contains(path, "..") {
 		scope = 4
 	}
 	toolBashAddMode(mask, scope, perms)
 }
 
-func toolBashScanSegment(mask *int, seg string) {
+func toolBashScanSegment(mask *int, seg string, cwd string) {
 	flags, pathBits, redir := 0, 4, 0
 	switch {
 	case strings.HasPrefix(seg, "sudo "), strings.HasPrefix(seg, "su "), strings.HasPrefix(seg, "doas "), strings.HasPrefix(seg, "shutdown"), strings.HasPrefix(seg, "reboot"), strings.HasPrefix(seg, "halt"), strings.HasPrefix(seg, "poweroff"):
@@ -409,16 +424,16 @@ func toolBashScanSegment(mask *int, seg string) {
 		toolBashAddMode(mask, 8, 2)
 	}
 	switch {
-	case strings.HasPrefix(seg, "./"), strings.HasPrefix(seg, "bash "), strings.HasPrefix(seg, "sh "), strings.HasPrefix(seg, "zsh "), strings.HasPrefix(seg, "python"), strings.HasPrefix(seg, "node "), strings.HasPrefix(seg, "ruby "), strings.HasPrefix(seg, "perl "), strings.HasPrefix(seg, "npm test"), strings.HasPrefix(seg, "npm run"), strings.HasPrefix(seg, "make"), strings.HasPrefix(seg, "cargo test"), strings.HasPrefix(seg, "cargo build"), strings.HasPrefix(seg, "go test"), strings.Contains(seg, "function "), strings.Contains(seg, "()"), strings.Contains(seg, "{"), strings.Contains(seg, " if "), strings.HasPrefix(seg, "if "), strings.Contains(seg, " for "), strings.HasPrefix(seg, "for "), strings.Contains(seg, " while "), strings.HasPrefix(seg, "while "), strings.Contains(seg, " case "), strings.HasPrefix(seg, "case "), strings.Contains(seg, ":(){:|:&};:"):
+	case strings.HasPrefix(seg, "./"), strings.HasPrefix(seg, "bash "), strings.HasPrefix(seg, "sh "), strings.HasPrefix(seg, "zsh "), strings.HasPrefix(seg, "python"), strings.HasPrefix(seg, "node "), strings.HasPrefix(seg, "ruby "), strings.HasPrefix(seg, "perl "), strings.HasPrefix(seg, "npm test"), strings.HasPrefix(seg, "npm run"), strings.HasPrefix(seg, "make"), strings.HasPrefix(seg, "cargo test"), strings.HasPrefix(seg, "cargo build"), strings.HasPrefix(seg, "go test"), strings.HasPrefix(seg, "git commit"), strings.HasPrefix(seg, "git add"), strings.HasPrefix(seg, "git checkout"), strings.HasPrefix(seg, "git merge"), strings.HasPrefix(seg, "git rebase"), strings.HasPrefix(seg, "git stash"), strings.HasPrefix(seg, "git cherry-pick"), strings.Contains(seg, "function "), strings.Contains(seg, "()"), strings.Contains(seg, "{"), strings.Contains(seg, " if "), strings.HasPrefix(seg, "if "), strings.Contains(seg, " for "), strings.HasPrefix(seg, "for "), strings.Contains(seg, " while "), strings.HasPrefix(seg, "while "), strings.Contains(seg, " case "), strings.HasPrefix(seg, "case "), strings.Contains(seg, ":(){:|:&};:"):
 		toolBashAddMode(mask, 1, 1)
 	}
 	switch {
-	case strings.Contains(seg, ">"), strings.Contains(seg, "tee "), strings.HasPrefix(seg, "mkdir "), strings.HasPrefix(seg, "touch "), strings.HasPrefix(seg, "cp "), strings.HasPrefix(seg, "mv "), strings.HasPrefix(seg, "rm "), strings.Contains(seg, " rm "), strings.Contains(seg, "sed -i"), strings.Contains(seg, " -delete"), strings.HasPrefix(seg, "git fetch"), strings.HasPrefix(seg, "git pull"), strings.HasPrefix(seg, "git clone"), strings.HasPrefix(seg, "npm install"), strings.HasPrefix(seg, "pnpm install"), strings.HasPrefix(seg, "yarn install"), strings.HasPrefix(seg, "cargo build"), strings.HasPrefix(seg, "go test"), strings.HasPrefix(seg, "npm test"):
+	case strings.Contains(seg, ">"), strings.Contains(seg, "tee "), strings.HasPrefix(seg, "mkdir "), strings.HasPrefix(seg, "touch "), strings.HasPrefix(seg, "cp "), strings.HasPrefix(seg, "mv "), strings.HasPrefix(seg, "rm "), strings.Contains(seg, " rm "), strings.Contains(seg, "sed -i"), strings.Contains(seg, " -delete"), strings.HasPrefix(seg, "git fetch"), strings.HasPrefix(seg, "git pull"), strings.HasPrefix(seg, "git clone"), strings.HasPrefix(seg, "git commit"), strings.HasPrefix(seg, "git add"), strings.HasPrefix(seg, "git checkout"), strings.HasPrefix(seg, "git merge"), strings.HasPrefix(seg, "git rebase"), strings.HasPrefix(seg, "git stash"), strings.HasPrefix(seg, "npm install"), strings.HasPrefix(seg, "pnpm install"), strings.HasPrefix(seg, "yarn install"), strings.HasPrefix(seg, "cargo build"), strings.HasPrefix(seg, "go test"), strings.HasPrefix(seg, "npm test"):
 		pathBits, flags = 6, 1
 	}
 	for _, tok := range strings.Fields(seg) {
 		if redir != 0 {
-			toolBashAddPath(mask, tok, redir)
+			toolBashAddPath(mask, tok, redir, cwd)
 			flags, redir = 3, 0
 			continue
 		}
@@ -429,16 +444,16 @@ func toolBashScanSegment(mask *int, seg string) {
 			redir = 6
 		case strings.HasPrefix(tok, "2>"):
 		case strings.HasPrefix(tok, ">") || strings.HasPrefix(tok, ">>"):
-			toolBashAddPath(mask, strings.TrimLeft(tok, ">"), 2)
+			toolBashAddPath(mask, strings.TrimLeft(tok, ">"), 2, cwd)
 			flags = 3
 		case strings.HasPrefix(tok, "<>"):
-			toolBashAddPath(mask, strings.TrimPrefix(tok, "<>"), 6)
+			toolBashAddPath(mask, strings.TrimPrefix(tok, "<>"), 6, cwd)
 			flags = 3
 		case strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "../") || strings.HasPrefix(tok, "~/"):
-			toolBashAddPath(mask, tok, pathBits)
+			toolBashAddPath(mask, tok, pathBits, cwd)
 			flags = 3
 		case toolBashReSensitive.MatchString(tok):
-			toolBashAddPath(mask, tok, pathBits)
+			toolBashAddPath(mask, tok, pathBits, cwd)
 			flags = 3
 		}
 	}
@@ -447,7 +462,7 @@ func toolBashScanSegment(mask *int, seg string) {
 	}
 }
 
-func toolBashScanScript(script string) int {
+func toolBashScanScript(script string, cwd string) int {
 	mask := 0
 	script = strings.ReplaceAll(script, "\\\n", " ")
 	if strings.Contains(script, "/dev/tcp") {
@@ -457,7 +472,7 @@ func toolBashScanScript(script string) int {
 	for _, segment := range strings.Split(replacer.Replace(script), "\n") {
 		segment = strings.TrimSpace(segment)
 		if segment != "" {
-			toolBashScanSegment(&mask, segment)
+			toolBashScanSegment(&mask, segment, cwd)
 		}
 	}
 	return mask
@@ -468,7 +483,8 @@ func ToolClassifyBashRequiredMode(cmd string) string {
 	if cmd == "" {
 		return "0000"
 	}
-	mask = toolBashScanScript(strings.ToLower(cmd))
+	cwd := strings.ToLower(getWd())
+	mask = toolBashScanScript(strings.ToLower(cmd), cwd)
 	if mask == 0 {
 		toolBashAddMode(&mask, 1, 4)
 	}
@@ -489,7 +505,7 @@ func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr string) 
 	allowedMode := toolBashModeNormalize(os.Getenv("BASH_AGENT_BASH_MODE"))
 	requiredMode := ToolClassifyBashRequiredMode(cmd)
 	if !ToolBashModeAllows(allowedMode, requiredMode) {
-		return "", fmt.Errorf("Error: command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)", requiredMode, allowedMode)
+		return "", fmt.Errorf("command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)", requiredMode, allowedMode)
 	}
 
 	timeoutSecs := td.cfg.ToolTimeoutSecs
@@ -701,7 +717,7 @@ func (td *ToolDispatcher) toolWebFetch(ctx context.Context, url string) (string,
 	client := &http.Client{Timeout: 60 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://r.jina.ai/"+url, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("fetch failed: %v", err)
 	}
 	if td.cfg.JinaAPIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+td.cfg.JinaAPIKey)

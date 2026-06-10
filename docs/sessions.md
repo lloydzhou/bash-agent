@@ -61,6 +61,7 @@ session 统计数据，JSON 格式，包含以下字段：
   "current_turn_count": 5,
   "agent_request_count": 15,
   "compact_request_count": 1,
+  "sub_agent_request_count": 3,
   "total_input_tokens": 50000,
   "total_output_tokens": 10000,
   "total_cache_read_tokens": 30000,

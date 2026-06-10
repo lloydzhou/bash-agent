@@ -43,11 +43,11 @@ function parse_todos_array(arr,    i, c, depth, in_str, item, content, status, o
                 content = extract_str(item, "content")
                 status = extract_str(item, "status")
                 if (content == "") {
-                    print "Error: todo item content is required" > "/dev/stderr"
+                    print "todo item content is required" > "/dev/stderr"
                     exit 1
                 }
                 if (status != "pending" && status != "in_progress" && status != "completed") {
-                    print "Error: invalid todo status: " status > "/dev/stderr"
+                    print "invalid todo status: " status > "/dev/stderr"
                     exit 1
                 }
                 todo_total_count++

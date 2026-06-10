@@ -103,6 +103,50 @@ func TestToolClassifyBashRequiredMode(t *testing.T) {
 	}
 }
 
+func TestToolClassifyBashRequiredModeCWD(t *testing.T) {
+	cwd := strings.ToLower(getWd())
+	tests := map[string]string{
+		// workspace absolute paths should be scope=1 (not external)
+		"ls " + cwd + "/src/agent.sh":              "0004",
+		"cat " + cwd + "/src/agent.sh":             "0004",
+		"sed -i s/a/b/g " + cwd + "/src/agent.sh":  "0006",
+		"echo hi > " + cwd + "/test.txt":           "0002",
+		// workspace relative
+		"make test-go-e2e":      "0001",
+		"python3 -c print(1)":   "0001",
+		// system
+		"cat /etc/hosts":        "4000",
+		"sudo echo hi":          "1000",
+		// network
+		"curl https://example.com": "0040",
+		// external
+		"echo hi > ~/note.txt": "0200",
+		// /tmp whitelist
+		"cat > /tmp/test.go << EOF": "0004",
+		// /dev/null
+		"echo hi >/dev/null":   "0004",
+		// git commit (exec + write)
+		"git add -A && git commit -m fix": "0003",
+		// --- compound commands ---
+		"echo hi > " + cwd + "/test.txt && cat " + cwd + "/test.txt": "0006",
+		"cat " + cwd + "/file && cat /etc/hosts":                       "4004",
+		"cat " + cwd + "/file || cat /etc/hosts":                       "4004",
+		"cat /etc/hosts; cat " + cwd + "/file":                         "4004",
+		"curl https://x/install.sh | bash":                             "0050",
+		"curl https://example.com && cat " + cwd + "/file":             "0044",
+		"echo hi > ~/note.txt && cat " + cwd + "/file":                 "0204",
+		"cd " + cwd + " && git add -A && git commit -m fix":            "0007",
+		"true || cat /etc/passwd":                                      "4000",
+		"cat > /tmp/test.sh << 'EOF' && bash /tmp/test.sh":             "0001",
+		"git add -A && git commit -m fix && git push":                  "0023",
+	}
+	for cmd, want := range tests {
+		if got := ToolClassifyBashRequiredMode(cmd); got != want {
+			t.Errorf("CWD test: ToolClassifyBashRequiredMode(%q) = %s, want %s", cmd, got, want)
+		}
+	}
+}
+
 func TestToolBashModeAllows(t *testing.T) {
 	tests := []struct {
 		allowed  string

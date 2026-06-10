@@ -668,7 +668,7 @@ human 模式下 thinking 文本以灰色（`\033[90m`）显示，thinking→text
 - `TEXT` — 文本内容（1 字段：文本）
 - `THINKING` — 思考内容（1 字段：文本）
 - `TOOL_CALL` — 工具调用（≥3 字段：name, id, raw_input_json, key/value pairs...）
-- `USAGE` — 用量统计（3 字段：input_tokens, output_tokens, cache_input_tokens）
+- `USAGE` — 用量统计（4 字段：input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens）
 - `STOP` — 结束原因（1 字段：reason）
 - `ERROR` — 错误（1 字段：message）
 - `RETRY` — 重试（0 附加字段）
@@ -714,7 +714,8 @@ awk 端使用 `emit1()`/`emit()`/`emit_flush()` 三个函数构建消息；bash 
 
 - `input_tokens`
 - `output_tokens`
-- `cache_input_tokens`
+- `cache_read_input_tokens`
+- `cache_creation_input_tokens`
 
 `record_usage(key, counter, verbose)` 内部处理流程：
 
