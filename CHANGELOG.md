@@ -1045,8 +1045,13 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.0...HEAD
-[4.2.0]: https://github.com/lloydzhou/bash-agent/compare/v4.1.0...v4.2.0
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.4...HEAD
+[4.2.4]: https://github.com/lloydzhou/bash-agent/compare/v4.2.3...v4.2.4
+[4.2.3]: https://github.com/lloydzhou/bash-agent/compare/v4.2.2...v4.2.3
+[4.2.2]: https://github.com/lloydzhou/bash-agent/compare/v4.2.1...v4.2.2
+[4.2.1]: https://github.com/lloydzhou/bash-agent/compare/v4.2.0...v4.2.1
+[4.2.0]: https://github.com/lloydzhou/bash-agent/compare/v4.1.1...v4.2.0
+[4.1.1]: https://github.com/lloydzhou/bash-agent/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/lloydzhou/bash-agent/compare/v4.0.7...v4.1.0
 [4.0.7]: https://github.com/lloydzhou/bash-agent/compare/v4.0.6...v4.0.7
 [4.0.6]: https://github.com/lloydzhou/bash-agent/compare/v4.0.5...v4.0.6
@@ -1057,6 +1062,8 @@
 [4.0.1]: https://github.com/lloydzhou/bash-agent/compare/v4.0.0...v4.0.1
 [4.0.0]: https://github.com/lloydzhou/bash-agent/compare/v3.0.7...v4.0.0
 [3.0.7]: https://github.com/lloydzhou/bash-agent/compare/v3.0.6...v3.0.7
+[3.0.6]: https://github.com/lloydzhou/bash-agent/compare/v3.0.5...v3.0.6
+[3.0.5]: https://github.com/lloydzhou/bash-agent/compare/v3.0.4...v3.0.5
 [3.0.4]: https://github.com/lloydzhou/bash-agent/compare/v3.0.3...v3.0.4
 [3.0.3]: https://github.com/lloydzhou/bash-agent/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/lloydzhou/bash-agent/compare/v3.0.1...v3.0.2
@@ -1065,9 +1072,12 @@
 [2.5.3]: https://github.com/lloydzhou/bash-agent/compare/v2.5.2...v2.5.3
 [2.5.2]: https://github.com/lloydzhou/bash-agent/compare/v2.5.1...v2.5.2
 [2.5.1]: https://github.com/lloydzhou/bash-agent/compare/v2.5.0...v2.5.1
+[2.5.0]: https://github.com/lloydzhou/bash-agent/compare/v2.4.1...v2.5.0
+[2.4.1]: https://github.com/lloydzhou/bash-agent/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/lloydzhou/bash-agent/compare/v2.3.2...v2.4.0
 [2.3.2]: https://github.com/lloydzhou/bash-agent/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/lloydzhou/bash-agent/compare/v2.3.0...v2.3.1
+[2.3.0]: https://github.com/lloydzhou/bash-agent/compare/v2.2.1...v2.3.0
 [2.2.1]: https://github.com/lloydzhou/bash-agent/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/lloydzhou/bash-agent/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/lloydzhou/bash-agent/compare/v2.0.2...v2.1.0
