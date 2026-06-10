@@ -198,7 +198,7 @@ func (td *ToolDispatcher) toolRead(p, offsetStr, limitStr string) (string, error
 
 	data, err := os.ReadFile(p)
 	if err != nil {
-		return "", fmt.Errorf("read error: %w", err)
+		return "", fmt.Errorf("read error: %v", err)
 	}
 
 	lines := strings.Split(string(data), "\n")
@@ -241,10 +241,10 @@ func (td *ToolDispatcher) toolWrite(p, content string) (string, error) {
 	}
 	dir := filepath.Dir(p)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("create directory: %w", err)
+		return "", fmt.Errorf("create directory: %v", err)
 	}
 	if err := os.WriteFile(p, []byte(content), 0644); err != nil {
-		return "", err
+		return "", fmt.Errorf("write failed: %v", err)
 	}
 	return "OK", nil
 }
@@ -254,6 +254,9 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("no path provided")
 	}
+	if oldStr == "" {
+		return "", fmt.Errorf("empty old_string")
+	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return "", fmt.Errorf("file not found: %s", p)
@@ -261,10 +264,13 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 
 	content := string(data)
 	if !strings.Contains(content, oldStr) {
-		return "", fmt.Errorf("old_string not found in %s", p)
+		return "", fmt.Errorf("old_string not found in %s. Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit.", p)
 	}
 
 	newContent := strings.Replace(content, oldStr, newStr, 1)
+	if len(newContent) == 0 {
+		return "", fmt.Errorf("edit produced empty result")
+	}
 
 	// 生成 diff — 对齐 bash 版: diff -u --color=always
 	label := p
@@ -489,7 +495,7 @@ func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr string) 
 	allowedMode := toolBashModeNormalize(os.Getenv("BASH_AGENT_BASH_MODE"))
 	requiredMode := ToolClassifyBashRequiredMode(cmd)
 	if !ToolBashModeAllows(allowedMode, requiredMode) {
-		return "", fmt.Errorf("Error: command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)", requiredMode, allowedMode)
+		return "", fmt.Errorf("command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)", requiredMode, allowedMode)
 	}
 
 	timeoutSecs := td.cfg.ToolTimeoutSecs
@@ -701,7 +707,7 @@ func (td *ToolDispatcher) toolWebFetch(ctx context.Context, url string) (string,
 	client := &http.Client{Timeout: 60 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, "GET", "https://r.jina.ai/"+url, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("fetch failed: %v", err)
 	}
 	if td.cfg.JinaAPIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+td.cfg.JinaAPIKey)

@@ -67,8 +67,8 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
         return r;
     }
     char *path = json_get_string(jp.val, "path");
-    if (!path) {
-        r.output = util_strdup("Error: missing 'path' parameter");
+    if (!path || !path[0]) {
+        r.output = util_strdup("Error: no path provided");
         r.exit_code = 1;
         return r;
     }
@@ -78,7 +78,10 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
     /* 读取文件 */
     char *content = util_read_file(path);
     if (!content) {
-        r.output = util_strdup("Error: file not found or cannot read");
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Error: file not found: %s", path);
+        r.output = buf.data;
         r.exit_code = 1;
         free(path);
         return r;
@@ -124,15 +127,22 @@ static ToolResult tool_write(const char *input_json) {
     }
     char *path = json_get_string(jp.val, "path");
     char *content = json_get_string(jp.val, "content");
-    if (!path || !content) {
-        r.output = util_strdup("Error: missing 'path' or 'content'");
+    if (!path || !path[0]) {
+        r.output = util_strdup("Error: no path provided");
+        r.exit_code = 1;
+        free(path);
+        free(content);
+        return r;
+    }
+    if (!content) {
+        r.output = util_strdup("Error: no content provided");
         r.exit_code = 1;
         free(path);
         free(content);
         return r;
     }
     if (util_write_file(path, content) != 0) {
-        r.output = util_strdup("Error: cannot write file");
+        r.output = util_strdup("Error: write failed");
         r.exit_code = 1;
     } else {
         /* 输出格式: OK: wrote N bytes to path */
@@ -158,8 +168,20 @@ static ToolResult tool_edit(const char *input_json) {
     char *path = json_get_string(jp.val, "path");
     char *old_str = json_get_string(jp.val, "old_string");
     char *new_str = json_get_string(jp.val, "new_string");
-    if (!path || !old_str || !new_str) {
-        r.output = util_strdup("Error: missing parameters");
+    if (!path || !path[0]) {
+        r.output = util_strdup("Error: no path provided");
+        r.exit_code = 1;
+        free(path); free(old_str); free(new_str);
+        return r;
+    }
+    if (!old_str || !old_str[0]) {
+        r.output = util_strdup("Error: empty old_string");
+        r.exit_code = 1;
+        free(path); free(old_str); free(new_str);
+        return r;
+    }
+    if (!new_str) {
+        r.output = util_strdup("Error: no new_string provided");
         r.exit_code = 1;
         free(path); free(old_str); free(new_str);
         return r;
@@ -167,7 +189,10 @@ static ToolResult tool_edit(const char *input_json) {
 
     char *content = util_read_file(path);
     if (!content) {
-        r.output = util_strdup("Error: file not found");
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Error: file not found: %s", path);
+        r.output = buf.data;
         r.exit_code = 1;
         free(path); free(old_str); free(new_str);
         return r;
@@ -176,7 +201,10 @@ static ToolResult tool_edit(const char *input_json) {
     /* 查找 old_string */
     char *pos = strstr(content, old_str);
     if (!pos) {
-        r.output = util_strdup("Error: old_string not found in file");
+        StrBuf buf;
+        sb_init(&buf);
+        sb_appendf(&buf, "Error: old_string not found in %s. Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit.", path);
+        r.output = buf.data;
         r.exit_code = 1;
         free(content); free(path); free(old_str); free(new_str);
         return r;
@@ -200,6 +228,13 @@ static ToolResult tool_edit(const char *input_json) {
     memcpy(new_content, content, prefix_len);
     memcpy(new_content + prefix_len, new_str, new_len);
     memcpy(new_content + prefix_len + new_len, pos + old_len, suffix_len + 1);
+
+    if (new_content[0] == '\0') {
+        r.output = util_strdup("Error: edit produced empty result");
+        r.exit_code = 1;
+        free(content); free(new_content); free(path); free(old_str); free(new_str);
+        return r;
+    }
 
     /* 生成 diff 摘要 — 对齐 bash 版: diff -u --label a/$label --label b/$label */
     int added = 0, removed = 0;
@@ -603,8 +638,8 @@ static ToolResult tool_glob(const char *input_json, const char *cwd) {
     }
     char *pattern = json_get_string(jp.val, "pattern");
     char *path = json_get_string(jp.val, "path");
-    if (!pattern) {
-        r.output = util_strdup("Error: missing 'pattern'");
+    if (!pattern || !pattern[0]) {
+        r.output = util_strdup("Error: no pattern provided");
         r.exit_code = 1;
         free(path);
         return r;
@@ -653,8 +688,8 @@ static ToolResult tool_grep(const char *input_json, const char *cwd) {
         return r;
     }
     char *pattern = json_get_string(jp.val, "pattern");
-    if (!pattern) {
-        r.output = util_strdup("Error: missing 'pattern'");
+    if (!pattern || !pattern[0]) {
+        r.output = util_strdup("Error: no pattern provided");
         r.exit_code = 1;
         return r;
     }
@@ -749,9 +784,9 @@ static ToolResult tool_plan_confirm(const SessionPaths *paths) {
      * 对齐 bash 版: agent_compact_context(plan_confirm) → store_plan_confirm(mv) */
     char *draft = paths ? store_plan_draft_read(paths) : NULL;
     if (draft && draft[0]) {
-        r.output = util_strdup("Plan confirmed.");
+        r.output = util_strdup("Plan confirmed and locked in.");
     } else {
-        r.output = util_strdup("No plan draft to confirm.");
+        r.output = util_strdup("Error: no plan draft found to confirm.");
     }
     free(draft);
     return r;
@@ -775,8 +810,8 @@ static ToolResult tool_skill(const char *input_json, const char *home, const cha
         return r;
     }
     char *name = json_get_string(jp.val, "name");
-    if (!name) {
-        r.output = util_strdup("Error: missing 'name'");
+    if (!name || !name[0]) {
+        r.output = util_strdup("Error: no skill name provided");
         r.exit_code = 1;
         return r;
     }
@@ -807,7 +842,7 @@ static ToolResult tool_skill(const char *input_json, const char *home, const cha
     } else {
         StrBuf buf;
         sb_init(&buf);
-        sb_appendf(&buf, "Skill '%s' not found", name);
+        sb_appendf(&buf, "Error: skill not found: %s", name);
         r.output = buf.data;
         r.exit_code = 1;
     }
@@ -879,8 +914,8 @@ static ToolResult tool_web_search(const char *input_json) {
         return r;
     }
     char *query = json_get_string(jp.val, "query");
-    if (!query) {
-        r.output = util_strdup("Error: missing 'query'");
+    if (!query || !query[0]) {
+        r.output = util_strdup("Error: no query provided");
         r.exit_code = 1;
         return r;
     }
@@ -928,8 +963,8 @@ static ToolResult tool_web_fetch(const char *input_json) {
         return r;
     }
     char *url = json_get_string(jp.val, "url");
-    if (!url) {
-        r.output = util_strdup("Error: missing 'url'");
+    if (!url || !url[0]) {
+        r.output = util_strdup("Error: no url provided");
         r.exit_code = 1;
         return r;
     }

@@ -162,7 +162,7 @@ use crate::config::Config;
                     let args: Args = serde_json::from_value(input.clone())?;
                     self.web_fetch(&args.url)
                 }
-                _ => bail!("unknown tool: {name}"),
+                _ => bail!("Error: unknown tool: {name}"),
             }
         }
 
@@ -248,7 +248,7 @@ use crate::config::Config;
             }
             let updated = content.replacen(old_s, new_s, 1);
             if updated.is_empty() {
-                bail!("Error: edit produced empty result, reverted");
+                bail!("Error: edit produced empty result");
             }
             let diff = unified_diff_color(path, &content, &updated)?;
             fs::write(path, updated)?;

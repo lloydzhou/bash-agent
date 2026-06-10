@@ -28,7 +28,7 @@ BEGIN {
 
     i = index(data, old)
     if (i == 0) {
-        print "Error: old_string not found in " path ". Hint: Read the file and copy exact bytes (including whitespace/indent/newlines) before retrying Edit." > "/dev/stderr"
+        print "Error: old_string not found in " path ". Hint: use Grep to locate the target lines, then Read the relevant portion (with offset/limit) to copy the exact text before retrying Edit." > "/dev/stderr"
         exit 2
     }
 
