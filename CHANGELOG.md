@@ -10,7 +10,7 @@
 
 ## [4.2.5] - 2025-06-10
 
-> **Bugfix + 一致性版本**：修复 bash 权限扫描器将 workspace 绝对路径误判为 external；统一 tool 错误信息格式消除双重 Error 前缀；统一 Edit 成功输出格式。
+> **Bugfix + 一致性版本**：修复 bash 权限扫描器将 workspace 绝对路径误判为 external；统一 tool 错误信息格式消除双重 Error 前缀；统一 Edit 成功输出格式；统一 DP_MIN_KEEP_RATIO 默认值为 0.25。
 
 ### Fixed
 
@@ -19,6 +19,11 @@
 - **双重 Error 前缀**：tool 函数返回 `"Error: xxx"`，agent 层再加 `"Error: tool execution failed: "` → 最终显示 `"Error: tool execution failed: Error: xxx"`。修复：tool 函数返回裸消息（如 `file not found: xxx`），agent 层统一加 `"Error: "` 前缀。四版本同步。
 - **Edit 成功输出不统一**：Bash 版输出 `Edit(path) [+N -N lines]`，缺少 `Success:` 前缀，与 Read/Write 风格不一致。统一为 `Success: Edit(path) [+N -N lines]`。四版本同步。
 - **Edit Hint 改进**：`old_string not found` 的提示从 "Read the file and copy exact bytes" 改为 "use Grep to locate the target lines, then Read the relevant portion (with offset/limit)"，更具体地引导 LLM 正确操作。
+- **DP_MIN_KEEP_RATIO 默认值不一致**：Go (`0.12`)、Rust 测试 (`0.12`)、C force compact 路径 (`0.12`) 与 Bash 基准 (`0.25`) 不一致。统一为 `0.25`，文档同步更新。
+
+### Changed
+
+- **C 版 DP 配置结构体重构**：新增 `DPConfig` struct + `dp_config_init()` 函数，在 `agent_create()` 时初始化一次存入 `agent->dp_cfg`；`compact_dp_decision()` 改为接收 `const DPConfig*` 参数，`agent_compact_context()` 直接使用 `agent->dp_cfg`，消除 3 处散落的环境变量读取。
 
 ### Added
 
