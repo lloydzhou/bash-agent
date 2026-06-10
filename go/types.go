@@ -71,7 +71,7 @@ func DefaultConfig() Config {
 		DPPInput:           3.0,
 		DPPCache:           0.30,
 		DPPOut:             15.0,
-		DPMinKeepRatio:     0.12,
+		DPMinKeepRatio:     0.25,
 		DPRetention:        0.8,
 		DPBeta:             0.03,
 		DPQualityPenalty:   0.2,

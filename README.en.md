@@ -225,7 +225,7 @@ DP algorithm environment variables:
 | `DP_R` | `0.8` | Single summary info retention rate |
 | `DP_BETA` | `0.03` | Info loss penalty coefficient |
 | `DP_QUALITY_PENALTY` | `0.2` | Quality decay penalty (based on "Lost in the Middle" research) |
-| `DP_MIN_KEEP_RATIO` | `0.12` | Minimum message keep ratio |
+| `DP_MIN_KEEP_RATIO` | `0.25` | Minimum message keep ratio |
 
 ## Context Compaction
 

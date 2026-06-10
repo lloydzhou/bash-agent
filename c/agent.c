@@ -256,6 +256,9 @@ Agent *agent_create(const char *provider, const char *model,
     a->thinking = util_strdup(util_env("THINKING", "adaptive"));
     a->effort = util_strdup(util_env("EFFORT", "high"));
 
+    /* DP Compact 配置（启动时初始化一次） */
+    a->dp_cfg = dp_config_init(a->max_context_tokens);
+
     /* Skills */
     a->skill_count = skill_count;
     if (skill_count > 0) {
@@ -2388,6 +2391,25 @@ static int dp_env_i(const char *name, int def) {
     return atoi(v);
 }
 
+/* ── DP Compact 配置初始化 ── */
+DPConfig dp_config_init(int max_context_tokens) {
+    DPConfig c = {0};
+    c.baseline_e       = dp_env_i("DP_BASELINE_E", 8);
+    c.e_fixed          = dp_env_i("DP_E_FIXED", 0);
+    c.L_fixed          = dp_env_d("DP_L", 0.0);
+    c.V                = dp_env_d("DP_V", 5000.0);
+    c.p_input          = dp_env_d("DP_P_INPUT", 3.0);
+    c.p_cache          = dp_env_d("DP_P_CACHE", 0.30);
+    c.p_out            = dp_env_d("DP_P_OUT", 15.0);
+    c.S                = dp_env_d("DP_S", 500.0);
+    c.min_keep_ratio   = dp_env_d("DP_MIN_KEEP_RATIO", 0.25);
+    c.r                = dp_env_d("DP_R", 0.8);
+    c.beta             = dp_env_d("DP_BETA", 0.03);
+    c.quality_penalty  = dp_env_d("DP_QUALITY_PENALTY", 0.2);
+    c.max_context      = (max_context_tokens > 0) ? max_context_tokens : 200000;
+    return c;
+}
+
 static int compact_is_real_user_line(const char *line) {
     JsonParse jp = json_parse_root(line);
     if (!jp.error) {
@@ -2418,7 +2440,7 @@ static int compact_is_real_user_line(const char *line) {
  *
  * 返回：保留行数（对齐到 user 消息边界），0 表示不压缩
  */
-static int compact_dp_decision(char **lines, int n, int max_context_tokens,
+static int compact_dp_decision(char **lines, int n, const DPConfig *cfg,
                                int turn_count, int total_requests,
                                int total_compact, int total_input) {
     if (n == 0) return 0;
@@ -2436,20 +2458,20 @@ static int compact_dp_decision(char **lines, int n, int max_context_tokens,
         is_user[i] = compact_is_real_user_line(lines[i]);
     }
 
-    /* ── 参数（环境变量 / 默认值，对齐 bash 版）── */
-    int baseline_e    = dp_env_i("DP_BASELINE_E", 8);
-    int e_fixed       = dp_env_i("DP_E_FIXED", 0);
-    double L_fixed    = dp_env_d("DP_L", 0.0);
-    double V          = dp_env_d("DP_V", 5000.0);
-    double p_input    = dp_env_d("DP_P_INPUT", 3.0);
-    double p_cache    = dp_env_d("DP_P_CACHE", 0.30);
-    double p_out      = dp_env_d("DP_P_OUT", 15.0);
-    double S          = dp_env_d("DP_S", 500.0);
-    double min_keep_ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.25);
-    double r          = dp_env_d("DP_R", 0.8);
-    double beta       = dp_env_d("DP_BETA", 0.03);
-    double quality_penalty = dp_env_d("DP_QUALITY_PENALTY", 0.2);
-    int max_ctx       = (max_context_tokens > 0) ? max_context_tokens : 200000;
+    /* ── 参数（来自 cfg，对齐 bash 版）── */
+    int baseline_e    = cfg->baseline_e;
+    int e_fixed       = cfg->e_fixed;
+    double L_fixed    = cfg->L_fixed;
+    double V          = cfg->V;
+    double p_input    = cfg->p_input;
+    double p_cache    = cfg->p_cache;
+    double p_out      = cfg->p_out;
+    double S          = cfg->S;
+    double min_keep_ratio = cfg->min_keep_ratio;
+    double r          = cfg->r;
+    double beta       = cfg->beta;
+    double quality_penalty = cfg->quality_penalty;
+    int max_ctx       = cfg->max_context;
 
     /* ── E: expected remaining user-input rounds ── */
     double E;
@@ -2656,8 +2678,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         }
 
         /* DP 决策 */
-        int dp_keep = compact_dp_decision(quick_lines, quick_count,
-                                           agent->max_context_tokens,
+        int dp_keep = compact_dp_decision(quick_lines, quick_count, &agent->dp_cfg,
                                            turn_count, total_requests,
                                            total_compact, total_input);
         for (int i = 0; i < quick_count; i++) free(quick_lines[i]);
@@ -2708,16 +2729,14 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         free(stats2);
     }
 
-    int keep = compact_dp_decision(lines, line_count,
-                                    agent->max_context_tokens,
+    int keep = compact_dp_decision(lines, line_count, &agent->dp_cfg,
                                     turn_count, total_requests,
                                     total_compact, total_input);
     /* DP 返回 0（不值得）或 >= line_count（全保留）→ fallback */
     if (keep <= 0 || keep >= line_count) {
-        double ratio = dp_env_d("DP_MIN_KEEP_RATIO", 0.12);
         /* plan_clear / plan_confirm 强制按 user turn 比例截断 */
         if (strcmp(trigger, "plan_clear") == 0 || strcmp(trigger, "plan_confirm") == 0) {
-            keep = compact_turn_keep(lines, line_count, ratio);
+            keep = compact_turn_keep(lines, line_count, agent->dp_cfg.min_keep_ratio);
         } else {
             /* auto 模式：检查 context_tokens 是否接近上限 */
             int ct = 0;
@@ -2728,7 +2747,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
                 free(stats3);
             }
             if (ct > 0 && ct > agent->max_context_tokens * 90 / 100) {
-                keep = compact_turn_keep(lines, line_count, ratio);
+                keep = compact_turn_keep(lines, line_count, agent->dp_cfg.min_keep_ratio);
             } else {
                 for (int i = 0; i < line_count; i++) free(lines[i]);
                 free(lines);
@@ -2736,7 +2755,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
             }
         }
     }
-    if (keep <= 0) keep = compact_turn_keep(lines, line_count, dp_env_d("DP_MIN_KEEP_RATIO", 0.12));
+    if (keep <= 0) keep = compact_turn_keep(lines, line_count, agent->dp_cfg.min_keep_ratio);
     /* 对齐 bash 版: plan_clear/plan_confirm 绕过 keep >= line_count 守卫 */
     if (keep >= line_count &&
         strcmp(trigger, "plan_clear") != 0 &&
