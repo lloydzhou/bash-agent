@@ -8,6 +8,42 @@
 
 ---
 
+## [4.2.6] - 2025-06-13
+
+> **安全修复 + 四版本一致性版本**：修复 Bash 权限扫描器根目录绕过漏洞；统一四版本 session 功能、请求体字段顺序、默认值；新增 Bash 完整架构文档。
+
+### Security
+
+- **根目录 `/` 和 `/*` 权限绕过**：`tool_bash_add_path()` 中 `/` 和 `/*` 不匹配任何路径正则，被误归类为 workspace scope。攻击者可通过 `rm -rf /*`、`find / -delete` 等命令绕过 system 权限检查。修复：`/` 和 `/*` 归类为 system scope (8)。Bash/C/Go/Rust 四版本同步。
+- **`RE_ROOT_DELETE` 正则不匹配 `/*`**：`rm -rf /*` 中 `/` 后跟 `*`（glob）不匹配原有的 `/([[:space:]]|$)` 末尾模式。修复：正则末尾增加 `|[*]`。
+- **Bash token 遍历 glob 干扰**：`for tok in $seg` 未禁用 glob 展开，`/*` 被展开为根目录文件列表，导致分类结果依赖文件系统状态。修复：改用 `read -ra` 避免 glob。
+- **`sudo`/`su`/`doas` 换行绕过**：`sudo\necho hi` 被分割为两个 segment，单独的 `sudo` 不匹配 `sudo *` 模式。修复：case 匹配增加无参数形式 `sudo|su|doas`。
+
+### Fixed
+
+- **C 版 `--list-sessions` 缺失**：此前输出 "not implemented"。新增 `store_session_list_rows()` 实现。
+- **C/Go `--continue` mtime 判定不一致**：直接用目录 mtime 而非 events.jsonl mtime。修复：优先 events.jsonl，fallback 目录 mtime（对齐 Bash/Rust）。
+- **Go `--max-turns` 默认值 500**：应为 1000（Bash/C/Rust 均为 1000）。修复 flag 默认值。
+- **Go `TOOL_RESULT_MAX_BYTES` 默认 30000**：应为 100000（Bash/C/Rust 均为 100000）。
+- **Go `ListSessionRows` preview 截断用字节**：`len(line)` 应为 `utf8.RuneCountInString(line)`，`line[:57]` 应为 `string([]rune(line)[:57])`。
+- **Go `SummaryCall` instruction 消息字段顺序**：`map[string]string` 序列化为字母序，手动拼接保持 `role→content`。
+- **Bash usage 帮助文本 `--max-turns` 写 500**：实际默认值 1000，修正文档。
+
+### Changed
+
+- **LLM 请求体字段顺序统一**：四版本统一为 Go/Rust 天然的 map/BTreeMap 字母序：`max_tokens → messages → model → output_config → stream → system → thinking → tools`。Bash `llm_call()` 和 C `build_claude_request()` 调整拼接顺序。
+- **list-sessions 排序统一为 modified 降序**：Bash（sort 管道）、C（间接索引排序）、Go（sort.Slice）均改为 modified 降序，Rust 已是降序。
+- **Rust Config 移除未使用字段**：`max_context_keep_pct` 和 `max_turns_before_compact` 从未被引用，移除。
+
+### Added
+
+- **C 版 `util_truncate_chars()`**：按 UTF-8 字符数截断 + 省略号，与已有的 `util_truncate_str()`（按字节）配对，消除 `store.c` 中的重复逻辑。
+- **Bash 架构文档**（`docs/BASH_ARCHITECTURE.md`）：18 个模块的完整实现细节记录，作为 Port 版本对齐基准。
+- **四版本对比报告**（`docs/COMPARISON_ALL.md`）：8 项差异的详细记录和修复状态。
+- **安全测试用例**：`ls /`、`rm -rf /*`、`find / -delete`、`sudo\necho hi` 等场景，添加到四版本的分类器测试中。
+
+---
+
 ## [4.2.5] - 2025-06-10
 
 > **Bugfix + 一致性版本**：修复 bash 权限扫描器将 workspace 绝对路径误判为 external；统一 tool 错误信息格式消除双重 Error 前缀；统一 Edit 成功输出格式；统一 DP_MIN_KEEP_RATIO 默认值为 0.25。
