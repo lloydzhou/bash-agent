@@ -337,15 +337,7 @@ int store_session_list_rows(const char *home, const char *cwd, StrBuf *out) {
         sb_truncate(&buf, base_len);
 
         /* UTF-8 字符数截断（对齐 bash ${#preview} / rust chars().count()） */
-        if (util_utf8_char_count(preview) > 60) {
-            int char_count = 0;
-            char *p = preview;
-            while (*p && char_count < 57) {
-                if ((*(unsigned char *)p & 0xC0) != 0x80) char_count++;
-                p++;
-            }
-            p[0] = '.'; p[1] = '.'; p[2] = '.'; p[3] = '\0';
-        }
+        util_truncate_chars(preview, 60);
 
         sb_appendf(out, "%-40s %-16s %s\n", names[i], time_buf, preview);
         count++;
