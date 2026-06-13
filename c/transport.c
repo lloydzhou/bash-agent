@@ -810,25 +810,43 @@ char *build_claude_request(const char *model, const char *system_prompt,
     StrBuf buf;
     sb_init(&buf);
 
-    sb_append(&buf, "{\"model\":");
-    sb_append_json_string(&buf, model);
-    sb_append(&buf, ",\"max_tokens\":");
+    /* 字段顺序对齐 Go/Rust 的 map 字母序：
+     * max_tokens → messages → model → output_config → stream → system → thinking → tools */
+    sb_append(&buf, "{\"max_tokens\":");
     sb_appendf(&buf, "%d", max_tokens);
+
+    /* messages */
+    sb_append(&buf, ",\"messages\":[");
+    for (int i = 0; i < conv_line_count; i++) {
+        if (i > 0) sb_append(&buf, ",");
+        sb_append(&buf, conv_lines[i]);
+    }
+    sb_append(&buf, "]");
+
+    /* model */
+    sb_append(&buf, ",\"model\":");
+    sb_append_json_string(&buf, model);
+
+    /* output_config (仅 thinking != disabled) */
+    if (thinking && strcmp(thinking, "disabled") != 0) {
+        sb_append(&buf, ",\"output_config\":{\"effort\":");
+        sb_append_json_string(&buf, effort ? effort : "high");
+        sb_append(&buf, "}");
+    }
+
+    /* stream */
     sb_append(&buf, ",\"stream\":true");
 
-    /* system prompt — 与 bash/Go/Rust 一致用字符串格式，触发 API prompt caching */
+    /* system prompt */
     if (system_prompt && system_prompt[0]) {
         sb_append(&buf, ",\"system\":");
         sb_append_json_string(&buf, system_prompt);
     }
 
-    /* thinking — 对齐 bash 版: {"type":"adaptive"} + {"output_config":{"effort":"high"}} */
+    /* thinking (仅 thinking != disabled) */
     if (thinking && strcmp(thinking, "disabled") != 0) {
         sb_append(&buf, ",\"thinking\":{\"type\":");
         sb_append_json_string(&buf, thinking);
-        sb_append(&buf, "}");
-        sb_append(&buf, ",\"output_config\":{\"effort\":");
-        sb_append_json_string(&buf, effort ? effort : "high");
         sb_append(&buf, "}");
     }
 
@@ -838,13 +856,7 @@ char *build_claude_request(const char *model, const char *system_prompt,
         sb_append(&buf, tools_json);
     }
 
-    /* messages */
-    sb_append(&buf, ",\"messages\":[");
-    for (int i = 0; i < conv_line_count; i++) {
-        if (i > 0) sb_append(&buf, ",");
-        sb_append(&buf, conv_lines[i]);
-    }
-    sb_append(&buf, "]}");
+    sb_append(&buf, "}");
 
     char *result = buf.data;
     /* 不要 sb_free，因为我们返回 buf.data */
