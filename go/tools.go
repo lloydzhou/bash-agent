@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const defaultToolResultMaxBytes = 30000
+const defaultToolResultMaxBytes = 100000
 
 func getToolResultMaxBytes() int {
 	if v := os.Getenv("TOOL_RESULT_MAX_BYTES"); v != "" {
