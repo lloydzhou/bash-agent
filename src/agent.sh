@@ -1467,7 +1467,7 @@ Options:
   --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
-  --max-turns N           Max agent turns (default: 500)
+  --max-turns N           Max agent turns (default: 1000)
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
