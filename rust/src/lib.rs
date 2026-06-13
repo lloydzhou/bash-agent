@@ -32,8 +32,6 @@ pub mod config {
         pub prompt: String,
         pub max_turns: i32,
         pub max_context_tokens: usize,
-        pub max_context_keep_pct: i32,
-        pub max_turns_before_compact: i32,
         pub dp_p_input: f64,
         pub dp_p_cache: f64,
         pub dp_p_out: f64,
@@ -72,8 +70,6 @@ pub mod config {
                 prompt: String::new(),
                 max_turns: 1000,
                 max_context_tokens: 200_000,
-                max_context_keep_pct: 25,
-                max_turns_before_compact: 100,
                 dp_p_input: 3.0,
                 dp_p_cache: 0.30,
                 dp_p_out: 15.0,
@@ -114,11 +110,6 @@ pub mod config {
         }
         if let Ok(v) = std::env::var("EFFORT") {
             cfg.effort = v;
-        }
-        if let Ok(v) = std::env::var("MAX_TURNS_BEFORE_COMPACT") {
-            if let Ok(n) = v.parse::<i32>() {
-                cfg.max_turns_before_compact = n;
-            }
         }
         if let Ok(v) = std::env::var("DP_P_INPUT") {
             if let Ok(f) = v.parse::<f64>() {
@@ -534,8 +525,6 @@ pub mod types {
         pub prompt: String,
         pub max_turns: i32,
         pub max_context_tokens: usize,
-        pub max_context_keep_pct: i32,
-        pub max_turns_before_compact: i32,
         pub dp_p_input: f64,
         pub dp_p_cache: f64,
         pub dp_p_out: f64,
