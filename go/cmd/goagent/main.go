@@ -41,7 +41,7 @@ func main() {
 	flag.StringVar(&maxTokens, "max-tokens", "16384", "Max output tokens")
 	flag.IntVar(&toolTimeout, "tool-timeout", 600, "Tool execution timeout in seconds")
 	flag.Var(&skills, "skill", "Load a skill (repeatable)")
-	flag.IntVar(&maxTurns, "max-turns", 500, "Max agent turns")
+	flag.IntVar(&maxTurns, "max-turns", 1000, "Max agent turns")
 	flag.StringVar(&maxContext, "max-context", "200000", "Max context tokens before compact")
 	flag.StringVar(&apiKey, "api-key", "", "API key (default from env)")
 	flag.StringVar(&baseURL, "base-url", "", "Override API base URL")
