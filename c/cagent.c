@@ -129,7 +129,20 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "--tool-timeout") == 0 && i + 1 < argc) {
             tool_timeout_str = argv[++i];
         } else if (strcmp(argv[i], "--list-sessions") == 0) {
-            fprintf(stderr, "Sessions listing not implemented\n");
+            char list_cwd[4096];
+            getcwd(list_cwd, sizeof(list_cwd));
+            const char *list_env_h = util_env("BASH_AGENT_HOME", NULL);
+            const char *list_h = (list_env_h && list_env_h[0]) ? list_env_h : util_env("HOME", util_home_dir());
+            StrBuf list_rows;
+            sb_init(&list_rows);
+            int list_count = store_session_list_rows(list_h, list_cwd, &list_rows);
+            if (list_count > 0) {
+                printf("%-40s %-16s %s\n", "NAME", "MODIFIED", "PREVIEW");
+                fputs(list_rows.data, stdout);
+            } else {
+                printf("No sessions found.\n");
+            }
+            sb_free(&list_rows);
             return 0;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);

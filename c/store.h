@@ -51,6 +51,9 @@ char *session_new_id(void);
 /* 查找最近一个会话（用于 --continue） */
 char *store_session_resolve_continue(const char *home, const char *cwd);
 
+/* 列出所有会话行（用于 --list-sessions），格式化行写入 out，返回行数 */
+int store_session_list_rows(const char *home, const char *cwd, StrBuf *out);
+
 /* ============================================================
  * conversation.jsonl 操作
  * ============================================================ */
