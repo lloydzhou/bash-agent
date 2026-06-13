@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <ctype.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
@@ -235,8 +236,17 @@ char *store_session_resolve_continue(const char *home, const char *cwd) {
         sb_truncate(&buf, 0);
         sb_appendf(&buf, "%s/.bash-agent/projects/%s/%s", home, key, entry->d_name);
         if (stat(buf.data, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        if (st.st_mtime > latest_time) {
-            latest_time = st.st_mtime;
+        /* 优先用 events.jsonl 的 mtime，fallback 到目录 mtime（对齐 bash/rust） */
+        time_t mtime = st.st_mtime;
+        size_t base_len = buf.len;
+        sb_append(&buf, "/events.jsonl");
+        struct stat events_st;
+        if (stat(buf.data, &events_st) == 0) {
+            mtime = events_st.st_mtime;
+        }
+        sb_truncate(&buf, base_len);
+        if (mtime > latest_time) {
+            latest_time = mtime;
             free(latest_id);
             latest_id = util_strdup(entry->d_name);
         }
@@ -245,6 +255,101 @@ char *store_session_resolve_continue(const char *home, const char *cwd) {
     sb_free(&buf);
     free(key);
     return latest_id;
+}
+
+int store_session_list_rows(const char *home, const char *cwd, StrBuf *out) {
+    char *key = store_session_project_key(cwd);
+    StrBuf buf;
+    sb_init(&buf);
+    sb_appendf(&buf, "%s/.bash-agent/projects/%s", home, key);
+
+    struct dirent **namelist;
+    int n = scandir(buf.data, &namelist, NULL, alphasort);
+    if (n < 0) { sb_free(&buf); free(key); return 0; }
+
+    /* 收集有效 session 的 name 和 mtime */
+    char **names = calloc(n, sizeof(char *));
+    time_t *mtimes = calloc(n, sizeof(time_t));
+    int valid = 0;
+
+    for (int i = 0; i < n; i++) {
+        struct dirent *entry = namelist[i];
+        if (entry->d_name[0] == '.') { free(entry); continue; }
+        struct stat st;
+        sb_truncate(&buf, 0);
+        sb_appendf(&buf, "%s/.bash-agent/projects/%s/%s", home, key, entry->d_name);
+        if (stat(buf.data, &st) != 0 || !S_ISDIR(st.st_mode)) { free(entry); continue; }
+        names[valid] = util_strdup(entry->d_name);
+        mtimes[valid] = st.st_mtime;
+        valid++;
+        free(entry);
+    }
+    free(namelist);
+
+    /* 按 mtime 降序排序 */
+    /* 间接排序：用索引数组 */
+    int *order = calloc(valid, sizeof(int));
+    for (int i = 0; i < valid; i++) order[i] = i;
+    /* 简单选择排序（session 数量通常不大）—— 用 mtimes[order[i]] 比较 */
+    for (int i = 0; i < valid - 1; i++) {
+        for (int j = i + 1; j < valid; j++) {
+            if (mtimes[order[j]] > mtimes[order[i]]) {
+                int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+            }
+        }
+    }
+
+    int count = 0;
+    for (int idx = 0; idx < valid; idx++) {
+        int i = order[idx];
+        struct stat st;
+        sb_truncate(&buf, 0);
+        sb_appendf(&buf, "%s/.bash-agent/projects/%s/%s", home, key, names[i]);
+        stat(buf.data, &st);
+
+        /* modified: 目录 mtime，格式 YYYY-MM-DD HH:MM（对齐 bash） */
+        char time_buf[32];
+        struct tm *tm = localtime(&st.st_mtime);
+        strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M", tm);
+
+        /* preview: 从 summary.txt 取第一行非空内容，超 60 字符截断为 57 + ... */
+        char preview[1024];
+        preview[0] = '\0';
+        size_t base_len = buf.len;
+        sb_append(&buf, "/summary.txt");
+        FILE *fp = fopen(buf.data, "r");
+        if (fp) {
+            char line[1024];
+            while (fgets(line, sizeof(line), fp)) {
+                /* trim leading/trailing whitespace */
+                char *start = line;
+                while (*start && isspace((unsigned char)*start)) start++;
+                if (*start) {
+                    size_t len = strlen(start);
+                    while (len > 0 && isspace((unsigned char)start[len - 1])) start[--len] = '\0';
+                    strncpy(preview, start, sizeof(preview) - 1);
+                    preview[sizeof(preview) - 1] = '\0';
+                    break;
+                }
+            }
+            fclose(fp);
+        }
+        sb_truncate(&buf, base_len);
+
+        /* UTF-8 字符数截断（对齐 bash ${#preview} / rust chars().count()） */
+        util_truncate_chars(preview, 60);
+
+        sb_appendf(out, "%-40s %-16s %s\n", names[i], time_buf, preview);
+        count++;
+    }
+
+    for (int i = 0; i < valid; i++) FREE_PTR(names[i]);
+    free(names);
+    free(mtimes);
+    free(order);
+    sb_free(&buf);
+    free(key);
+    return count;
 }
 
 /* ============================================================

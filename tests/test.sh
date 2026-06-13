@@ -2665,6 +2665,19 @@ test_bash_mode_scanner() {
     assert_mode "workspace: python3 -c" \
         "python3 -c print(1)" "0001"
 
+    # --- 安全漏洞修复：根目录 / 和 /* 必须归类为 system ---
+    assert_mode "root read: ls /" \
+        "ls /" "4000"
+    assert_mode "root delete glob: rm -rf /*" \
+        "rm -rf /*" "6000"
+    assert_mode "root find: find / -name" \
+        "find / -name foo" "4000"
+    assert_mode "root find delete: find / -delete" \
+        "find / -delete" "6000"
+    # 换行符分割后 sudo 单独 segment 也必须被检测
+    assert_mode "newline sudo bypass" \
+        $'sudo\necho hi' "1000"
+
     # ═══════════════════════════════════════
     # 复合命令测试（segment 拆分 + mask 合并）
     # ═══════════════════════════════════════

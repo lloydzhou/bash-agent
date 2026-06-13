@@ -593,19 +593,20 @@ store_event_recent_turn_lines() {
 }
 
 store_session_list_rows() {
-    local dir session_dir name mod preview summary_file
+    local dir session_dir name mod preview summary_file ts
     dir="$(store_session_get_dir)"
     [[ -d "$dir" ]] || return 0
     for session_dir in "$dir"/*/; do
         [[ -d "$session_dir" ]] || continue
         name=$(basename "$session_dir")
+        ts=$(stat -f "%m" "$session_dir" 2>/dev/null || stat -c "%Y" "$session_dir" 2>/dev/null || echo 0)
         mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$session_dir" 2>/dev/null || stat -c "%y" "$session_dir" 2>/dev/null | cut -d. -f1)
         summary_file="${session_dir}/summary.txt"
         preview=""
         [[ -s "$summary_file" ]] && preview=$(grep -m1 -v '^[[:space:]]*$' "$summary_file" 2>/dev/null || true)
         [[ ${#preview} -gt 60 ]] && preview="${preview:0:57}..."
-        printf '%s\t%s\t%s\n' "$name" "$mod" "$preview"
-    done
+        printf '%s\t%s\t%s\t%s\n' "$ts" "$name" "$mod" "$preview"
+    done | sort -t$'\t' -rn -k1 | cut -f2-
 }
 
 # llm
@@ -621,14 +622,15 @@ llm_stream_curl() {
 llm_call() {
     local messages="$1" max_tokens="${2:-$MAX_TOKENS}" use_thinking="${3:-$THINKING}" body system_prompt
     system_prompt=$(agent_build_prompt)
-    body="{\"model\":\"${MODEL}\",\"max_tokens\":${max_tokens},\"stream\":true"
-    if [[ "$use_thinking" != "disabled" ]]; then
-        body+=",\"thinking\":{\"type\":\"${use_thinking}\"}"
-        body+=",\"output_config\":{\"effort\":\"${EFFORT}\"}"
-    fi
+    # 字段顺序对齐 Go/Rust 的 map 字母序：max_tokens→messages→model→output_config→stream→system→thinking→tools
+    local use_think=0; [[ "$use_thinking" != "disabled" ]] && use_think=1
+    body="{\"max_tokens\":${max_tokens},\"messages\":${messages},\"model\":\"${MODEL}\""
+    (( use_think )) && body+=",\"output_config\":{\"effort\":\"${EFFORT}\"}"
+    body+=",\"stream\":true"
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(util_json_escape "$system_prompt")\""
+    (( use_think )) && body+=",\"thinking\":{\"type\":\"${use_thinking}\"}"
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
-    body+=",\"messages\":${messages}}"
+    body+="}"
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %s...\033[0m\n' "$((${#body} / 1024))" "${body:0:200}" >&2
     printf '%s' "$body" | util_body_convert | llm_stream_curl | sse_convert | sse_parse
 }
@@ -791,7 +793,7 @@ tool_bash_mode_normalize() {
     [[ "$mode" =~ ^[0-7][0-7][0-7][0-7]$ ]] && printf '%s' "$mode" || printf '0000'
 }
 
-TOOL_BASH_RE_ROOT_DELETE='(^|[[:space:];|&])rm[[:space:]]+-[^[:space:]]*[rf][^[:space:]]*[[:space:]]+/([[:space:]]|$)'
+TOOL_BASH_RE_ROOT_DELETE='(^|[[:space:];|&])rm[[:space:]]+-[^[:space:]]*[rf][^[:space:]]*[[:space:]]+/([[:space:]]|$|[*])'
 TOOL_BASH_RE_SYSTEM_PATH='(^|[[:space:]"'\''])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[[:space:]"'\'']|$)'
 TOOL_BASH_RE_SENSITIVE_PATH='(^|[[:space:]"'\''])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])([^[:space:]"'\'']*\.(env|pem|key)|[^[:space:]"'\'']*(token|credential|secret)[^[:space:]"'\'']*)'
 TOOL_BASH_RE_EXTERNAL_PATH='(^|[[:space:]"'\''])(~|\$home)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])/[A-Za-z0-9._-]'
@@ -807,6 +809,8 @@ tool_bash_add_path() {
     path="${path#\"}"; path="${path%\"}"; path="${path#\'}"; path="${path%\'}"
     path="${path#of=}"; path="${path%;}"; path="${path%,}"; path="${path%)}"
     [[ -z "$path" || "$path" == /tmp || "$path" == /tmp/* || "$path" == /dev/null || "$path" == '&'* ]] && return 0
+    # 根目录 / 和 /* 归类为 system（防止绕过 system 权限检查）
+    [[ "$path" == "/" || "$path" == "/*" ]] && scope=8
     if [[ "$path" == /dev/tcp* ]]; then
         scope=2
     elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
@@ -822,7 +826,7 @@ tool_bash_add_path() {
 tool_bash_scan_segment() {
     local seg="$1" tok redir=0 path_bits=4 flags=0
     case "$seg" in
-        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 ;;
+        sudo|sudo\ *|su|su\ *|doas|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 ;;
         mkfs*|fdisk*|diskutil*|mount\ *|umount\ *) tool_bash_add_mode 8 2 ;;
         *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*) tool_bash_add_mode 2 4 ;;
     esac
@@ -837,7 +841,9 @@ tool_bash_scan_segment() {
     case "$seg" in
         *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|git\ commit*|git\ add*|git\ checkout*|git\ merge*|git\ rebase*|git\ stash*|npm\ test*) path_bits=6; flags=1 ;;
     esac
-    for tok in $seg; do
+    local -a _tokens
+    read -ra _tokens <<< "$seg"
+    for tok in "${_tokens[@]}"; do
         (( redir )) && { tool_bash_add_path "$tok" "$redir"; flags=3; redir=0; continue; }
         case "$tok" in
             '>'|'>>'|'1>'|'1>>') redir=2; continue ;;
@@ -1465,7 +1471,7 @@ Options:
   --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
-  --max-turns N           Max agent turns (default: 500)
+  --max-turns N           Max agent turns (default: 1000)
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)

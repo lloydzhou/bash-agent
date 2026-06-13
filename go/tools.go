@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-const defaultToolResultMaxBytes = 30000
+const defaultToolResultMaxBytes = 100000
 
 func getToolResultMaxBytes() int {
 	if v := os.Getenv("TOOL_RESULT_MAX_BYTES"); v != "" {
@@ -337,7 +337,7 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 }
 
 var (
-	toolBashReRootDelete   = regexp.MustCompile(`(^|[\s;|&])rm\s+-[^\s]*[rf][^\s]*\s+/(\s|$)`)
+	toolBashReRootDelete   = regexp.MustCompile(`(^|[\s;|&])rm\s+-[^\s]*[rf][^\s]*\s+/(\s|$|[*])`)
 	toolBashReSystemPath   = regexp.MustCompile(`(^|[\s"'` + "`" + `])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[\s"'` + "`" + `]|$)`)
 	toolBashReSensitive    = regexp.MustCompile(`(^|[\s"'` + "`" + `])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[\s"'` + "`" + `]|$)|(^|[\s"'` + "`" + `])([^\s"'` + "`" + `]*\.(env|pem|key)|[^\s"'` + "`" + `]*(token|credential|secret)[^\s"'` + "`" + `]*)`)
 	toolBashReExternalPath = regexp.MustCompile(`(^|[\s"'` + "`" + `])(~|\$home)(/|[\s"'` + "`" + `]|$)|(^|[\s"'` + "`" + `])/[A-Za-z0-9._-]`)
@@ -391,6 +391,8 @@ func toolBashAddPath(mask *int, path string, perms int, cwd string) {
 	}
 	if strings.HasPrefix(path, "/dev/tcp") {
 		scope = 2
+	} else if path == "/" || path == "/*" {
+		scope = 8
 	} else if toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path) {
 		scope = 8
 	} else if cwd != "" && (path == cwd || strings.HasPrefix(path, cwd+"/")) {
@@ -404,7 +406,7 @@ func toolBashAddPath(mask *int, path string, perms int, cwd string) {
 func toolBashScanSegment(mask *int, seg string, cwd string) {
 	flags, pathBits, redir := 0, 4, 0
 	switch {
-	case strings.HasPrefix(seg, "sudo "), strings.HasPrefix(seg, "su "), strings.HasPrefix(seg, "doas "), strings.HasPrefix(seg, "shutdown"), strings.HasPrefix(seg, "reboot"), strings.HasPrefix(seg, "halt"), strings.HasPrefix(seg, "poweroff"):
+	case seg == "sudo" || strings.HasPrefix(seg, "sudo "), seg == "su" || strings.HasPrefix(seg, "su "), seg == "doas" || strings.HasPrefix(seg, "doas "), strings.HasPrefix(seg, "shutdown"), strings.HasPrefix(seg, "reboot"), strings.HasPrefix(seg, "halt"), strings.HasPrefix(seg, "poweroff"):
 		toolBashAddMode(mask, 8, 1)
 	case strings.HasPrefix(seg, "mkfs"), strings.HasPrefix(seg, "fdisk"), strings.HasPrefix(seg, "diskutil"), strings.HasPrefix(seg, "mount "), strings.HasPrefix(seg, "umount "):
 		toolBashAddMode(mask, 8, 2)

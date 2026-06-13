@@ -380,6 +380,7 @@ STATIC void bash_add_path(unsigned short *mask, const char *path, int perms) {
     if (strncmp(buf, "of=", 3) == 0) memmove(buf, buf + 3, strlen(buf + 3) + 1);
     if (!buf[0] || strcmp(buf, "/tmp") == 0 || strncmp(buf, "/tmp/", 5) == 0 || strcmp(buf, "/dev/null") == 0 || buf[0] == '&') return;
     if (strncmp(buf, "/dev/tcp", 8) == 0) scope = 2;
+    else if (strcmp(buf, "/") == 0 || strcmp(buf, "/*") == 0) scope = 8;
     else if (bash_is_sensitive_path(buf) || bash_is_system_path(buf)) scope = 8;
     else if (g_cwd[0] != '\0' && (strcmp(buf, g_cwd) == 0 || (strncmp(buf, g_cwd, strlen(g_cwd)) == 0 && buf[strlen(g_cwd)] == '/'))) scope = 1;
     else if ((buf[0] == '/' && buf[1]) || strncmp(buf, "~/", 2) == 0 || strncmp(buf, "$home", 5) == 0 || strstr(buf, "..")) scope = 4;
@@ -398,7 +399,9 @@ STATIC int bash_is_block_device_path(const char *path) {
 STATIC void bash_scan_segment(unsigned short *mask, const char *seg) {
     char *copy, *save = NULL, *tok;
     int redir = 0, path_bits = 4, flags = 0;
-    if (bash_starts_with(seg, "sudo ") || bash_starts_with(seg, "su ") || bash_starts_with(seg, "doas ") ||
+    if (strcmp(seg, "sudo") == 0 || bash_starts_with(seg, "sudo ") ||
+        strcmp(seg, "su") == 0 || bash_starts_with(seg, "su ") ||
+        strcmp(seg, "doas") == 0 || bash_starts_with(seg, "doas ") ||
         bash_starts_with(seg, "shutdown") || bash_starts_with(seg, "reboot") || bash_starts_with(seg, "halt") ||
         bash_starts_with(seg, "poweroff")) bash_add_mode(mask, 8, 1);
     else if (bash_starts_with(seg, "mkfs") || bash_starts_with(seg, "fdisk") || bash_starts_with(seg, "diskutil") ||

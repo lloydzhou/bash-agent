@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ═══════════════════════════════════════════
@@ -226,12 +228,16 @@ func (s *FileStore) GetLatestDir() (string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		fi, err := e.Info()
+		/* 优先用 events.jsonl 的 mtime，fallback 到目录 mtime（对齐 bash/rust） */
+		mt, err := e.Info()
 		if err != nil {
 			continue
 		}
-		if fi.ModTime().Unix() > latestTs {
-			latestTs = fi.ModTime().Unix()
+		if fi, err := os.Stat(filepath.Join(projectDir, e.Name(), "events.jsonl")); err == nil {
+			mt = fi
+		}
+		if mt.ModTime().Unix() > latestTs {
+			latestTs = mt.ModTime().Unix()
 			latest = e.Name()
 		}
 	}
@@ -1065,8 +1071,8 @@ func (s *FileStore) ListSessionRows() []SessionRow {
 			for _, line := range strings.Split(string(data), "\n") {
 				line = strings.TrimSpace(line)
 				if line != "" {
-					if len(line) > 60 {
-						line = line[:57] + "..."
+					if utf8.RuneCountInString(line) > 60 {
+						line = string([]rune(line)[:57]) + "..."
 					}
 					row.Preview = line
 					break
@@ -1075,5 +1081,9 @@ func (s *FileStore) ListSessionRows() []SessionRow {
 		}
 		rows = append(rows, row)
 	}
+	// 按 modified 降序排列（对齐 Rust）
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Modified > rows[j].Modified
+	})
 	return rows
 }

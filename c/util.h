@@ -69,6 +69,9 @@ size_t util_utf8_truncate_len(const char *s, size_t max_bytes);
 /* 原地截断到 max_total 字节以内（UTF-8 安全），超长时尾部追加 "..." */
 void util_truncate_str(char *s, size_t max_total);
 
+/* 原地截断到 max_chars 个 UTF-8 字符以内，超长时尾部追加 "..." */
+void util_truncate_chars(char *s, int max_chars);
+
 /* UTF-8 sanitize：将非法字节替换为 \ufffd 字面文本，返回新 malloc'd 字符串 */
 char *util_sanitize_utf8(const char *src);
 

@@ -300,6 +300,19 @@ void util_truncate_str(char *s, size_t max_total) {
     s[cut + 3] = '\0';
 }
 
+void util_truncate_chars(char *s, int max_chars) {
+    if (util_utf8_char_count(s) <= max_chars) return;
+    /* 留 3 字符给 "..."，找到前 (max_chars - 3) 个字符的字节位置 */
+    int target = max_chars >= 3 ? max_chars - 3 : 0;
+    int char_count = 0;
+    char *p = s;
+    while (*p && char_count < target) {
+        if ((*(unsigned char *)p & 0xC0) != 0x80) char_count++;
+        p++;
+    }
+    p[0] = '.'; p[1] = '.'; p[2] = '.'; p[3] = '\0';
+}
+
 char *util_rtrim(char *s) {
     size_t len = strlen(s);
     while (len > 0 && (s[len-1] == '\n' || s[len-1] == '\r' ||

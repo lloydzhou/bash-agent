@@ -95,6 +95,10 @@ func TestToolClassifyBashRequiredMode(t *testing.T) {
 		"echo harmless >/dev/null":         "0004",
 		"python script.py":                 "0001",
 		"echo hello":                       "0004",
+		"ls /":                             "4000",
+		"rm -rf /*":                        "6000",
+		"find / -name foo":                 "4000",
+		"find / -delete":                   "6000",
 	}
 	for cmd, want := range tests {
 		if got := ToolClassifyBashRequiredMode(cmd); got != want {
