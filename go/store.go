@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1080,5 +1081,9 @@ func (s *FileStore) ListSessionRows() []SessionRow {
 		}
 		rows = append(rows, row)
 	}
+	// 按 modified 降序排列（对齐 Rust）
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Modified > rows[j].Modified
+	})
 	return rows
 }

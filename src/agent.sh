@@ -593,19 +593,20 @@ store_event_recent_turn_lines() {
 }
 
 store_session_list_rows() {
-    local dir session_dir name mod preview summary_file
+    local dir session_dir name mod preview summary_file ts
     dir="$(store_session_get_dir)"
     [[ -d "$dir" ]] || return 0
     for session_dir in "$dir"/*/; do
         [[ -d "$session_dir" ]] || continue
         name=$(basename "$session_dir")
+        ts=$(stat -f "%m" "$session_dir" 2>/dev/null || stat -c "%Y" "$session_dir" 2>/dev/null || echo 0)
         mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$session_dir" 2>/dev/null || stat -c "%y" "$session_dir" 2>/dev/null | cut -d. -f1)
         summary_file="${session_dir}/summary.txt"
         preview=""
         [[ -s "$summary_file" ]] && preview=$(grep -m1 -v '^[[:space:]]*$' "$summary_file" 2>/dev/null || true)
         [[ ${#preview} -gt 60 ]] && preview="${preview:0:57}..."
-        printf '%s\t%s\t%s\n' "$name" "$mod" "$preview"
-    done
+        printf '%s\t%s\t%s\t%s\n' "$ts" "$name" "$mod" "$preview"
+    done | sort -t$'\t' -rn -k1 | cut -f2-
 }
 
 # llm

@@ -263,12 +263,15 @@ int store_session_list_rows(const char *home, const char *cwd, StrBuf *out) {
     sb_init(&buf);
     sb_appendf(&buf, "%s/.bash-agent/projects/%s", home, key);
 
-    /* scandir + alphasort 确保字母升序（对齐 bash glob / Go ReadDir） */
     struct dirent **namelist;
     int n = scandir(buf.data, &namelist, NULL, alphasort);
     if (n < 0) { sb_free(&buf); free(key); return 0; }
 
-    int count = 0;
+    /* 收集有效 session 的 name 和 mtime */
+    char **names = calloc(n, sizeof(char *));
+    time_t *mtimes = calloc(n, sizeof(time_t));
+    int valid = 0;
+
     for (int i = 0; i < n; i++) {
         struct dirent *entry = namelist[i];
         if (entry->d_name[0] == '.') { free(entry); continue; }
@@ -276,6 +279,33 @@ int store_session_list_rows(const char *home, const char *cwd, StrBuf *out) {
         sb_truncate(&buf, 0);
         sb_appendf(&buf, "%s/.bash-agent/projects/%s/%s", home, key, entry->d_name);
         if (stat(buf.data, &st) != 0 || !S_ISDIR(st.st_mode)) { free(entry); continue; }
+        names[valid] = util_strdup(entry->d_name);
+        mtimes[valid] = st.st_mtime;
+        valid++;
+        free(entry);
+    }
+    free(namelist);
+
+    /* 按 mtime 降序排序 */
+    /* 间接排序：用索引数组 */
+    int *order = calloc(valid, sizeof(int));
+    for (int i = 0; i < valid; i++) order[i] = i;
+    /* 简单选择排序（session 数量通常不大）—— 用 mtimes[order[i]] 比较 */
+    for (int i = 0; i < valid - 1; i++) {
+        for (int j = i + 1; j < valid; j++) {
+            if (mtimes[order[j]] > mtimes[order[i]]) {
+                int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+            }
+        }
+    }
+
+    int count = 0;
+    for (int idx = 0; idx < valid; idx++) {
+        int i = order[idx];
+        struct stat st;
+        sb_truncate(&buf, 0);
+        sb_appendf(&buf, "%s/.bash-agent/projects/%s/%s", home, key, names[i]);
+        stat(buf.data, &st);
 
         /* modified: 目录 mtime，格式 YYYY-MM-DD HH:MM（对齐 bash） */
         char time_buf[32];
@@ -317,11 +347,14 @@ int store_session_list_rows(const char *home, const char *cwd, StrBuf *out) {
             p[0] = '.'; p[1] = '.'; p[2] = '.'; p[3] = '\0';
         }
 
-        sb_appendf(out, "%-40s %-16s %s\n", entry->d_name, time_buf, preview);
+        sb_appendf(out, "%-40s %-16s %s\n", names[i], time_buf, preview);
         count++;
-        free(entry);
     }
-    free(namelist);
+
+    for (int i = 0; i < valid; i++) FREE_PTR(names[i]);
+    free(names);
+    free(mtimes);
+    free(order);
     sb_free(&buf);
     free(key);
     return count;
