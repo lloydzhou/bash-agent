@@ -83,12 +83,9 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, system
 	for _, line := range lines {
 		msgs = append(msgs, json.RawMessage(line))
 	}
-	// 追加 summary instruction 作为用户消息
-	instrMsg, _ := json.Marshal(map[string]string{
-		"role":    "user",
-		"content": summaryInstruction,
-	})
-	msgs = append(msgs, json.RawMessage(instrMsg))
+	// 追加 summary instruction 作为用户消息（手动拼接保持 role→content 顺序）
+	instrMsg := []byte(`{"role":"user","content":"` + UtilJSONEscape(summaryInstruction) + `"}`)
+	msgs = append(msgs, instrMsg)
 
 	messagesJSON, _ := json.Marshal(msgs)
 
