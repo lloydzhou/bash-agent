@@ -73,6 +73,12 @@ int main(void) {
     printf("\n=== git ===\n");
     T("git add -A && git commit -m fix", "0003");
 
+    printf("\n=== root dir security ===\n");
+    T("ls /", "4000");
+    T("rm -rf /*", "6000");
+    T("find / -name foo", "4000");
+    T("find / -delete", "6000");
+
     printf("\n=== compound commands ===\n");
     snprintf(b1, sizeof(b1), "echo hi > %s/test.txt && cat %s/test.txt", cwd, cwd);
     snprintf(b2, sizeof(b2), "cat %s/file && cat /etc/hosts", cwd);

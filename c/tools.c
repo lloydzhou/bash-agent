@@ -380,6 +380,7 @@ STATIC void bash_add_path(unsigned short *mask, const char *path, int perms) {
     if (strncmp(buf, "of=", 3) == 0) memmove(buf, buf + 3, strlen(buf + 3) + 1);
     if (!buf[0] || strcmp(buf, "/tmp") == 0 || strncmp(buf, "/tmp/", 5) == 0 || strcmp(buf, "/dev/null") == 0 || buf[0] == '&') return;
     if (strncmp(buf, "/dev/tcp", 8) == 0) scope = 2;
+    else if (strcmp(buf, "/") == 0 || strcmp(buf, "/*") == 0) scope = 8;
     else if (bash_is_sensitive_path(buf) || bash_is_system_path(buf)) scope = 8;
     else if (g_cwd[0] != '\0' && (strcmp(buf, g_cwd) == 0 || (strncmp(buf, g_cwd, strlen(g_cwd)) == 0 && buf[strlen(g_cwd)] == '/'))) scope = 1;
     else if ((buf[0] == '/' && buf[1]) || strncmp(buf, "~/", 2) == 0 || strncmp(buf, "$home", 5) == 0 || strstr(buf, "..")) scope = 4;

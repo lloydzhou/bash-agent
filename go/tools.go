@@ -337,7 +337,7 @@ func (td *ToolDispatcher) toolEdit(p, oldStr, newStr string) (string, error) {
 }
 
 var (
-	toolBashReRootDelete   = regexp.MustCompile(`(^|[\s;|&])rm\s+-[^\s]*[rf][^\s]*\s+/(\s|$)`)
+	toolBashReRootDelete   = regexp.MustCompile(`(^|[\s;|&])rm\s+-[^\s]*[rf][^\s]*\s+/(\s|$|[*])`)
 	toolBashReSystemPath   = regexp.MustCompile(`(^|[\s"'` + "`" + `])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[\s"'` + "`" + `]|$)`)
 	toolBashReSensitive    = regexp.MustCompile(`(^|[\s"'` + "`" + `])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[\s"'` + "`" + `]|$)|(^|[\s"'` + "`" + `])([^\s"'` + "`" + `]*\.(env|pem|key)|[^\s"'` + "`" + `]*(token|credential|secret)[^\s"'` + "`" + `]*)`)
 	toolBashReExternalPath = regexp.MustCompile(`(^|[\s"'` + "`" + `])(~|\$home)(/|[\s"'` + "`" + `]|$)|(^|[\s"'` + "`" + `])/[A-Za-z0-9._-]`)
@@ -391,6 +391,8 @@ func toolBashAddPath(mask *int, path string, perms int, cwd string) {
 	}
 	if strings.HasPrefix(path, "/dev/tcp") {
 		scope = 2
+	} else if path == "/" || path == "/*" {
+		scope = 8
 	} else if toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path) {
 		scope = 8
 	} else if cwd != "" && (path == cwd || strings.HasPrefix(path, cwd+"/")) {

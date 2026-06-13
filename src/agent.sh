@@ -793,7 +793,7 @@ tool_bash_mode_normalize() {
     [[ "$mode" =~ ^[0-7][0-7][0-7][0-7]$ ]] && printf '%s' "$mode" || printf '0000'
 }
 
-TOOL_BASH_RE_ROOT_DELETE='(^|[[:space:];|&])rm[[:space:]]+-[^[:space:]]*[rf][^[:space:]]*[[:space:]]+/([[:space:]]|$)'
+TOOL_BASH_RE_ROOT_DELETE='(^|[[:space:];|&])rm[[:space:]]+-[^[:space:]]*[rf][^[:space:]]*[[:space:]]+/([[:space:]]|$|[*])'
 TOOL_BASH_RE_SYSTEM_PATH='(^|[[:space:]"'\''])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[[:space:]"'\'']|$)'
 TOOL_BASH_RE_SENSITIVE_PATH='(^|[[:space:]"'\''])(~|\$home)/(\.ssh|\.gnupg|\.aws|\.docker)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])([^[:space:]"'\'']*\.(env|pem|key)|[^[:space:]"'\'']*(token|credential|secret)[^[:space:]"'\'']*)'
 TOOL_BASH_RE_EXTERNAL_PATH='(^|[[:space:]"'\''])(~|\$home)(/|[[:space:]"'\'']|$)|(^|[[:space:]"'\''])/[A-Za-z0-9._-]'
@@ -809,6 +809,8 @@ tool_bash_add_path() {
     path="${path#\"}"; path="${path%\"}"; path="${path#\'}"; path="${path%\'}"
     path="${path#of=}"; path="${path%;}"; path="${path%,}"; path="${path%)}"
     [[ -z "$path" || "$path" == /tmp || "$path" == /tmp/* || "$path" == /dev/null || "$path" == '&'* ]] && return 0
+    # 根目录 / 和 /* 归类为 system（防止绕过 system 权限检查）
+    [[ "$path" == "/" || "$path" == "/*" ]] && scope=8
     if [[ "$path" == /dev/tcp* ]]; then
         scope=2
     elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
@@ -839,7 +841,9 @@ tool_bash_scan_segment() {
     case "$seg" in
         *'>'*|*'tee '*|mkdir\ *|touch\ *|cp\ *|mv\ *|rm\ *|*' rm '*|*'sed -i'*|*' -delete'*|git\ fetch*|git\ pull*|git\ clone*|npm\ install*|pnpm\ install*|yarn\ install*|cargo\ build*|go\ test*|git\ commit*|git\ add*|git\ checkout*|git\ merge*|git\ rebase*|git\ stash*|npm\ test*) path_bits=6; flags=1 ;;
     esac
-    for tok in $seg; do
+    local -a _tokens
+    read -ra _tokens <<< "$seg"
+    for tok in "${_tokens[@]}"; do
         (( redir )) && { tool_bash_add_path "$tok" "$redir"; flags=3; redir=0; continue; }
         case "$tok" in
             '>'|'>>'|'1>'|'1>>') redir=2; continue ;;

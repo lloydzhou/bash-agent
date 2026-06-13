@@ -16,7 +16,7 @@ use crate::config::Config;
     use std::time::Duration;
 
     static RE_BASH_ROOT_DELETE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(^|[\s;|&])rm\s+-[^\s]*[rf][^\s]*\s+/(\s|$)").expect("regex"));
+        Lazy::new(|| Regex::new(r"(^|[\s;|&])rm\s+-[^\s]*[rf][^\s]*\s+/(\s|$|[*])").expect("regex"));
     static RE_BASH_SYSTEM_PATH: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"(^|[\s"'`])(/etc|/usr|/bin|/sbin|/var|/library|/system|/dev)(/|[\s"'`]|$)"#).expect("regex"));
     static RE_BASH_SENSITIVE_PATH: Lazy<Regex> = Lazy::new(|| {
@@ -744,6 +744,8 @@ use crate::config::Config;
         }
         if path.starts_with("/dev/tcp") {
             scope = 2;
+        } else if path == "/" || path == "/*" {
+            scope = 8;
         } else if RE_BASH_SENSITIVE_PATH.is_match(path) || RE_BASH_SYSTEM_PATH.is_match(path) {
             scope = 8;
         } else if !cwd.is_empty() && (path == cwd || path.starts_with(&format!("{}/", cwd))) {
@@ -1259,6 +1261,10 @@ use crate::config::Config;
                 ("echo harmless >/dev/null", "0004"),
                 ("python script.py", "0001"),
                 ("echo hello", "0004"),
+                ("ls /", "4000"),
+                ("rm -rf /*", "6000"),
+                ("find / -name foo", "4000"),
+                ("find / -delete", "6000"),
             ];
             for (cmd, want) in cases {
                 assert_eq!(classify_bash_required_mode(cmd), want, "{cmd}");
