@@ -622,15 +622,12 @@ llm_call() {
     local messages="$1" max_tokens="${2:-$MAX_TOKENS}" use_thinking="${3:-$THINKING}" body system_prompt
     system_prompt=$(agent_build_prompt)
     # 字段顺序对齐 Go/Rust 的 map 字母序：max_tokens→messages→model→output_config→stream→system→thinking→tools
+    local use_think=0; [[ "$use_thinking" != "disabled" ]] && use_think=1
     body="{\"max_tokens\":${max_tokens},\"messages\":${messages},\"model\":\"${MODEL}\""
-    if [[ "$use_thinking" != "disabled" ]]; then
-        body+=",\"output_config\":{\"effort\":\"${EFFORT}\"}"
-    fi
+    (( use_think )) && body+=",\"output_config\":{\"effort\":\"${EFFORT}\"}"
     body+=",\"stream\":true"
     [[ -n "$system_prompt" ]] && body+=",\"system\":\"$(util_json_escape "$system_prompt")\""
-    if [[ "$use_thinking" != "disabled" ]]; then
-        body+=",\"thinking\":{\"type\":\"${use_thinking}\"}"
-    fi
+    (( use_think )) && body+=",\"thinking\":{\"type\":\"${use_thinking}\"}"
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
     body+="}"
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %s...\033[0m\n' "$((${#body} / 1024))" "${body:0:200}" >&2
