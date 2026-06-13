@@ -826,7 +826,7 @@ tool_bash_add_path() {
 tool_bash_scan_segment() {
     local seg="$1" tok redir=0 path_bits=4 flags=0
     case "$seg" in
-        sudo\ *|su\ *|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 ;;
+        sudo|sudo\ *|su|su\ *|doas|doas\ *|shutdown*|reboot*|halt*|poweroff*) tool_bash_add_mode 8 1 ;;
         mkfs*|fdisk*|diskutil*|mount\ *|umount\ *) tool_bash_add_mode 8 2 ;;
         *'curl '*|*'wget '*|*'http '*|*'https://'*|*'http://'*|git\ clone*|git\ fetch*|git\ pull*|git\ ls-remote*) tool_bash_add_mode 2 4 ;;
     esac

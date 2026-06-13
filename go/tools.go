@@ -406,7 +406,7 @@ func toolBashAddPath(mask *int, path string, perms int, cwd string) {
 func toolBashScanSegment(mask *int, seg string, cwd string) {
 	flags, pathBits, redir := 0, 4, 0
 	switch {
-	case strings.HasPrefix(seg, "sudo "), strings.HasPrefix(seg, "su "), strings.HasPrefix(seg, "doas "), strings.HasPrefix(seg, "shutdown"), strings.HasPrefix(seg, "reboot"), strings.HasPrefix(seg, "halt"), strings.HasPrefix(seg, "poweroff"):
+	case seg == "sudo" || strings.HasPrefix(seg, "sudo "), seg == "su" || strings.HasPrefix(seg, "su "), seg == "doas" || strings.HasPrefix(seg, "doas "), strings.HasPrefix(seg, "shutdown"), strings.HasPrefix(seg, "reboot"), strings.HasPrefix(seg, "halt"), strings.HasPrefix(seg, "poweroff"):
 		toolBashAddMode(mask, 8, 1)
 	case strings.HasPrefix(seg, "mkfs"), strings.HasPrefix(seg, "fdisk"), strings.HasPrefix(seg, "diskutil"), strings.HasPrefix(seg, "mount "), strings.HasPrefix(seg, "umount "):
 		toolBashAddMode(mask, 8, 2)

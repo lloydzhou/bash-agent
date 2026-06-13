@@ -2674,6 +2674,9 @@ test_bash_mode_scanner() {
         "find / -name foo" "4000"
     assert_mode "root find delete: find / -delete" \
         "find / -delete" "6000"
+    # 换行符分割后 sudo 单独 segment 也必须被检测
+    assert_mode "newline sudo bypass" \
+        $'sudo\necho hi' "1000"
 
     # ═══════════════════════════════════════
     # 复合命令测试（segment 拆分 + mask 合并）

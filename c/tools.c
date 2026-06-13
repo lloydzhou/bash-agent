@@ -399,7 +399,9 @@ STATIC int bash_is_block_device_path(const char *path) {
 STATIC void bash_scan_segment(unsigned short *mask, const char *seg) {
     char *copy, *save = NULL, *tok;
     int redir = 0, path_bits = 4, flags = 0;
-    if (bash_starts_with(seg, "sudo ") || bash_starts_with(seg, "su ") || bash_starts_with(seg, "doas ") ||
+    if (strcmp(seg, "sudo") == 0 || bash_starts_with(seg, "sudo ") ||
+        strcmp(seg, "su") == 0 || bash_starts_with(seg, "su ") ||
+        strcmp(seg, "doas") == 0 || bash_starts_with(seg, "doas ") ||
         bash_starts_with(seg, "shutdown") || bash_starts_with(seg, "reboot") || bash_starts_with(seg, "halt") ||
         bash_starts_with(seg, "poweroff")) bash_add_mode(mask, 8, 1);
     else if (bash_starts_with(seg, "mkfs") || bash_starts_with(seg, "fdisk") || bash_starts_with(seg, "diskutil") ||

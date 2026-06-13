@@ -759,9 +759,9 @@ use crate::config::Config;
     fn bash_scan_segment(mask: &mut u16, seg: &str, cwd: &str) {
         let (mut redir, mut path_bits, mut flags) = (0u16, 4u16, 0u8);
         match seg {
-            s if s.starts_with("sudo ")
-                || s.starts_with("su ")
-                || s.starts_with("doas ")
+            s if s == "sudo" || s.starts_with("sudo ")
+                || s == "su" || s.starts_with("su ")
+                || s == "doas" || s.starts_with("doas ")
                 || s.starts_with("shutdown")
                 || s.starts_with("reboot")
                 || s.starts_with("halt")
