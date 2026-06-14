@@ -114,7 +114,7 @@ Pre-built binaries (C / Go / Rust) are available on [Releases](https://github.co
 | `--api-key` | override API key | - |
 | `--skill NAME` | load a skill | - |
 | `--max-tokens` | max output tokens | `4096` |
-| `--max-turns` | max agent loop turns | `40` |
+| `--max-turns` | max agent loop turns | `1000` |
 | `--max-context` | context budget (`100k`/`1m`/`1g`) | `200000` |
 | `--tool-timeout N` | tool timeout in seconds | `600` |
 | `--session [NAME]` | create or resume a session | - |

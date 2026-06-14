@@ -39,6 +39,8 @@ system external network workspace
 
 - `system`
   - `/etc`、`/usr`、`/var`、`/dev`、`/bin`、`/sbin`、`/System` 等系统路径
+  - 根目录 `/` 和 `/*`（根目录 glob）
+  - `sudo`/`su`/`doas` 等特权命令（含无参数单独行）
   - 以及明显的系统级操作
 - `external`
   - 工作区外、但不属于系统路径的普通文件路径

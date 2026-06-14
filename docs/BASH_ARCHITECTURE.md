@@ -89,7 +89,7 @@ $len1\r\ndata1\r\n   — 字段1
 PROVIDER="claude"
 MODEL=""                    # 留空，validate_config 中按 provider 填默认
 MAX_TOKENS=16384
-MAX_TURNS=1000              # 注意：usage() 中写的 500 是旧值
+MAX_TURNS=1000              # 实际循环上限
 MAX_CONTEXT_TOKENS=200000
 TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
@@ -111,7 +111,7 @@ PREV_WAS_THINKING=false     # 跟踪是否刚输出 thinking（用于 thinking�
 
 ### 2.1 关键细节
 
-- `MAX_TURNS=1000`：实际循环上限。`usage()` 中写的 `--max-turns N (default: 500)` 是文档遗留错误，实际值 1000。
+- `MAX_TURNS=1000`：实际循环上限。
 - `MAX_CONTEXT_TOKENS=200000`：compact 阈值。`usage()` 中写 `default: 200000; supports k/m`。
 - `TOOL_RESULT_MAX_BYTES=100000`：工具输出截断阈值（字节）。
 - `DISPLAY_LAST_CHAR`：全局变量，跟踪终端最后输出的字符。初始为 `\n`。用于判断是否需要补换行。
@@ -227,9 +227,9 @@ llm_call() {
 }
 ```
 
-**请求体字段顺序（严格固定）**：
+**请求体字段顺序（字母序，对齐 Go/Rust 的 map/BTreeMap）**：
 ```
-model → max_tokens → stream → thinking → output_config → system → tools → messages
+max_tokens → messages → model → output_config → stream → system → thinking → tools
 ```
 
 - `thinking` 和 `output_config` 仅在 `use_thinking != "disabled"` 时出现

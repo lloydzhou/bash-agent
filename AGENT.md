@@ -81,7 +81,7 @@ Bash / Go / Rust / C 四个版本的 **system prompt** 和 **tools.json** 必须
 **核心规则**：
 1. **Port 版本不得自行决定"优化掉"某些字段**。即使 compact summary 不需要 tools，Bash 版带了 tools，所有 Port 版就必须带。前缀一致比省几个 input token 重要得多（cache_creation 费用远高于 input 费用）
 2. **必须复用同一个请求构建函数**。C 版本用 `build_claude_request`，Go 版本用 `buildClaudeBody`/`Call`，Rust 版本用 `build_claude_request`。任何类型的请求都走同一条构建路径，不允许手动拼 JSON
-3. **请求体字段顺序必须一致**：`model → max_tokens → stream → thinking → output_config → system → tools → messages`
+3. **请求体字段顺序必须一致**（字母序，对齐 Go/Rust 的 map/BTreeMap 天然排序）：`max_tokens → messages → model → output_config → stream → system → thinking → tools`
 
 **检查清单（修改任何请求构建逻辑时）**：
 - [ ] Bash 版 `llm_call` / `llm_summary_call` 的请求体结构是什么？
@@ -151,7 +151,7 @@ System prompt 中的 `current-plan` section 读取自 `PLAN_FILE`。`PLAN_DRAFT_
 llm_call "$messages" "" disabled    # "" = max_tokens 默认值，disabled = 关闭 thinking
 ```
 
-Summary 调用不复用独立函数，而是直接调用 `llm_call`，传入 `disabled` 关闭 thinking。这保证了请求体的 `model → max_tokens → stream → system → tools → messages` 结构与正常请求完全一致（仅 thinking 字段省略），最大化 KV cache 前缀匹配。
+Summary 调用不复用独立函数，而是直接调用 `llm_call`，传入 `disabled` 关闭 thinking。这保证了请求体的 `max_tokens → messages → model → output_config → stream → system → thinking → tools` 结构与正常请求完全一致（仅 thinking/output_config 字段省略），最大化 KV cache 前缀匹配。
 
 #### 检查清单（修改任何操作顺序时）
 
