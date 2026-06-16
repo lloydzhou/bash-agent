@@ -170,13 +170,23 @@ use crate::config::Config;
             if path.is_empty() {
                 bail!("no path provided");
             }
-            let data = fs::read_to_string(path)
+            let data = fs::read(path)
                 .map_err(|_| anyhow!("Error: file not found or unreadable: {path}"))?;
+            // 编码处理：UTF-8 合法 → 直接用；否则尝试 iconv 转码，失败 fallback sanitize
+            let content = match std::str::from_utf8(&data) {
+                Ok(s) => self.sanitize_utf8(data.as_slice()),
+                Err(_) => {
+                    match self.iconv_to_utf8(&data) {
+                        Some(converted) => converted,
+                        None => self.sanitize_utf8(data.as_slice()),
+                    }
+                }
+            };
             if offset.is_none() && limit.is_none() {
-                return Ok(data);
+                return Ok(content);
             }
 
-            let mut lines: Vec<&str> = data.split('\n').collect();
+            let mut lines: Vec<&str> = content.split('\n').collect();
             if !lines.is_empty() && lines.last().map(|l| l.is_empty()).unwrap_or(false) {
                 lines.pop();
             }
@@ -1099,6 +1109,50 @@ use crate::config::Config;
             }
         }
         out
+    }
+
+    /// iconv_to_utf8: 调用系统 iconv 将非 UTF-8 编码（GBK/GB18030 等）转为 UTF-8。
+    /// file 命令对中文文件常报 iso-8859-1，实际多为 GBK/GB18030；GB18030 是 GBK 超集。
+    /// 返回 Some(sanitized_content) 或 None（失败时调用方应 fallback 到 sanitize_utf8）。
+    fn iconv_to_utf8(&self, data: &[u8]) -> Option<String> {
+        // 检测编码：file -bi，iso-8859-* 一律按 gb18030 处理（兼容 GBK）
+        let mut from_enc = "gb18030";
+        // 写临时文件用 file 检测
+        let tmp = std::env::temp_dir().join(format!("iconv-{}.tmp", std::process::id()));
+        if fs::write(&tmp, data).is_ok() {
+            if let Ok(out) = Command::new("file").arg("-bi").arg(&tmp).output() {
+                let mime = String::from_utf8_lossy(&out.stdout).to_lowercase();
+                if mime.contains("charset=utf-8") || mime.contains("charset=us-ascii") {
+                    let _ = fs::remove_file(&tmp);
+                    return Some(self.sanitize_utf8(data));
+                }
+                for enc in &["gbk", "gb2312", "gb18030", "big5", "shift_jis", "euc-jp", "euc-kr"] {
+                    if mime.contains(&format!("charset={enc}")) {
+                        from_enc = enc;
+                        break;
+                    }
+                }
+            }
+            let _ = fs::remove_file(&tmp);
+        }
+        // 调用 iconv 转码
+        let child = Command::new("iconv")
+            .arg("-f").arg(from_enc)
+            .arg("-t").arg("UTF-8//IGNORE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        use std::io::Write;
+        let mut stdin = child.stdin?;
+        stdin.write_all(data).ok()?;
+        drop(stdin);
+        let output = child.wait_with_output().ok()?;
+        if output.stdout.is_empty() && !data.is_empty() {
+            return None;
+        }
+        Some(self.sanitize_utf8(&output.stdout))
     }
 
     /// sanitize_utf8: replace illegal UTF-8 bytes with literal `\ufffd` text.

@@ -177,6 +177,118 @@ char *util_sanitize_utf8(const char *src) {
     return sb.data;
 }
 
+/* 检查字符串是否为合法 UTF-8。返回 1=合法, 0=非法 */
+static int is_valid_utf8(const char *src, size_t len) {
+    const unsigned char *p = (const unsigned char *)src;
+    const unsigned char *end = p + len;
+    while (p < end) {
+        unsigned char b = *p;
+        if (b < 0x80) { p++; }
+        else if (b >= 0xC2 && b <= 0xDF) {
+            if (p + 1 >= end || p[1] < 0x80 || p[1] > 0xBF) return 0;
+            p += 2;
+        } else if (b >= 0xE0 && b <= 0xEF) {
+            if (p + 2 >= end || p[1] < 0x80 || p[1] > 0xBF || p[2] < 0x80 || p[2] > 0xBF) return 0;
+            p += 3;
+        } else if (b >= 0xF0 && b <= 0xF4) {
+            if (p + 3 >= end || p[1] < 0x80 || p[1] > 0xBF || p[2] < 0x80 || p[2] > 0xBF || p[3] < 0x80 || p[3] > 0xBF) return 0;
+            p += 4;
+        } else {
+            return 0; /* C0-C1, 80-BF, F5-FF */
+        }
+    }
+    return 1;
+}
+
+/* 用 popen 调用 file -bi 检测编码，返回检测到的 from_enc（malloc'd）。
+ * iso-8859-* 一律视为 gb18030（兼容 GBK）。失败返回 NULL。 */
+static char *detect_encoding(const char *content, size_t len) {
+    char tmppath[256];
+    snprintf(tmppath, sizeof(tmppath), "/tmp/iconv_detect_%d.tmp", (int)getpid());
+    FILE *f = fopen(tmppath, "wb");
+    if (!f) return NULL;
+    fwrite(content, 1, len, f);
+    fclose(f);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "file -bi '%s' 2>/dev/null", tmppath);
+    FILE *pp = popen(cmd, "r");
+    if (!pp) { unlink(tmppath); return NULL; }
+
+    char mime[256] = {0};
+    if (fgets(mime, sizeof(mime), pp)) {
+        /* 转小写 */
+        for (char *c = mime; *c; c++) { if (*c >= 'A' && *c <= 'Z') *c += 32; }
+    }
+    pclose(pp);
+    unlink(tmppath);
+
+    /* 检查 charset */
+    if (strstr(mime, "charset=utf-8") || strstr(mime, "charset=us-ascii")) {
+        return util_strdup("utf-8");
+    }
+    /* 匹配已知中文/日文编码 */
+    const char *encs[] = {"gbk", "gb2312", "gb18030", "big5", "shift_jis", "euc-jp", "euc-kr", NULL};
+    for (int i = 0; encs[i]; i++) {
+        char needle[32];
+        snprintf(needle, sizeof(needle), "charset=%s", encs[i]);
+        if (strstr(mime, needle)) return util_strdup(encs[i]);
+    }
+    /* iso-8859-* → 视为 gb18030（file 对中文文件常误报 iso-8859-1） */
+    if (strstr(mime, "charset=iso-8859")) return util_strdup("gb18030");
+    return NULL;
+}
+
+char *util_iconv_if_needed(const char *content) {
+    if (!content) return util_sanitize_utf8("");
+    size_t len = strlen(content);
+
+    /* UTF-8 合法 → 直接 sanitize（idempotent） */
+    if (is_valid_utf8(content, len)) {
+        return util_sanitize_utf8(content);
+    }
+
+    /* 非 UTF-8 → 尝试 iconv 转码 */
+    char *from_enc = detect_encoding(content, len);
+    if (!from_enc) from_enc = util_strdup("gb18030"); /* 默认按 gb18030 尝试 */
+
+    /* 构建 iconv 管道：echo content | iconv -f gb18030 -t UTF-8//IGNORE */
+    char tmppath[256];
+    snprintf(tmppath, sizeof(tmppath), "/tmp/iconv_in_%d.tmp", (int)getpid());
+    FILE *f = fopen(tmppath, "wb");
+    if (!f) { free(from_enc); return util_sanitize_utf8(content); }
+    fwrite(content, 1, len, f);
+    fclose(f);
+
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "iconv -f '%s' -t UTF-8//IGNORE '%s' 2>/dev/null", from_enc, tmppath);
+    free(from_enc);
+
+    FILE *pp = popen(cmd, "r");
+    if (!pp) { unlink(tmppath); return util_sanitize_utf8(content); }
+
+    StrBuf sb;
+    sb_init(&sb);
+    char buf2[4096];
+    size_t total = 0;
+    while (fgets(buf2, sizeof(buf2), pp)) {
+        sb_append(&sb, buf2);
+        total += strlen(buf2);
+    }
+    pclose(pp);
+    unlink(tmppath);
+
+    if (total == 0 && len > 0) {
+        /* iconv 失败 → 兜底 */
+        sb_free(&sb);
+        return util_sanitize_utf8(content);
+    }
+
+    char *result = util_sanitize_utf8(sb.data);
+    sb_free(&sb);
+    return result;
+}
+
 /* ============================================================
  * 工具函数
  * ============================================================ */

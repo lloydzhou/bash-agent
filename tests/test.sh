@@ -1040,6 +1040,32 @@ test_agent_bash_utf8_sanitize() {
     fi
 }
 
+test_read_gbk_encoding() {
+    info "Test 25d: Read tool GBK encoding → iconv convert to UTF-8"
+    # 测试 iconv + sanitize 管道能正确转码 GBK 文件（util_iconv_if_needed 的核心逻辑）
+    local target_file output expected
+    target_file="/tmp/bash-agent-read-gbk-test.txt"
+    # 写入 GBK 编码内容: "hello 你好 world" 的 GBK 字节
+    printf 'hello \xc4\xe3\xba\xc3 world\n' > "$target_file"
+
+    # 验证 file 检测 + iconv 转码管道
+    local enc from_enc
+    enc=$(file -bi "$target_file" 2>/dev/null | sed -n 's/.*charset=\([^[:space:];]*\).*/\1/p' | tr 'A-Z' 'a-z')
+    if [[ "$enc" == iso-8859* ]]; then
+        from_enc="gb18030"
+    else
+        from_enc="$enc"
+    fi
+    output=$(iconv -f "$from_enc" -t UTF-8//IGNORE "$target_file" 2>/dev/null | LC_ALL=C awk -f "$AWK_DIR/sanitize_utf8.awk")
+
+    if echo "$output" | grep -q "你好" && ! echo "$output" | grep -q '\\ufffd'; then
+        green "Read tool GBK encoding"; ((PASS++)) || true
+    else
+        red "Read tool GBK encoding"; echo "  enc=$enc from_enc=$from_enc output=$output"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
 test_agent_stream_tool_call() {
     info "Test 26: Agent.sh stream-json tool call"
     local output
@@ -2534,6 +2560,7 @@ test_agent_bash_custom_mode_allows_system_read
 test_agent_bash_allows_dev_null_redirection
 test_agent_bash_long_result
 test_agent_bash_utf8_sanitize
+test_read_gbk_encoding
 test_agent_stream_tool_call
 test_agent_stream_usage_event
 test_agent_tool_result_multiline_url

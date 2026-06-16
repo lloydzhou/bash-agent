@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const defaultToolResultMaxBytes = 100000
@@ -188,6 +189,7 @@ func (td *ToolDispatcher) CallSummary(name string, params map[string]string) str
 // ─── 工具实现 ───
 
 // toolRead 读取文件（支持 offset/limit）
+// 非 UTF-8 编码（GBK 等）文件自动调用 iconv 转码，失败则 sanitize 兜底
 func (td *ToolDispatcher) toolRead(p, offsetStr, limitStr string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("no path provided")
@@ -201,7 +203,20 @@ func (td *ToolDispatcher) toolRead(p, offsetStr, limitStr string) (string, error
 		return "", fmt.Errorf("read error: %v", err)
 	}
 
-	lines := strings.Split(string(data), "\n")
+	// 编码处理：UTF-8 合法 → 直接用；否则尝试 iconv 转码，失败 fallback sanitize
+	var content string
+	if utf8.Valid(data) {
+		content = sanitizeUTF8(data)
+	} else {
+		converted, ok := iconvToUTF8(data)
+		if ok {
+			content = converted
+		} else {
+			content = sanitizeUTF8(data) // 兜底：保证 JSON 序列化不破坏
+		}
+	}
+
+	lines := strings.Split(content, "\n")
 	// offset 默认 1
 	offset := 1
 	if offsetStr != "" {
@@ -744,6 +759,44 @@ func (td *ToolDispatcher) toolSubAgent(ctx context.Context, prompt, description,
 		return td.launcher(ctx, prompt, description, fork)
 	}
 	return "", fmt.Errorf("sub-agent launcher not configured")
+}
+
+// ─── iconvToUTF8: 调用系统 iconv 将非 UTF-8 编码（GBK/GB18030 等）转为 UTF-8 ───
+// file 命令对中文文件常报 iso-8859-1，实际多为 GBK/GB18030；GB18030 是 GBK 超集。
+// 返回 (sanitized 内容, 是否成功)。失败时 ok=false，调用方应 fallback 到 sanitizeUTF8。
+func iconvToUTF8(data []byte) (string, bool) {
+	// 检测编码：优先用 file -bi，iso-8859-* 一律按 gb18030 处理（兼容 GBK）
+	fromEnc := "gb18030"
+	if tmpfile, err := os.CreateTemp("", "iconv-*.txt"); err == nil {
+		tmpfile.Write(data)
+		tmpfile.Close()
+		defer os.Remove(tmpfile.Name())
+		if out, err := exec.Command("file", "-bi", tmpfile.Name()).Output(); err == nil {
+			mime := strings.ToLower(string(out))
+			if strings.Contains(mime, "charset=utf-8") || strings.Contains(mime, "charset=us-ascii") {
+				return sanitizeUTF8(data), true // 实际是合法 UTF-8/ASCII
+			}
+			// 提取 charset，若明确非 iso-8859 则用检测到的值
+			for _, enc := range []string{"gbk", "gb2312", "gb18030", "big5", "shift_jis", "euc-jp", "euc-kr"} {
+				if strings.Contains(mime, "charset="+enc) {
+					fromEnc = enc
+					break
+				}
+			}
+		}
+	}
+	// 调用 iconv 转码
+	cmd := exec.Command("iconv", "-f", fromEnc, "-t", "UTF-8//IGNORE")
+	cmd.Stdin = bytes.NewReader(data)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", false
+	}
+	if out.Len() == 0 && len(data) > 0 {
+		return "", false
+	}
+	return sanitizeUTF8(out.Bytes()), true
 }
 
 // ─── sanitizeUTF8: 过滤非法 UTF-8 字节，替换为字面 \ufffd ───
