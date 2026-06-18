@@ -189,14 +189,10 @@ fn print_usage() {
     println!("  -h, --help              Show this help");
     println!();
     println!("Environment:");
-    println!("  ANTHROPIC_API_KEY       API key for Claude");
-    println!("  OPENAI_API_KEY          API key for OpenAI");
-    println!("  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)");
-    println!("  ANTHROPIC_BASE_URL      Claude API base URL");
-    println!("  OPENAI_BASE_URL         OpenAI API base URL");
-    println!("  BASH_AGENT_HOME         Override base directory for session storage");
-    println!("  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)");
-    println!("  MODEL                   Default model name");
+    println!("  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)");
+    println!("  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)");
+    println!("  BASH_AGENT_HOME         Override session storage (default: $HOME)");
+    println!("  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)");
 }
 
 fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {

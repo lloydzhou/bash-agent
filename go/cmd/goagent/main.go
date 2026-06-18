@@ -68,24 +68,15 @@ Options:
 		flag.PrintDefaults()
 		fmt.Fprint(os.Stderr, `
 Environment:
-  ANTHROPIC_API_KEY       API key for Claude
-  OPENAI_API_KEY          API key for OpenAI
-  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)
-  ANTHROPIC_BASE_URL      Claude API base URL
-  OPENAI_BASE_URL         OpenAI API base URL
-  BASH_AGENT_HOME         Override base directory for session storage
-  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)
-  MODEL                   Default model name
-  EFFORT                  Default thinking effort (default: high)
-  THINKING                Default thinking mode (default: adaptive)
+  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)
+  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)
+  BASH_AGENT_HOME         Override session storage (default: $HOME)
+  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)
 
 Examples:
   goagent "Read /etc/hostname and tell me what it says"
-  goagent -m claude-sonnet-4-20250514 "List files in /tmp"
-  goagent --session code-review "Analyze this code"
   goagent --continue "What did we discuss?"
-  goagent --fork --continue "Branch off the last session and try a different approach"
-  goagent --fork --session code-review "Fork the code-review session"
+  goagent --fork --continue "Branch off the last session"
   goagent -i
 `)
 	}

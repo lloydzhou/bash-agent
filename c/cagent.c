@@ -44,14 +44,10 @@ static void usage(const char *prog) {
     fprintf(stderr, "  --output human|stream-json Output format\n");
     fprintf(stderr, "  -h, --help                 Show this help\n");
     fprintf(stderr, "Environment:\n");
-    fprintf(stderr, "  ANTHROPIC_API_KEY       API key for Claude\n");
-    fprintf(stderr, "  OPENAI_API_KEY          API key for OpenAI\n");
-    fprintf(stderr, "  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)\n");
-    fprintf(stderr, "  ANTHROPIC_BASE_URL      Claude API base URL\n");
-    fprintf(stderr, "  OPENAI_BASE_URL         OpenAI API base URL\n");
-    fprintf(stderr, "  BASH_AGENT_HOME         Override base directory for session storage\n");
-    fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)\n");
-    fprintf(stderr, "  MODEL                   Default model name\n");
+    fprintf(stderr, "  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)\n");
+    fprintf(stderr, "  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)\n");
+    fprintf(stderr, "  BASH_AGENT_HOME         Override session storage (default: $HOME)\n");
+    fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)\n");
 }
 
 static char *g_paste_session_dir = NULL;
