@@ -1506,8 +1506,7 @@ Examples:
   ./agent.sh --session code-review "Analyze this code"
   ./agent.sh --skill shell-safety "List files in /tmp"
   ./agent.sh --continue "What did we discuss?"
-  ./agent.sh --fork --continue "Branch off the last session and try a different approach"
-  ./agent.sh --fork --session code-review "Fork the code-review session"
+  ./agent.sh --fork --continue "Branch off the last session"
   ./agent.sh --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'
   echo "prompt" | ./agent.sh --print
   ./agent.sh -i
@@ -1690,8 +1689,6 @@ main() {
     parse_args "$@"
     util_find_awk_dir
     validate_config
-    # --fork：从源 session 派生新 session。SESSION_ID 此时已解析为源（parse_args 中 --fork 无 --session 时
-    # 已调用 store_session_resolve_continue），生成新 ID 后 init + store_session_fork 复制。
     if [[ "${FORK:-}" == true ]]; then
         local fork_source_id="${SESSION_ID:-}"
         SESSION_ID="$(util_new_session_id)"
