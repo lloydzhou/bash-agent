@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	agent "github.com/lloyd/claude-code/bash-agent/go2"
@@ -27,6 +28,7 @@ func main() {
 		printMode    bool
 		session      string
 		cont         bool
+		forkSession  bool
 		listSessions bool
 		verbose      bool
 		interactive  bool
@@ -51,6 +53,7 @@ func main() {
 	flag.StringVar(&thinking, "thinking", "adaptive", "Thinking mode: adaptive|enabled|disabled")
 	flag.StringVar(&session, "session", "", "Use named session")
 	flag.BoolVar(&cont, "continue", false, "Continue most recent session")
+	flag.BoolVar(&forkSession, "fork-session", false, "When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)")
 	flag.BoolVar(&listSessions, "list-sessions", false, "List all saved sessions")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose mode")
 	flag.BoolVar(&verbose, "v", false, "Verbose mode (shorthand)")
@@ -81,6 +84,8 @@ Examples:
   goagent -m claude-sonnet-4-20250514 "List files in /tmp"
   goagent --session code-review "Analyze this code"
   goagent --continue "What did we discuss?"
+  goagent --fork-session --continue "Branch off the last session and try a different approach"
+  goagent --fork-session --session code-review "Fork the code-review session"
   goagent -i
 `)
 	}
@@ -209,7 +214,40 @@ Examples:
 	}
 
 	// 初始化 session
-	if err := store.Init(sessionID); err != nil {
+	// --fork-session: 从源 session 派生新 session（对齐 bash 版 store_session_fork_resolve + store_session_fork）
+	if forkSession {
+		// 确定 fork 源：优先用原始 --session 值，否则回退到最新（等价 --continue）
+		sourceID := session
+		if sourceID == "" {
+			if id, err := store.GetLatestDir(); err == nil && id != "" {
+				sourceID = id
+			}
+		}
+		if sourceID == "" {
+			fmt.Fprintf(os.Stderr, "Error: --fork-session requires an existing session (use with --session <id> or --continue)\n")
+			os.Exit(1)
+		}
+		convPath := filepath.Join(store.GetDir(), sourceID, "conversation.jsonl")
+		if data, err := os.ReadFile(convPath); err != nil || len(data) == 0 {
+			fmt.Fprintf(os.Stderr, "Error: --fork-session: source session '%s' has no conversation to fork\n", sourceID)
+			os.Exit(1)
+		}
+		sourceDir := filepath.Join(store.GetDir(), sourceID)
+		// 生成新 session ID 并初始化（events.jsonl 全新，仅含 session_start）
+		sessionID = agent.UtilNewSessionID()
+		if err := store.Init(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: init session: %v\n", err)
+			os.Exit(1)
+		}
+		// fork 复制 conversation/summary/plan（events 保持全新）
+		if err := store.Fork(sourceDir, filepath.Join(store.GetDir(), sessionID)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: fork session: %v\n", err)
+			os.Exit(1)
+		}
+		// 记录 session_fork 事件（溯源）
+		store.AppendEvent(fmt.Sprintf(`{"type":"session_fork","session_id":"%s","source_session_id":"%s"}`,
+			agent.UtilJSONEscape(sessionID), agent.UtilJSONEscape(sourceID)))
+	} else if err := store.Init(sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init session: %v\n", err)
 		os.Exit(1)
 	}

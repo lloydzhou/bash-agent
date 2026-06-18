@@ -576,6 +576,27 @@ impl Agent {
         if sid.is_empty() {
             sid = chrono_like_now();
         }
+        // --fork-session: 从源 session 派生新 session（对齐 bash 版 store_session_fork_resolve）
+        let fork_source_id: Option<String> = if cfg.fork_session {
+            // 使用原始 session_id（可能为空），而不是已处理过的 sid
+            let mut src_id = cfg.session_id.clone();
+            // 如果没指定源 session（空），回退到最新 session（等价 --continue）
+            if src_id.is_empty() {
+                src_id = session::continue_session(&home, &cwd).unwrap_or_default();
+            }
+            if src_id.is_empty() {
+                bail!("--fork-session requires an existing session (use with --session <id> or --continue)");
+            }
+            let sp = session::paths_for(&home, &cwd, &src_id);
+            if !std::fs::read(&sp.conversation).map(|d| !d.is_empty()).unwrap_or(false) {
+                bail!("--fork-session: source session '{}' has no conversation to fork", src_id);
+            }
+            // 生成新 session ID（fork 出来的新 session 用全新 ID）
+            sid = chrono_like_now();
+            Some(src_id)
+        } else {
+            None
+        };
         cfg.session_id = sid.clone();
         let paths = session::paths_for(&home, &cwd, &sid);
         session::ensure_dir(&paths.base_dir)?;
@@ -602,6 +623,12 @@ impl Agent {
                 r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"sub_agent_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#,
                 '\n'
             )?;
+        }
+
+        // fork 复制 conversation/summary/plan 到新 session 目录（events 保持全新）
+        if let Some(src_id) = &fork_source_id {
+            let src_paths = session::paths_for(&home, &cwd, src_id);
+            let _ = store::store_session_fork(&src_paths, &paths);
         }
 
         let conv = Store {
@@ -653,7 +680,16 @@ impl Agent {
         };
 
         if new_session {
-            let _ = rt.append_event(json!({"type":"session_start","session_id":sid}));
+            let _ = rt.append_event(json!({"type":"session_start","session_id":sid.clone()}));
+        }
+
+        // fork 事件溯源（与 bash 版一致：events.jsonl 保持全新，仅追加 session_fork）
+        if let Some(src_id) = &fork_source_id {
+            let _ = rt.append_event(json!({
+                "type": "session_fork",
+                "session_id": &sid,
+                "source_session_id": src_id
+            }));
         }
 
         Ok(rt)

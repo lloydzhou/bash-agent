@@ -38,6 +38,7 @@ static void usage(const char *prog) {
     fprintf(stderr, "  --base-url URL             API base URL\n");
     fprintf(stderr, "  --session ID               Session ID\n");
     fprintf(stderr, "  --continue                 Continue last session\n");
+    fprintf(stderr, "  --fork-session             When resuming, create a new forked session (use with --session or --continue)\n");
     fprintf(stderr, "  --interactive              Force interactive mode\n");
     fprintf(stderr, "  --verbose                  Verbose logging\n");
     fprintf(stderr, "  --output human|stream-json Output format\n");
@@ -74,6 +75,7 @@ int main(int argc, char *argv[]) {
     const char *thinking_str = NULL;
     const char *tool_timeout_str = NULL;
     int do_continue = 0;
+    int do_fork = 0;
     int force_interactive = 0;
     int verbose = 0;
     int do_print = 0;
@@ -102,6 +104,8 @@ int main(int argc, char *argv[]) {
             }
         } else if (strcmp(argv[i], "--continue") == 0) {
             do_continue = 1;
+        } else if (strcmp(argv[i], "--fork-session") == 0) {
+            do_fork = 1;
         } else if (strcmp(argv[i], "--interactive") == 0 || strcmp(argv[i], "-i") == 0) {
             force_interactive = 1;
         } else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
@@ -234,8 +238,37 @@ int main(int argc, char *argv[]) {
     /* 初始化 curl */
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    /* 自动生成 session_id（如果未指定或为空） */
-    if (!effective_session || !effective_session[0]) {
+    /* --fork-session: 从源 session 派生新 session（对齐 bash 版 store_session_fork_resolve）
+     * 必须在 auto-generate session_id 之前：此时 effective_session 指向源 session */
+    char *fork_source_id = NULL;
+    if (do_fork) {
+        fork_source_id = util_strdup(effective_session);
+        /* 如果没指定源 session，回退到最新（等价 --continue） */
+        if (!fork_source_id || !fork_source_id[0]) {
+            free(fork_source_id);
+            fork_source_id = store_session_resolve_continue(home, cwd);
+        }
+        if (!fork_source_id || !fork_source_id[0]) {
+            fprintf(stderr, "Error: --fork-session requires an existing session (use with --session <id> or --continue)\n");
+            return 1;
+        }
+        /* 验证 source conversation 存在且非空 */
+        SessionPaths src_paths = store_session_paths_for(home, cwd, fork_source_id);
+        char *src_conv = util_read_file(src_paths.conversation);
+        int has_conv = (src_conv && strlen(src_conv) > 0);
+        free(src_conv);
+        store_session_paths_free(&src_paths);
+        if (!has_conv) {
+            fprintf(stderr, "Error: --fork-session: source session '%s' has no conversation to fork\n", fork_source_id);
+            return 1;
+        }
+    }
+
+    /* 自动生成 session_id（如果未指定或为空；fork 模式生成全新 ID） */
+    if (do_fork) {
+        free(effective_session);
+        effective_session = session_new_id();
+    } else if (!effective_session || !effective_session[0]) {
         free(effective_session);
         effective_session = session_new_id();
     }
@@ -261,6 +294,24 @@ int main(int argc, char *argv[]) {
     }
     agent->verbose = verbose;
     agent->output_format = (strcmp(output_fmt, "stream-json") == 0) ? 1 : 0;
+
+    /* --fork-session: fork 复制 conversation/summary/plan + 写 session_fork 事件
+     * agent_create 内部的 store_session_init 已创建新 session（含 session_start 事件） */
+    if (do_fork && fork_source_id) {
+        SessionPaths src_paths = store_session_paths_for(home, cwd, fork_source_id);
+        store_session_fork(&src_paths, &agent->paths);
+        store_session_paths_free(&src_paths);
+        /* session_fork 事件溯源（与 bash 版一致：events.jsonl 保持全新） */
+        StrBuf evt;
+        sb_init(&evt);
+        sb_append(&evt, "{\"type\":\"session_fork\",\"session_id\":");
+        sb_append_json_string(&evt, effective_session);
+        sb_append(&evt, ",\"source_session_id\":");
+        sb_append_json_string(&evt, fork_source_id);
+        sb_append_char(&evt, '}');
+        store_event_append(&agent->paths, evt.data);
+        sb_free(&evt);
+    }
 
     /* 设置 CLI 参数到 agent — 支持 k/m/g 后缀 */
     {
@@ -431,6 +482,7 @@ int main(int argc, char *argv[]) {
     free(effective_model);
     free(effective_base_url);
     free(effective_session);
+    free(fork_source_id);
     curl_global_cleanup();
 
     return 0;

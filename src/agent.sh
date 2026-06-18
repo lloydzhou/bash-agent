@@ -25,6 +25,9 @@ VERBOSE=false
 # Internal Runtime State
 INTERACTIVE=false
 LOG_EVENTS=true
+FORK_SESSION=false
+FORK_SOURCE_DIR=""
+FORK_SOURCE_ID=""
 declare -a HEADER_ARGS=()
 declare -a SKILL_NAMES=()
 INTERRUPT_REQUESTED=false
@@ -463,6 +466,22 @@ store_session_resolve_continue() {
     else
         SESSION_ID="$(util_new_session_id)"
     fi
+}
+
+# --fork-session: 解析源 session（来自 --session 或回退到最新），并准备一个全新的 session id。
+# 必须在 store_session_init 之前调用：此时 SESSION_ID 仍指向源 session，函数会将其替换为新 id。
+store_session_fork_resolve() {
+    local source_id="${SESSION_ID:-}"
+    # 未通过 --session 指定源时，回退到最新 session（等价于 --continue 的解析）
+    [[ -z "$source_id" ]] && source_id="$(store_session_get_latest_dir || true)"
+    [[ -z "$source_id" ]] && util_die "--fork-session requires an existing session (use with --session <id> or --continue)"
+    local source_dir
+    source_dir="$(store_session_get_dir)/${source_id}"
+    [[ -f "${source_dir}/conversation.jsonl" && -s "${source_dir}/conversation.jsonl" ]] \
+        || util_die "--fork-session: source session '${source_id}' has no conversation to fork"
+    FORK_SOURCE_DIR="$source_dir"
+    FORK_SOURCE_ID="$source_id"
+    SESSION_ID="$(util_new_session_id)"
 }
 
 # 处理子 agent 通过 FIFO 发回的 AGENT_RESULT 将 result_text 注入主 agent conversation，触发 agent_loop 让主 agent 处理
@@ -1481,6 +1500,7 @@ Options:
   --print                 Alias for --output-format stream-json
   --session [NAME]        Use named session (persist conversation)
   --continue              Continue most recent session
+  --fork-session          When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)
   --list-sessions         List all saved sessions
   -v, --verbose           Verbose mode
   -i, --interactive       Interactive mode (REPL)
@@ -1504,6 +1524,8 @@ Examples:
   ./agent.sh --session code-review "Analyze this code"
   ./agent.sh --skill shell-safety "List files in /tmp"
   ./agent.sh --continue "What did we discuss?"
+  ./agent.sh --fork-session --continue "Branch off the last session and try a different approach"
+  ./agent.sh --fork-session --session code-review "Fork the code-review session"
   ./agent.sh --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'
   echo "prompt" | ./agent.sh --print
   ./agent.sh -i
@@ -1544,6 +1566,7 @@ parse_args() {
                 fi
                 shift
                 ;;
+            --fork-session)  FORK_SESSION=true; shift ;;
             --list-sessions)
                 list_sessions
                 exit 0
@@ -1681,7 +1704,18 @@ main() {
     parse_args "$@"
     util_find_awk_dir
     validate_config
+    # --fork-session：从源 session 派生新 session。必须在 session_init 之前解析源，
+    # 此时 SESSION_ID 仍指向源 session，store_session_fork_resolve 会替换为新 id。
+    if [[ "${FORK_SESSION:-}" == true ]]; then
+        store_session_fork_resolve
+    fi
     store_session_init
+    # fork 复制源 session 的 conversation/summary/plan 到新 session 目录。
+    # events.jsonl 保持全新（仅含 session_start），fork 后追加一条 session_fork 记录溯源。
+    if [[ -n "${FORK_SOURCE_DIR:-}" ]]; then
+        store_session_fork "$FORK_SOURCE_DIR" "$(store_session_get_dir)/${SESSION_ID}"
+        store_event_append "{\"type\":\"session_fork\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\",\"source_session_id\":\"$(util_json_escape "$FORK_SOURCE_ID")\"}"
+    fi
     util_load_tool_defs
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode

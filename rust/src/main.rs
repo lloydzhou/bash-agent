@@ -122,6 +122,10 @@ fn parse_args(args: Vec<String>) -> Result<Config> {
                 cfg.continue_session = true;
                 i += 1;
             }
+            "--fork-session" => {
+                cfg.fork_session = true;
+                i += 1;
+            }
             "--list-sessions" => {
                 cfg.list_sessions = true;
                 i += 1;
@@ -178,6 +182,7 @@ fn print_usage() {
     println!("  --print                 Alias for --output-format stream-json");
     println!("  --session [NAME]        Use named session");
     println!("  --continue              Continue most recent session");
+    println!("  --fork-session          When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)");
     println!("  --list-sessions         List saved sessions");
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
