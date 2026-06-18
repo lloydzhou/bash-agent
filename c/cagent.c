@@ -284,19 +284,6 @@ int main(int argc, char *argv[]) {
     agent->verbose = verbose;
     agent->output_format = (strcmp(output_fmt, "stream-json") == 0) ? 1 : 0;
 
-    /* --fork：session_fork 事件溯源（session_start 已由 agent_create 内部写入） */
-    if (do_fork && fork_source_id) {
-        StrBuf evt;
-        sb_init(&evt);
-        sb_append(&evt, "{\"type\":\"session_fork\",\"session_id\":");
-        sb_append_json_string(&evt, effective_session);
-        sb_append(&evt, ",\"source_session_id\":");
-        sb_append_json_string(&evt, fork_source_id);
-        sb_append_char(&evt, '}');
-        store_event_append(&agent->paths, evt.data);
-        sb_free(&evt);
-    }
-
     /* 设置 CLI 参数到 agent — 支持 k/m/g 后缀 */
     {
         long v;

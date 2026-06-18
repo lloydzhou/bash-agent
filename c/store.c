@@ -182,23 +182,15 @@ int store_session_init(const SessionPaths *p, int is_new) {
 }
 
 int store_session_fork(const SessionPaths *parent, const SessionPaths *child) {
-    /* 确保目标目录存在（对齐 bash/go 版的 mkdir -p / MkdirAll） */
     util_mkdirs(child->session_dir, 0755);
-    /* 复制 conversation/summary/plan */
     char *parent_conv = util_read_file(parent->conversation);
-    if (parent_conv && strlen(parent_conv) > 0) {
-        util_write_file(child->conversation, parent_conv);
-    }
+    if (parent_conv && strlen(parent_conv) > 0) util_write_file(child->conversation, parent_conv);
     free(parent_conv);
     char *parent_summary = util_read_file(parent->summary);
-    if (parent_summary && strlen(parent_summary) > 0) {
-        util_write_file(child->summary, parent_summary);
-    }
+    if (parent_summary && strlen(parent_summary) > 0) util_write_file(child->summary, parent_summary);
     free(parent_summary);
     char *parent_plan = util_read_file(parent->plan);
-    if (parent_plan && strlen(parent_plan) > 0) {
-        util_write_file(child->plan, parent_plan);
-    }
+    if (parent_plan && strlen(parent_plan) > 0) util_write_file(child->plan, parent_plan);
     free(parent_plan);
     return 0;
 }

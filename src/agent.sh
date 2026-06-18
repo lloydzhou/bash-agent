@@ -1682,7 +1682,6 @@ main() {
     util_find_awk_dir
     validate_config
     [[ "${FORK:-}" == true ]] && { local _fs="$(store_session_get_dir)/${SESSION_ID}"; SESSION_ID="$(util_new_session_id)"; store_session_fork "$_fs" "$(store_session_get_dir)/${SESSION_ID}"; }; store_session_init
-    [[ -n "${_fs:-}" ]] && store_event_append "{\"type\":\"session_fork\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\",\"source_session_id\":\"$(util_json_escape "${_fs##*/}")\"}"
     util_load_tool_defs
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode

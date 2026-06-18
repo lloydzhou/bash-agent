@@ -220,8 +220,6 @@ Examples:
 		sessionID = agent.UtilNewSessionID()
 		store.Fork(sourceDir, filepath.Join(store.GetDir(), sessionID))
 		store.Init(sessionID)
-		store.AppendEvent(fmt.Sprintf(`{"type":"session_fork","session_id":"%s","source_session_id":"%s"}`,
-			agent.UtilJSONEscape(sessionID), agent.UtilJSONEscape(filepath.Base(sourceDir))))
 	} else if err := store.Init(sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init session: %v\n", err)
 		os.Exit(1)

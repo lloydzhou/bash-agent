@@ -292,8 +292,6 @@ Agent *agent_create(const char *provider, const char *model,
     a->paths = store_session_paths_for(home, cwd, sid);
     free(sid);
 
-    /* 判断是否新会话：与 bash 版一致，以 events.jsonl 是否为空为准。
-     * 只看 conversation.jsonl 是否存在会把已有空会话当作旧会话，也可能在跨版本切换时误判。 */
     int is_new = 1;
     struct stat st;
     if (stat(a->paths.events, &st) == 0 && st.st_size > 0) is_new = 0;

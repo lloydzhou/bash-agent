@@ -669,15 +669,6 @@ impl Agent {
             let _ = rt.append_event(json!({"type":"session_start","session_id":sid.clone()}));
         }
 
-        // fork 事件溯源（与 bash 版一致：events.jsonl 保持全新，仅追加 session_fork）
-        if let Some(src_id) = &fork_source_id {
-            let _ = rt.append_event(json!({
-                "type": "session_fork",
-                "session_id": &sid,
-                "source_session_id": src_id
-            }));
-        }
-
         Ok(rt)
     }
 

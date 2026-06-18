@@ -1647,13 +1647,6 @@ test_agent_fork_session() {
         red "fork: conversation NOT inherited"; ((FAIL++)) || true
     fi
 
-    # 验证：session_fork 事件记录
-    if grep -q '"session_fork"' "$proj_dir/$new_id/events.jsonl" 2>/dev/null; then
-        green "fork: session_fork event recorded"; ((PASS++)) || true
-    else
-        red "fork: session_fork event missing"; ((FAIL++)) || true
-    fi
-
     # 验证：新 session 的 events.jsonl 是全新的（不含源 session 的事件内容）
     if ! grep -q "original" "$proj_dir/$new_id/events.jsonl" 2>/dev/null; then
         green "fork: events.jsonl is fresh (no source events leaked)"; ((PASS++)) || true
