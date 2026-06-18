@@ -25,7 +25,6 @@ VERBOSE=false
 # Internal Runtime State
 INTERACTIVE=false
 LOG_EVENTS=true
-FORK=false
 declare -a HEADER_ARGS=()
 declare -a SKILL_NAMES=()
 INTERRUPT_REQUESTED=false
@@ -675,7 +674,6 @@ tool_dispatch() {
     esac
 }
 
-
 tool_param_keys() {
     case "$1" in
         Read) printf 'path offset limit' ;;
@@ -713,7 +711,6 @@ tool_args_from_msg() {
         done
     fi
 }
-
 
 tool_call_summary() {
     local name="$1" label="" key="" i value="" _vi
@@ -1506,7 +1503,6 @@ Examples:
   ./agent.sh --session code-review "Analyze this code"
   ./agent.sh --skill shell-safety "List files in /tmp"
   ./agent.sh --continue "What did we discuss?"
-  ./agent.sh --fork --continue "Branch off the last session"
   ./agent.sh --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'
   echo "prompt" | ./agent.sh --print
   ./agent.sh -i
@@ -1547,11 +1543,7 @@ parse_args() {
                 fi
                 shift
                 ;;
-            --fork)
-                FORK=true
-                [[ -z "${SESSION_ID:-}" ]] && store_session_resolve_continue
-                shift
-                ;;
+            --fork)  FORK=true; [[ -z "${SESSION_ID:-}" ]] && store_session_resolve_continue; shift ;;
             --list-sessions)
                 list_sessions
                 exit 0
@@ -1689,15 +1681,8 @@ main() {
     parse_args "$@"
     util_find_awk_dir
     validate_config
-    if [[ "${FORK:-}" == true ]]; then
-        local fork_source_id="${SESSION_ID:-}"
-        SESSION_ID="$(util_new_session_id)"
-        store_session_init
-        store_session_fork "$(store_session_get_dir)/${fork_source_id}" "$(store_session_get_dir)/${SESSION_ID}"
-        store_event_append "{\"type\":\"session_fork\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\",\"source_session_id\":\"$(util_json_escape "$fork_source_id")\"}"
-    else
-        store_session_init
-    fi
+    [[ "${FORK:-}" == true ]] && { local _fs="$(store_session_get_dir)/${SESSION_ID}"; SESSION_ID="$(util_new_session_id)"; }; store_session_init
+    [[ -n "${_fs:-}" ]] && { store_session_fork "$_fs" "$(store_session_get_dir)/${SESSION_ID}"; store_event_append "{\"type\":\"session_fork\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\",\"source_session_id\":\"$(util_json_escape "${_fs##*/}")\"}"; }
     util_load_tool_defs
     if [[ "$INTERACTIVE" == true ]]; then
         interactive_mode
