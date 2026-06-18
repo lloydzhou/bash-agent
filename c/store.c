@@ -182,7 +182,9 @@ int store_session_init(const SessionPaths *p, int is_new) {
 }
 
 int store_session_fork(const SessionPaths *parent, const SessionPaths *child) {
-    /* 复制 conversation/summary/plan（对齐 bash/go/rust 版 store_session_fork） */
+    /* 确保目标目录存在（对齐 bash/go 版的 mkdir -p / MkdirAll） */
+    util_mkdirs(child->session_dir, 0755);
+    /* 复制 conversation/summary/plan */
     char *parent_conv = util_read_file(parent->conversation);
     if (parent_conv && strlen(parent_conv) > 0) {
         util_write_file(child->conversation, parent_conv);

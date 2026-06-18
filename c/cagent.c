@@ -261,6 +261,15 @@ int main(int argc, char *argv[]) {
 
     store_event_set_stream_json(strcmp(output_fmt, "stream-json") == 0);
 
+    /* --fork：先复制源 session 数据，agent_create 内部的 store_session_init 再补全 events/stats */
+    if (do_fork && fork_source_id) {
+        SessionPaths new_paths = store_session_paths_for(home, cwd, effective_session);
+        SessionPaths src_paths = store_session_paths_for(home, cwd, fork_source_id);
+        store_session_fork(&src_paths, &new_paths);
+        store_session_paths_free(&new_paths);
+        store_session_paths_free(&src_paths);
+    }
+
     /* 创建 Agent */
     Agent *agent = agent_create(provider, effective_model,
                                 effective_api_key, effective_base_url,
@@ -275,13 +284,8 @@ int main(int argc, char *argv[]) {
     agent->verbose = verbose;
     agent->output_format = (strcmp(output_fmt, "stream-json") == 0) ? 1 : 0;
 
-    /* --fork：fork 复制 conversation/summary/plan + 写 session_fork 事件
-     * agent_create 内部的 store_session_init 已创建新 session（含 session_start 事件） */
+    /* --fork：session_fork 事件溯源（session_start 已由 agent_create 内部写入） */
     if (do_fork && fork_source_id) {
-        SessionPaths src_paths = store_session_paths_for(home, cwd, fork_source_id);
-        store_session_fork(&src_paths, &agent->paths);
-        store_session_paths_free(&src_paths);
-        /* session_fork 事件溯源（与 bash 版一致：events.jsonl 保持全新） */
         StrBuf evt;
         sb_init(&evt);
         sb_append(&evt, "{\"type\":\"session_fork\",\"session_id\":");

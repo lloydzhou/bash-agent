@@ -214,12 +214,12 @@ Examples:
 	}
 
 	// 初始化 session
-	// --fork：sessionID 此时已是源 session，生成新 ID 后 Init + Fork 复制。
+	// --fork：sessionID 此时已是源 session，生成新 ID 后先 Fork 复制再 Init 补全。
 	if fork {
 		sourceDir := filepath.Join(store.GetDir(), sessionID)
 		sessionID = agent.UtilNewSessionID()
-		store.Init(sessionID)
 		store.Fork(sourceDir, filepath.Join(store.GetDir(), sessionID))
+		store.Init(sessionID)
 		store.AppendEvent(fmt.Sprintf(`{"type":"session_fork","session_id":"%s","source_session_id":"%s"}`,
 			agent.UtilJSONEscape(sessionID), agent.UtilJSONEscape(filepath.Base(sourceDir))))
 	} else if err := store.Init(sessionID); err != nil {

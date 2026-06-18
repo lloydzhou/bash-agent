@@ -588,6 +588,11 @@ impl Agent {
         let paths = session::paths_for(&home, &cwd, &sid);
         session::ensure_dir(&paths.base_dir)?;
         session::ensure_dir(&paths.session_dir)?;
+        // fork 复制 conversation/summary/plan 到新 session 目录（在 touch/init 之前）
+        if let Some(src_id) = &fork_source_id {
+            let src_paths = session::paths_for(&home, &cwd, src_id);
+            let _ = store::store_session_fork(&src_paths, &paths);
+        }
         let new_session = paths
             .events
             .metadata()
@@ -610,12 +615,6 @@ impl Agent {
                 r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"sub_agent_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#,
                 '\n'
             )?;
-        }
-
-        // fork 复制 conversation/summary/plan 到新 session 目录（events 保持全新）
-        if let Some(src_id) = &fork_source_id {
-            let src_paths = session::paths_for(&home, &cwd, src_id);
-            let _ = store::store_session_fork(&src_paths, &paths);
         }
 
         let conv = Store {
