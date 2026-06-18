@@ -570,16 +570,29 @@ impl Drop for Agent {
 impl Agent {
     pub(crate) fn new(mut cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<Self> {
         let mut sid = cfg.session_id.clone();
-        if sid.is_empty() && cfg.continue_session {
+        if sid.is_empty() && (cfg.continue_session || cfg.fork) {
             sid = session::continue_session(&home, &cwd).unwrap_or_default();
         }
         if sid.is_empty() {
             sid = chrono_like_now();
         }
+        // --fork：sid 此时已是源 session，保存后替换为新 ID（对齐 bash 版）
+        let fork_source_id: Option<String> = if cfg.fork {
+            let src_id = sid.clone();
+            sid = chrono_like_now();
+            Some(src_id)
+        } else {
+            None
+        };
         cfg.session_id = sid.clone();
         let paths = session::paths_for(&home, &cwd, &sid);
         session::ensure_dir(&paths.base_dir)?;
         session::ensure_dir(&paths.session_dir)?;
+        // fork 复制 conversation/summary/plan 到新 session 目录（在 touch/init 之前）
+        if let Some(src_id) = &fork_source_id {
+            let src_paths = session::paths_for(&home, &cwd, src_id);
+            let _ = store::store_session_fork(&src_paths, &paths);
+        }
         let new_session = paths
             .events
             .metadata()
@@ -653,7 +666,7 @@ impl Agent {
         };
 
         if new_session {
-            let _ = rt.append_event(json!({"type":"session_start","session_id":sid}));
+            let _ = rt.append_event(json!({"type":"session_start","session_id":sid.clone()}));
         }
 
         Ok(rt)
@@ -695,12 +708,12 @@ impl Agent {
 
         // 在主线程中完成 fork 复制（与 Bash 版本一致：在子进程启动前复制，避免竞态）
         let sub_paths = session::paths_for(&home, &cwd, &sub_session_id_clone);
+        if fork {
+            let _ = store::store_session_fork(&parent_paths, &sub_paths);
+        }
         if let Err(e) = store::store_session_init(&sub_paths, false) {
             self.active_sub_count -= 1;
             return format!("Failed to create sub-agent session dir: {}", e);
-        }
-        if fork {
-            let _ = store::store_session_fork(&parent_paths, &sub_paths);
         }
 
         std::thread::spawn(move || {

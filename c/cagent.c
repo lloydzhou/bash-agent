@@ -38,19 +38,16 @@ static void usage(const char *prog) {
     fprintf(stderr, "  --base-url URL             API base URL\n");
     fprintf(stderr, "  --session ID               Session ID\n");
     fprintf(stderr, "  --continue                 Continue last session\n");
+    fprintf(stderr, "  --fork                     When resuming, create a new forked session (use with --session or --continue)\n");
     fprintf(stderr, "  --interactive              Force interactive mode\n");
     fprintf(stderr, "  --verbose                  Verbose logging\n");
     fprintf(stderr, "  --output human|stream-json Output format\n");
     fprintf(stderr, "  -h, --help                 Show this help\n");
     fprintf(stderr, "Environment:\n");
-    fprintf(stderr, "  ANTHROPIC_API_KEY       API key for Claude\n");
-    fprintf(stderr, "  OPENAI_API_KEY          API key for OpenAI\n");
-    fprintf(stderr, "  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)\n");
-    fprintf(stderr, "  ANTHROPIC_BASE_URL      Claude API base URL\n");
-    fprintf(stderr, "  OPENAI_BASE_URL         OpenAI API base URL\n");
-    fprintf(stderr, "  BASH_AGENT_HOME         Override base directory for session storage\n");
-    fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)\n");
-    fprintf(stderr, "  MODEL                   Default model name\n");
+    fprintf(stderr, "  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)\n");
+    fprintf(stderr, "  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)\n");
+    fprintf(stderr, "  BASH_AGENT_HOME         Override session storage (default: $HOME)\n");
+    fprintf(stderr, "  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)\n");
 }
 
 static char *g_paste_session_dir = NULL;
@@ -74,6 +71,7 @@ int main(int argc, char *argv[]) {
     const char *thinking_str = NULL;
     const char *tool_timeout_str = NULL;
     int do_continue = 0;
+    int do_fork = 0;
     int force_interactive = 0;
     int verbose = 0;
     int do_print = 0;
@@ -102,6 +100,8 @@ int main(int argc, char *argv[]) {
             }
         } else if (strcmp(argv[i], "--continue") == 0) {
             do_continue = 1;
+        } else if (strcmp(argv[i], "--fork") == 0) {
+            do_fork = 1;
         } else if (strcmp(argv[i], "--interactive") == 0 || strcmp(argv[i], "-i") == 0) {
             force_interactive = 1;
         } else if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
@@ -209,7 +209,7 @@ int main(int argc, char *argv[]) {
 
     /* 继续 session */
     char *effective_session = util_strdup(session_id);
-    if (do_continue && (!effective_session || !effective_session[0])) {
+    if ((do_continue || do_fork) && (!effective_session || !effective_session[0])) {
         char cwd_buf[4096];
         getcwd(cwd_buf, sizeof(cwd_buf));
         const char *env_h = util_env("BASH_AGENT_HOME", NULL);
@@ -234,8 +234,17 @@ int main(int argc, char *argv[]) {
     /* 初始化 curl */
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    /* 自动生成 session_id（如果未指定或为空） */
-    if (!effective_session || !effective_session[0]) {
+    /* --fork：effective_session 此时已是源 session（上方 session 解析已统一处理 resolve） */
+    char *fork_source_id = NULL;
+    if (do_fork) {
+        fork_source_id = util_strdup(effective_session);
+    }
+
+    /* 自动生成 session_id（如果未指定或为空；fork 模式生成全新 ID） */
+    if (do_fork) {
+        free(effective_session);
+        effective_session = session_new_id();
+    } else if (!effective_session || !effective_session[0]) {
         free(effective_session);
         effective_session = session_new_id();
     }
@@ -247,6 +256,15 @@ int main(int argc, char *argv[]) {
     mq_init(&display_queue);
 
     store_event_set_stream_json(strcmp(output_fmt, "stream-json") == 0);
+
+    /* --fork：先复制源 session 数据，agent_create 内部的 store_session_init 再补全 events/stats */
+    if (do_fork && fork_source_id) {
+        SessionPaths new_paths = store_session_paths_for(home, cwd, effective_session);
+        SessionPaths src_paths = store_session_paths_for(home, cwd, fork_source_id);
+        store_session_fork(&src_paths, &new_paths);
+        store_session_paths_free(&new_paths);
+        store_session_paths_free(&src_paths);
+    }
 
     /* 创建 Agent */
     Agent *agent = agent_create(provider, effective_model,
@@ -431,6 +449,7 @@ int main(int argc, char *argv[]) {
     free(effective_model);
     free(effective_base_url);
     free(effective_session);
+    free(fork_source_id);
     curl_global_cleanup();
 
     return 0;

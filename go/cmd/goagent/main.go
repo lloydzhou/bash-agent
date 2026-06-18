@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	agent "github.com/lloyd/claude-code/bash-agent/go2"
@@ -27,6 +28,7 @@ func main() {
 		printMode    bool
 		session      string
 		cont         bool
+		fork         bool
 		listSessions bool
 		verbose      bool
 		interactive  bool
@@ -51,6 +53,7 @@ func main() {
 	flag.StringVar(&thinking, "thinking", "adaptive", "Thinking mode: adaptive|enabled|disabled")
 	flag.StringVar(&session, "session", "", "Use named session")
 	flag.BoolVar(&cont, "continue", false, "Continue most recent session")
+	flag.BoolVar(&fork, "fork", false, "When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)")
 	flag.BoolVar(&listSessions, "list-sessions", false, "List all saved sessions")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose mode")
 	flag.BoolVar(&verbose, "v", false, "Verbose mode (shorthand)")
@@ -65,22 +68,15 @@ Options:
 		flag.PrintDefaults()
 		fmt.Fprint(os.Stderr, `
 Environment:
-  ANTHROPIC_API_KEY       API key for Claude
-  OPENAI_API_KEY          API key for OpenAI
-  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)
-  ANTHROPIC_BASE_URL      Claude API base URL
-  OPENAI_BASE_URL         OpenAI API base URL
-  BASH_AGENT_HOME         Override base directory for session storage
-  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)
-  MODEL                   Default model name
-  EFFORT                  Default thinking effort (default: high)
-  THINKING                Default thinking mode (default: adaptive)
+  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)
+  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)
+  BASH_AGENT_HOME         Override session storage (default: $HOME)
+  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)
 
 Examples:
   goagent "Read /etc/hostname and tell me what it says"
-  goagent -m claude-sonnet-4-20250514 "List files in /tmp"
-  goagent --session code-review "Analyze this code"
   goagent --continue "What did we discuss?"
+  goagent --fork --continue "Branch off the last session"
   goagent -i
 `)
 	}
@@ -191,15 +187,15 @@ Examples:
 	// 加载工具定义（编译时嵌入的 tools.json）
 	a.SetToolDefs(agent.UtilLoadToolDefs())
 
-	// Session 管理
+	// Session 管理：--fork 和 --continue 无 --session 时统一回退到最新 session
 	sessionID := session
-	if sessionID == "" {
-		sessionID = agent.UtilNewSessionID()
-	}
-	if cont {
+	if sessionID == "" && (fork || cont) {
 		if id, err := store.ResolveContinue(); err == nil && id != "" {
 			sessionID = id
 		}
+	}
+	if sessionID == "" {
+		sessionID = agent.UtilNewSessionID()
 	}
 
 	// --list-sessions
@@ -209,7 +205,13 @@ Examples:
 	}
 
 	// 初始化 session
-	if err := store.Init(sessionID); err != nil {
+	// --fork：sessionID 此时已是源 session，生成新 ID 后先 Fork 复制再 Init 补全。
+	if fork {
+		sourceDir := filepath.Join(store.GetDir(), sessionID)
+		sessionID = agent.UtilNewSessionID()
+		store.Fork(sourceDir, filepath.Join(store.GetDir(), sessionID))
+		store.Init(sessionID)
+	} else if err := store.Init(sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init session: %v\n", err)
 		os.Exit(1)
 	}

@@ -122,6 +122,10 @@ fn parse_args(args: Vec<String>) -> Result<Config> {
                 cfg.continue_session = true;
                 i += 1;
             }
+            "--fork" => {
+                cfg.fork = true;
+                i += 1;
+            }
             "--list-sessions" => {
                 cfg.list_sessions = true;
                 i += 1;
@@ -178,20 +182,17 @@ fn print_usage() {
     println!("  --print                 Alias for --output-format stream-json");
     println!("  --session [NAME]        Use named session");
     println!("  --continue              Continue most recent session");
+    println!("  --fork                   When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)");
     println!("  --list-sessions         List saved sessions");
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
     println!("  -h, --help              Show this help");
     println!();
     println!("Environment:");
-    println!("  ANTHROPIC_API_KEY       API key for Claude");
-    println!("  OPENAI_API_KEY          API key for OpenAI");
-    println!("  DEEPSEEK_API_KEY        API key for DeepSeek (auto-configures provider)");
-    println!("  ANTHROPIC_BASE_URL      Claude API base URL");
-    println!("  OPENAI_BASE_URL         OpenAI API base URL");
-    println!("  BASH_AGENT_HOME         Override base directory for session storage");
-    println!("  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)");
-    println!("  MODEL                   Default model name");
+    println!("  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)");
+    println!("  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)");
+    println!("  BASH_AGENT_HOME         Override session storage (default: $HOME)");
+    println!("  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)");
 }
 
 fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {

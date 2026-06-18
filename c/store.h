@@ -40,6 +40,9 @@ int store_session_init(const SessionPaths *p, int is_new);
 /* 为子 agent 创建新会话（初始化目录） */
 int store_session_init_sub(const SessionPaths *parent_paths, const SessionPaths *sub_paths, int fork);
 
+/* 复制 conversation/summary/plan 到新 session（不 init child，对齐 bash/go/rust 版 store_session_fork） */
+int store_session_fork(const SessionPaths *parent, const SessionPaths *child);
+
 const char *store_session_image_dir(const SessionPaths *paths);
 
 /* 从 cwd 生成 project key（简化为路径替换 / 为 -） */

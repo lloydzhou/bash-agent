@@ -1600,6 +1600,73 @@ test_agent_sub_agent_fork_context() {
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
 
+# Test: --fork — create a new forked session from a source session (CLI fork)
+test_agent_fork_session() {
+    info "Test: --fork creates new session with inherited conversation"
+    local tmpdir saved_home="${BASH_AGENT_HOME:-}"
+    tmpdir=$(mktemp -d)
+    export BASH_AGENT_HOME="$tmpdir"
+
+    # 计算当前 cwd 的 project key
+    local pkey proj_dir
+    pkey=$(project_key)
+    proj_dir="$tmpdir/.bash-agent/projects/$pkey"
+
+    # 创建源 session（手动写入 conversation/summary/plan/events）
+    local src_id="20240101-1200-0001"
+    local src_dir="$proj_dir/$src_id"
+    mkdir -p "$src_dir/images"
+    printf '{"role":"user","content":"original question"}\n{"role":"assistant","content":"original answer"}\n' > "$src_dir/conversation.jsonl"
+    printf 'original summary' > "$src_dir/summary.txt"
+    printf '# original plan' > "$src_dir/plan.md"
+    printf '{"type":"session_start","session_id":"%s"}\n' "$src_id" > "$src_dir/events.jsonl"
+
+    # 运行 --fork（假 URL，agent 在 LLM 调用时失败，但 fork 复制已完成）
+    timeout 10 "$AGENT" \
+        --fork --session "$src_id" \
+        -p claude --api-key test --base-url "http://127.0.0.1:39999" \
+        "fork test prompt" >/dev/null 2>&1 || true
+
+    # 找到 fork 出来的新 session（排除源 session）
+    local new_id
+    new_id=$(ls -1 "$proj_dir" 2>/dev/null | grep -v "^${src_id}$" | head -1)
+
+    # 验证：新 session 已创建
+    if [[ -n "$new_id" && -d "$proj_dir/$new_id" ]]; then
+        green "fork: new session created ($new_id)"; ((PASS++)) || true
+    else
+        red "fork: no new session created"; ((FAIL++)) || true
+        rm -rf "$tmpdir"; export BASH_AGENT_HOME="$saved_home"; return
+    fi
+
+    # 验证：conversation 继承自源 session
+    if grep -q "original question" "$proj_dir/$new_id/conversation.jsonl" 2>/dev/null \
+       && grep -q "original answer" "$proj_dir/$new_id/conversation.jsonl" 2>/dev/null; then
+        green "fork: conversation inherited from source"; ((PASS++)) || true
+    else
+        red "fork: conversation NOT inherited"; ((FAIL++)) || true
+    fi
+
+    # 验证：新 session 的 events.jsonl 是全新的（不含源 session 的事件内容）
+    if ! grep -q "original" "$proj_dir/$new_id/events.jsonl" 2>/dev/null; then
+        green "fork: events.jsonl is fresh (no source events leaked)"; ((PASS++)) || true
+    else
+        red "fork: source events leaked into forked session"; ((FAIL++)) || true
+    fi
+
+    # 验证：源 session conversation 未被修改
+    local src_conv_count
+    src_conv_count=$(grep -c "original" "$src_dir/conversation.jsonl" 2>/dev/null || echo 0)
+    if (( src_conv_count == 2 )); then
+        green "fork: source session unchanged"; ((PASS++)) || true
+    else
+        red "fork: source session was modified"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$tmpdir"
+    export BASH_AGENT_HOME="$saved_home"
+}
+
 # Test 37: compact_dp.awk — DP compact decision algorithm
 test_compact_dp_awk() {
     info "Test 37: compact_dp.awk DP compact decision"
@@ -2560,6 +2627,8 @@ test_agent_sub_agent_child_session
 test_agent_sub_agent_fork
 test_agent_sub_agent_fork_failure
 test_agent_sub_agent_fork_context
+
+test_agent_fork_session
 
 test_agent_stats_structure
 test_agent_project_key

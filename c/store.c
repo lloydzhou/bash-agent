@@ -181,27 +181,25 @@ int store_session_init(const SessionPaths *p, int is_new) {
     return 0;
 }
 
+int store_session_fork(const SessionPaths *parent, const SessionPaths *child) {
+    util_mkdirs(child->session_dir, 0755);
+    char *parent_conv = util_read_file(parent->conversation);
+    if (parent_conv && strlen(parent_conv) > 0) util_write_file(child->conversation, parent_conv);
+    free(parent_conv);
+    char *parent_summary = util_read_file(parent->summary);
+    if (parent_summary && strlen(parent_summary) > 0) util_write_file(child->summary, parent_summary);
+    free(parent_summary);
+    char *parent_plan = util_read_file(parent->plan);
+    if (parent_plan && strlen(parent_plan) > 0) util_write_file(child->plan, parent_plan);
+    free(parent_plan);
+    return 0;
+}
+
 int store_session_init_sub(const SessionPaths *parent_paths, const SessionPaths *sub_paths, int fork) {
-    if (store_session_init(sub_paths, 1) != 0) return -1;
     if (fork) {
-        /* 复制父会话文件到子会话 — 对齐 bash 版 store_session_fork:
-         * cp conversation.jsonl, summary.txt, plan.md */
-        char *parent_conv = util_read_file(parent_paths->conversation);
-        if (parent_conv && strlen(parent_conv) > 0) {
-            util_write_file(sub_paths->conversation, parent_conv);
-        }
-        free(parent_conv);
-        char *parent_summary = util_read_file(parent_paths->summary);
-        if (parent_summary && strlen(parent_summary) > 0) {
-            util_write_file(sub_paths->summary, parent_summary);
-        }
-        free(parent_summary);
-        char *parent_plan = util_read_file(parent_paths->plan);
-        if (parent_plan && strlen(parent_plan) > 0) {
-            util_write_file(sub_paths->plan, parent_plan);
-        }
-        free(parent_plan);
+        store_session_fork(parent_paths, sub_paths);
     }
+    if (store_session_init(sub_paths, 1) != 0) return -1;
     return 0;
 }
 

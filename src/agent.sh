@@ -674,7 +674,6 @@ tool_dispatch() {
     esac
 }
 
-
 tool_param_keys() {
     case "$1" in
         Read) printf 'path offset limit' ;;
@@ -712,7 +711,6 @@ tool_args_from_msg() {
         done
     fi
 }
-
 
 tool_call_summary() {
     local name="$1" label="" key="" i value="" _vi
@@ -1481,30 +1479,21 @@ Options:
   --print                 Alias for --output-format stream-json
   --session [NAME]        Use named session (persist conversation)
   --continue              Continue most recent session
+  --fork                  When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)
   --list-sessions         List all saved sessions
   -v, --verbose           Verbose mode
   -i, --interactive       Interactive mode (REPL)
   -h, --help              Show this help
 
 Environment:
-  ANTHROPIC_API_KEY       API key for Claude
-  OPENAI_API_KEY          API key for OpenAI
-  DEEPSEEK_API_KEY        API key for DeepSeek (auto-detected, uses Anthropic-compatible endpoint)
-  ANTHROPIC_BASE_URL      Claude API base URL
-  OPENAI_BASE_URL         OpenAI API base URL
-  BASH_AGENT_HOME         Override base directory for session storage (default: $HOME)
-  BASH_AGENT_BASH_MODE    Bash tool permissions as 4 octal rwx digits: system/external/network/workspace (default: 0467)
-  EFFORT                  Default thinking effort (default: high)
-  THINKING                Default thinking mode (default: adaptive)
-  MODEL                   Default model name
+  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)
+  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)
+  BASH_AGENT_HOME         Override session storage (default: $HOME)
+  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
-  ./agent.sh -m claude-sonnet-4-20250514 "List files in /tmp"
-  ./agent.sh --session code-review "Analyze this code"
-  ./agent.sh --skill shell-safety "List files in /tmp"
   ./agent.sh --continue "What did we discuss?"
-  ./agent.sh --output-format stream-json "Hello" | jq -r 'select(.type=="text") .content'
   echo "prompt" | ./agent.sh --print
   ./agent.sh -i
 EOF
@@ -1544,6 +1533,7 @@ parse_args() {
                 fi
                 shift
                 ;;
+            --fork)  FORK=true; [[ -z "${SESSION_ID:-}" ]] && store_session_resolve_continue; shift ;;
             --list-sessions)
                 list_sessions
                 exit 0
@@ -1681,6 +1671,7 @@ main() {
     parse_args "$@"
     util_find_awk_dir
     validate_config
+    [[ "${FORK:-}" == true ]] && { local _fs="$(store_session_get_dir)/${SESSION_ID}"; SESSION_ID="$(util_new_session_id)"; store_session_fork "$_fs" "$(store_session_get_dir)/${SESSION_ID}"; }
     store_session_init
     util_load_tool_defs
     if [[ "$INTERACTIVE" == true ]]; then
