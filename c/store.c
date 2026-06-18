@@ -196,10 +196,10 @@ int store_session_fork(const SessionPaths *parent, const SessionPaths *child) {
 }
 
 int store_session_init_sub(const SessionPaths *parent_paths, const SessionPaths *sub_paths, int fork) {
-    if (store_session_init(sub_paths, 1) != 0) return -1;
     if (fork) {
         store_session_fork(parent_paths, sub_paths);
     }
+    if (store_session_init(sub_paths, 1) != 0) return -1;
     return 0;
 }
 
