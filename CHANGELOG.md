@@ -8,6 +8,26 @@
 
 ---
 
+## [4.2.7] - 2025-06-19
+
+> **`--fork` 命令行参数 + C 版 Read 显示修复**：新增从已有 session 派生新 session 的 `--fork` 参数；修复 C 版 Read 工具 offset/limit 不显示。
+
+### Added
+
+- **`--fork` 命令行参数**（Bash/Go/Rust/C）：从已有 session 派生新 session，通过 `store_session_fork` 复制 conversation/summary/plan，生成全新 session ID。与 `--session <id>` 或 `--continue` 配合使用，无源时自动回退到最近 session（等价 `--continue`）。fork 在 `store_session_init` 之前执行（先复制再补全），是静默文件复制，不产生额外事件。C 版 `store_session_fork` 提取为独立函数（从 `store_session_init_sub` 中分离）。
+
+### Fixed
+
+- **C 版 Read 工具 offset/limit 不显示**：`json_get_string` 内部要求 `JSON_STRING` 类型，但 LLM 传的 offset/limit 是 `JSON_NUMBER` → 返回 NULL → 摘要不显示。改用 `json_as_string(json_get(...))`。其他三版本（Bash/Go/Rust）均有正确的 fallback 逻辑。
+- **C/Rust SubAgent fork 顺序不一致**：`store_session_init_sub`（C）和 SubAgent 启动（Rust）中 init 在 fork 之前。统一为 fork 先 init 后（先复制源数据，init 再补全 events/stats）。
+
+### Changed
+
+- **精简 usage 文档**（四版本同步）：Environment 从 10 行合并为 4 行（`*_API_KEY`/`*_BASE_URL` 合并，去掉 Options 已覆盖的 `EFFORT`/`THINKING`/`MODEL`），Examples 从 8 个精简为 4 个。
+- **Go/Rust bash mode classifier 测试扩展**：补齐与 Bash 版等覆盖度的分类器测试用例。
+
+---
+
 ## [4.2.6] - 2025-06-13
 
 > **安全修复 + 四版本一致性版本**：修复 Bash 权限扫描器根目录绕过漏洞；统一四版本 session 功能、请求体字段顺序、默认值；新增 Bash 完整架构文档。
