@@ -1012,8 +1012,8 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     JsonParse jp2 = json_parse_root(tc->input_json.data);
                     if (!jp2.error) {
                         fpath = json_get_string(jp2.val, "path");
-                        foffset = json_get_string(jp2.val, "offset");
-                        flimit = json_get_string(jp2.val, "limit");
+                        foffset = json_as_string(json_get(jp2.val, "offset"));
+                        flimit = json_as_string(json_get(jp2.val, "limit"));
                     }
 
                     StrBuf summary;
