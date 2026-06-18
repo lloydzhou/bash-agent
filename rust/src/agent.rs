@@ -570,18 +570,15 @@ impl Drop for Agent {
 impl Agent {
     pub(crate) fn new(mut cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<Self> {
         let mut sid = cfg.session_id.clone();
-        if sid.is_empty() && cfg.continue_session {
+        if sid.is_empty() && (cfg.continue_session || cfg.fork) {
             sid = session::continue_session(&home, &cwd).unwrap_or_default();
         }
         if sid.is_empty() {
             sid = chrono_like_now();
         }
-        // --fork：从源 session 派生新 session（对齐 bash 版，直接在 init 后调用 store_session_fork）
+        // --fork：sid 此时已是源 session，保存后替换为新 ID（对齐 bash 版）
         let fork_source_id: Option<String> = if cfg.fork {
-            let mut src_id = cfg.session_id.clone();
-            if src_id.is_empty() {
-                src_id = session::continue_session(&home, &cwd).unwrap_or_default();
-            }
+            let src_id = sid.clone();
             sid = chrono_like_now();
             Some(src_id)
         } else {

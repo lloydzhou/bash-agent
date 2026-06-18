@@ -196,15 +196,15 @@ Examples:
 	// 加载工具定义（编译时嵌入的 tools.json）
 	a.SetToolDefs(agent.UtilLoadToolDefs())
 
-	// Session 管理
+	// Session 管理：--fork 和 --continue 无 --session 时统一回退到最新 session
 	sessionID := session
-	if sessionID == "" {
-		sessionID = agent.UtilNewSessionID()
-	}
-	if cont {
+	if sessionID == "" && (fork || cont) {
 		if id, err := store.ResolveContinue(); err == nil && id != "" {
 			sessionID = id
 		}
+	}
+	if sessionID == "" {
+		sessionID = agent.UtilNewSessionID()
 	}
 
 	// --list-sessions
@@ -214,18 +214,14 @@ Examples:
 	}
 
 	// 初始化 session
-	// --fork：从源 session 派生新 session。直接在 Init 后调用 Fork 复制 conversation/summary/plan。
+	// --fork：sessionID 此时已是源 session，生成新 ID 后 Init + Fork 复制。
 	if fork {
-		sourceID := session
-		if sourceID == "" {
-			sourceID, _ = store.ResolveContinue()
-		}
-		sourceDir := filepath.Join(store.GetDir(), sourceID)
+		sourceDir := filepath.Join(store.GetDir(), sessionID)
 		sessionID = agent.UtilNewSessionID()
 		store.Init(sessionID)
 		store.Fork(sourceDir, filepath.Join(store.GetDir(), sessionID))
 		store.AppendEvent(fmt.Sprintf(`{"type":"session_fork","session_id":"%s","source_session_id":"%s"}`,
-			agent.UtilJSONEscape(sessionID), agent.UtilJSONEscape(sourceID)))
+			agent.UtilJSONEscape(sessionID), agent.UtilJSONEscape(filepath.Base(sourceDir))))
 	} else if err := store.Init(sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: init session: %v\n", err)
 		os.Exit(1)

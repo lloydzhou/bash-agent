@@ -213,7 +213,7 @@ int main(int argc, char *argv[]) {
 
     /* 继续 session */
     char *effective_session = util_strdup(session_id);
-    if (do_continue && (!effective_session || !effective_session[0])) {
+    if ((do_continue || do_fork) && (!effective_session || !effective_session[0])) {
         char cwd_buf[4096];
         getcwd(cwd_buf, sizeof(cwd_buf));
         const char *env_h = util_env("BASH_AGENT_HOME", NULL);
@@ -238,15 +238,10 @@ int main(int argc, char *argv[]) {
     /* 初始化 curl */
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    /* --fork：从源 session 派生新 session。记录源 ID（--session 或回退到最新），然后生成新 ID。
-     * 必须在 auto-generate session_id 之前：此时 effective_session 指向源 session */
+    /* --fork：effective_session 此时已是源 session（上方 session 解析已统一处理 resolve） */
     char *fork_source_id = NULL;
     if (do_fork) {
         fork_source_id = util_strdup(effective_session);
-        if (!fork_source_id || !fork_source_id[0]) {
-            free(fork_source_id);
-            fork_source_id = store_session_resolve_continue(home, cwd);
-        }
     }
 
     /* 自动生成 session_id（如果未指定或为空；fork 模式生成全新 ID） */
