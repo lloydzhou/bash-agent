@@ -1600,9 +1600,9 @@ test_agent_sub_agent_fork_context() {
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
 
-# Test: --fork-session — create a new forked session from a source session (CLI fork)
+# Test: --fork — create a new forked session from a source session (CLI fork)
 test_agent_fork_session() {
-    info "Test: --fork-session creates new session with inherited conversation"
+    info "Test: --fork creates new session with inherited conversation"
     local tmpdir saved_home="${BASH_AGENT_HOME:-}"
     tmpdir=$(mktemp -d)
     export BASH_AGENT_HOME="$tmpdir"
@@ -1621,9 +1621,9 @@ test_agent_fork_session() {
     printf '# original plan' > "$src_dir/plan.md"
     printf '{"type":"session_start","session_id":"%s"}\n' "$src_id" > "$src_dir/events.jsonl"
 
-    # 运行 --fork-session（假 URL，agent 在 LLM 调用时失败，但 fork 复制已完成）
+    # 运行 --fork（假 URL，agent 在 LLM 调用时失败，但 fork 复制已完成）
     timeout 10 "$AGENT" \
-        --fork-session --session "$src_id" \
+        --fork --session "$src_id" \
         -p claude --api-key test --base-url "http://127.0.0.1:39999" \
         "fork test prompt" >/dev/null 2>&1 || true
 
@@ -1633,70 +1633,48 @@ test_agent_fork_session() {
 
     # 验证：新 session 已创建
     if [[ -n "$new_id" && -d "$proj_dir/$new_id" ]]; then
-        green "fork-session: new session created ($new_id)"; ((PASS++)) || true
+        green "fork: new session created ($new_id)"; ((PASS++)) || true
     else
-        red "fork-session: no new session created"; ((FAIL++)) || true
+        red "fork: no new session created"; ((FAIL++)) || true
         rm -rf "$tmpdir"; export BASH_AGENT_HOME="$saved_home"; return
     fi
 
     # 验证：conversation 继承自源 session
     if grep -q "original question" "$proj_dir/$new_id/conversation.jsonl" 2>/dev/null \
        && grep -q "original answer" "$proj_dir/$new_id/conversation.jsonl" 2>/dev/null; then
-        green "fork-session: conversation inherited from source"; ((PASS++)) || true
+        green "fork: conversation inherited from source"; ((PASS++)) || true
     else
-        red "fork-session: conversation NOT inherited"; ((FAIL++)) || true
+        red "fork: conversation NOT inherited"; ((FAIL++)) || true
     fi
 
     # 验证：session_fork 事件记录
     if grep -q '"session_fork"' "$proj_dir/$new_id/events.jsonl" 2>/dev/null; then
-        green "fork-session: session_fork event recorded"; ((PASS++)) || true
+        green "fork: session_fork event recorded"; ((PASS++)) || true
     else
-        red "fork-session: session_fork event missing"; ((FAIL++)) || true
+        red "fork: session_fork event missing"; ((FAIL++)) || true
     fi
 
     # 验证：新 session 的 events.jsonl 是全新的（不含源 session 的事件内容）
     if ! grep -q "original" "$proj_dir/$new_id/events.jsonl" 2>/dev/null; then
-        green "fork-session: events.jsonl is fresh (no source events leaked)"; ((PASS++)) || true
+        green "fork: events.jsonl is fresh (no source events leaked)"; ((PASS++)) || true
     else
-        red "fork-session: source events leaked into forked session"; ((FAIL++)) || true
+        red "fork: source events leaked into forked session"; ((FAIL++)) || true
     fi
 
     # 验证：源 session conversation 未被修改
     local src_conv_count
     src_conv_count=$(grep -c "original" "$src_dir/conversation.jsonl" 2>/dev/null || echo 0)
     if (( src_conv_count == 2 )); then
-        green "fork-session: source session unchanged"; ((PASS++)) || true
+        green "fork: source session unchanged"; ((PASS++)) || true
     else
-        red "fork-session: source session was modified"; ((FAIL++)) || true
+        red "fork: source session was modified"; ((FAIL++)) || true
     fi
 
     rm -rf "$tmpdir"
     export BASH_AGENT_HOME="$saved_home"
 }
 
-# Test: --fork-session — error when no source session exists
-test_agent_fork_session_no_source() {
-    info "Test: --fork-session errors when no source session"
-    local tmpdir saved_home="${BASH_AGENT_HOME:-}"
-    tmpdir=$(mktemp -d)
-    export BASH_AGENT_HOME="$tmpdir"
-
-    # 不创建任何 session，直接 fork
-    local output
-    output=$(timeout 10 "$AGENT" \
-        --fork-session --session "nonexistent-session" \
-        -p claude --api-key test --base-url "http://127.0.0.1:39999" \
-        "test" 2>&1) || true
-
-    if echo "$output" | grep -qi "no conversation to fork"; then
-        green "fork-session: error on missing source conversation"; ((PASS++)) || true
-    else
-        red "fork-session: missing error for nonexistent source"; ((FAIL++)) || true
-    fi
-
-    rm -rf "$tmpdir"
-    export BASH_AGENT_HOME="$saved_home"
-}
+# Test 37: compact_dp.awk — DP compact decision algorithm
 test_compact_dp_awk() {
     info "Test 37: compact_dp.awk DP compact decision"
     local tmpdir conv_file
@@ -2658,7 +2636,6 @@ test_agent_sub_agent_fork_failure
 test_agent_sub_agent_fork_context
 
 test_agent_fork_session
-test_agent_fork_session_no_source
 
 test_agent_stats_structure
 test_agent_project_key

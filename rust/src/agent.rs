@@ -576,22 +576,12 @@ impl Agent {
         if sid.is_empty() {
             sid = chrono_like_now();
         }
-        // --fork-session: 从源 session 派生新 session（对齐 bash 版 store_session_fork_resolve）
-        let fork_source_id: Option<String> = if cfg.fork_session {
-            // 使用原始 session_id（可能为空），而不是已处理过的 sid
+        // --fork：从源 session 派生新 session（对齐 bash 版，直接在 init 后调用 store_session_fork）
+        let fork_source_id: Option<String> = if cfg.fork {
             let mut src_id = cfg.session_id.clone();
-            // 如果没指定源 session（空），回退到最新 session（等价 --continue）
             if src_id.is_empty() {
                 src_id = session::continue_session(&home, &cwd).unwrap_or_default();
             }
-            if src_id.is_empty() {
-                bail!("--fork-session requires an existing session (use with --session <id> or --continue)");
-            }
-            let sp = session::paths_for(&home, &cwd, &src_id);
-            if !std::fs::read(&sp.conversation).map(|d| !d.is_empty()).unwrap_or(false) {
-                bail!("--fork-session: source session '{}' has no conversation to fork", src_id);
-            }
-            // 生成新 session ID（fork 出来的新 session 用全新 ID）
             sid = chrono_like_now();
             Some(src_id)
         } else {

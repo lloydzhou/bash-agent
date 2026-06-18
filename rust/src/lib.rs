@@ -52,7 +52,7 @@ pub mod config {
         pub session_id: String,
         pub continue_session: bool,
         pub list_sessions: bool,
-        pub fork_session: bool,
+        pub fork: bool,
     }
 
     impl Default for Config {
@@ -91,7 +91,7 @@ pub mod config {
                 session_id: String::new(),
                 continue_session: false,
                 list_sessions: false,
-                fork_session: false,
+                fork: false,
             }
         }
     }
