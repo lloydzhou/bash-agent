@@ -1860,6 +1860,33 @@ static void linenoiseEditPaste(struct linenoiseState *l) {
 
 char *linenoiseEditMore = "If you see this, you are misusing the API: when linenoiseEditFeed() is called, if it returns linenoiseEditMore the user is yet editing the line. See the README file for more information.";
 
+/* ============================================================
+ * Display mutex — protects terminal operations in EditFeed (readline
+ * thread) from racing with linenoiseWrite's Hide/Show (display thread).
+ * Must appear before linenoiseEditFeed which locks on every keypress.
+ * ============================================================ */
+
+#ifdef _WIN32
+/* Windows: use critical section for mutex-like behavior */
+static CRITICAL_SECTION g_display_mutex;
+static int g_display_mutex_init = 0;
+#define INIT_MUTEX() do { \
+    if (!g_display_mutex_init) { \
+        InitializeCriticalSection(&g_display_mutex); \
+        g_display_mutex_init = 1; \
+    } \
+} while(0)
+#define LOCK_MUTEX() EnterCriticalSection(&g_display_mutex)
+#define UNLOCK_MUTEX() LeaveCriticalSection(&g_display_mutex)
+#else
+/* POSIX: use pthread mutex */
+#include <pthread.h>
+static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define INIT_MUTEX() (void)0
+#define LOCK_MUTEX() pthread_mutex_lock(&g_display_mutex)
+#define UNLOCK_MUTEX() pthread_mutex_unlock(&g_display_mutex)
+#endif
+
 /* This function is part of the multiplexed API of linenoise, see the top
  * comment on linenoiseEditStart() for more information. Call this function
  * each time there is some data to read from the standard input file
@@ -1894,13 +1921,20 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         return NULL;
     }
 
+    /* Lock display mutex: terminal operations below (refreshLine, completeLine,
+     * etc.) must not race with linenoiseWrite's Hide/Show in the display thread.
+     * The read() above is intentionally unlocked so display output doesn't
+     * stall while waiting for user input. */
+    INIT_MUTEX();
+    LOCK_MUTEX();
+
     /* Only autocomplete when the callback is set. completeLine()
      * returns the character to be handled next, or zero when the
      * key was consumed to navigate completions. */
     if ((l->in_completion || c == 9 /* TAB */) && completionCallback != NULL) {
         int retval = completeLine(l,c);
         /* Read next character when 0 */
-        if (retval == 0) return linenoiseEditMore;
+        if (retval == 0) { UNLOCK_MUTEX(); return linenoiseEditMore; }
         c = retval;
     }
 
@@ -1917,8 +1951,10 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
             refreshLine(l);
             hintsCallback = hc;
         }
+        UNLOCK_MUTEX();
         return strdup(l->buf);
     case CTRL_C:     /* ctrl-c */
+        UNLOCK_MUTEX();
         errno = EAGAIN;
         return NULL;
     case BACKSPACE:   /* backspace */
@@ -1933,6 +1969,7 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
             history_len--;
             free(history[history_len]);
             errno = ENOENT;
+            UNLOCK_MUTEX();
             return NULL;
         }
         break;
@@ -2051,7 +2088,7 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
                     if (read(l->ifd, utf8+i, 1) != 1) break;
                 }
             }
-            if (linenoiseEditInsert(l, utf8, utf8len)) return NULL;
+            if (linenoiseEditInsert(l, utf8, utf8len)) { UNLOCK_MUTEX(); return NULL; }
         }
         break;
     case CTRL_U: /* Ctrl+u, delete the whole line. */
@@ -2090,6 +2127,7 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
         }
         break;
     }
+    UNLOCK_MUTEX();
     return linenoiseEditMore;
 }
 
@@ -2395,32 +2433,7 @@ int linenoiseHistoryLoad(const char *filename) {
     return 0;
 }
 
-/* ============================================================
- * Readline state management & mutex for EditFeed synchronization
- * ============================================================ */
-
 #include <stdarg.h>
-
-#ifdef _WIN32
-/* Windows: use critical section for mutex-like behavior */
-static CRITICAL_SECTION g_display_mutex;
-static int g_display_mutex_init = 0;
-#define INIT_MUTEX() do { \
-    if (!g_display_mutex_init) { \
-        InitializeCriticalSection(&g_display_mutex); \
-        g_display_mutex_init = 1; \
-    } \
-} while(0)
-#define LOCK_MUTEX() EnterCriticalSection(&g_display_mutex)
-#define UNLOCK_MUTEX() LeaveCriticalSection(&g_display_mutex)
-#else
-/* POSIX: use pthread mutex */
-#include <pthread.h>
-static pthread_mutex_t g_display_mutex = PTHREAD_MUTEX_INITIALIZER;
-#define INIT_MUTEX() (void)0
-#define LOCK_MUTEX() pthread_mutex_lock(&g_display_mutex)
-#define UNLOCK_MUTEX() pthread_mutex_unlock(&g_display_mutex)
-#endif
 
 static struct linenoiseState *g_current_ls = NULL;
 static int g_ls_active = 0;
