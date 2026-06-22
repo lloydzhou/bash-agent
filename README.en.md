@@ -7,8 +7,8 @@
 <p align="center">
   <img alt="bash 5.0+" src="https://img.shields.io/badge/bash-5.0%2B-4EAA25?logo=gnubash&logoColor=white">
   <img alt="platform Linux | macOS | WSL" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-blue">
-  <img alt="lines 1,689" src="https://img.shields.io/badge/lines-1%2C689-informational">
-  <img alt="functions 112" src="https://img.shields.io/badge/functions-112-informational">
+  <img alt="lines 1,690" src="https://img.shields.io/badge/lines-1%2C690-informational">
+  <img alt="functions 107" src="https://img.shields.io/badge/functions-107-informational">
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="status preview" src="https://img.shields.io/badge/status-preview-orange">
 </p>
@@ -25,7 +25,7 @@ C (`cagent`), Go (`goagent`), and Rust (`rustagent`) ports maintain the same sem
 - **Four aligned runtimes** — bash/c/go/rust share the same agent loop, tool, and session semantics
 - **Async SubAgent** — built-in `SubAgent` tool delegates subtasks to independent sessions running in parallel, results auto-injected back. Supports `fork` mode for context inheritance, session isolation, and failure propagation
 - **Cache-aware compaction** — DP economics algorithm decides whether and how much to compact
-- **Session persistence** — project-scoped, resumable, compactable
+- **Session persistence** — project-scoped, resumable, forkable, compactable
 - **Machine-friendly** — `stream-json` outputs structured events for client consumption
 - **Skill system** — on-demand skill loading without polluting future prompts
 
@@ -119,6 +119,7 @@ Pre-built binaries (C / Go / Rust) are available on [Releases](https://github.co
 | `--tool-timeout N` | tool timeout in seconds | `600` |
 | `--session [NAME]` | create or resume a session | - |
 | `--continue` | continue the latest session | - |
+| `--fork` | fork a new session from source (with `--session` or `--continue`) | - |
 | `--list-sessions` | list sessions for the current project | - |
 | `-i` | interactive mode | - |
 | `--output-format FMT` | output format: `human` or `stream-json` | `human` |

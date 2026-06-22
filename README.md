@@ -7,7 +7,7 @@
 <p align="center">
   <img alt="bash 5.0+" src="https://img.shields.io/badge/bash-5.0%2B-4EAA25?logo=gnubash&logoColor=white">
   <img alt="platform Linux | macOS | WSL" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-blue">
-  <img alt="lines 1,689" src="https://img.shields.io/badge/lines-1%2C689-informational">
+  <img alt="lines 1,690" src="https://img.shields.io/badge/lines-1%2C690-informational">
   <img alt="functions 107" src="https://img.shields.io/badge/functions-107-informational">
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="status preview" src="https://img.shields.io/badge/status-preview-orange">
@@ -25,7 +25,7 @@
 - **四运行时对齐** — bash/c/go/rust 保持相同的 agent loop、tool、session 语义
 - **异步子 Agent** — 内建 `SubAgent` 工具，委托子任务给独立会话并行执行，结果自动回注主对话。支持 `fork` 模式继承上下文、会话隔离、故障传播
 - **缓存感知压缩** — 基于经济学的 DP 算法自动决策是否压缩、保留多少
-- **Session 持久化** — 按项目隔离，支持恢复、续接、compact
+- **Session 持久化** — 按项目隔离，支持恢复、续接、fork 派生、compact
 - **机器友好** — `stream-json` 输出结构化事件，可被上层客户端消费
 - **技能系统** — 按需加载 skill，不污染后续 prompt
 
@@ -122,6 +122,7 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 | `--tool-timeout N` | tool 超时秒数 | `600` |
 | `--session [NAME]` | 创建或使用 session | - |
 | `--continue` | 继续最近 session | - |
+| `--fork` | 从源 session 派生新 session（配合 `--session` 或 `--continue`） | - |
 | `--list-sessions` | 列出当前项目 session | - |
 | `-i` | 交互模式 | - |
 | `--output-format FMT` | 输出格式：`human` 或 `stream-json` | `human` |
