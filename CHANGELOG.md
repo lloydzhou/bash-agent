@@ -8,6 +8,16 @@
 
 ---
 
+## [4.2.8] - 2025-06-19
+
+> **交互模式输入修复**：修复 C/Rust/Go 交互模式下中文输入被 display 输出打断导致乱码的竞态问题。
+
+### Fixed
+
+- **交互模式中文输入乱码**：`linenoiseEditFeed`（readline 线程）处理按键时调用 `refreshLine` 操作终端，但不持有 `g_display_mutex`，与 display 线程的 `linenoiseWrite`（Hide/Show）存在竞态。中文输入法的 UTF-8 多字节序列在逐字节 `read` + `refreshLine` 的间隙被打断，导致终端状态错乱、字节丢失。修复：在 `read()` 之后加锁，所有 return 路径前解锁。`read()` 本身不持锁以避免阻塞 display 线程。一处修复 `linenoise.c`，C/Rust/Go 三版本共享生效。
+
+---
+
 ## [4.2.7] - 2025-06-19
 
 > **`--fork` 命令行参数 + C 版 Read 显示修复**：新增从已有 session 派生新 session 的 `--fork` 参数；修复 C 版 Read 工具 offset/limit 不显示。
