@@ -8,6 +8,20 @@
 
 ---
 
+## [4.2.9] - 2026-06-25
+
+> **Go 会话与入口行为一致性修复**：修复 Go 版本在 session 目录、`--session`/`--list-sessions` 入口参数和终端标题输出上与 Bash/C/Rust 不一致的问题。
+
+### Fixed
+
+- **Go session 存储目录对齐**：会话目录计算时解析符号链接，macOS 下 `/tmp` 会落到 `/private/tmp`，与 Bash `pwd -P`、C `getcwd` 和 Rust 行为一致。
+- **Go project key 对齐**：移除 Go 独有的 200 字符截断，避免长路径 session key 与其他版本不一致。
+- **Go `--list-sessions` 无 API key 行为**：将 `--list-sessions` 提前到 API key 校验前执行，无 API key 时也能列出本地 session。
+- **Go `--session` 参数行为**：支持裸 `--session` 自动创建新 session；修复 `--session <id>` 后续参数被误当 prompt 的问题。
+- **Go 终端标题输出**：OSC 0 title 与 OSC 9;4 progress 分别独立输出，避免 progress 序列嵌入 title；请求数 `R` 改为千分位格式化。
+
+---
+
 ## [4.2.8] - 2025-06-19
 
 > **交互模式输入修复**：修复 C/Rust/Go 交互模式下中文输入被 display 输出打断导致乱码的竞态问题。
@@ -1134,7 +1148,11 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.5...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.9...HEAD
+[4.2.9]: https://github.com/lloydzhou/bash-agent/compare/v4.2.8...v4.2.9
+[4.2.8]: https://github.com/lloydzhou/bash-agent/compare/v4.2.7...v4.2.8
+[4.2.7]: https://github.com/lloydzhou/bash-agent/compare/v4.2.6...v4.2.7
+[4.2.6]: https://github.com/lloydzhou/bash-agent/compare/v4.2.5...v4.2.6
 [4.2.5]: https://github.com/lloydzhou/bash-agent/compare/v4.2.4...v4.2.5
 [4.2.4]: https://github.com/lloydzhou/bash-agent/compare/v4.2.3...v4.2.4
 [4.2.3]: https://github.com/lloydzhou/bash-agent/compare/v4.2.2...v4.2.3
