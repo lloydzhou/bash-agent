@@ -90,7 +90,7 @@ func (d *TermDisplay) SetTitle(title string) {
 	if d.silent {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "\033]0;%s\007", title)
+	fmt.Fprint(os.Stderr, title)
 }
 
 func (d *TermDisplay) clearLineIfAtNewline() {

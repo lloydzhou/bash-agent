@@ -81,7 +81,9 @@ Examples:
 `)
 	}
 
-	flag.Parse()
+	if err := flag.CommandLine.Parse(normalizeSessionArgs(os.Args[1:])); err != nil {
+		os.Exit(2)
+	}
 
 	// 收集位置参数作为 prompt
 	userInput := strings.Join(flag.Args(), " ")
@@ -160,12 +162,6 @@ Examples:
 		}
 	}
 
-	// API key 校验
-	if cfg.APIKey == "" && cfg.BaseURL == "" {
-		fmt.Fprintf(os.Stderr, "No API key. Set %s_API_KEY or use --api-key\n", strings.ToUpper(provider))
-		os.Exit(1)
-	}
-
 	// 创建组件
 	home := os.Getenv("BASH_AGENT_HOME")
 	if home == "" {
@@ -173,6 +169,19 @@ Examples:
 	}
 	cwd, _ := os.Getwd()
 	store := agent.NewFileStore(home, cwd)
+
+	// --list-sessions 不需要 API key（对齐 bash/rust/c）
+	if listSessions {
+		listAllSessions(store)
+		return
+	}
+
+	// API key 校验
+	if cfg.APIKey == "" && cfg.BaseURL == "" {
+		fmt.Fprintf(os.Stderr, "No API key. Set %s_API_KEY or use --api-key\n", strings.ToUpper(provider))
+		os.Exit(1)
+	}
+
 	display := agent.NewTermDisplay()
 	if cfg.OutputFormat == "stream-json" {
 		display.SetSilent(true)
@@ -196,12 +205,6 @@ Examples:
 	}
 	if sessionID == "" {
 		sessionID = agent.UtilNewSessionID()
-	}
-
-	// --list-sessions
-	if listSessions {
-		listAllSessions(store)
-		return
 	}
 
 	// 初始化 session
@@ -386,6 +389,25 @@ func listAllSessions(store agent.SessionStore) {
 	for _, r := range rows {
 		fmt.Printf("%-40s %-16s %s\n", r.Name, r.Modified, r.Preview)
 	}
+}
+
+func normalizeSessionArgs(args []string) []string {
+	out := make([]string, 0, len(args)+1)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--session" {
+			out = append(out, arg)
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				out = append(out, args[i+1])
+				i++
+			} else {
+				out = append(out, agent.UtilNewSessionID())
+			}
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
 }
 
 // stringSlice 实现 flag.Value 接口，支持重复 -skill
