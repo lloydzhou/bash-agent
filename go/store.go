@@ -208,6 +208,9 @@ func (s *FileStore) Fork(parentDir, childDir string) error {
 
 func (s *FileStore) GetDir() string {
 	cwd, _ := filepath.Abs(s.cwd)
+	if realCwd, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = realCwd
+	}
 	projectKey := pathToProjectKey(cwd)
 	base := s.home
 	if base == "" {
@@ -793,11 +796,11 @@ func (s *FileStore) FormatTitle(model, status string) string {
 	if status == "idle" {
 		progress = 0
 	}
-	return fmt.Sprintf("%s%s T:%s R:%d I:%s(%s) O:%s C:%s\x1b]9;4;%d\x07",
+	return fmt.Sprintf("\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\x07\x1b]9;4;%d\x07",
 		prefix,
 		model,
 		fmtInt(st.TurnCount),
-		st.TotalRequests,
+		fmtInt(st.TotalRequests),
 		fmtInt(cacheTotal),
 		cachePct,
 		fmtInt(st.OutputTokens),
@@ -1039,9 +1042,6 @@ func pathToProjectKey(absPath string) string {
 	}
 	key := strings.Trim(b.String(), "-")
 	key = "-" + key
-	if len(key) > 200 {
-		key = key[:200]
-	}
 	return key
 }
 
