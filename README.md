@@ -190,7 +190,9 @@ tcode goagent -p openai -m gpt-4o
 system external network workspace
 ```
 
-每一位使用 `4=read`、`2=write`、`1=execute`。
+每一位使用 `4=read`、`2=write`、`1=execute`。判断时是**权限位覆盖**，不是普通数字大小比较：命令会先被分类得到 `required`，只有当 `allowed` 在对应位置包含 `required` 的所有 bit 时才放行。
+
+例如 `required=1000` 表示需要 `system execute`；`allowed=6677` 虽然数值更大，但第一位 `system=6` 只有 `read+write`、没有 `execute`，所以仍会被拦截。如需允许系统级执行，使用 `7677` 或 `7777`。
 
 默认值：
 

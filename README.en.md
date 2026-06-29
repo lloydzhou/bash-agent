@@ -186,7 +186,9 @@ Without an API key, images can still be pasted (generating `[Image #N]` placehol
 system external network workspace
 ```
 
-Each digit uses `4=read`, `2=write`, `1=execute`.
+Each digit uses `4=read`, `2=write`, `1=execute`. The check is a **permission-bit coverage** check, not numeric ordering: each command is classified into a `required` mode, and it is allowed only when `allowed` contains all required bits in the same positions.
+
+For example, `required=1000` means `system execute` is required. `allowed=6677` is numerically larger, but its first digit `system=6` has only `read+write`, not `execute`, so the command is still blocked. To allow system-level execute, use `7677` or `7777`.
 
 Default:
 
