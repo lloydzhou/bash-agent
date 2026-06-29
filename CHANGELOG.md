@@ -8,6 +8,18 @@
 
 ---
 
+## [4.2.10] - 2026-06-29
+
+> **SubAgent worktree 委派指导**：在 `SubAgent` 工具描述中补充 child-managed git worktree 协作规则，用于并行或隔离代码任务，避免污染主工作区。
+
+### Changed
+
+- **SubAgent child-managed worktree guidance**：明确 git worktree 是可选隔离机制，不是默认要求；仅在父 agent 的 `SubAgent.prompt` 中显式要求时，由子 agent 自行判断、创建、使用、报告，并在安全条件下清理。
+- **最小化 runtime 行为变更**：不新增 Worktree 工具、脚本或配置；不支持 parent-managed；父 agent 不自动创建或清理 worktree，worktree 状态仅通过 prompt/messages/todos 传递。
+- **C 版嵌入链路说明**：四处 `tools.json` 仍共享同一份内容；C 版编译时继续由 `c/Makefile` 从 `c/tools.json` 动态生成 `tools_embed.h` 嵌入到二进制。
+
+---
+
 ## [4.2.9] - 2026-06-25
 
 > **Go 会话与入口行为一致性修复**：修复 Go 版本在 session 目录、`--session`/`--list-sessions` 入口参数和终端标题输出上与 Bash/C/Rust 不一致的问题。
@@ -1148,7 +1160,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.9...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.10...HEAD
+[4.2.10]: https://github.com/lloydzhou/bash-agent/compare/v4.2.9...v4.2.10
 [4.2.9]: https://github.com/lloydzhou/bash-agent/compare/v4.2.8...v4.2.9
 [4.2.8]: https://github.com/lloydzhou/bash-agent/compare/v4.2.7...v4.2.8
 [4.2.7]: https://github.com/lloydzhou/bash-agent/compare/v4.2.6...v4.2.7
