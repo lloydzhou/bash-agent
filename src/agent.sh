@@ -469,7 +469,6 @@ store_session_resolve_continue() {
     fi
 }
 
-# 记录事件到当前 session 的 events.jsonl
 store_event_append() {
     [[ -n "${SESSION_EVENT_FILE:-}" ]] || return 0
     if util_is_stream_json; then printf '%s\n' "$1" | tee -a "$SESSION_EVENT_FILE"; else printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"; fi
@@ -1317,17 +1316,13 @@ agent_main_loop() {
                     local _in="${REPLY_MESSAGE[5]:-0}" _out="${REPLY_MESSAGE[6]:-0}"
                     local _cr="${REPLY_MESSAGE[7]:-0}" _cc="${REPLY_MESSAGE[8]:-0}"
                     local _reqs="${REPLY_MESSAGE[9]:-0}"
-                    # 记录事件和统计（写文件，进程安全）
                     store_event_append "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(util_json_escape "$_sid")\"}"
                     store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$_sid")\",\"status\":\"$_status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
-                    # AGENT_RESULT RESP 追加到 NOTIFY_BUF（消费时解析：display + conversation）
                     util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
-                    # 递减 active_sub 计数器（大于 0 才减，防止竞态下提前归零）
                     local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
-                    # idle 时触发 notify turn（display 由 agent_drain_notify_buf 消费时处理）
                     if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
                         util_write_msg "NOTIFY_PENDING" >&5
                     fi
@@ -1346,42 +1341,16 @@ agent_main_loop() {
             USER_INPUT)
                 saw_user_input=true
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                # drain 可能在 agent_loop_stream 运行期间到达的 SubAgent 结果
-                # drain 任何在 agent_loop_stream 运行期间到达的 SubAgent 结果
-                while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
-                # 非交互模式：等待所有子进程完成后再退出
                 if [[ "$INTERACTIVE" != true ]]; then
                     local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    # 循环等待：只要还有活跃子 agent 或未读结果，就不退出
-                    while (( _cnt > 0 )) || [[ -s "$NOTIFY_BUF" ]]; do
-                        # 等待 0.1s 让子进程有机会完成
-                        sleep 0.1 2>/dev/null || true
-                        if [[ -s "$NOTIFY_BUF" ]]; then
-                            agent_run_loop "" notify
-                        fi
-                        _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    done
-                    if [[ ! -s "$NOTIFY_BUF" ]]; then
-                        util_write_msg "SESSION_END" >&5
-                    fi
+                    (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
                 fi
                 ;;
             NOTIFY_PENDING)
                 [[ -s "$NOTIFY_BUF" ]] && agent_run_loop "" notify
-                # 持续 drain 可能同时到达的更多结果
-                while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
                     local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    while (( _cnt > 0 )) || [[ -s "$NOTIFY_BUF" ]]; do
-                        sleep 0.1 2>/dev/null || true
-                        if [[ -s "$NOTIFY_BUF" ]]; then
-                            agent_run_loop "" notify
-                        fi
-                        _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    done
-                    if [[ ! -s "$NOTIFY_BUF" ]]; then
-                        util_write_msg "SESSION_END" >&5
-                    fi
+                    (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
                 fi
                 ;;
         esac
@@ -1401,9 +1370,7 @@ agent_drain_notify_buf() {
     exec 9<"$_nb_tmp"
     while util_read_msg <&9; do
         if [[ "${REPLY_MESSAGE[0]}" == "AGENT_RESULT" ]]; then
-            # display：转发 AGENT_RESULT RESP → display_sub_agent_result（复用原始格式）
             util_is_stream_json || util_write_msg "AGENT_RESULT" "${REPLY_MESSAGE[@]:1}" >&4 2>/dev/null || true
-            # conversation：从结构化字段构建纯文本
             local _sid="${REPLY_MESSAGE[1]}" _st="${REPLY_MESSAGE[2]}" _in="${REPLY_MESSAGE[3]}" _out="${REPLY_MESSAGE[4]}"
             local _th="${REPLY_MESSAGE[5]}" _tx="${REPLY_MESSAGE[6]}"
             _conv+="[sub-agent ${_sid}] ${_st} (in=${_in}, out=${_out})"$'\n'
@@ -1423,9 +1390,8 @@ agent_loop_stream() {
     trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes; rm -f "$AGENT_RUNNING_FLAG"' INT
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
-        # 通知后台 reader：agent_loop 在运行中（notify 走 buffer，不直接触发 NOTIFY_PENDING）
+        # agent_loop 运行中标记（notify reader 见此标记不发 NOTIFY_PENDING，靠 drain 消费）
         : > "$AGENT_RUNNING_FLAG"
-        # Drain NOTIFY_BUF before each LLM call: 原子 mv 读清
         agent_drain_notify_buf || true
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
@@ -1527,7 +1493,6 @@ agent_loop() {
     while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
-        # SubAgent counter incremented in tool_sub_agent (before child process spawn)
         _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
         util_is_stream_json || ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
