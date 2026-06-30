@@ -1322,14 +1322,8 @@ agent_main_loop() {
                     store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$_sid")\",\"status\":\"$_status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
-                    # 带颜色的格式化文本追加到 NOTIFY_BUF（display 直接用，conversation 去 ANSI）
-                    if [[ "$_status" == "ok" ]]; then
-                        printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$_sid" "$_in" "$_out" >> "$NOTIFY_BUF"
-                    else
-                        printf '\033[31m[sub-agent %s] failed\033[0m\n' "$_sid" >> "$NOTIFY_BUF"
-                    fi
-                    [[ -n "$_thinking" ]] && printf '\033[90m%s%s\033[0m\n' "${_thinking:0:120}" "$([[ ${#_thinking} -gt 120 ]] && printf '…')" >> "$NOTIFY_BUF"
-                    [[ -n "$_text" ]] && printf '%s%s\n' "${_text:0:120}" "$([[ ${#_text} -gt 120 ]] && printf '…')" >> "$NOTIFY_BUF"
+                    # AGENT_RESULT RESP 追加到 NOTIFY_BUF（消费时解析：display + conversation）
+                    util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
                     # 递减 active_sub 计数器（大于 0 才减，防止竞态下提前归零）
                     local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
@@ -1402,16 +1396,25 @@ agent_main_loop() {
 
 agent_drain_notify_buf() {
     [[ -f "$NOTIFY_BUF" && -s "$NOTIFY_BUF" ]] || return 1
-    local _nb_tmp="${NOTIFY_BUF}.${$}" _nb_content
+    local _nb_tmp="${NOTIFY_BUF}.${$}" _conv=""
     mv "$NOTIFY_BUF" "$_nb_tmp" 2>/dev/null || return 1
-    _nb_content=$(<"$_nb_tmp")
+    exec 9<"$_nb_tmp"
+    while util_read_msg <&9; do
+        if [[ "${REPLY_MESSAGE[0]}" == "AGENT_RESULT" ]]; then
+            # display：转发 AGENT_RESULT RESP → display_sub_agent_result（复用原始格式）
+            util_is_stream_json || util_write_msg "AGENT_RESULT" "${REPLY_MESSAGE[@]:1}" >&4 2>/dev/null || true
+            # conversation：从结构化字段构建纯文本
+            local _sid="${REPLY_MESSAGE[1]}" _st="${REPLY_MESSAGE[2]}" _in="${REPLY_MESSAGE[3]}" _out="${REPLY_MESSAGE[4]}"
+            local _th="${REPLY_MESSAGE[5]}" _tx="${REPLY_MESSAGE[6]}"
+            _conv+="[sub-agent ${_sid}] ${_st} (in=${_in}, out=${_out})"$'\n'
+            [[ -n "$_th" ]] && _conv+="Thinking: ${_th}"$'\n'
+            [[ -n "$_tx" ]] && _conv+="Text: ${_tx}"$'\n'
+        fi
+    done
+    exec 9<&-
     rm -f "$_nb_tmp"
-    [[ -n "$_nb_content" ]] || return 1
-    # display：带颜色直接输出（TEXT RESP → display_stream），补尾部换行
-    [[ "$_nb_content" == *$'\n' ]] || _nb_content+=$'\n'
-    util_is_stream_json || util_write_msg "TEXT" "$_nb_content" >&4 2>/dev/null || true
-    # conversation：去除 ANSI 颜色码后注入（[...m）
-    store_conv_add_user "$(printf '%s' "$_nb_content" | sed $'s/\x1b\[[0-9;]*m//g')"
+    [[ -n "$_conv" ]] || return 1
+    store_conv_add_user "$_conv"
 }
 
 agent_loop_stream() {
