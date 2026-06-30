@@ -793,6 +793,9 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	}()
 
 	for turn := 0; turn < a.cfg.MaxTurns; turn++ {
+		// Drain SubAgent results that arrived during previous LLM call（对齐 bash agent_drain_notify_buf）
+		a.drainSubAgentResults(ctx)
+
 		// Compact
 		if compacted, _ := a.CompactContext(ctx, "auto"); compacted {
 			a.EmitDisplay(Event{Type: EventContextUpdate, Fields: []string{"CONTEXT_UPDATE", "compact", "auto"}})
@@ -990,9 +993,26 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	return nil
 }
 
+// drainSubAgentResults 消费所有已到达但未处理的 SubAgent 结果（对齐 bash agent_drain_notify_buf）
+func (a *Agent) drainSubAgentResults(ctx context.Context) {
+	for {
+		select {
+		case r := <-a.subResultCh:
+			a.handleSubAgentResult(r)
+		case <-ctx.Done():
+			return
+		default:
+			return
+		}
+	}
+}
+
 // ─── SubAgent 启动（异步 goroutine）───
 
 func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork string) (string, error) {
+	if fork != "true" {
+		fork = "false"
+	}
 	sessionID := "sub_" + UtilNewSessionID()
 
 	// 记录 sub_agent_start 事件
@@ -1139,7 +1159,7 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 	a.EmitDisplay(Event{
 		Type: EventSubAgentResult,
 		Fields: []string{
-			"SUB_AGENT_RESULT",
+			"AGENT_RESULT",
 			r.SessionID,
 			r.Status,
 			fmt.Sprintf("%d", r.InputTokens),
