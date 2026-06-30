@@ -1347,6 +1347,8 @@ agent_main_loop() {
             USER_INPUT)
                 saw_user_input=true
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
+                # drain 可能在 agent_loop_stream 运行期间到达的 SubAgent 结果
+                while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
                 if [[ "$INTERACTIVE" != true ]]; then
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     if (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]]; then
@@ -1356,6 +1358,8 @@ agent_main_loop() {
                 ;;
             NOTIFY_PENDING)
                 [[ -s "$NOTIFY_BUF" ]] && agent_run_loop "" notify
+                # 持续 drain 可能同时到达的更多结果
+                while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     if (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]]; then
