@@ -1348,10 +1348,21 @@ agent_main_loop() {
                 saw_user_input=true
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
                 # drain 可能在 agent_loop_stream 运行期间到达的 SubAgent 结果
+                # drain 任何在 agent_loop_stream 运行期间到达的 SubAgent 结果
                 while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
+                # 非交互模式：等待所有子进程完成后再退出
                 if [[ "$INTERACTIVE" != true ]]; then
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    if (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]]; then
+                    # 循环等待：只要还有活跃子 agent 或未读结果，就不退出
+                    while (( _cnt > 0 )) || [[ -s "$NOTIFY_BUF" ]]; do
+                        # 等待 0.1s 让子进程有机会完成
+                        sleep 0.1 2>/dev/null || true
+                        if [[ -s "$NOTIFY_BUF" ]]; then
+                            agent_run_loop "" notify
+                        fi
+                        _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    done
+                    if [[ ! -s "$NOTIFY_BUF" ]]; then
                         util_write_msg "SESSION_END" >&5
                     fi
                 fi
@@ -1362,7 +1373,14 @@ agent_main_loop() {
                 while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    if (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]]; then
+                    while (( _cnt > 0 )) || [[ -s "$NOTIFY_BUF" ]]; do
+                        sleep 0.1 2>/dev/null || true
+                        if [[ -s "$NOTIFY_BUF" ]]; then
+                            agent_run_loop "" notify
+                        fi
+                        _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    done
+                    if [[ ! -s "$NOTIFY_BUF" ]]; then
                         util_write_msg "SESSION_END" >&5
                     fi
                 fi
