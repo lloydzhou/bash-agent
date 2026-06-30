@@ -419,6 +419,7 @@ store_session_init() {
     [[ -p "$INPUT_FIFO" ]] || { rm -f "$INPUT_FIFO"; mkfifo "$INPUT_FIFO"; }
     NOTIFY_FIFO="${session_dir}/notify.fifo"
     NOTIFY_BUF="${session_dir}/notify.buf"
+    NOTIFY_DISPLAY="${session_dir}/notify.display"
     ACTIVE_SUB_FILE="${session_dir}/active_sub.count"
     AGENT_RUNNING_FLAG="${session_dir}/agent_running.flag"
     [[ -p "$NOTIFY_FIFO" ]] || { rm -f "$NOTIFY_FIFO"; mkfifo "$NOTIFY_FIFO"; }
@@ -1322,8 +1323,9 @@ agent_main_loop() {
                     store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$_sid")\",\"status\":\"$_status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
-                    # 格式化文本追加到 NOTIFY_BUF
+                    # 格式化文本追加到 NOTIFY_BUF（conversation）+ NOTIFY_DISPLAY（display）
                     printf '[sub-agent %s] %s (in=%s, out=%s)\nThinking: %s\nText: %s\n' "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
+                    util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_DISPLAY"
                     # 递减 active_sub 计数器（大于 0 才减，防止竞态下提前归零）
                     local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
@@ -1391,22 +1393,21 @@ agent_main_loop() {
     exec 4>&-
     wait "$display_pid" 2>/dev/null || true
     cleanup_all_pipes
-    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$AGENT_RUNNING_FLAG"
+    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$NOTIFY_DISPLAY" "$AGENT_RUNNING_FLAG"
 }
 
 agent_drain_notify_buf() {
     [[ -f "$NOTIFY_BUF" && -s "$NOTIFY_BUF" ]] || return 1
-    local _nb_tmp="${NOTIFY_BUF}.${$}" _nb_content
+    local _nb_tmp="${NOTIFY_BUF}.${$}" _nd_tmp="${NOTIFY_DISPLAY}.${$}" _nb_content
     mv "$NOTIFY_BUF" "$_nb_tmp" 2>/dev/null || return 1
+    mv "$NOTIFY_DISPLAY" "$_nd_tmp" 2>/dev/null || true
     _nb_content=$(<"$_nb_tmp")
     rm -f "$_nb_tmp"
-    [[ -n "$_nb_content" ]] || return 1
+    [[ -n "$_nb_content" ]] || { rm -f "$_nd_tmp"; return 1; }
     store_conv_add_user "$_nb_content"
-    # 消费时 display：紫色标记 + 确保尾部换行（不打断后续流式输出）
-    local _disp
-    _disp=$(printf '\033[35m%s\033[0m' "$_nb_content")
-    [[ "$_disp" == *$'\n' ]] || _disp+=$'\n'
-    util_is_stream_json || util_write_msg "TEXT" "$_disp" >&4 2>/dev/null || true
+    # 消费时 display：直接将 RESP 写入 FD 4（cat 不剥离尾部 \r\n）
+    util_is_stream_json || [[ ! -f "$_nd_tmp" ]] || cat "$_nd_tmp" >&4 2>/dev/null || true
+    rm -f "$_nd_tmp"
 }
 
 agent_loop_stream() {
