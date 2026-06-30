@@ -1327,9 +1327,7 @@ agent_main_loop() {
                     # 递减 active_sub 计数器（大于 0 才减，防止竞态下提前归零）
                     local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
-                    # 展示结果摘要到 display
-                    util_is_stream_json || ( util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
-                    # idle（无 agent_loop_stream 在跑）→ 发 NOTIFY_PENDING 触发 notify turn
+                    # idle 时触发 notify turn（display 由 agent_drain_notify_buf 消费时处理）
                     if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
                         util_write_msg "NOTIFY_PENDING" >&5
                     fi
@@ -1404,6 +1402,8 @@ agent_drain_notify_buf() {
     rm -f "$_nb_tmp"
     [[ -n "$_nb_content" ]] || return 1
     store_conv_add_user "$_nb_content"
+    # 消费时 display：通过 FD 4 写入 display pipe，不打断流式输出
+    util_is_stream_json || util_write_msg "TEXT" "$_nb_content" >&4 2>/dev/null || true
 }
 
 agent_loop_stream() {

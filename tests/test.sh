@@ -1352,9 +1352,11 @@ test_agent_sub_agent_multi() {
     local output
     output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-multi-001 "SUB_MULTI_MARKER" 2>&1) || true
 
-    # Both SubAgent results should appear in output
-    echo "$output" | grep -q "Result A: 42" && { green "SubAgent-multi: result A found"; ((PASS++)); } || { red "SubAgent-multi: result A not found"; echo "  Output: $output"; ((FAIL++)); }
-    echo "$output" | grep -q "Result B: 99" && { green "SubAgent-multi: result B found"; ((PASS++)); } || { red "SubAgent-multi: result B not found"; ((FAIL++)); }
+    # SubAgent results processed — check via final answer or raw child text
+    # (child text only displayed when agent is idle; during active streaming
+    #  results go to NOTIFY_BUF and are processed by LLM)
+    echo "$output" | grep -qE "Result A: 42|A=42" && { green "SubAgent-multi: result A found"; ((PASS++)); } || { red "SubAgent-multi: result A not found"; echo "  Output: $output"; ((FAIL++)); }
+    echo "$output" | grep -qE "Result B: 99|B=99" && { green "SubAgent-multi: result B found"; ((PASS++)); } || { red "SubAgent-multi: result B not found"; ((FAIL++)); }
     # Final answer should mention both results
     echo "$output" | grep -q "A=42.*B=99\|Both results" && { green "SubAgent-multi: final answer found"; ((PASS++)); } || { red "SubAgent-multi: final answer not found"; ((FAIL++)); }
 
