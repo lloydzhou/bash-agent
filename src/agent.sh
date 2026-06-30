@@ -1347,17 +1347,20 @@ agent_main_loop() {
             USER_INPUT)
                 saw_user_input=true
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                # 非交互模式下，所有子 agent 完成后退出
                 if [[ "$INTERACTIVE" != true ]]; then
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    (( _cnt <= 0 )) && util_write_msg "SESSION_END" >&5
+                    if (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]]; then
+                        util_write_msg "SESSION_END" >&5
+                    fi
                 fi
                 ;;
             NOTIFY_PENDING)
                 [[ -s "$NOTIFY_BUF" ]] && agent_run_loop "" notify
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    (( _cnt <= 0 )) && util_write_msg "SESSION_END" >&5
+                    if (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]]; then
+                        util_write_msg "SESSION_END" >&5
+                    fi
                 fi
                 ;;
         esac
