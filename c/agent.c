@@ -1645,33 +1645,8 @@ int agent_main_loop(Agent *agent) {
                 }
                 break;
             }
-            case MSG_AGENT_RESULT: {
-                /* SubAgent 结果处理（非交互模式下直接到达此处） */
-                agent_handle_sub_agent_result(agent,
-                    msg->data.agent_result.session_id,
-                    msg->data.agent_result.status,
-                    msg->data.agent_result.thinking,
-                    msg->data.agent_result.text,
-                    msg->data.agent_result.in_tokens,
-                    msg->data.agent_result.out_tokens,
-                    msg->data.agent_result.cache_read_tokens,
-                    msg->data.agent_result.cache_creation_tokens,
-                    msg->data.agent_result.request_count);
-
-                /* 将结果注入 conversation 并触发 agent loop */
-                StrBuf ctx;
-                sb_init(&ctx);
-                sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
-                           msg->data.agent_result.session_id,
-                           msg->data.agent_result.status,
-                           msg->data.agent_result.in_tokens,
-                           msg->data.agent_result.out_tokens,
-                           msg->data.agent_result.thinking ? msg->data.agent_result.thinking : "",
-                           msg->data.agent_result.text ? msg->data.agent_result.text : "");
-                agent_run_loop(agent, ctx.data, "sub_agent_result");
-                sb_free(&ctx);
+            default:
                 break;
-            }
         }
 
         input_message_free(msg);
