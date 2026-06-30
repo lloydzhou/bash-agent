@@ -1137,6 +1137,76 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        # --- SubAgent multi (two SubAgents in one response) ---
+        # Stage 1: main agent -> TWO SubAgent tool_calls
+        if b'SUB_MULTI_MARKER' in body and b'"tool_result"' not in body and b'SUB_CHILD_A' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_multi1\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_multi_a\",\"name\":\"SubAgent\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_CHILD_A','description':'task A'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_multi_b\",\"name\":\"SubAgent\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_CHILD_B','description':'task B'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":20}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 2a: child A request
+        if b'SUB_CHILD_A' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_child_a\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Result A: 42.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 2b: child B request
+        if b'SUB_CHILD_B' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_child_b\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Result B: 99.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 3: main agent after both tool_results (no [sub-agent] yet)
+        if b'SUB_MULTI_MARKER' in body and b'"tool_result"' in body and b'[sub-agent sub_' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_multi3\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Waiting for sub-agents.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        # Stage 4: main agent with one or both [sub-agent] results -> final answer
+        if b'SUB_MULTI_MARKER' in body and b'[sub-agent sub_' in body:
+            if path.startswith('/v1/messages'):
+                # Count how many sub-agent results are in the body
+                sub_count = body.count(b'[sub-agent sub_')
+                if sub_count >= 2:
+                    final_text = 'Both results: A=42, B=99.'
+                else:
+                    final_text = 'Partial result received, waiting for more.'
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_multi4\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':final_text}}) + '\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         # --- SubAgent failure mock ---
         # Stage 1: main agent -> SubAgent tool_call with SUB_FAIL_CHILD prompt
         if b'SUB_FAIL_MARKER' in body and b'"tool_result"' not in body:

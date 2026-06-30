@@ -1340,6 +1340,28 @@ test_agent_sub_agent() {
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
 
+# Test: SubAgent multi — two SubAgents in one response, both results must be processed
+test_agent_sub_agent_multi() {
+    info "Test: SubAgent multi (two parallel SubAgents)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-multi-001 "SUB_MULTI_MARKER" 2>&1) || true
+
+    # Both SubAgent results should appear in output
+    echo "$output" | grep -q "Result A: 42" && { green "SubAgent-multi: result A found"; ((PASS++)); } || { red "SubAgent-multi: result A not found"; echo "  Output: $output"; ((FAIL++)); }
+    echo "$output" | grep -q "Result B: 99" && { green "SubAgent-multi: result B found"; ((PASS++)); } || { red "SubAgent-multi: result B not found"; ((FAIL++)); }
+    # Final answer should mention both results
+    echo "$output" | grep -q "A=42.*B=99\|Both results" && { green "SubAgent-multi: final answer found"; ((PASS++)); } || { red "SubAgent-multi: final answer not found"; ((FAIL++)); }
+
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
 # Test: SubAgent failure propagation — child agent fails, parent sees status=failed
 test_agent_sub_agent_failure() {
     info "Test: SubAgent failure propagation"
@@ -2636,6 +2658,7 @@ test_compact_dp_awk
 test_compact_turn_keep_awk
 test_agent_compact_context
 test_agent_sub_agent
+test_agent_sub_agent_multi
 test_agent_sub_agent_failure
 test_agent_sub_agent_child_session
 test_agent_sub_agent_fork
