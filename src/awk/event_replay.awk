@@ -89,7 +89,7 @@ BEGIN {
         _thinking = extract_str($0, "thinking")
         _text = extract_str($0, "text")
         # Escape backslashes and newlines for RESP wire format
-        emit1("SUB_AGENT_RESULT")
+        emit1("AGENT_RESULT")
         emit(_sid)
         emit(_status)
         emit(_in)

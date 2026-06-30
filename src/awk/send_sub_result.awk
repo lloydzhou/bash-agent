@@ -1,11 +1,11 @@
-# send_sub_result.awk — Extract sub-agent result and send SUB_AGENT_RESULT via RESP
+# send_sub_result.awk — Extract sub-agent result and send AGENT_RESULT via RESP
 # Usage: awk -v session_id=... -v status=ok -v stats_file=... -v conv_file=... \
 #            -f json.awk -f send_sub_result.awk
 # Reads the last assistant message from conv_file, stats from stats_file,
-# outputs RESP-formatted SUB_AGENT_RESULT message to stdout.
+# outputs RESP-formatted AGENT_RESULT message to stdout.
 #
 # RESP format: *N\r\n$len\r\ndata\r\n...
-# Fields: SUB_AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc> <reqs>
+# Fields: AGENT_RESULT <session_id> <status> <thinking> <text> <in> <out> <cr> <cc> <reqs>
 
 BEGIN {
     thinking = ""
@@ -57,8 +57,8 @@ BEGIN {
         close(stats_file)
     }
 
-    # 3. Build RESP message: SUB_AGENT_RESULT session_id status thinking text in out cr cc reqs
-    _resp_field("SUB_AGENT_RESULT")
+    # 3. Build RESP message: AGENT_RESULT session_id status thinking text in out cr cc reqs
+    _resp_field("AGENT_RESULT")
     _resp_field(session_id)
     _resp_field(status)
     _resp_field(thinking)

@@ -155,7 +155,7 @@ util_msg_to_stream() {
                 "$(util_json_escape "${REPLY_MESSAGE[3]}")"
             ;;
         USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"agent"}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
-        SUB_AGENT_RESULT) printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}' \
+        AGENT_RESULT) printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}' \
             "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" \
             "$(util_json_escape "${REPLY_MESSAGE[5]}")" "$(util_json_escape "${REPLY_MESSAGE[6]}")" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
@@ -1152,7 +1152,7 @@ display_message() {
             PREV_WAS_THINKING=false
             [[ -n "$_tr_text" ]] && display_human_text "$_tr_text"
             ;;
-        SUB_AGENT_RESULT)
+        AGENT_RESULT)
             display_sub_agent_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" "${REPLY_MESSAGE[5]}" "${REPLY_MESSAGE[6]}"
             ;;
         IMAGE_DESCRIBE)
@@ -1311,7 +1311,7 @@ agent_main_loop() {
         exec 6<> "$NOTIFY_FIFO" 2>/dev/null  # `<>` 双端打开，防止写者关闭后 EOF
         while util_read_msg <&6; do
             case "${REPLY_MESSAGE[0]}" in
-                SUB_AGENT_RESULT)
+                AGENT_RESULT)
                     local _sid="${REPLY_MESSAGE[1]}" _status="${REPLY_MESSAGE[2]}"
                     local _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
                     local _in="${REPLY_MESSAGE[5]:-0}" _out="${REPLY_MESSAGE[6]:-0}"
@@ -1323,16 +1323,12 @@ agent_main_loop() {
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
                     # 格式化文本追加到 NOTIFY_BUF
-                    {
-                        printf '[sub-agent %s] %s (in=%s, out=%s)\n' "$_sid" "$_status" "$_in" "$_out"
-                        printf 'Thinking: %s\n' "$_thinking"
-                        printf 'Text: %s\n' "$_text"
-                    } >> "$NOTIFY_BUF"
+                    printf '[sub-agent %s] %s (in=%s, out=%s)\nThinking: %s\nText: %s\n' "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
                     # 递减 active_sub 计数器
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
                     # 展示结果摘要到 display
-                    util_is_stream_json || ( util_write_msg "SUB_AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
+                    util_is_stream_json || ( util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
                     # idle（无 agent_loop_stream 在跑）→ 发 NOTIFY_PENDING 触发 notify turn
                     if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
                         util_write_msg "NOTIFY_PENDING" >&5
