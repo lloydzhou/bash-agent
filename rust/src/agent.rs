@@ -352,6 +352,7 @@ enum DisplayEvent {
         images: String,
         description: String,
     },
+    Title(String), // 终端标题（OSC 序列），通过 display worker 序列化避免与 text 交织
 }
 
 enum DisplayCommand {
@@ -493,6 +494,11 @@ fn render_display_event(
             }
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
+        }
+        DisplayEvent::Title(title) => {
+            // OSC 序列直接写 stderr，通过 display worker 序列化避免与 text delta 交织
+            let _ = write!(io::stderr(), "{}", title);
+            let _ = io::stderr().flush();
         }
     }
     Ok(())
@@ -1595,6 +1601,7 @@ impl Agent {
             DisplayEvent::ContextUpdate(_) => {}
             DisplayEvent::SubAgentResult { .. } => {}
             DisplayEvent::ImageDescribe { .. } => {}
+            DisplayEvent::Title(_) => {}
         }
         if let Some(tx) = &self.display_tx {
             tx.send(DisplayCommand::Event(evt))
@@ -1973,8 +1980,7 @@ impl Agent {
         };
         let prefix = if status == "idle" { "" } else { "⏳ " };
         let progress = if status == "idle" { 0 } else { 3 };
-        let _ = write!(
-            self.stderr.borrow_mut(),
+        let title = format!(
             "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{}\x07\x1b]9;4;{}\x07",
             prefix,
             self.cfg.model,
@@ -1986,7 +1992,14 @@ impl Agent {
             Self::fmt_num(ctx),
             progress
         );
-        let _ = self.stderr.borrow_mut().flush();
+        // 通过 display worker 序列化输出，避免与 text delta 交织
+        if self.display_tx.is_some() {
+            self.queue_display_only(DisplayEvent::Title(title));
+        } else {
+            // 子 agent 无 display worker，直接写 stderr
+            let _ = write!(self.stderr.borrow_mut(), "{}", title);
+            let _ = self.stderr.borrow_mut().flush();
+        }
     }
 
     fn is_stream_json_mode(&self) -> bool {
