@@ -218,7 +218,7 @@ typedef struct {
     char *description;
     int fork_mode;
     char *sub_session_id;
-    MsgQueue *input_queue;
+    MsgQueue *sub_result_queue;
 } SubAgentArgs;
 
 /* ============================================================
@@ -243,6 +243,8 @@ Agent *agent_create(const char *provider, const char *model,
     a->interactive = interactive;
     a->input_queue = input_queue;
     a->display_queue = display_queue;
+    a->sub_result_queue = malloc(sizeof(MsgQueue));
+    mq_init(a->sub_result_queue);
     a->max_tokens = 16384;
     a->max_turns = 1000;
     a->max_context_tokens = 200000;
@@ -323,6 +325,10 @@ void agent_destroy(Agent *agent) {
         free(agent->skill_names);
     }
     store_session_paths_free(&agent->paths);
+    if (agent->sub_result_queue) {
+        mq_destroy(agent->sub_result_queue);
+        free(agent->sub_result_queue);
+    }
     free(agent);
 }
 
@@ -650,6 +656,43 @@ int agent_replay_events(Agent *agent, int max_turns) {
  * 对齐 bash 版 agent_run_loop
  * ============================================================ */
 
+/* drain SubAgent 结果：display + conversation 注入，返回消费条数（对齐 bash agent_drain_notify_buf） */
+static int agent_drain_sub_results(Agent *agent) {
+    int drained = 0;
+    while (1) {
+        void *sub_data = NULL;
+        if (mq_try_pop(agent->sub_result_queue, &sub_data) != 0) break;
+        InputMessage *sub_msg = (InputMessage *)sub_data;
+        if (sub_msg && sub_msg->type == MSG_AGENT_RESULT) {
+            agent_handle_sub_agent_result(agent,
+                sub_msg->data.agent_result.session_id,
+                sub_msg->data.agent_result.status,
+                sub_msg->data.agent_result.thinking,
+                sub_msg->data.agent_result.text,
+                sub_msg->data.agent_result.in_tokens,
+                sub_msg->data.agent_result.out_tokens,
+                sub_msg->data.agent_result.cache_read_tokens,
+                sub_msg->data.agent_result.cache_creation_tokens,
+                sub_msg->data.agent_result.request_count);
+            StrBuf ctx;
+            sb_init(&ctx);
+            sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
+                       sub_msg->data.agent_result.session_id,
+                       sub_msg->data.agent_result.status,
+                       sub_msg->data.agent_result.in_tokens,
+                       sub_msg->data.agent_result.out_tokens,
+                       sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
+                       sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
+            store_conv_add_user(agent->paths.conversation, ctx.data);
+            sb_free(&ctx);
+            drained++;
+        }
+        input_message_free(sub_msg);
+        free(sub_msg);
+    }
+    return drained;
+}
+
 int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     int rc = agent_loop(agent, user_input, turn_kind);
     agent_update_title_status(agent, "idle");
@@ -790,6 +833,9 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     while (turn < agent->max_turns) {
         turn++;
         agent->interrupted = 0;
+
+        /* drain SubAgent 结果（对齐 bash agent_drain_notify_buf） */
+        agent_drain_sub_results(agent);
 
         /* compact */
         agent_compact_context(agent, "auto");
@@ -1173,7 +1219,11 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
 
         sse_accum_free(accum);
 
-        if (!should_continue) break;
+        if (!should_continue) {
+            /* end_turn 后尝试 drain（对齐 bash agent_drain_notify_buf && continue） */
+            if (agent_drain_sub_results(agent) > 0 && !agent->interrupted) continue;
+            break;
+        }
         if (agent->interrupted) break;
     }
 
@@ -1557,7 +1607,7 @@ int agent_main_loop(Agent *agent) {
                  * 才显示下一轮提示符。 */
                 while (agent->active_sub_count > 0) {
                     void *sub_data = NULL;
-                    if (mq_pop(agent->input_queue, &sub_data) != 0) break;
+                    if (mq_pop(agent->sub_result_queue, &sub_data) != 0) break;
                     InputMessage *sub_msg = (InputMessage *)sub_data;
                     if (!sub_msg) continue;
 
@@ -1584,9 +1634,6 @@ int agent_main_loop(Agent *agent) {
                                    sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
                         agent_run_loop(agent, ctx.data, "sub_agent_result");
                         sb_free(&ctx);
-                    } else {
-                        /* 简单处理：也执行它 */
-                        agent_run_loop(agent, sub_msg->data.user_input.text, "user_input");
                     }
                     input_message_free(sub_msg);
                     free(sub_msg);
@@ -1598,33 +1645,8 @@ int agent_main_loop(Agent *agent) {
                 }
                 break;
             }
-            case MSG_AGENT_RESULT: {
-                /* SubAgent 结果处理（非交互模式下直接到达此处） */
-                agent_handle_sub_agent_result(agent,
-                    msg->data.agent_result.session_id,
-                    msg->data.agent_result.status,
-                    msg->data.agent_result.thinking,
-                    msg->data.agent_result.text,
-                    msg->data.agent_result.in_tokens,
-                    msg->data.agent_result.out_tokens,
-                    msg->data.agent_result.cache_read_tokens,
-                    msg->data.agent_result.cache_creation_tokens,
-                    msg->data.agent_result.request_count);
-
-                /* 将结果注入 conversation 并触发 agent loop */
-                StrBuf ctx;
-                sb_init(&ctx);
-                sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
-                           msg->data.agent_result.session_id,
-                           msg->data.agent_result.status,
-                           msg->data.agent_result.in_tokens,
-                           msg->data.agent_result.out_tokens,
-                           msg->data.agent_result.thinking ? msg->data.agent_result.thinking : "",
-                           msg->data.agent_result.text ? msg->data.agent_result.text : "");
-                agent_run_loop(agent, ctx.data, "sub_agent_result");
-                sb_free(&ctx);
+            default:
                 break;
-            }
         }
 
         input_message_free(msg);
@@ -1662,7 +1684,7 @@ static void *sub_agent_thread_fn(void *arg) {
         msg->data.agent_result.session_id = util_strdup(args->sub_session_id);
         msg->data.agent_result.status = util_strdup("failed");
         msg->data.agent_result.text = util_strdup("Failed to create sub-agent");
-        mq_push(args->input_queue, msg);
+        mq_push(args->sub_result_queue, msg);
         goto cleanup;
     }
 
@@ -1731,7 +1753,7 @@ static void *sub_agent_thread_fn(void *arg) {
     msg->data.agent_result.cache_read_tokens = sub->last_cache_read_tokens;
     msg->data.agent_result.cache_creation_tokens = sub->last_cache_creation_tokens;
     msg->data.agent_result.request_count = store_stats_get_file_int(sub->paths.stats, "agent_request_count");
-    mq_push(args->input_queue, msg);
+    mq_push(args->sub_result_queue, msg);
 
     agent_destroy(sub);
 
@@ -1799,7 +1821,7 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     args->description = util_strdup(description);
     args->fork_mode = 0;  /* fork 已在主线程完成 */
     args->sub_session_id = util_strdup(sub_session_id);
-    args->input_queue = agent->input_queue;
+    args->sub_result_queue = agent->sub_result_queue;
 
     pthread_t thread;
     pthread_create(&thread, NULL, sub_agent_thread_fn, args);
@@ -1818,19 +1840,6 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
                                    int in_tokens, int out_tokens,
                                    int cache_read, int cache_creation,
                                    int request_count) {
-    agent->active_sub_count--;
-
-    /* 显示结果（事件已手动写入，只推显示队列不重复写事件） */
-    DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-    *dm = display_msg_sub_agent_result(session_id, status, thinking,
-                                       text, in_tokens, out_tokens);
-    if (!store_event_stream_json_enabled()) {
-        mq_push(agent->display_queue, dm);
-    } else {
-        display_message_free(dm);
-        free(dm);
-    }
-
     /* 记录 usage 事件（kind=sub_agent, sub_session_id） */
     {
         StrBuf evt;
@@ -1844,26 +1853,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
         sb_free(&evt);
     }
 
-    /* 更新统计 — 对齐 bash 版 agent_handle_sub_result:
-     * store_stats_update total_input_tokens=+N total_output_tokens=+N
-     *   total_cache_read_tokens=+N total_cache_creation_tokens=+N
-     *   sub_agent_request_count=+1 agent_request_count=+N */
-    store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + in_tokens);
-    store_stats_set_int_file(agent->paths.stats, "total_output_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_output_tokens") + out_tokens);
-    store_stats_set_int_file(agent->paths.stats, "total_cache_read_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + cache_read);
-    store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + cache_creation);
-    store_stats_set_int_file(agent->paths.stats, "sub_agent_request_count",
-        store_stats_get_file_int(agent->paths.stats, "sub_agent_request_count") + 1);
-    /* agent_request_count 累加子 agent 的请求数 */
-    store_stats_set_int_file(agent->paths.stats, "agent_request_count",
-        store_stats_get_file_int(agent->paths.stats, "agent_request_count") + request_count);
-    agent_update_title(agent);
-
-    /* 记录 sub_agent_result 事件 — 对齐 bash 版，供 replay 和 stream-json 复现 */
+    /* 记录 sub_agent_result 事件 — 供 replay 和 stream-json 复现 */
     {
         StrBuf evt;
         sb_init(&evt);
@@ -1881,7 +1871,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
         sb_free(&evt);
     }
 
-    /* 记录 sub_agent_end 事件 — 对齐 bash 版，带 timestamp */
+    /* 记录 sub_agent_end 事件 — 带 timestamp */
     {
         time_t now = time(NULL);
         struct tm tm_buf;
@@ -1899,6 +1889,35 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
         sb_append(&evt, "}");
         store_event_append(&agent->paths, evt.data);
         sb_free(&evt);
+    }
+
+    /* 更新统计 */
+    store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + in_tokens);
+    store_stats_set_int_file(agent->paths.stats, "total_output_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_output_tokens") + out_tokens);
+    store_stats_set_int_file(agent->paths.stats, "total_cache_read_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + cache_read);
+    store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + cache_creation);
+    store_stats_set_int_file(agent->paths.stats, "sub_agent_request_count",
+        store_stats_get_file_int(agent->paths.stats, "sub_agent_request_count") + 1);
+    store_stats_set_int_file(agent->paths.stats, "agent_request_count",
+        store_stats_get_file_int(agent->paths.stats, "agent_request_count") + request_count);
+    agent_update_title(agent);
+
+    /* 递减活跃子 agent 计数 */
+    agent->active_sub_count--;
+
+    /* 显示结果（推 display 队列） */
+    DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+    *dm = display_msg_sub_agent_result(session_id, status, thinking,
+                                       text, in_tokens, out_tokens);
+    if (!store_event_stream_json_enabled()) {
+        mq_push(agent->display_queue, dm);
+    } else {
+        display_message_free(dm);
+        free(dm);
     }
 
     return 0;

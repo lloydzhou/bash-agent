@@ -46,7 +46,21 @@ project_key() {
 
 green() { printf '\033[32m✓ PASS: %s\033[0m\n' "$1"; }
 red()   { printf '\033[31m✗ FAIL: %s\033[0m\n' "$1"; }
-info()  { printf '\033[36m→ %s\033[0m\n' "$1"; }
+TEST_TIMER_NAME=""
+TEST_TIMER_START=$SECONDS
+info() {
+    if [[ -n "$TEST_TIMER_NAME" ]]; then
+        printf '\033[90m  elapsed: %ss — %s\033[0m\n' "$((SECONDS - TEST_TIMER_START))" "$TEST_TIMER_NAME"
+    fi
+    TEST_TIMER_NAME="$1"
+    TEST_TIMER_START=$SECONDS
+    printf '\033[36m→ %s\033[0m\n' "$1"
+}
+timing_finish() {
+    [[ -n "$TEST_TIMER_NAME" ]] || return 0
+    printf '\033[90m  elapsed: %ss — %s\033[0m\n' "$((SECONDS - TEST_TIMER_START))" "$TEST_TIMER_NAME"
+    TEST_TIMER_NAME=""
+}
 
 # Short test helpers
 multi_grep() { local o="$1"; shift; for p in "$@"; do grep -q "$p" <<< "$o" 2>/dev/null || return 1; done; return 0; }
@@ -1322,6 +1336,30 @@ test_agent_sub_agent() {
     fi
 
     # Cleanup
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
+# Test: SubAgent multi — two SubAgents in one response, both results must be processed
+test_agent_sub_agent_multi() {
+    info "Test: SubAgent multi (two parallel SubAgents)"
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    local output
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-multi-001 "SUB_MULTI_MARKER" 2>&1) || true
+
+    # SubAgent results processed — check via final answer or raw child text
+    # (child text only displayed when agent is idle; during active streaming
+    #  results go to NOTIFY_BUF and are processed by LLM)
+    echo "$output" | grep -qE "Result A: 42|A=42" && { green "SubAgent-multi: result A found"; ((PASS++)); } || { red "SubAgent-multi: result A not found"; echo "  Output: $output"; ((FAIL++)); }
+    echo "$output" | grep -qE "Result B: 99|B=99" && { green "SubAgent-multi: result B found"; ((PASS++)); } || { red "SubAgent-multi: result B not found"; ((FAIL++)); }
+    # Final answer should mention both results
+    echo "$output" | grep -q "A=42.*B=99\|Both results" && { green "SubAgent-multi: final answer found"; ((PASS++)); } || { red "SubAgent-multi: final answer not found"; ((FAIL++)); }
+
     rm -rf "$tmpdir"
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
@@ -2622,6 +2660,7 @@ test_compact_dp_awk
 test_compact_turn_keep_awk
 test_agent_compact_context
 test_agent_sub_agent
+test_agent_sub_agent_multi
 test_agent_sub_agent_failure
 test_agent_sub_agent_child_session
 test_agent_sub_agent_fork
@@ -2807,6 +2846,8 @@ test_bash_mode_scanner() {
 }
 
 test_bash_mode_scanner
+
+timing_finish
 
 echo ""
 echo "=============================="

@@ -48,6 +48,11 @@ int mq_push(MsgQueue *q, void *data);
  */
 int mq_pop(MsgQueue *q, void **data_out);
 
+/*
+ * 非阻塞出队 — 队列为空时立即返回 -1
+ */
+int mq_try_pop(MsgQueue *q, void **data_out);
+
 /* 当前队列长度 */
 int mq_count(MsgQueue *q);
 

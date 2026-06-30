@@ -82,6 +82,22 @@ int mq_pop(MsgQueue *q, void **data_out) {
     return 0;
 }
 
+int mq_try_pop(MsgQueue *q, void **data_out) {
+    pthread_mutex_lock(&q->mutex);
+    if (!q->head) {
+        pthread_mutex_unlock(&q->mutex);
+        return -1;
+    }
+    MQNode *node = q->head;
+    q->head = node->next;
+    if (!q->head) q->tail = NULL;
+    q->count--;
+    pthread_mutex_unlock(&q->mutex);
+    *data_out = node->data;
+    free(node);
+    return 0;
+}
+
 int mq_count(MsgQueue *q) {
     pthread_mutex_lock(&q->mutex);
     int n = q->count;

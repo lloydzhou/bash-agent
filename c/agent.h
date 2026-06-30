@@ -75,8 +75,9 @@ typedef struct {
     int active_sub_count;
 
     /* 消息队列 */
-    MsgQueue *input_queue;  /* 外部传入，agent_loop 从中读取 */
-    MsgQueue *display_queue;/* 外部传入，agent_loop 向其写入 */
+    MsgQueue *input_queue;      /* 外部传入，agent_loop 从中读取 */
+    MsgQueue *display_queue;    /* 外部传入，agent_loop 向其写入 */
+    MsgQueue *sub_result_queue; /* SubAgent 结果队列（对齐 bash NOTIFY_FIFO） */
 
     /* 中断标志 */
     volatile int interrupted;

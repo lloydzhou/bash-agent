@@ -211,7 +211,7 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
     }
     // 等待所有子 agent 完成（bash 版没有超时，Ctrl+C 可杀）
     while rt.active_sub_count > 0 {
-        match rt.msg_rx.recv() {
+        match rt.sub_result_rx.recv() {
             Ok(MainLoopMessage::AgentResult {
                 session_id,
                 status,
@@ -269,6 +269,8 @@ struct Agent {
     last_cache_creation_tokens: usize,
     msg_tx: Arc<Mutex<Option<mpsc::Sender<MainLoopMessage>>>>, // 主循环消息队列发送端（Arc<Mutex<Option>> 以便 readline 线程退出时主动 drop）
     msg_rx: mpsc::Receiver<MainLoopMessage>, // 主循环消息队列接收端
+    sub_result_rx: mpsc::Receiver<MainLoopMessage>, // SubAgent 结果专用通道（对齐 NOTIFY_FIFO）
+    sub_result_tx: Arc<mpsc::Sender<MainLoopMessage>>, // SubAgent 结果发送端
     active_sub_count: usize,                 // 活跃子 agent 计数
     sub_agent_request_count: usize,          // SubAgent 请求计数
     stdout: RefCell<Box<dyn Write + Send>>,  // 可替换的输出目标（子 agent 时为 sink）
@@ -350,6 +352,7 @@ enum DisplayEvent {
         images: String,
         description: String,
     },
+    Title(String), // 终端标题（OSC 序列），通过 display worker 序列化避免与 text 交织
 }
 
 enum DisplayCommand {
@@ -492,6 +495,11 @@ fn render_display_event(
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
+        DisplayEvent::Title(title) => {
+            // OSC 序列直接写 stderr，通过 display worker 序列化避免与 text delta 交织
+            let _ = write!(io::stderr(), "{}", title);
+            let _ = io::stderr().flush();
+        }
     }
     Ok(())
 }
@@ -629,6 +637,8 @@ impl Agent {
         let transport = Arc::from(crate::transport::new_transport(&cfg));
         let (msg_tx, msg_rx) = mpsc::channel(); // 初始化消息队列
         let msg_tx = Arc::new(Mutex::new(Some(msg_tx))); // 包装在 Arc<Mutex<Option>> 中
+        let (_sub_result_tx, sub_result_rx) = mpsc::channel(); // SubAgent 结果专用通道
+        let sub_result_tx = Arc::new(_sub_result_tx);
 
         let (display_tx, display_handle) = if cfg.output_format == OutputFormat::StreamJson {
             (None, None)
@@ -656,6 +666,8 @@ impl Agent {
             last_cache_creation_tokens: 0,
             msg_tx,
             msg_rx,
+            sub_result_rx,
+            sub_result_tx,
             active_sub_count: 0,
             sub_agent_request_count: 0,
             stdout: RefCell::new(Box::new(io::stdout())),
@@ -701,7 +713,7 @@ impl Agent {
         let cwd = self.cwd.clone();
         let home = self.home.clone();
         let cfg = self.cfg.clone();
-        let msg_tx_arc = self.msg_tx.clone();
+        let msg_tx_arc = self.sub_result_tx.clone(); // 子 agent 结果发送到专用通道
         let sub_session_id_clone = sub_session_id.clone();
         let parent_paths = self.paths.clone();
         let fork = fields.get("fork").map(|s| s == "true" || s == "1").unwrap_or(false);
@@ -721,20 +733,17 @@ impl Agent {
             let sub_conv = Store { path: sub_paths.conversation.clone() };
             if let Err(e) = sub_conv.ensure() {
                 // 早期失败时发送失败结果，让主进程减少 active_sub_count
-                let tx_guard = msg_tx_arc.lock().unwrap();
-                if let Some(tx) = tx_guard.as_ref() {
-                    let _ = tx.send(MainLoopMessage::AgentResult {
-                        session_id: sub_session_id_clone.clone(),
-                        status: "failed".to_string(),
-                        thinking: String::new(),
-                        text: format!("Failed to create sub-agent conversation: {}", e),
-                        in_tokens: 0,
-                        out_tokens: 0,
-                        cache_read_tokens: 0,
-                        cache_creation_tokens: 0,
-                        request_count: 0,
-                    });
-                }
+                let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
+                    session_id: sub_session_id_clone.clone(),
+                    status: "failed".to_string(),
+                    thinking: String::new(),
+                    text: format!("Failed to create sub-agent conversation: {}", e),
+                    in_tokens: 0,
+                    out_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    request_count: 0,
+                });
                 return;
             }
 
@@ -747,6 +756,7 @@ impl Agent {
             sub_cfg.interactive = false;
 
             let (sub_msg_tx, _sub_msg_rx) = mpsc::channel();
+            let (sub_rtx, sub_rrx) = mpsc::channel();
             let mut sub_rt = Agent {
                 cfg: sub_cfg,
                 cwd: cwd.clone(),
@@ -766,6 +776,8 @@ impl Agent {
                 last_cache_creation_tokens: 0,
                 msg_tx: Arc::new(Mutex::new(Some(sub_msg_tx))),
                 msg_rx: _sub_msg_rx,
+                sub_result_rx: sub_rrx,
+                sub_result_tx: Arc::new(sub_rtx),
                 active_sub_count: 0,
                 sub_agent_request_count: 0,
                 stdout: RefCell::new(Box::new(io::empty())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
@@ -787,20 +799,17 @@ impl Agent {
                 Ok(l) => l,
                 Err(e) => {
                     // 通过消息队列发送失败结果，让主进程减少计数
-                    let tx_guard = msg_tx_arc.lock().unwrap();
-                    if let Some(tx) = tx_guard.as_ref() {
-                        let _ = tx.send(MainLoopMessage::AgentResult {
-                            session_id: sub_session_id_clone,
-                            status: "failed".to_string(),
-                            thinking: String::new(),
-                            text: format!("Sub-agent failed: {}", e),
-                            in_tokens: 0,
-                            out_tokens: 0,
-                            cache_read_tokens: 0,
-                            cache_creation_tokens: 0,
-                            request_count: 0,
-                        });
-                    }
+                    let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
+                        session_id: sub_session_id_clone,
+                        status: "failed".to_string(),
+                        thinking: String::new(),
+                        text: format!("Sub-agent failed: {}", e),
+                        in_tokens: 0,
+                        out_tokens: 0,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                        request_count: 0,
+                    });
                     return;
                 }
             };
@@ -849,20 +858,17 @@ impl Agent {
             let request_count = stats_get_f64(&stats, "agent_request_count") as usize;
 
             // 6. 通过消息队列发送结果
-            let tx_guard = msg_tx_arc.lock().unwrap();
-            if let Some(tx) = tx_guard.as_ref() {
-                let _ = tx.send(MainLoopMessage::AgentResult {
-                    session_id: sub_session_id_clone,
-                    status: status.to_string(),
-                    thinking: result_thinking,
-                    text: result_text,
-                    in_tokens,
-                    out_tokens,
-                    cache_read_tokens,
-                    cache_creation_tokens,
-                    request_count,
-                });
-            }
+            let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
+                session_id: sub_session_id_clone,
+                status: status.to_string(),
+                thinking: result_thinking,
+                text: result_text,
+                in_tokens,
+                out_tokens,
+                cache_read_tokens,
+                cache_creation_tokens,
+                request_count,
+            });
         });
 
         format!("Sub-agent started: session_id={}", sub_session_id)
@@ -1058,7 +1064,7 @@ impl Agent {
                     // 直到全部完成后再返回主循环（readline 已在下一轮 EditStart）。
                     // display worker 的 hide/show 保证输出不会与 linenoise 冲突。
                     while self.active_sub_count > 0 {
-                        match self.msg_rx.recv() {
+                        match self.sub_result_rx.recv() {
                             Ok(MainLoopMessage::AgentResult {
                                 session_id,
                                 status,
@@ -1091,12 +1097,7 @@ impl Agent {
 
                     // 不再通知 readline 线程 — 它已经在下一轮 EditStart
                 }
-                MainLoopMessage::AgentResult { .. } => {
-                    // 在交互模式下，AgentResult 应该在 UserInput 的内部 while 循环中被处理。
-                    // 如果走到这里，说明是非交互模式或者异常情况。
-                    // 非交互模式下直接忽略（active_sub_count 不会 > 0 因为没有 while 循环等待）。
-                    // 保留此分支以防意外。
-                }
+                _ => {}
             }
 
             // 非交互模式且无活跃子 agent 时退出
@@ -1197,6 +1198,33 @@ impl Agent {
         Ok(())
     }
 
+    /// drain SubAgent 结果：events + stats + display + conversation 注入（对齐 bash agent_drain_notify_buf）
+    /// 返回 true 如果消费了至少一条结果
+    fn drain_sub_results(&mut self) -> bool {
+        let mut drained = false;
+        while let Ok(msg) = self.sub_result_rx.try_recv() {
+            if let MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count } = msg {
+                let _ = self.append_event(json!({"type":"usage","input_tokens":in_tokens,"output_tokens":out_tokens,"cache_read_input_tokens":cache_read_tokens,"cache_creation_input_tokens":cache_creation_tokens,"kind":"sub_agent","sub_session_id":&session_id}));
+                let _ = self.emit_and_append_event(json!({"type":"sub_agent_result","session_id":&session_id,"status":&status,"input_tokens":in_tokens,"output_tokens":out_tokens,"thinking":&thinking,"text":&text}));
+                let _ = self.append_event(json!({"type":"sub_agent_end","session_id":&session_id,"timestamp":chrono_like_now(),"status":&status}));
+                let _ = store::store_stats_update(&self.paths.stats, |stats| {
+                    Self::add_stat_usize(stats, "sub_agent_request_count", 1);
+                    Self::add_stat_usize(stats, "agent_request_count", request_count);
+                    Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
+                    Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
+                    Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
+                    Self::add_stat_usize(stats, "total_cache_creation_tokens", cache_creation_tokens);
+                });
+                if self.active_sub_count > 0 { self.active_sub_count -= 1; }
+                let ctx = format!("[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}", session_id, status, in_tokens, out_tokens, thinking, text);
+                let _ = self.queue_display_event(DisplayEvent::SubAgentResult { session_id, status, thinking, text, in_tokens, out_tokens });
+                let _ = self.conv.add_user(&ctx);
+                drained = true;
+            }
+        }
+        drained
+    }
+
     /// 检查是否被中断（per-agent 标志 + 全局 SIGINT 标志）
     fn is_interrupted(&self) -> bool {
         self.interrupted.load(Ordering::SeqCst) || CTRLC_FLAG.load(Ordering::SeqCst)
@@ -1275,6 +1303,9 @@ impl Agent {
             let mut turn = 0;
             while turn < self.cfg.max_turns {
                 turn += 1;
+
+                // Drain SubAgent 结果（对齐 bash agent_drain_notify_buf）
+                self.drain_sub_results();
 
                 // Compact before each LLM call: uses ctx_tokens from previous call's USAGE
                 let _ = self.compact_context_window("auto");
@@ -1475,6 +1506,8 @@ impl Agent {
                     }
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
+                        // end_turn 后尝试 drain（对齐 bash agent_drain_notify_buf && continue）
+                        if self.drain_sub_results() { continue; }
                         CTRLC_FLAG.store(false, Ordering::SeqCst);
                         return Ok(());
                     }
@@ -1568,6 +1601,7 @@ impl Agent {
             DisplayEvent::ContextUpdate(_) => {}
             DisplayEvent::SubAgentResult { .. } => {}
             DisplayEvent::ImageDescribe { .. } => {}
+            DisplayEvent::Title(_) => {}
         }
         if let Some(tx) = &self.display_tx {
             tx.send(DisplayCommand::Event(evt))
@@ -1946,8 +1980,7 @@ impl Agent {
         };
         let prefix = if status == "idle" { "" } else { "⏳ " };
         let progress = if status == "idle" { 0 } else { 3 };
-        let _ = write!(
-            self.stderr.borrow_mut(),
+        let title = format!(
             "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{}\x07\x1b]9;4;{}\x07",
             prefix,
             self.cfg.model,
@@ -1959,7 +1992,14 @@ impl Agent {
             Self::fmt_num(ctx),
             progress
         );
-        let _ = self.stderr.borrow_mut().flush();
+        // 通过 display worker 序列化输出，避免与 text delta 交织
+        if self.display_tx.is_some() {
+            self.queue_display_only(DisplayEvent::Title(title));
+        } else {
+            // 子 agent 无 display worker，直接写 stderr
+            let _ = write!(self.stderr.borrow_mut(), "{}", title);
+            let _ = self.stderr.borrow_mut().flush();
+        }
     }
 
     fn is_stream_json_mode(&self) -> bool {
