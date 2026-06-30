@@ -422,7 +422,7 @@ store_session_init() {
     NOTIFY_FIFO="${session_dir}/notify.fifo"
     NOTIFY_BUF="${session_dir}/notify.buf"
     ACTIVE_SUB_FILE="${session_dir}/active_sub.count"
-    AGENT_RUNNING_FLAG="/tmp/agent_loop_active.$$"
+    AGENT_RUNNING_FLAG="${session_dir}/agent_running.flag"
     [[ -p "$NOTIFY_FIFO" ]] || { rm -f "$NOTIFY_FIFO"; mkfifo "$NOTIFY_FIFO"; }
     printf '0\n' > "$ACTIVE_SUB_FILE"
 }
@@ -1376,8 +1376,6 @@ agent_loop_stream() {
     # Trap SIGINT: close pipe FD to unblock read
     trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes; rm -f "$AGENT_RUNNING_FLAG"' INT
     # 通知后台 reader：agent_loop 在运行中（notify 走 buffer 不走 NOTIFY_PENDING）
-    # NOTE: 嵌套 SubAgent 场景下，child 的 agent_loop_stream 会误删此 flag（因 $$ 在
-    # subshell 中不变）。影响有限：最多产生多余 NOTIFY_PENDING，不丢数据。
     : > "$AGENT_RUNNING_FLAG"
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
