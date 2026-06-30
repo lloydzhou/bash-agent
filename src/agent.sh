@@ -1323,9 +1323,9 @@ agent_main_loop() {
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
                     # 格式化文本追加到 NOTIFY_BUF
                     printf '[sub-agent %s] %s (in=%s, out=%s)\nThinking: %s\nText: %s\n' "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
-                    # 递减 active_sub 计数器
+                    # 递减 active_sub 计数器（大于 0 才减，防止竞态下提前归零）
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
+                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
                     # 展示结果摘要到 display
                     util_is_stream_json || ( util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
                     # idle（无 agent_loop_stream 在跑）→ 发 NOTIFY_PENDING 触发 notify turn
