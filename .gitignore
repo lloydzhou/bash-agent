@@ -10,3 +10,4 @@ c/build/
 c/tools_embed.h
 c/test_classify
 c/test_classify.dSYM/
+.bash-agent/
