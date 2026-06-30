@@ -8,6 +8,49 @@
 
 ---
 
+## [4.2.11] - 2026-06-30
+
+> **JSON escape 性能优化 + SubAgent 双 FIFO 通知架构重构**：`util_json_escape` 从纯 Bash 全局替换改为 awk 管道（~1000x 加速）；SubAgent 通知从单 FIFO 改为双 FIFO 架构（NOTIFY_FIFO + NOTIFY_BUF），结果消费时统一 display（不打断流式输出），四版本（Bash/Go/C/Rust）架构对齐。
+
+### Performance
+
+- **`util_json_escape` awk 化**：从纯 Bash `${_s//\\/\\\\}` 多轮全局替换改为复用已有的 `json.awk` + `json_cli.awk` 的 `escape_json_string` 函数。28KB system prompt escape 从 ~9.2s/次降到 ~8ms/次（~1070x），单轮 mock 请求从 ~9.3s 降到 ~0.36s（~26x），完整 `make test-bash` 从 ~1200s 降到 ~180s（~7x）。
+
+### Changed — SubAgent 双 FIFO 通知架构
+
+- **双 FIFO 设计**：SubAgent 结果不再走 INPUT_FIFO（与用户输入共用），改为独立的 NOTIFY_FIFO + NOTIFY_BUF 缓冲。notify reader 后台子 shell 阻塞读 NOTIFY_FIFO，`agent_drain_notify_buf` 在每轮 LLM 调用前 + end_turn 后消费。
+- **display 移到消费时**：SubAgent 结果的 display 不再在到达时立即输出（打断流式 text delta），而是在 `agent_drain_notify_buf` 消费时统一渲染（LLM 调用间隙）。
+- **计数器移到 `tool_sub_agent`**：`ACTIVE_SUB_FILE` 计数器从 `agent_loop`（管道转发的消息）移到 `tool_sub_agent`（子进程创建前），消除管道延迟导致的竞态。
+- **`AGENT_RUNNING_FLAG`**：标记 `agent_loop_stream` 运行状态。运行中时 notify reader 不发 NOTIFY_PENDING，靠 drain 在下一轮迭代消费。
+- **非交互退出判断**：`cat "$ACTIVE_SUB_FILE"` ≤ 0 **且** `NOTIFY_BUF` 空 → SESSION_END。用 `cat` 而非 `$(<file)` 避免 Bash 特殊语法陷阱。
+
+### Fixed
+
+- **`$(<file 2>/dev/null || echo 0)` 对已存在文件返回空字符串**：Bash 的 `$(<file)` 特殊语法被 `|| echo 0` 破坏，变成空命令+重定向，成功退出但不产生输出。改用 `cat "$file" 2>/dev/null || echo 0`。
+- **`RS="\0"` 在 macOS BWK awk 中不生效**：`"\0"` 被当作空字符串，触发段落模式按空行分割记录，大输入被截断。恢复 `getline` 循环读取完整 stdin。
+- **SubAgent fork 默认值为空字符串**：`fork="${3:-}"` 改为 `fork="${3:-false}"` + `[[ "$fork" == "true" ]] || fork=false` 归一化。
+- **`store_session_fork` 缺少 `create_dir_all`**（Rust）：目标目录不存在时 `fs::copy` 静默失败，fork 模式下子 agent conversation 未继承父内容。
+- **Rust title 与 display 交织**：`update_term_title` 在主线程写 stderr，display worker 在子线程写 stdout，终端输出交织。改为通过 `DisplayEvent::Title` 走 display worker channel 序列化输出。
+
+### Architecture Alignment — 四版本对齐
+
+- **Go**：新增 `drainSubAgentResults()` + fork 归一化 + `SUB_AGENT_RESULT` → `AGENT_RESULT`
+- **C**：新增 `sub_result_queue`（独立队列）+ `mq_try_pop`（非阻塞出队）+ `agent_drain_sub_results()` + end_turn 后 drain + 清理 main switch 死代码
+- **Rust**：新增 `sub_result_rx/tx` 独立 channel + `drain_sub_results()` + end_turn 后 drain + 清理 main match 死代码
+- **四版本统一 SubAgent 结果处理顺序**：`usage event → sub_agent_result event → sub_agent_end event → stats update → counter decrement → display → conversation injection`
+
+### Tests
+
+- **新增 `SUB_MULTI_MARKER` 测试**：mock server 同一响应返回两个 SubAgent tool_call，验证并行 SubAgent 结果都被正确处理。
+- **四版本全部 179/179 通过**。
+- `tests/test.sh` 新增 per-test 计时显示。
+
+### Docs
+
+- `docs/BASH_ARCHITECTURE.md` 更新 10 个 section：进程模型、FD 分配、消息类型、agent_main_loop、agent_loop_stream、tool_sub_agent、目录结构、SubAgent 机制（完全重写）、util_json_escape。
+
+---
+
 ## [4.2.10] - 2026-06-29
 
 > **SubAgent worktree 委派指导**：在 `SubAgent` 工具描述中补充 child-managed git worktree 协作规则，用于并行或隔离代码任务，避免污染主工作区。
