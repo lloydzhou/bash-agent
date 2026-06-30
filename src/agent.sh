@@ -1323,7 +1323,13 @@ agent_main_loop() {
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
                     # 带颜色的格式化文本追加到 NOTIFY_BUF（display 直接用，conversation 去 ANSI）
-                    printf '\033[35m[sub-agent %s] %s (in=%s, out=%s)\033[0m\n\033[90mThinking: %s\033[0m\nText: %s\n' "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
+                    if [[ "$_status" == "ok" ]]; then
+                        printf '\033[35m[sub-agent %s] completed (in=%s, out=%s)\033[0m\n' "$_sid" "$_in" "$_out" >> "$NOTIFY_BUF"
+                    else
+                        printf '\033[31m[sub-agent %s] failed\033[0m\n' "$_sid" >> "$NOTIFY_BUF"
+                    fi
+                    [[ -n "$_thinking" ]] && printf '\033[90m%s%s\033[0m\n' "${_thinking:0:120}" "$([[ ${#_thinking} -gt 120 ]] && printf '…')" >> "$NOTIFY_BUF"
+                    [[ -n "$_text" ]] && printf '%s%s\n' "${_text:0:120}" "$([[ ${#_text} -gt 120 ]] && printf '…')" >> "$NOTIFY_BUF"
                     # 递减 active_sub 计数器（大于 0 才减，防止竞态下提前归零）
                     local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
