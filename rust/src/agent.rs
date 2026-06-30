@@ -1197,6 +1197,25 @@ impl Agent {
         Ok(())
     }
 
+    /// drain SubAgent 结果：events + stats + display + conversation 注入（对齐 bash agent_drain_notify_buf）
+    /// 返回 true 如果消费了至少一条结果
+    fn drain_sub_results(&mut self) -> bool {
+        let mut drained = false;
+        while let Ok(msg) = self.sub_result_rx.try_recv() {
+            if let MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count: _ } = msg {
+                let _ = self.append_event(json!({"type":"usage","input_tokens":in_tokens,"output_tokens":out_tokens,"cache_read_input_tokens":cache_read_tokens,"cache_creation_input_tokens":cache_creation_tokens,"kind":"sub_agent","sub_session_id":&session_id}));
+                let _ = self.emit_and_append_event(json!({"type":"sub_agent_result","session_id":&session_id,"status":&status,"input_tokens":in_tokens,"output_tokens":out_tokens,"thinking":&thinking,"text":&text}));
+                let _ = self.append_event(json!({"type":"sub_agent_end","session_id":&session_id,"timestamp":chrono_like_now(),"status":&status}));
+                if self.active_sub_count > 0 { self.active_sub_count -= 1; }
+                let ctx = format!("[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}", session_id, status, in_tokens, out_tokens, thinking, text);
+                let _ = self.queue_display_event(DisplayEvent::SubAgentResult { session_id, status, thinking, text, in_tokens, out_tokens });
+                let _ = self.conv.add_user(&ctx);
+                drained = true;
+            }
+        }
+        drained
+    }
+
     /// 检查是否被中断（per-agent 标志 + 全局 SIGINT 标志）
     fn is_interrupted(&self) -> bool {
         self.interrupted.load(Ordering::SeqCst) || CTRLC_FLAG.load(Ordering::SeqCst)
@@ -1277,17 +1296,7 @@ impl Agent {
                 turn += 1;
 
                 // Drain SubAgent 结果（对齐 bash agent_drain_notify_buf）
-                while let Ok(msg) = self.sub_result_rx.try_recv() {
-                    if let MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count: _ } = msg {
-                        let _ = self.append_event(json!({"type":"usage","input_tokens":in_tokens,"output_tokens":out_tokens,"cache_read_input_tokens":cache_read_tokens,"cache_creation_input_tokens":cache_creation_tokens,"kind":"sub_agent","sub_session_id":&session_id}));
-                        let _ = self.emit_and_append_event(json!({"type":"sub_agent_result","session_id":&session_id,"status":&status,"input_tokens":in_tokens,"output_tokens":out_tokens,"thinking":&thinking,"text":&text}));
-                        let _ = self.append_event(json!({"type":"sub_agent_end","session_id":&session_id,"timestamp":chrono_like_now(),"status":&status}));
-                        if self.active_sub_count > 0 { self.active_sub_count -= 1; }
-                        let ctx = format!("[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}", session_id, status, in_tokens, out_tokens, thinking, text);
-                        let _ = self.queue_display_event(DisplayEvent::SubAgentResult { session_id, status, thinking, text, in_tokens, out_tokens });
-                        let _ = self.conv.add_user(&ctx);
-                    }
-                }
+                self.drain_sub_results();
 
                 // Compact before each LLM call: uses ctx_tokens from previous call's USAGE
                 let _ = self.compact_context_window("auto");
@@ -1488,6 +1497,8 @@ impl Agent {
                     }
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
+                        // end_turn 后尝试 drain（对齐 bash agent_drain_notify_buf && continue）
+                        if self.drain_sub_results() { continue; }
                         CTRLC_FLAG.store(false, Ordering::SeqCst);
                         return Ok(());
                     }

@@ -656,6 +656,43 @@ int agent_replay_events(Agent *agent, int max_turns) {
  * 对齐 bash 版 agent_run_loop
  * ============================================================ */
 
+/* drain SubAgent 结果：display + conversation 注入，返回消费条数（对齐 bash agent_drain_notify_buf） */
+static int agent_drain_sub_results(Agent *agent) {
+    int drained = 0;
+    while (1) {
+        void *sub_data = NULL;
+        if (mq_try_pop(agent->sub_result_queue, &sub_data) != 0) break;
+        InputMessage *sub_msg = (InputMessage *)sub_data;
+        if (sub_msg && sub_msg->type == MSG_AGENT_RESULT) {
+            agent_handle_sub_agent_result(agent,
+                sub_msg->data.agent_result.session_id,
+                sub_msg->data.agent_result.status,
+                sub_msg->data.agent_result.thinking,
+                sub_msg->data.agent_result.text,
+                sub_msg->data.agent_result.in_tokens,
+                sub_msg->data.agent_result.out_tokens,
+                sub_msg->data.agent_result.cache_read_tokens,
+                sub_msg->data.agent_result.cache_creation_tokens,
+                sub_msg->data.agent_result.request_count);
+            StrBuf ctx;
+            sb_init(&ctx);
+            sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
+                       sub_msg->data.agent_result.session_id,
+                       sub_msg->data.agent_result.status,
+                       sub_msg->data.agent_result.in_tokens,
+                       sub_msg->data.agent_result.out_tokens,
+                       sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
+                       sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
+            store_conv_add_user(agent->paths.conversation, ctx.data);
+            sb_free(&ctx);
+            drained++;
+        }
+        input_message_free(sub_msg);
+        free(sub_msg);
+    }
+    return drained;
+}
+
 int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     int rc = agent_loop(agent, user_input, turn_kind);
     agent_update_title_status(agent, "idle");
@@ -798,36 +835,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         agent->interrupted = 0;
 
         /* drain SubAgent 结果（对齐 bash agent_drain_notify_buf） */
-        while (1) {
-            void *sub_data = NULL;
-            if (mq_try_pop(agent->sub_result_queue, &sub_data) != 0) break;
-            InputMessage *sub_msg = (InputMessage *)sub_data;
-            if (sub_msg && sub_msg->type == MSG_AGENT_RESULT) {
-                agent_handle_sub_agent_result(agent,
-                    sub_msg->data.agent_result.session_id,
-                    sub_msg->data.agent_result.status,
-                    sub_msg->data.agent_result.thinking,
-                    sub_msg->data.agent_result.text,
-                    sub_msg->data.agent_result.in_tokens,
-                    sub_msg->data.agent_result.out_tokens,
-                    sub_msg->data.agent_result.cache_read_tokens,
-                    sub_msg->data.agent_result.cache_creation_tokens,
-                    sub_msg->data.agent_result.request_count);
-                StrBuf ctx;
-                sb_init(&ctx);
-                sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
-                           sub_msg->data.agent_result.session_id,
-                           sub_msg->data.agent_result.status,
-                           sub_msg->data.agent_result.in_tokens,
-                           sub_msg->data.agent_result.out_tokens,
-                           sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
-                           sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
-                store_conv_add_user(agent->paths.conversation, ctx.data);
-                sb_free(&ctx);
-            }
-            input_message_free(sub_msg);
-            free(sub_msg);
-        }
+        agent_drain_sub_results(agent);
 
         /* compact */
         agent_compact_context(agent, "auto");
@@ -1211,7 +1219,11 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
 
         sse_accum_free(accum);
 
-        if (!should_continue) break;
+        if (!should_continue) {
+            /* end_turn 后尝试 drain（对齐 bash agent_drain_notify_buf && continue） */
+            if (agent_drain_sub_results(agent) > 0 && !agent->interrupted) continue;
+            break;
+        }
         if (agent->interrupted) break;
     }
 
