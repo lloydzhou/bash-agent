@@ -269,6 +269,7 @@ use std::path::{Path, PathBuf};
     }
 
     pub fn store_session_fork(parent: &Paths, child: &Paths) -> Result<()> {
+        fs::create_dir_all(&child.session_dir)?; // 先建目录（对齐 Bash mkdir -p）
         let files_to_copy: [(&Path, &Path); 3] = [
             (&parent.conversation, &child.conversation),
             (&parent.summary, &child.summary),
