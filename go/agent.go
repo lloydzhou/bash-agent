@@ -1118,10 +1118,6 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 
 // handleSubAgentResult 处理子 agent 结果
 func (a *Agent) handleSubAgentResult(r SubAgentResult) {
-	a.subMu.Lock()
-	a.pendingSubAgents--
-	a.subMu.Unlock()
-
 	// 记录 usage 事件（带 kind=sub_agent, sub_session_id）
 	usageEvent := map[string]interface{}{
 		"type":                        "usage",
@@ -1171,6 +1167,11 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 
 	// 更新 store 的 stats（与 bash 版 store_stats_update total_input_tokens=+_in ... agent_request_count=+_reqs 一致）
 	a.store.UpdateSubAgentStats(r.InputTokens, r.OutputTokens, r.CacheRead, r.CacheWrite, r.Requests)
+
+	// 递减活跃子 agent 计数（在事件和统计之后，对齐 bash 顺序）
+	a.subMu.Lock()
+	a.pendingSubAgents--
+	a.subMu.Unlock()
 
 	// 构造注入消息
 	injectMsg := fmt.Sprintf("[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",

@@ -1197,10 +1197,18 @@ impl Agent {
     fn drain_sub_results(&mut self) -> bool {
         let mut drained = false;
         while let Ok(msg) = self.sub_result_rx.try_recv() {
-            if let MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count: _ } = msg {
+            if let MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count } = msg {
                 let _ = self.append_event(json!({"type":"usage","input_tokens":in_tokens,"output_tokens":out_tokens,"cache_read_input_tokens":cache_read_tokens,"cache_creation_input_tokens":cache_creation_tokens,"kind":"sub_agent","sub_session_id":&session_id}));
                 let _ = self.emit_and_append_event(json!({"type":"sub_agent_result","session_id":&session_id,"status":&status,"input_tokens":in_tokens,"output_tokens":out_tokens,"thinking":&thinking,"text":&text}));
                 let _ = self.append_event(json!({"type":"sub_agent_end","session_id":&session_id,"timestamp":chrono_like_now(),"status":&status}));
+                let _ = store::store_stats_update(&self.paths.stats, |stats| {
+                    Self::add_stat_usize(stats, "sub_agent_request_count", 1);
+                    Self::add_stat_usize(stats, "agent_request_count", request_count);
+                    Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
+                    Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
+                    Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
+                    Self::add_stat_usize(stats, "total_cache_creation_tokens", cache_creation_tokens);
+                });
                 if self.active_sub_count > 0 { self.active_sub_count -= 1; }
                 let ctx = format!("[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}", session_id, status, in_tokens, out_tokens, thinking, text);
                 let _ = self.queue_display_event(DisplayEvent::SubAgentResult { session_id, status, thinking, text, in_tokens, out_tokens });

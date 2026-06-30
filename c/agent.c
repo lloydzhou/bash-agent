@@ -1840,19 +1840,6 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
                                    int in_tokens, int out_tokens,
                                    int cache_read, int cache_creation,
                                    int request_count) {
-    agent->active_sub_count--;
-
-    /* 显示结果（事件已手动写入，只推显示队列不重复写事件） */
-    DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-    *dm = display_msg_sub_agent_result(session_id, status, thinking,
-                                       text, in_tokens, out_tokens);
-    if (!store_event_stream_json_enabled()) {
-        mq_push(agent->display_queue, dm);
-    } else {
-        display_message_free(dm);
-        free(dm);
-    }
-
     /* 记录 usage 事件（kind=sub_agent, sub_session_id） */
     {
         StrBuf evt;
@@ -1866,26 +1853,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
         sb_free(&evt);
     }
 
-    /* 更新统计 — 对齐 bash 版 agent_handle_sub_result:
-     * store_stats_update total_input_tokens=+N total_output_tokens=+N
-     *   total_cache_read_tokens=+N total_cache_creation_tokens=+N
-     *   sub_agent_request_count=+1 agent_request_count=+N */
-    store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + in_tokens);
-    store_stats_set_int_file(agent->paths.stats, "total_output_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_output_tokens") + out_tokens);
-    store_stats_set_int_file(agent->paths.stats, "total_cache_read_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + cache_read);
-    store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
-        store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + cache_creation);
-    store_stats_set_int_file(agent->paths.stats, "sub_agent_request_count",
-        store_stats_get_file_int(agent->paths.stats, "sub_agent_request_count") + 1);
-    /* agent_request_count 累加子 agent 的请求数 */
-    store_stats_set_int_file(agent->paths.stats, "agent_request_count",
-        store_stats_get_file_int(agent->paths.stats, "agent_request_count") + request_count);
-    agent_update_title(agent);
-
-    /* 记录 sub_agent_result 事件 — 对齐 bash 版，供 replay 和 stream-json 复现 */
+    /* 记录 sub_agent_result 事件 — 供 replay 和 stream-json 复现 */
     {
         StrBuf evt;
         sb_init(&evt);
@@ -1903,7 +1871,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
         sb_free(&evt);
     }
 
-    /* 记录 sub_agent_end 事件 — 对齐 bash 版，带 timestamp */
+    /* 记录 sub_agent_end 事件 — 带 timestamp */
     {
         time_t now = time(NULL);
         struct tm tm_buf;
@@ -1921,6 +1889,35 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
         sb_append(&evt, "}");
         store_event_append(&agent->paths, evt.data);
         sb_free(&evt);
+    }
+
+    /* 更新统计 */
+    store_stats_set_int_file(agent->paths.stats, "total_input_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_input_tokens") + in_tokens);
+    store_stats_set_int_file(agent->paths.stats, "total_output_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_output_tokens") + out_tokens);
+    store_stats_set_int_file(agent->paths.stats, "total_cache_read_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_cache_read_tokens") + cache_read);
+    store_stats_set_int_file(agent->paths.stats, "total_cache_creation_tokens",
+        store_stats_get_file_int(agent->paths.stats, "total_cache_creation_tokens") + cache_creation);
+    store_stats_set_int_file(agent->paths.stats, "sub_agent_request_count",
+        store_stats_get_file_int(agent->paths.stats, "sub_agent_request_count") + 1);
+    store_stats_set_int_file(agent->paths.stats, "agent_request_count",
+        store_stats_get_file_int(agent->paths.stats, "agent_request_count") + request_count);
+    agent_update_title(agent);
+
+    /* 递减活跃子 agent 计数 */
+    agent->active_sub_count--;
+
+    /* 显示结果（推 display 队列） */
+    DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+    *dm = display_msg_sub_agent_result(session_id, status, thinking,
+                                       text, in_tokens, out_tokens);
+    if (!store_event_stream_json_enabled()) {
+        mq_push(agent->display_queue, dm);
+    } else {
+        display_message_free(dm);
+        free(dm);
     }
 
     return 0;
