@@ -471,7 +471,7 @@ store_session_resolve_continue() {
     fi
 }
 
-# 处理子 agent 通过 FIFO 发回的 AGENT_RESULT 将 result_text 注入主 agent conversation，触发 agent_loop 让主 agent 处理
+# 记录事件到当前 session 的 events.jsonl
 store_event_append() {
     [[ -n "${SESSION_EVENT_FILE:-}" ]] || return 0
     if util_is_stream_json; then printf '%s\n' "$1" | tee -a "$SESSION_EVENT_FILE"; else printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"; fi
@@ -1016,8 +1016,8 @@ tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlenc
 
 tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/$1" 2>&1; }
 
-# 启动异步子 agent：后台执行 agent_loop，完成后通过 INPUT_FIFO 发回 AGENT_RESULT
-# 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <result_text> <in> <out> <cr> <cc> <reqs>
+# 启动异步子 agent：后台执行 agent_loop，完成后通过 NOTIFY_FIFO 发回 AGENT_RESULT
+# 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <thinking> <text> <in> <out> <cr> <cc> <reqs>
 tool_sub_agent() {
     local prompt="$1" description="${2:-}" fork="${3:-}" sub_session_id="sub_$(util_new_session_id)"
 
@@ -1355,7 +1355,7 @@ agent_main_loop() {
                 fi
                 ;;
             NOTIFY_PENDING)
-                agent_run_loop "" notify
+                [[ -s "$NOTIFY_BUF" ]] && agent_run_loop "" notify
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
                     local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     (( _cnt <= 0 )) && util_write_msg "SESSION_END" >&5
@@ -1371,24 +1371,26 @@ agent_main_loop() {
     rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$AGENT_RUNNING_FLAG"
 }
 
+agent_drain_notify_buf() {
+    [[ -f "$NOTIFY_BUF" && -s "$NOTIFY_BUF" ]] || return 1
+    local _nb_tmp="${NOTIFY_BUF}.${$}" _nb_content
+    mv "$NOTIFY_BUF" "$_nb_tmp" 2>/dev/null || return 1
+    _nb_content=$(<"$_nb_tmp")
+    rm -f "$_nb_tmp"
+    [[ -n "$_nb_content" ]] || return 1
+    store_conv_add_user "$_nb_content"
+}
+
 agent_loop_stream() {
     local user_input="$1" turn=0
     # Trap SIGINT: close pipe FD to unblock read
     trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes; rm -f "$AGENT_RUNNING_FLAG"' INT
-    # 通知后台 reader：agent_loop 在运行中（notify 走 buffer 不走 NOTIFY_PENDING）
-    : > "$AGENT_RUNNING_FLAG"
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
+        # 通知后台 reader：agent_loop 在运行中（notify 走 buffer，不直接触发 NOTIFY_PENDING）
+        : > "$AGENT_RUNNING_FLAG"
         # Drain NOTIFY_BUF before each LLM call: 原子 mv 读清
-        if [[ -f "$NOTIFY_BUF" && -s "$NOTIFY_BUF" ]]; then
-            local _nb_tmp="${NOTIFY_BUF}.${$}"
-            if mv "$NOTIFY_BUF" "$_nb_tmp" 2>/dev/null; then
-                local _nb_content
-                _nb_content=$(<"$_nb_tmp")
-                rm -f "$_nb_tmp"
-                [[ -n "$_nb_content" ]] && store_conv_add_user "$_nb_content"
-            fi
-        fi
+        agent_drain_notify_buf || true
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
@@ -1445,8 +1447,13 @@ agent_loop_stream() {
             if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
                 store_stats_update current_context_tokens=${_ctx_tokens}
             fi
-            # tool_use/tool_calls → loop continues; anything else → break
-            [[ "$stop" == "tool_use" || "$stop" == "tool_calls" ]] || { util_write_msg "STOP" "$stop"; break; }
+            # tool_use/tool_calls → loop continues; otherwise exit unless a sub-agent result arrived meanwhile
+            if [[ "$stop" != "tool_use" && "$stop" != "tool_calls" ]]; then
+                rm -f "$AGENT_RUNNING_FLAG"
+                agent_drain_notify_buf && continue
+                util_write_msg "STOP" "$stop"
+                break
+            fi
         else
             util_write_msg "STOP" "interrupted"
             break
@@ -1475,7 +1482,7 @@ agent_loop() {
         util_write_msg "IMAGE_DESCRIBE" "$_images" "$desc" >&4 2>/dev/null || true
         user_input+=$'\n\n<attached-images>\n'"$desc"$'\n</attached-images>'
     fi
-    store_conv_add_user "$user_input"
+    [[ "$turn_kind" != notify ]] && store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
     # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl
     trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT
