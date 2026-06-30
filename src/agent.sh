@@ -1023,6 +1023,7 @@ tool_sub_agent() {
     [[ -z "$prompt" ]] && { echo "no prompt provided for sub-agent"; return 1; }
 
     store_event_append "{\"type\":\"sub_agent_start\",\"session_id\":\"$(util_json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(util_json_escape "$prompt")\",\"description\":\"$(util_json_escape "$description")\",\"fork\":$fork}" >/dev/null
+    { local __cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"; }
 
     (
         local _parent_notify_fifo="$NOTIFY_FIFO"
@@ -1515,7 +1516,7 @@ agent_loop() {
     while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
-        [[ "$_type" == "TOOL_CALL" && "$_reason" == "SubAgent" ]] && { local __cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"; }
+        # SubAgent counter incremented in tool_sub_agent (before child process spawn)
         _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
         util_is_stream_json || ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
