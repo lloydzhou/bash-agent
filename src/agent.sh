@@ -1401,7 +1401,8 @@ agent_drain_notify_buf() {
     _nb_content=$(<"$_nb_tmp")
     rm -f "$_nb_tmp"
     [[ -n "$_nb_content" ]] || return 1
-    # display：带颜色直接输出（TEXT RESP → display_stream）
+    # display：带颜色直接输出（TEXT RESP → display_stream），补尾部换行
+    [[ "$_nb_content" == *$'\n' ]] || _nb_content+=$'\n'
     util_is_stream_json || util_write_msg "TEXT" "$_nb_content" >&4 2>/dev/null || true
     # conversation：去除 ANSI 颜色码后注入（[...m）
     store_conv_add_user "$(printf '%s' "$_nb_content" | sed $'s/\x1b\[[0-9;]*m//g')"
