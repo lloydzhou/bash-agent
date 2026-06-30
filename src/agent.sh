@@ -1023,7 +1023,7 @@ tool_sub_agent() {
     [[ -z "$prompt" ]] && { echo "no prompt provided for sub-agent"; return 1; }
 
     store_event_append "{\"type\":\"sub_agent_start\",\"session_id\":\"$(util_json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(util_json_escape "$prompt")\",\"description\":\"$(util_json_escape "$description")\",\"fork\":$fork}" >/dev/null
-    { local __cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"; }
+    { local __cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"; }
 
     (
         local _parent_notify_fifo="$NOTIFY_FIFO"
@@ -1325,7 +1325,7 @@ agent_main_loop() {
                     # 格式化文本追加到 NOTIFY_BUF
                     printf '[sub-agent %s] %s (in=%s, out=%s)\nThinking: %s\nText: %s\n' "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
                     # 递减 active_sub 计数器（大于 0 才减，防止竞态下提前归零）
-                    local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
                     # 展示结果摘要到 display
                     util_is_stream_json || ( util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" ) >&4 2>/dev/null || true
@@ -1353,7 +1353,7 @@ agent_main_loop() {
                 while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
                 # 非交互模式：等待所有子进程完成后再退出
                 if [[ "$INTERACTIVE" != true ]]; then
-                    local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     # 循环等待：只要还有活跃子 agent 或未读结果，就不退出
                     while (( _cnt > 0 )) || [[ -s "$NOTIFY_BUF" ]]; do
                         # 等待 0.1s 让子进程有机会完成
@@ -1361,7 +1361,7 @@ agent_main_loop() {
                         if [[ -s "$NOTIFY_BUF" ]]; then
                             agent_run_loop "" notify
                         fi
-                        _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                        _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     done
                     if [[ ! -s "$NOTIFY_BUF" ]]; then
                         util_write_msg "SESSION_END" >&5
@@ -1373,13 +1373,13 @@ agent_main_loop() {
                 # 持续 drain 可能同时到达的更多结果
                 while [[ -s "$NOTIFY_BUF" ]]; do agent_run_loop "" notify; done
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
-                    local _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     while (( _cnt > 0 )) || [[ -s "$NOTIFY_BUF" ]]; do
                         sleep 0.1 2>/dev/null || true
                         if [[ -s "$NOTIFY_BUF" ]]; then
                             agent_run_loop "" notify
                         fi
-                        _cnt=$(<"$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                        _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
                     done
                     if [[ ! -s "$NOTIFY_BUF" ]]; then
                         util_write_msg "SESSION_END" >&5
