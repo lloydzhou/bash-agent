@@ -1402,8 +1402,11 @@ agent_drain_notify_buf() {
     rm -f "$_nb_tmp"
     [[ -n "$_nb_content" ]] || return 1
     store_conv_add_user "$_nb_content"
-    # 消费时 display：通过 FD 4 写入 display pipe，不打断流式输出
-    util_is_stream_json || util_write_msg "TEXT" "$_nb_content" >&4 2>/dev/null || true
+    # 消费时 display：紫色标记 + 确保尾部换行（不打断后续流式输出）
+    local _disp
+    _disp=$(printf '\033[35m%s\033[0m' "$_nb_content")
+    [[ "$_disp" == *$'\n' ]] || _disp+=$'\n'
+    util_is_stream_json || util_write_msg "TEXT" "$_disp" >&4 2>/dev/null || true
 }
 
 agent_loop_stream() {
