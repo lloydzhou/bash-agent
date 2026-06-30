@@ -1091,12 +1091,7 @@ impl Agent {
 
                     // 不再通知 readline 线程 — 它已经在下一轮 EditStart
                 }
-                MainLoopMessage::AgentResult { .. } => {
-                    // 在交互模式下，AgentResult 应该在 UserInput 的内部 while 循环中被处理。
-                    // 如果走到这里，说明是非交互模式或者异常情况。
-                    // 非交互模式下直接忽略（active_sub_count 不会 > 0 因为没有 while 循环等待）。
-                    // 保留此分支以防意外。
-                }
+                _ => {}
             }
 
             // 非交互模式且无活跃子 agent 时退出
