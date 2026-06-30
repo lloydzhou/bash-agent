@@ -119,9 +119,7 @@ util_parse_size() {
 }
 
 util_json_escape() {
-    local _s="${1:-}"
-    _s="${_s//\\/\\\\}" _s="${_s//\"/\\\"}" _s="${_s//$'\n'/\\n}" _s="${_s//$'\r'/\\r}" _s="${_s//$'\t'/\\t}" _s="${_s//$'\b'/\\b}" _s="${_s//$'\f'/\\f}"
-    printf '%s' "$_s"
+    printf '%s' "${1:-}" | util_awk_run -v json_mode=escape_string -f "$AWK_DIR/json.awk" -f "$AWK_DIR/json_cli.awk"
 }
 
 util_is_stream_json() { [[ "$OUTPUT_FORMAT" == "stream-json" ]]; }
@@ -1019,28 +1017,29 @@ tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -H "Authorization
 # 启动异步子 agent：后台执行 agent_loop，完成后通过 NOTIFY_FIFO 发回 AGENT_RESULT
 # 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <thinking> <text> <in> <out> <cr> <cc> <reqs>
 tool_sub_agent() {
-    local prompt="$1" description="${2:-}" fork="${3:-}" sub_session_id="sub_$(util_new_session_id)"
+    local prompt="$1" description="${2:-}" fork="${3:-false}" sub_session_id="sub_$(util_new_session_id)"
+    [[ "$fork" == "true" ]] || fork=false
 
     [[ -z "$prompt" ]] && { echo "no prompt provided for sub-agent"; return 1; }
 
-    store_event_append "{\"type\":\"sub_agent_start\",\"session_id\":\"$(util_json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(util_json_escape "$prompt")\",\"description\":\"$(util_json_escape "$description")\",\"fork\":$fork}"
+    store_event_append "{\"type\":\"sub_agent_start\",\"session_id\":\"$(util_json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(util_json_escape "$prompt")\",\"description\":\"$(util_json_escape "$description")\",\"fork\":$fork}" >/dev/null
 
     (
+        local _parent_notify_fifo="$NOTIFY_FIFO"
         # fork mode needs to copy conversation and summary to new session dir
         if [[ "$fork" == "true" ]]; then
             store_session_fork "$(store_session_get_dir)/${SESSION_ID}" "$(store_session_get_dir)/${sub_session_id}"
         fi
         export SESSION_ID="$sub_session_id"
         export INTERACTIVE=false
-        local _parent_notify_fifo="$NOTIFY_FIFO"
         store_session_init
         util_load_tool_defs
-        local _done=false _status="failed"
-        trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"; exec 6<&- 2>/dev/null; rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$ACTIVE_SUB_FILE"' EXIT
         # Silence the child shell completely; close all inherited FDs
         exec </dev/null >/dev/null 2>&1
         exec 3<&- 2>/dev/null; exec 4<&- 2>/dev/null; exec 5<&- 2>/dev/null
         exec 8<&- 2>/dev/null
+        local _done=false _status="failed"
+        trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"; exec 6<&- 2>/dev/null; rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$ACTIVE_SUB_FILE"' EXIT
         agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"
         _done=true

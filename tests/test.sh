@@ -46,7 +46,21 @@ project_key() {
 
 green() { printf '\033[32m✓ PASS: %s\033[0m\n' "$1"; }
 red()   { printf '\033[31m✗ FAIL: %s\033[0m\n' "$1"; }
-info()  { printf '\033[36m→ %s\033[0m\n' "$1"; }
+TEST_TIMER_NAME=""
+TEST_TIMER_START=$SECONDS
+info() {
+    if [[ -n "$TEST_TIMER_NAME" ]]; then
+        printf '\033[90m  elapsed: %ss — %s\033[0m\n' "$((SECONDS - TEST_TIMER_START))" "$TEST_TIMER_NAME"
+    fi
+    TEST_TIMER_NAME="$1"
+    TEST_TIMER_START=$SECONDS
+    printf '\033[36m→ %s\033[0m\n' "$1"
+}
+timing_finish() {
+    [[ -n "$TEST_TIMER_NAME" ]] || return 0
+    printf '\033[90m  elapsed: %ss — %s\033[0m\n' "$((SECONDS - TEST_TIMER_START))" "$TEST_TIMER_NAME"
+    TEST_TIMER_NAME=""
+}
 
 # Short test helpers
 multi_grep() { local o="$1"; shift; for p in "$@"; do grep -q "$p" <<< "$o" 2>/dev/null || return 1; done; return 0; }
@@ -2807,6 +2821,8 @@ test_bash_mode_scanner() {
 }
 
 test_bash_mode_scanner
+
+timing_finish
 
 echo ""
 echo "=============================="

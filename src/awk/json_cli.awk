@@ -2,16 +2,14 @@
 
 BEGIN {
     if (json_mode == "escape_string") {
-        if (json_input == "") {
-            if ((getline json_input) < 0) {
-                json_input = ""
-            } else {
-                while ((getline _line) > 0) {
-                    json_input = json_input "\n" _line
-                }
+        if ((getline json_input) < 0) {
+            json_input = ""
+        } else {
+            while ((getline _line) > 0) {
+                json_input = json_input "\n" _line
             }
         }
-        print escape_json_string(json_input)
+        printf "%s", escape_json_string(json_input)
         exit 0
     }
 
