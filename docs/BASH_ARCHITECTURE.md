@@ -16,13 +16,23 @@
 │  FD 3 ← INPUT_FIFO (读端)                            │
 │  FD 5 → INPUT_FIFO (写端, 防止 EOF)                   │
 │  FD 4 → display_stream 子进程 (RESP 消息)              │
+│  FD 6 ↔ NOTIFY_FIFO (双端打开, 读 sub-agent 结果)      │
 │  FD 7 ← agent_loop_stream 管道                        │
 │  FD 8 ← llm_call 管道                                │
 │                                                      │
 │  ┌──────────────────────┐                           │
 │  │ agent_loop_stream()   │ (process substitution)    │
 │  │  FD 8 ← llm_call 管道 │                          │
-│  │  → FD 4 (display)     │                          │
+│  │  → FD 7 (agent_loop)  │                          │
+│  │  agent_drain_notify_  │                          │
+│  │    buf() 消费结果      │                          │
+│  └──────────────────────┘                           │
+│                                                      │
+│  ┌──────────────────────┐                           │
+│  │ notify reader (子shell)│ (background)              │
+│  │  FD 6 ← NOTIFY_FIFO   │                          │
+│  │  → NOTIFY_BUF (文件)   │                          │
+│  │  → FD 5 NOTIFY_PENDING│                          │
 │  └──────────────────────┘                           │
 │                                                      │
 │  ┌──────────────────────┐                           │
@@ -34,7 +44,7 @@
 
 Sub-Agent (后台子进程):
   ( ... ) &  — 在子 shell 中执行 agent_loop
-  完成后通过 store_sub_send_result 写入父进程的 INPUT_FIFO
+  完成后通过 store_sub_send_result 写入父进程的 NOTIFY_FIFO
 ```
 
 ### 1.2 FD 分配（固定）
@@ -44,9 +54,10 @@ Sub-Agent (后台子进程):
 | 3 | 读 | INPUT_FIFO 读取端 | agent_main_loop |
 | 4 | 写 | display_stream 管道 | agent_main_loop |
 | 5 | 写 | INPUT_FIFO 写入端（保持打开防 EOF） | agent_main_loop / interactive_mode |
+| 6 | 读写 | NOTIFY_FIFO 双端打开（防写者关闭后 EOF） | notify reader 子 shell |
 | 7 | 读 | agent_loop_stream → agent_loop 管道 | agent_loop |
 | 8 | 读 | llm_call → agent_loop_stream 管道 | agent_loop_stream |
-| 9 | 读 | curl SSE 流 | llm_stream_curl |
+| 9 | 读 | NOTIFY_BUF 临时文件读取 | agent_drain_notify_buf |
 
 ### 1.3 RESP 消息协议
 
@@ -73,9 +84,9 @@ $len1\r\ndata1\r\n   — 字段1
 | ERROR | message | LLM/内部 |
 | RETRY | (无) | LLM SSE (retry 信号) |
 | CONTEXT_UPDATE | kind, trigger | compact |
-| SUB_AGENT_RESULT | session_id, status, in, out, thinking, text | sub-agent |
+| AGENT_RESULT | session_id, status, in, out, thinking, text | sub-agent 完成（NOTIFY_FIFO） |
+| NOTIFY_PENDING | (无) | notify reader → 主循环（触发 notify turn） |
 | USER_INPUT | seq, content | 用户输入 |
-| AGENT_RESULT | session_id, status, thinking, text, in, out, cr, cc, reqs | sub-agent 完成 |
 | SESSION_END | code | 退出 |
 | IMAGE_DESCRIBE | images, description | 图片描述 |
 | USER_MESSAGE | content | 用户消息回显 |
@@ -312,35 +323,76 @@ agent_main_loop() {
     until exec 3< "$INPUT_FIFO"; do sleep 0.01; done  # 等待 FIFO 可读
     exec 5> "$INPUT_FIFO"  # 保持写端打开，防止 EOF
     exec 4> >(display_stream)  # 启动 display 子进程
-    local display_pid=$! active_sub_count=0
-    
-    while util_read_msg <&3; do
+    local display_pid=$! saw_user_input=false
+
+    # 后台 notify reader：阻塞读 NOTIFY_FIFO → 写入 NOTIFY_BUF + 记录事件统计
+    (
+        trap - INT EXIT
+        exec 6<> "$NOTIFY_FIFO" 2>/dev/null  # 双端打开，防止写者关闭后 EOF
+        while util_read_msg <&6; do
+            case "${REPLY_MESSAGE[0]}" in
+                AGENT_RESULT)
+                    # 解析字段
+                    _sid="${REPLY_MESSAGE[1]}" _status="${REPLY_MESSAGE[2]}"
+                    _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
+                    _in="${REPLY_MESSAGE[5]}" _out="${REPLY_MESSAGE[6]}" ...
+
+                    # 记录事件（usage, sub_agent_result, sub_agent_end）
+                    store_event_append ...
+
+                    # AGENT_RESULT RESP 追加到 NOTIFY_BUF
+                    util_write_msg "AGENT_RESULT" ... >> "$NOTIFY_BUF"
+
+                    # 递减 ACTIVE_SUB_FILE 计数器（大于 0 才减）
+                    _cnt=$(cat "$ACTIVE_SUB_FILE"); (( _cnt > 0 )) && _cnt--
+
+                    # idle 时（无 AGENT_RUNNING_FLAG）触发 notify turn
+                    if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
+                        util_write_msg "NOTIFY_PENDING" >&5
+                    fi
+                    ;;
+            esac
+        done
+    ) &
+    local _notify_pid=$!
+
+    while true; do
+        util_read_msg <&3 || break
         case "${REPLY_MESSAGE[0]}" in
             SESSION_END) break ;;
-            USER_INPUT)  agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}" ;;
-            AGENT_RESULT)
-                if [[ "$INTERRUPT_REQUESTED" == true ]]; then
-                    agent_handle_sub_result true   # silent mode
-                else
-                    agent_handle_sub_result        # normal mode
+            USER_INPUT)
+                saw_user_input=true
+                agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
+                # 非交互模式：无活跃子 agent 且无待读结果 → 退出
+                if [[ "$INTERACTIVE" != true ]]; then
+                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
+                fi
+                ;;
+            NOTIFY_PENDING)
+                [[ -s "$NOTIFY_BUF" ]] && agent_run_loop "" notify
+                if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
+                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
                 fi
                 ;;
         esac
-        # 非交互模式且没有活跃 sub-agent → 退出
-        [[ "$INTERACTIVE" != true ]] && (( active_sub_count == 0 )) && break
     done
-    
-    exec 4>&-  # 关闭 display 管道
+
+    kill "$_notify_pid" 2>/dev/null; wait "$_notify_pid" 2>/dev/null || true
+    exec 4>&-
     wait "$display_pid" 2>/dev/null || true
     cleanup_all_pipes
-    rm -f "$INPUT_FIFO"
+    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$AGENT_RUNNING_FLAG"
 }
 ```
 
-**关键细节**：
-- `active_sub_count`：跟踪活跃 sub-agent 数量。TOOL_CALL SubAgent 时 +1，AGENT_RESULT 时 -1
-- 非交互模式下，如果没有活跃 sub-agent 就退出循环
-- INTERRUPT_REQUESTED 时 sub-agent 结果静默处理（不显示回显）
+**关键设计变化（vs 旧版）**：
+- **双 FIFO**：INPUT_FIFO（用户输入 + NOTIFY_PENDING）+ NOTIFY_FIFO（SubAgent 结果）
+- **notify reader 子 shell**：后台阻塞读 NOTIFY_FIFO，解析 AGENT_RESULT，写入 NOTIFY_BUF
+- **ACTIVE_SUB_FILE**：文件计数器（替代旧的内存变量 `active_sub_count`），在 `tool_sub_agent` 中子进程创建前递增，在 notify reader 中递减
+- **AGENT_RUNNING_FLAG**：标记 agent_loop_stream 是否运行中。运行中时 notify reader 不发 NOTIFY_PENDING（靠 `agent_drain_notify_buf` 在下一轮迭代消费）
+- **退出判断**：`_cnt <= 0 && NOTIFY_BUF 空 → SESSION_END`
 
 ### 5.3 agent_loop()
 
@@ -389,22 +441,28 @@ agent_loop() {
 ```bash
 agent_loop_stream() {
     local user_input="$1" turn=0
-    trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
+    trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes; rm -f "$AGENT_RUNNING_FLAG"' INT
     
     while (( turn < MAX_TURNS )); do
         (( turn++ ))
         
-        # ① Compact before LLM call
+        # ① agent_loop 运行中标记（notify reader 见此标记不发 NOTIFY_PENDING）
+        : > "$AGENT_RUNNING_FLAG"
+        
+        # ② 消费 NOTIFY_BUF（SubAgent 结果），在 LLM 调用前处理
+        agent_drain_notify_buf || true
+        
+        # ③ Compact before LLM call
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         
-        # ② LLM call
+        # ④ LLM call
         exec 8< <(llm_call "$(store_conv_get_messages)")
         
-        # ③ 读取 SSE 消息流
+        # ⑤ 读取 SSE 消息流
         while util_read_msg <&8; do
             if INTERRUPT_REQUESTED → stop="interrupted"; break
             
-            util_write_msg "${REPLY_MESSAGE[@]}"  # 转发给 display（FD 4）
+            util_write_msg "${REPLY_MESSAGE[@]}"  # 转发给 agent_loop (FD 7)
             
             case type:
                 RETRY → 重置 text/thinking/tool_calls/tool_conv_results/_ctx_tokens
@@ -418,32 +476,43 @@ agent_loop_stream() {
         done
         exec 8<&-
         
-        # ④ Interrupted → emit STOP interrupted, break
+        # ⑥ Interrupted → emit STOP interrupted, break
         [[ INTERRUPT_REQUESTED ]] && { util_write_msg "STOP" "interrupted"; break; }
         
-        # ⑤ Fatal stop → return 1
+        # ⑦ Fatal stop → return 1
         case stop:
             error|max_tokens|length → 
                 stop != error 时 emit ERROR "Response truncated (max_tokens reached)"
                 return 1
         esac
         
-        # ⑥ 持久化（非 interrupted）
+        # ⑧ 持久化（非 interrupted）
         store_conv_add_assistant "$text" "$thinking" "$tool_calls"
         if tool_conv_results:
             store_conv_add_tool_results "$tool_conv_results"
         if _ctx_tokens > 0:
             store_stats_update current_context_tokens=${_ctx_tokens}
         
-        # ⑦ 继续/退出
-        stop == tool_use|tool_calls → continue loop
-        else → emit STOP, break
+        # ⑨ 继续/退出
+        if stop == tool_use|tool_calls → continue loop
+        else:
+            rm -f "$AGENT_RUNNING_FLAG"       # 移除运行标记
+            agent_drain_notify_buf && continue  # 有 SubAgent 结果 → 继续处理
+            util_write_msg "STOP" "$stop"
+            break
     done
     
     # Max turns reached
     (( turn >= MAX_TURNS )) && util_write_msg "ERROR" "Max turns ($MAX_TURNS) reached"
+    rm -f "$AGENT_RUNNING_FLAG"
 }
 ```
+
+**新增设计（vs 旧版）**：
+- 每轮迭代开头创建 `AGENT_RUNNING_FLAG`，结束时移除
+- 每轮迭代开头和 end_turn 后都调用 `agent_drain_notify_buf` 消费 SubAgent 结果
+- end_turn 后如果有 SubAgent 结果 → `continue` 继续处理（不打断流式输出）
+- **`agent_drain_notify_buf` 消费时**：RESP 解析 → AGENT_RESULT 转发 FD 4（display_sub_agent_result 原始格式）→ 从字段构建纯文本注入 conversation
 
 **RETRY 处理细节**：
 当收到 RETRY 消息时，重置所有累积变量：`text="" thinking="" tool_calls="" tool_conv_results="" _ctx_tokens=""`。这是为了丢弃 retry 前的部分响应。
@@ -684,23 +753,31 @@ tool_plan_clear() {
 ```bash
 tool_sub_agent() {
     sub_session_id = "sub_$(util_new_session_id)"
+    fork = "${3:-false}"  # 默认 false
+    [[ "$fork" == "true" ]] || fork=false  # 归一化
     
-    # 记录 sub_agent_start 事件
-    store_event_append '{"type":"sub_agent_start",...}'
+    # 记录 sub_agent_start 事件（stdout 重定向到 /dev/null 防污染）
+    store_event_append '{"type":"sub_agent_start",...}' >/dev/null
+    
+    # 子进程创建前递增计数器（消除竞态：先加后创建）
+    __cnt=$(cat "$ACTIVE_SUB_FILE"); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"
     
     # 后台子 shell
     (
+        _parent_notify_fifo="$NOTIFY_FIFO"  # 捕获父进程 NOTIFY_FIFO 路径
+        
         if fork == "true":
-            store_session_fork(parent_dir, sub_dir)  # 复制 conversation/summary/plan
+            store_session_fork(parent_dir, sub_dir)
         export SESSION_ID=sub_session_id
         export INTERACTIVE=false
-        store_session_init
+        store_session_init          # 创建子会话目录（含新的 INPUT_FIFO/NOTIFY_FIFO）
         util_load_tool_defs
-        trap 'store_sub_send_result ...; rm -f INPUT_FIFO' EXIT
-        exec </dev/null >/dev/null 2>&1  # 完全静默
-        exec 3<&- 4<&- 5<&- 8<&- ...  # 关闭所有继承的 FD
+        # Silence：在 store_session_init 之后关闭 FD
+        exec </dev/null >/dev/null 2>&1
+        exec 3<&- 4<&- 5<&- 8<&-
+        trap 'store_sub_send_result ... "$_parent_notify_fifo"; exec 6<&-; rm -f $INPUT_FIFO $NOTIFY_FIFO $NOTIFY_BUF $ACTIVE_SUB_FILE' EXIT
         agent_loop "$prompt" && _status="ok"
-        store_sub_send_result "$sub_session_id" "$_status" "$_parent_input_fifo"
+        store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"
     ) &
     
     printf 'Sub-agent started: session_id=%s, pid=%s' "$sub_session_id" "$!"
@@ -872,7 +949,11 @@ tool_bash_mode_allows() {
   plan.md             — 已确认计划
   plan.draft          — 计划草稿
   images/             — 粘贴的图片
-  input.fifo          — 输入管道（运行时）
+  input.fifo          — 用户输入管道（运行时）
+  notify.fifo         — SubAgent 结果通知管道（运行时）
+  notify.buf          — SubAgent 结果缓冲（NOTIFY_BUF，RESP 格式）
+  active_sub.count    — 活跃 SubAgent 计数器
+  agent_running.flag  — agent_loop_stream 运行中标记
 ```
 
 ### 9.2 project_key 计算
@@ -1055,7 +1136,7 @@ display_stream() { while util_read_msg; do display_message; done }
 | THINKING | 灰色 `\033[90m...\033[0m`；`PREV_WAS_THINKING=true` |
 | TOOL_CALL | 黄色 `\033[33m[tool] summary\033[0m`；调用 `tool_call_summary` |
 | TOOL_RESULT | Edit→全量输出+换行；Read/Write→第一行+换行；其他→全量+换行 |
-| SUB_AGENT_RESULT | 紫色/红色状态行；thinking 截断 120 字符；text 截断 120 字符 |
+| AGENT_RESULT | 紫色/红色状态行；thinking 截断 120 字符；text 截断 120 字符 |
 | IMAGE_DESCRIBE | 青色 `📸 images: description` |
 | USER_MESSAGE | 绿色 `> text`（截断 80 字符） |
 | STOP | interrupted → 青色 "Interrupted."；其他 → 确保换行 |
@@ -1098,21 +1179,34 @@ fi
 
 ## 11. SubAgent 机制
 
-### 11.1 启动流程
+### 11.1 双 FIFO 架构
 
-1. 生成 `sub_session_id = "sub_$(util_new_session_id)"`
-2. 记录 `sub_agent_start` 事件
-3. 后台子 shell：
+```
+INPUT_FIFO:  用户输入 + NOTIFY_PENDING（主循环读）
+NOTIFY_FIFO: SubAgent 结果（notify reader 读）
+
+NOTIFY_BUF:  SubAgent 结果缓冲文件（RESP 格式）
+ACTIVE_SUB_FILE: 活跃计数器（文件）
+AGENT_RUNNING_FLAG: agent_loop_stream 运行标记（文件）
+```
+
+### 11.2 启动流程
+
+1. `sub_session_id = "sub_$(util_new_session_id)"`
+2. `fork="${3:-false}"`，归一化为 `true` 或 `false`
+3. 记录 `sub_agent_start` 事件（`>/dev/null`）
+4. **子进程创建前**递增 `ACTIVE_SUB_FILE` 计数器
+5. 后台子 shell：
+   - 捕获父进程 `NOTIFY_FIFO` 路径
    - fork=true 时复制 conversation/summary/plan
-   - 设置新的 SESSION_ID
-   - `store_session_init`（创建新会话目录）
-   - trap EXIT：发送结果到父 INPUT_FIFO
-   - 关闭所有继承的 FD（3/4/5/8）
+   - 设置新 `SESSION_ID`，`store_session_init`
    - `exec </dev/null >/dev/null 2>&1`（完全静默）
+   - 关闭所有继承的 FD（3/4/5/8）
+   - trap EXIT：`store_sub_send_result` 写入父进程的 `NOTIFY_FIFO`
    - `agent_loop "$prompt"`
-   - `store_sub_send_result` 发送结果
+   - `store_sub_send_result`
 
-### 11.2 结果传递
+### 11.3 结果传递
 
 ```bash
 store_sub_send_result() {
@@ -1120,28 +1214,42 @@ store_sub_send_result() {
     # - thinking (最后一条 assistant 的 thinking)
     # - text (最后一条 assistant 的 text)
     # - usage 统计 (in/out/cr/cc)
-    # 写入父进程的 INPUT_FIFO
+    # 写入父进程的 NOTIFY_FIFO（不是 INPUT_FIFO）
 }
 ```
 
-### 11.3 结果处理
+### 11.4 notify reader（后台子 shell）
+
+阻塞读 `NOTIFY_FIFO`，处理 `AGENT_RESULT` 消息：
+
+1. 记录事件：`usage`(kind=sub_agent) + `sub_agent_result` + `sub_agent_end`
+2. 更新统计：`store_stats_update total_input_tokens=+N ...`
+3. 将 `AGENT_RESULT` RESP 追加到 `NOTIFY_BUF`
+4. 递减 `ACTIVE_SUB_FILE`（大于 0 才减）
+5. 如果 `AGENT_RUNNING_FLAG` 不存在（idle）→ 发 `NOTIFY_PENDING` 到 `INPUT_FIFO`
+
+### 11.5 agent_drain_notify_buf()
+
+在 `agent_loop_stream` 每轮迭代开头和 end_turn 后调用：
+
+1. 原子 `mv` NOTIFY_BUF 到临时文件
+2. `exec 9< tmpfile`；逐条 `util_read_msg <&9` 解析 RESP
+3. 对每条 `AGENT_RESULT`：
+   - **display**：转发 RESP 到 FD 4 → `display_sub_agent_result`（完全复用原始格式）
+   - **conversation**：从结构化字段构建纯文本，`store_conv_add_user`
+
+### 11.6 非交互模式退出逻辑
 
 ```bash
-agent_handle_sub_result() {
-    # REPLY_MESSAGE: AGENT_RESULT session_id status thinking text in out cr cc reqs
-    
-    # 1. 记录 usage 事件 (kind=sub_agent, sub_session_id)
-    # 2. 更新 stats: total tokens += sub stats, sub_agent_request_count++, agent_request_count += reqs
-    # 3. 记录 sub_agent_result 事件 (供 replay)
-    # 4. 记录 sub_agent_end 事件
-    # 5. active_sub_count--
-    # 6. silent 模式 → return（不显示不触发 LLM）
-    # 7. 发送 SUB_AGENT_RESULT 给 display
-    # 8. 注入 conversation 触发 agent_run_loop:
-    #    "[sub-agent session_id] status (in=N, out=N)\nThinking: ...\nText: ..."
-    #    turn_kind = sub_agent_result
-}
+# USER_INPUT handler:
+_cnt=$(cat "$ACTIVE_SUB_FILE")
+(( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && SESSION_END
+
+# NOTIFY_PENDING handler:
+# 同上，额外检查 saw_user_input
 ```
+
+`cat` 而非 `$(<file)`：因为 `$(<file 2>/dev/null || echo 0)` 对已存在文件返回空字符串（Bash `$(<file)` 特殊语法被 `||` 破坏）。
 
 ---
 
@@ -1315,11 +1423,13 @@ Bash 工具输出通过 `sanitize_utf8.awk` 清理非法 UTF-8 字节。
 ### 16.2 util_json_escape
 
 ```bash
-# 转义: \ " \n \r \t \b \f
-_s="${_s//\\/\\\\}" _s="${_s//\"/\\\"}" _s="${_s//$'\n'/\\n}" _s="${_s//$'\r'/\\r}" _s="${_s//$'\t'/\\t}" _s="${_s//$'\b'/\\b}" _s="${_s//$'\f'/\\f}"
+# 通过 awk 管道转义（复用 json.awk 的 escape_json_string 函数）
+printf '%s' "${1:-}" | util_awk_run -v json_mode=escape_string -f "$AWK_DIR/json.awk" -f "$AWK_DIR/json_cli.awk"
 ```
 
-**注意**：不转义 Unicode 控制字符（如 \u0000-\u001f 中除上述 6 个之外的）。也不转义 `/`。
+**为什么用 awk 而不是纯 Bash**：纯 Bash 的 `${_s//\\/\\\\}` 对 28KB system prompt 需要约 9 秒/次（多次全局替换），awk 仅需约 4ms/次。
+
+**注意**：不转义 Unicode 控制字符（如 \u0000-\u001f 中除 `\ " \n \r \t \b \f` 之外的）。也不转义 `/`。
 
 ---
 
