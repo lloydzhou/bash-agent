@@ -1435,6 +1435,7 @@ agent_loop_stream() {
         # Fatal stop reasons exit immediately
         case "$stop" in
             error|max_tokens|length)
+                rm -f "$AGENT_RUNNING_FLAG"
                 [[ "$stop" != "error" ]] && { util_write_msg "ERROR" "Response truncated (max_tokens reached)"; }
                 return 1
                 ;;
