@@ -8,6 +8,36 @@
 
 ---
 
+## [4.2.12] - 2026-07-01
+
+> **OpenAI SSE 兼容性修复 + agent error 退出后 SubAgent 结果处理**：修复 C/Rust 在接入 sensenova 等非标准 OpenAI 兼容 API 时 tool_call 解析失败的问题；修复 Bash/Go 在主 agent LLM 调用失败后 SubAgent 结果无法触发新 agent_loop 的问题。
+
+### Fixed — OpenAI SSE 非标准空字符串字段（C + Rust）
+
+部分 OpenAI 兼容 API（如 sensenova）在流式 SSE 中使用空字符串 `""` 代替标准省略/`null`：
+- `finish_reason: ""`（每个 chunk 都有，标准是仅在最后一帧为 `null` 或具体值）
+- 后续 tool_call chunk 中 `id: ""` / `name: ""`（标准是省略这些字段）
+
+这导致 C/Rust 的 `if (id)` / `if (finish)`（非 NULL 检查）被空字符串满足，触发提前 STOP 并用空字符串覆盖第一个 chunk 设置的正确 tool name，表现为 `Unknown tool:` 错误。
+
+- **C**（`c/transport.c`）：`if (id)` → `if (id && id[0])`，`if (finish)` → `if (finish && finish[0])`
+- **Rust**（`rust/src/sse.rs`）：`if let Some(v)` → `if !v.is_empty()`
+- Bash/Go 已有 `!= ""` 检查，无需修改
+
+### Fixed — agent error 退出后 SubAgent 结果无法触发新 loop（Bash + Go）
+
+主 agent 的 LLM 调用失败（如 curl timeout）后，agent 进入 idle 状态。此时后台 SubAgent 结果到达后无法自动处理，用户必须手动输入才能看到结果。
+
+- **Bash**（`src/agent.sh`）：`agent_loop_stream` 在 `stop=error` 时 `return 1` 跳过了 `rm -f "$AGENT_RUNNING_FLAG"`。flag 残留导致 notify reader 不发 `NOTIFY_PENDING`，SubAgent 结果无法触发新 loop。修复：`return 1` 前加 `rm -f "$AGENT_RUNNING_FLAG"`。
+- **Go**（`go/agent.go`）：`RunLoop` 在 `stopReason=error` 时直接 `return`，跳过了 pending SubAgent 检查。C/Rust 的 SubAgent 消费在 `main_loop` 层（`while active_sub_count > 0`），独立于退出原因，故无此 bug。修复：error `return` 前加 pending SubAgent 检查。
+
+### Tests
+
+- 新增 `SENSENOVA_STYLE_MARKER` mock 测试：模拟非标准 SSE 格式（`finish_reason:""` + 后续 chunk `name:""`/`id:""`），验证 tool name 不被覆盖。
+- 四版本 180/180 通过。
+
+---
+
 ## [4.2.11] - 2026-06-30
 
 > **JSON escape 性能优化 + SubAgent 双 FIFO 通知架构重构**：`util_json_escape` 从纯 Bash 全局替换改为 awk 管道（~1000x 加速）；SubAgent 通知从单 FIFO 改为双 FIFO 架构（NOTIFY_FIFO + NOTIFY_BUF），结果消费时统一 display（不打断流式输出），四版本（Bash/Go/C/Rust）架构对齐。
