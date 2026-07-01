@@ -952,6 +952,19 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 				a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", "Response truncated (max_tokens reached)"}})
 			}
 			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
+			// error 退出后仍需消费 pending SubAgent 结果（对齐 C/Rust main_loop 的 active_sub_count 等待）
+			a.subMu.Lock()
+			hasPending := a.pendingSubAgents > 0
+			a.subMu.Unlock()
+			if hasPending {
+				select {
+				case r := <-a.subResultCh:
+					a.handleSubAgentResult(r)
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
 			if loopErr != "" {
 				return fmt.Errorf("LLM error: %s", loopErr)
 			}
