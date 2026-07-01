@@ -19,8 +19,15 @@
   conversation.jsonl   当前对话窗口（发给模型的消息）
   events.jsonl         内部事件日志
   summary.txt          compact 后的历史摘要
-  plan.md              当前 session 的计划文档
+  plan.md              已确认计划（PlanConfirm 后从 plan.draft 移入）
+  plan.draft           计划草稿（编辑不触发缓存失效）
   stats.json           session 统计数据
+  images/              粘贴的图片（Ctrl+V）
+  input.fifo           用户输入管道（Bash 版运行时）
+  notify.fifo          SubAgent 结果通知管道（Bash 版运行时）
+  notify.buf           SubAgent 结果缓冲文件（RESP 格式）
+  active_sub.count     活跃 SubAgent 计数器
+  agent_running.flag   agent_loop_stream 运行中标记
 ```
 
 ### conversation.jsonl
