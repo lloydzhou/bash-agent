@@ -18,7 +18,9 @@
           "description": "Number of lines to read. Only provide when reading a specific portion of the file."
         }
       },
-      "required": ["path"]
+      "required": [
+        "path"
+      ]
     }
   },
   {
@@ -36,7 +38,10 @@
           "description": "Content to write to the file"
         }
       },
-      "required": ["path", "content"]
+      "required": [
+        "path",
+        "content"
+      ]
     }
   },
   {
@@ -58,12 +63,16 @@
           "description": "The replacement text"
         }
       },
-      "required": ["path", "old_string", "new_string"]
+      "required": [
+        "path",
+        "old_string",
+        "new_string"
+      ]
     }
   },
   {
     "name": "Bash",
-    "description": "Execute a bash command. Returns stdout and stderr.",
+    "description": "Execute a bash command. Returns stdout and stderr. For long-running commands (builds, tests, servers), use async=true to run in background — returns immediately with task_id/pid, results delivered asynchronously.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -74,9 +83,15 @@
         "timeout": {
           "type": "integer",
           "description": "Timeout in seconds. If the command exceeds this duration, it will be killed. Only use for commands expected to take a long time (e.g. build, test, server start). Default: uses --tool-timeout setting."
+        },
+        "async": {
+          "type": "boolean",
+          "description": "If true, run the command in background. Returns immediately with task_id and pid. When the command finishes, the output is delivered asynchronously as an async_task_result event (similar to SubAgent results). Use for long-running commands. The result arrives as: [async-task <id>] exit_code=<code>\\nOutput: <output>"
         }
       },
-      "required": ["command"]
+      "required": [
+        "command"
+      ]
     }
   },
   {
@@ -94,7 +109,9 @@
           "description": "Optional directory to search from. Defaults to ."
         }
       },
-      "required": ["pattern"]
+      "required": [
+        "pattern"
+      ]
     }
   },
   {
@@ -120,7 +137,9 @@
           "description": "Number of lines before and after each match. Useful for getting enough context to Edit directly from Grep output."
         }
       },
-      "required": ["pattern"]
+      "required": [
+        "pattern"
+      ]
     }
   },
   {
@@ -144,11 +163,16 @@
                 "description": "Task status: pending, in_progress, or completed. Prefer exactly one in_progress item while actively working."
               }
             },
-            "required": ["content", "status"]
+            "required": [
+              "content",
+              "status"
+            ]
           }
         }
       },
-      "required": ["todos"]
+      "required": [
+        "todos"
+      ]
     }
   },
   {
@@ -178,7 +202,9 @@
           "description": "The skill name selected from the skill-index section of the prompt"
         }
       },
-      "required": ["name"]
+      "required": [
+        "name"
+      ]
     }
   },
   {
@@ -192,7 +218,9 @@
           "description": "The search query to use"
         }
       },
-      "required": ["query"]
+      "required": [
+        "query"
+      ]
     }
   },
   {
@@ -206,7 +234,9 @@
           "description": "The URL to fetch content from"
         }
       },
-      "required": ["url"]
+      "required": [
+        "url"
+      ]
     }
   },
   {
@@ -228,7 +258,9 @@
           "description": "Set to true to fork parent session context (conversation history, plan, skills). Default is false for a fresh independent session."
         }
       },
-      "required": ["prompt"]
+      "required": [
+        "prompt"
+      ]
     }
   }
 ]

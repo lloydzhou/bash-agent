@@ -156,6 +156,8 @@ util_msg_to_stream() {
         AGENT_RESULT) printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}' \
             "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" \
             "$(util_json_escape "${REPLY_MESSAGE[5]}")" "$(util_json_escape "${REPLY_MESSAGE[6]}")" ;;
+        ASYNC_TASK_RESULT) printf '{"type":"async_task_result","task_id":"%s","exit_code":%s,"output":"%s"}' \
+            "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "$(util_json_escape "${REPLY_MESSAGE[3]}")" ;;
         STOP)        printf '{"type":"stop","reason":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
         CONTEXT_UPDATE) printf '{"type":"context_update","kind":"%s","trigger":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" "$(util_json_escape "${REPLY_MESSAGE[2]}")" ;;
         ERROR)       printf '{"type":"error","message":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
@@ -660,7 +662,7 @@ tool_dispatch() {
         Read)      tool_read "$@" ;;
         Write)     tool_write "$1" "$2" ;;
         Edit)      tool_edit "$@" ;;
-        Bash)      tool_bash "$1" "$2" ;;
+        Bash)      tool_bash "$1" "$2" "$3" ;;
         Glob)      tool_glob "$1" "$2" ;;
         Grep)      tool_grep "$1" "$2" "$3" "$4" ;;
         TodoWrite) printf '%s' "$1" ;;
@@ -682,7 +684,7 @@ tool_param_keys() {
         Read) printf 'path offset limit' ;;
         Write) printf 'path content' ;;
         Edit) printf 'path old_string new_string' ;;
-        Bash) printf 'command timeout' ;;
+        Bash) printf 'command timeout async' ;;
         Glob) printf 'pattern path' ;;
         Grep) printf 'pattern path glob context' ;;
         TodoWrite) printf 'checklist' ;;
@@ -936,8 +938,10 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" allowed_mode required_mode tool_rc tmpout
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" async="${3:-false}" allowed_mode required_mode tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "no command provided"; return 1; }
+    # 归一化 async 参数
+    [[ "$async" == "true" || "$async" == "1" ]] && async=true || async=false
     allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
     tool_classify_bash_required_mode "$cmd" >/dev/null
     required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
@@ -945,6 +949,29 @@ tool_bash() {
         echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
         return 1
     fi
+    # 异步模式：后台执行，立即返回 task_id + pid
+    if [[ "$async" == "true" ]]; then
+        local task_id="async_$(util_new_session_id)"
+        local output_file="$(store_session_get_dir)/${SESSION_ID}/${task_id}.log"
+        store_event_append "{\"type\":\"async_task_start\",\"task_id\":\"$(util_json_escape "$task_id")\",\"command\":\"$(util_json_escape "$cmd")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" >/dev/null
+        { local __cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"; }
+        (
+            local _parent_notify_fifo="$NOTIFY_FIFO"
+            if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
+                util_run_timeout "$timeout_secs" bash -lc "$cmd" > "$output_file" 2>&1
+            else
+                bash -lc "$cmd" > "$output_file" 2>&1
+            fi
+            local _exit_code=$?
+            # 通过 NOTIFY_FIFO 发送结果（复用 SubAgent 的 notify 通道）
+            exec 6<>"$_parent_notify_fifo" 2>/dev/null
+            util_write_msg "ASYNC_TASK_RESULT" "$task_id" "$_exit_code" "$output_file" >&6 2>/dev/null || true
+            exec 6<&- 2>/dev/null
+        ) &
+        printf 'Async task started: task_id=%s, pid=%s' "$task_id" "$!"
+        return 0
+    fi
+    # 同步模式（现有逻辑）
     tmpout=$(mktemp)
     if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
         util_run_timeout "$timeout_secs" bash -lc "$cmd" > "$tmpout" 2>&1
@@ -1083,6 +1110,21 @@ display_sub_agent_result() {
     DISPLAY_LAST_CHAR=$'\n'
 }
 
+display_async_task_result() {
+    local task_id="$1" exit_code="$2" _output="$3"
+    if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
+        env printf '\r\033[K'
+    fi
+    display_ensure_newline
+    if [[ "$exit_code" == "0" ]]; then
+        printf '\033[36m[async-task %s] completed (exit_code=0)\033[0m\n' "$task_id"
+    else
+        printf '\033[31m[async-task %s] failed (exit_code=%s)\033[0m\n' "$task_id" "$exit_code"
+    fi
+    [[ -n "$_output" ]] && printf '%s%s\n' "${_output:0:120}" "$([[ ${#_output} -gt 120 ]] && printf '…')"
+    DISPLAY_LAST_CHAR=$'\n'
+}
+
 # Convert REPLY_MESSAGE to a stream event JSON string. Prints JSON to stdout;
 # returns 1 if type has no event representation.
 # Render a single RESP message from REPLY_MESSAGE in human-readable mode.
@@ -1153,6 +1195,9 @@ display_message() {
             ;;
         AGENT_RESULT)
             display_sub_agent_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" "${REPLY_MESSAGE[5]}" "${REPLY_MESSAGE[6]}"
+            ;;
+        ASYNC_TASK_RESULT)
+            display_async_task_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}"
             ;;
         IMAGE_DESCRIBE)
             [[ -n "${REPLY_MESSAGE[2]}" ]] && { display_human_text "$(printf '\033[36m📸 %s: %s\033[0m\n' "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}")"; DISPLAY_LAST_CHAR=$'\n'; }
@@ -1233,7 +1278,8 @@ agent_build_prompt() {
     output_language_reaffirm="MUST use \"${locale}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
     [[ "$locale" == zh* ]] && output_language_reaffirm='再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！'
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
-    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.'
+    tool_guidance=$'- Use Read for a single file. If you need multiple files, call Read multiple times.\n- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n- Use Glob and Grep for one pattern at a time.\n- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n- Use multiple tool calls in one response when they are independent.\n- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n- Bash supports async=true for long-running commands (builds, tests, servers). The command starts in background, returns immediately with task_id and pid. When finished, the result arrives asynchronously as: [async-task <id>] exit_code=<code>\\nOutput: <output>. Results are delivered via the same notify mechanism as SubAgent.
+- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.'
     sub_agent_guidance=$'- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
     plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Files**: PLAN_DRAFT_FILE: '"${PLAN_DRAFT_FILE:-<not set>}"$' | PLAN_FILE: '"${PLAN_FILE:-<not set>}"$'\n- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n  Every user reply MUST be classified as exactly ONE of:\n  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.'
@@ -1327,6 +1373,20 @@ agent_main_loop() {
                         util_write_msg "NOTIFY_PENDING" >&5
                     fi
                     ;;
+                ASYNC_TASK_RESULT)
+                    local _tid="${REPLY_MESSAGE[1]}" _exit_code="${REPLY_MESSAGE[2]}" _output_file="${REPLY_MESSAGE[3]}"
+                    local _output=""
+                    [[ -f "$_output_file" && -s "$_output_file" ]] && _output=$(util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$_output_file" | tail -c 8192)
+                    rm -f "$_output_file" 2>/dev/null || true
+                    store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "$_tid")\",\"exit_code\":$_exit_code,\"output\":\"$(util_json_escape "$_output")\"}"
+                    store_event_append "{\"type\":\"async_task_end\",\"task_id\":\"$(util_json_escape "$_tid")\",\"exit_code\":$_exit_code,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+                    util_write_msg "ASYNC_TASK_RESULT" "$_tid" "$_exit_code" "$_output" >> "$NOTIFY_BUF"
+                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
+                    if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
+                        util_write_msg "NOTIFY_PENDING" >&5
+                    fi
+                    ;;
             esac
         done
     ) &
@@ -1376,6 +1436,11 @@ agent_drain_notify_buf() {
             _conv+="[sub-agent ${_sid}] ${_st} (in=${_in}, out=${_out})"$'\n'
             [[ -n "$_th" ]] && _conv+="Thinking: ${_th}"$'\n'
             [[ -n "$_tx" ]] && _conv+="Text: ${_tx}"$'\n'
+        elif [[ "${REPLY_MESSAGE[0]}" == "ASYNC_TASK_RESULT" ]]; then
+            util_is_stream_json || util_write_msg "ASYNC_TASK_RESULT" "${REPLY_MESSAGE[@]:1}" >&4 2>/dev/null || true
+            local _tid="${REPLY_MESSAGE[1]}" _exit_code="${REPLY_MESSAGE[2]}" _output="${REPLY_MESSAGE[3]}"
+            _conv+="[async-task ${_tid}] exit_code=${_exit_code}"$'\n'
+            [[ -n "$_output" ]] && _conv+="Output: ${_output}"$'\n'
         fi
     done
     exec 9<&-

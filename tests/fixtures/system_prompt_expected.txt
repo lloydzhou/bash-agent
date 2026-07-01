@@ -22,6 +22,7 @@ shell: __SHELL__
 - Prefer dedicated tools over Bash when a dedicated tool fits the task.
 - For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.
 - For skills, first check the skill-index section, then use Skill(name) for the matching skill.
+- Bash supports async=true for long-running commands (builds, tests, servers). The command starts in background, returns immediately with task_id and pid. When finished, the result arrives asynchronously as: [async-task <id>] exit_code=<code>\nOutput: <output>. Results are delivered via the same notify mechanism as SubAgent.
 - SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.
 </using-your-tools>
 <sub-agent-guidance>
