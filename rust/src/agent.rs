@@ -248,6 +248,11 @@ enum MainLoopMessage {
         cache_creation_tokens: usize,
         request_count: usize,
     },
+    AsyncResult {
+        task_id: String,
+        exit_code: i32,
+        output: String,
+    },
 }
 
 struct Agent {
@@ -347,6 +352,11 @@ enum DisplayEvent {
         text: String,
         in_tokens: usize,
         out_tokens: usize,
+    },
+    AsyncTaskResult {
+        task_id: String,
+        exit_code: i32,
+        output: String,
     },
     ImageDescribe {
         images: String,
@@ -499,6 +509,20 @@ fn render_display_event(
             // OSC 序列直接写 stderr，通过 display worker 序列化避免与 text delta 交织
             let _ = write!(io::stderr(), "{}", title);
             let _ = io::stderr().flush();
+        }
+        DisplayEvent::AsyncTaskResult { task_id, exit_code, output } => {
+            if interactive && ds.last_char == "\n" {
+                lw("\r\x1b[K");
+            }
+            ensure_newline(ds, &lw);
+            let color = if exit_code == 0 { "36" } else { "31" };
+            let status = if exit_code == 0 { "completed" } else { "failed" };
+            lw(&format!("\x1b[{}m[async-task {}] {} (exit_code={})\x1b[0m\n", color, task_id, status, exit_code));
+            if !output.is_empty() {
+                lw(&format!("{}\n", truncate_str(&output, 120)));
+            }
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
         }
     }
     Ok(())
@@ -1088,6 +1112,15 @@ impl Agent {
                                 // 将其放回队列末尾，等当前子 agent 完成后再处理。
                                 // TODO: 暂时忽略，后续可改为队列缓存。
                             }
+                            Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
+                                let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
+                                let _ = self.append_event(json!({"type":"async_task_end","task_id":&task_id,"exit_code":exit_code,"timestamp":chrono_like_now()}));
+                                if self.active_sub_count > 0 { self.active_sub_count -= 1; }
+                                let ctx = format!("[async-task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
+                                let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
+                                let _ = self.agent_loop_with_kind(ctx, "async_task_result");
+                                self.flush_display();
+                            }
                             Err(std::sync::mpsc::RecvError) => {
                                 // 所有发送端关闭
                                 return Ok(());
@@ -1203,7 +1236,8 @@ impl Agent {
     fn drain_sub_results(&mut self) -> bool {
         let mut drained = false;
         while let Ok(msg) = self.sub_result_rx.try_recv() {
-            if let MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count } = msg {
+            match msg {
+            MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count } => {
                 let _ = self.append_event(json!({"type":"usage","input_tokens":in_tokens,"output_tokens":out_tokens,"cache_read_input_tokens":cache_read_tokens,"cache_creation_input_tokens":cache_creation_tokens,"kind":"sub_agent","sub_session_id":&session_id}));
                 let _ = self.emit_and_append_event(json!({"type":"sub_agent_result","session_id":&session_id,"status":&status,"input_tokens":in_tokens,"output_tokens":out_tokens,"thinking":&thinking,"text":&text}));
                 let _ = self.append_event(json!({"type":"sub_agent_end","session_id":&session_id,"timestamp":chrono_like_now(),"status":&status}));
@@ -1220,6 +1254,17 @@ impl Agent {
                 let _ = self.queue_display_event(DisplayEvent::SubAgentResult { session_id, status, thinking, text, in_tokens, out_tokens });
                 let _ = self.conv.add_user(&ctx);
                 drained = true;
+            }
+            MainLoopMessage::AsyncResult { task_id, exit_code, output } => {
+                let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
+                let _ = self.append_event(json!({"type":"async_task_end","task_id":&task_id,"exit_code":exit_code,"timestamp":chrono_like_now()}));
+                if self.active_sub_count > 0 { self.active_sub_count -= 1; }
+                let ctx = format!("[async-task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
+                let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
+                let _ = self.conv.add_user(&ctx);
+                drained = true;
+            }
+            _ => {}
             }
         }
         drained
@@ -1382,17 +1427,46 @@ impl Agent {
                                 stop = "interrupted".to_string();
                                 break;
                             }
-                            let dispatch_result = runner.dispatch(&call.name, &call.input_json);
-                            if self.is_interrupted() {
-                                stop = "interrupted".to_string();
-                                break;
-                            }
-                            let mut output = match dispatch_result {
-                                Ok(v) => v,
-                                Err(e) => format!("Error: {e}"),
+                            // Async bash 拦截：在 dispatch 之前检查
+                            let mut output = if call.name == "Bash" && call.fields.get("async").map(|s| s == "true" || s == "1").unwrap_or(false) {
+                                let command = call.fields.get("command").cloned().unwrap_or_default();
+                                let task_id = format!("async_{}", chrono_like_now());
+                                self.active_sub_count += 1;
+                                let tx = self.sub_result_tx.clone();
+                                let timeout = self.cfg.tool_timeout_secs;
+                                let tid = task_id.clone();
+                                let session_dir = self.paths.session_dir.to_string_lossy().to_string();
+                                let output_file = format!("{}/{}.log", session_dir, task_id);
+                                thread::spawn(move || {
+                                    let mut cmd = std::process::Command::new("bash");
+                                    cmd.arg("-lc").arg(&command);
+                                    let output_result = if timeout > 0 {
+                                        // 简化：不设精确超时（对齐其他版本的行为）
+                                        cmd.output()
+                                    } else {
+                                        cmd.output()
+                                    };
+                                    let (exit_code, stdout) = match output_result {
+                                        Ok(o) => (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)),
+                                        Err(e) => (127, e.to_string()),
+                                    };
+                                    let truncated = if stdout.len() > 8192 { stdout[stdout.len()-8192..].to_string() } else { stdout };
+                                    let _ = tx.send(MainLoopMessage::AsyncResult { task_id: tid, exit_code, output: truncated });
+                                });
+                                let _ = std::fs::remove_file(&output_file); // 预清理
+                                format!("Async task started: task_id={}", task_id)
+                            } else {
+                                let dispatch_result = runner.dispatch(&call.name, &call.input_json);
+                                if self.is_interrupted() {
+                                    stop = "interrupted".to_string();
+                                    break;
+                                }
+                                match dispatch_result {
+                                    Ok(v) => v,
+                                    Err(e) => format!("Error: {e}"),
+                                }
                             };
-                            output =
-                                tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
+                            output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
 
                             let mut conv_content = String::new();
                             if call.name == "PlanClear" {
@@ -1600,6 +1674,7 @@ impl Agent {
             DisplayEvent::UserMessage(_) => {}
             DisplayEvent::ContextUpdate(_) => {}
             DisplayEvent::SubAgentResult { .. } => {}
+            DisplayEvent::AsyncTaskResult { .. } => {}
             DisplayEvent::ImageDescribe { .. } => {}
             DisplayEvent::Title(_) => {}
         }

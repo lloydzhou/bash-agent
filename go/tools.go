@@ -36,13 +36,17 @@ func getToolResultMaxBytes() int {
 // SubAgentLauncher 子 agent 启动回调
 type SubAgentLauncher func(ctx context.Context, prompt, description, fork string) (string, error)
 
+// AsyncBashLauncher 异步 bash 启动回调
+type AsyncBashLauncher func(ctx context.Context, cmd string, timeoutSecs int) (string, error)
+
 // ToolDispatcher 工具调度器
 type ToolDispatcher struct {
-	cfg             Config
-	launcher        SubAgentLauncher
-	planConfirmFn   func() (string, error)
-	planClearFn     func() (string, error)
-	skillLoader     func(name string) (string, error)
+	cfg              Config
+	launcher         SubAgentLauncher
+	asyncBashLauncher AsyncBashLauncher
+	planConfirmFn    func() (string, error)
+	planClearFn      func() (string, error)
+	skillLoader      func(name string) (string, error)
 }
 
 // NewToolDispatcher 创建工具调度器
@@ -53,6 +57,11 @@ func NewToolDispatcher(cfg Config) *ToolDispatcher {
 // SetSubAgentLauncher 设置子 agent 启动回调
 func (td *ToolDispatcher) SetSubAgentLauncher(fn SubAgentLauncher) {
 	td.launcher = fn
+}
+
+// SetAsyncBashLauncher 设置异步 bash 启动回调
+func (td *ToolDispatcher) SetAsyncBashLauncher(fn AsyncBashLauncher) {
+	td.asyncBashLauncher = fn
 }
 
 // SetPlanConfirm 设置 plan confirm 回调
@@ -81,7 +90,7 @@ func (td *ToolDispatcher) Dispatch(ctx context.Context, name string, params map[
 	case "Edit":
 		return td.toolEdit(params["path"], params["old_string"], params["new_string"])
 	case "Bash":
-		return td.toolBash(ctx, params["command"], params["timeout"])
+		return td.toolBash(ctx, params["command"], params["timeout"], params["async"])
 	case "Glob":
 		return td.toolGlob(params["pattern"], params["path"])
 	case "Grep":
@@ -116,7 +125,7 @@ func (td *ToolDispatcher) ParamKeys(name string) []string {
 	case "Edit":
 		return []string{"path", "old_string", "new_string"}
 	case "Bash":
-		return []string{"command", "timeout"}
+		return []string{"command", "timeout", "async"}
 	case "Glob":
 		return []string{"pattern", "path"}
 	case "Grep":
@@ -500,7 +509,7 @@ func ToolBashModeAllows(allowed, required string) bool {
 }
 
 // toolBash 执行 shell 命令
-func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr string) (string, error) {
+func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr, asyncStr string) (string, error) {
 	if cmd == "" {
 		return "", fmt.Errorf("no command provided")
 	}
@@ -508,6 +517,18 @@ func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr string) 
 	requiredMode := ToolClassifyBashRequiredMode(cmd)
 	if !ToolBashModeAllows(allowedMode, requiredMode) {
 		return "", fmt.Errorf("command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)", requiredMode, allowedMode)
+	}
+
+	// 异步模式
+	isAsync := asyncStr == "true" || asyncStr == "1"
+	if isAsync && td.asyncBashLauncher != nil {
+		timeoutSecs := td.cfg.ToolTimeoutSecs
+		if timeoutStr != "" {
+			if t, err := time.ParseDuration(timeoutStr + "s"); err == nil {
+				timeoutSecs = int(t.Seconds())
+			}
+		}
+		return td.asyncBashLauncher(ctx, cmd, timeoutSecs)
 	}
 
 	timeoutSecs := td.cfg.ToolTimeoutSecs

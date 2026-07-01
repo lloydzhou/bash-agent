@@ -18,6 +18,7 @@
 typedef enum {
     MSG_USER_INPUT,       /* 用户从 stdin 输入 */
     MSG_AGENT_RESULT,     /* SubAgent 完成后发送结果 */
+    MSG_ASYNC_TASK_RESULT,/* 异步 Bash 任务完成 */
 } InputMsgType;
 
 typedef struct {
@@ -37,6 +38,11 @@ typedef struct {
             int cache_creation_tokens;
             int request_count;
         } agent_result;
+        struct {
+            char *task_id;
+            int exit_code;
+            char *output;           /* 可能为 NULL */
+        } async_task_result;
     } data;
 } InputMessage;
 
@@ -57,6 +63,7 @@ typedef enum {
     DISPLAY_ERROR,               /* 错误信息 */
     DISPLAY_SUB_AGENT_RESULT,    /* SubAgent 结果摘要 */
     DISPLAY_SUB_AGENT_START,     /* SubAgent 启动通知 */
+    DISPLAY_ASYNC_TASK_RESULT,   /* 异步 Bash 任务结果 */
     DISPLAY_CONTEXT_UPDATE,      /* 上下文压缩通知 */
     DISPLAY_FLUSH,               /* display 队列同步屏障 */
     DISPLAY_IMAGE_DESCRIBE,      /* 图片描述结果 */
@@ -97,6 +104,8 @@ DisplayMessage display_msg_sub_agent_start(const char *session_id, const char *d
 DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *status,
                                              const char *thinking, const char *text,
                                              int in_tokens, int out_tokens);
+DisplayMessage display_msg_async_task_result(const char *task_id, int exit_code,
+                                             const char *output);
 DisplayMessage display_msg_context_update(const char *trigger);
 DisplayMessage display_msg_image_describe(const char *images, const char *description);
 

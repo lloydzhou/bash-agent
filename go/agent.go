@@ -45,6 +45,7 @@ type Agent struct {
 }
 
 type SubAgentResult struct {
+	Kind         string // "sub_agent" (默认) 或 "async_task"
 	SessionID    string
 	Status       string // "ok" or "failed"
 	Thinking     string
@@ -54,6 +55,10 @@ type SubAgentResult struct {
 	CacheRead    int
 	CacheWrite   int
 	Requests     int
+	// async_task 字段
+	TaskID    string
+	ExitCode  int
+	Output    string
 }
 
 // imageNextName returns the next sequential image filename.
@@ -238,6 +243,7 @@ func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatch
 	}
 	// 设置回调
 	a.tools.SetSubAgentLauncher(a.LaunchSubAgent)
+	a.tools.SetAsyncBashLauncher(a.LaunchAsyncBash)
 	a.tools.SetPlanConfirm(a.HandlePlanConfirm)
 	a.tools.SetPlanClear(a.HandlePlanClear)
 	a.tools.SetSkillLoader(a.LoadSkill)
@@ -365,6 +371,7 @@ func (a *Agent) BuildPrompt() string {
 		"- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n" +
 		"- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n" +
 		"- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n" +
+		"- Bash supports async=true for long-running commands (builds, tests, servers). The command starts in background, returns immediately with task_id and pid. When finished, the result arrives asynchronously as: [async-task <id>] exit_code=<code>\\nOutput: <output>. Results are delivered via the same notify mechanism as SubAgent.\n" +
 		"- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules."
 	appendSection("using-your-tools", toolGuidance, "")
 
@@ -1060,6 +1067,79 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 	return fmt.Sprintf("Sub-agent started: session_id=%s", sessionID), nil
 }
 
+// ─── Async Bash 启动（后台 goroutine）───
+
+func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int) (string, error) {
+	taskID := "async_" + UtilNewSessionID()
+
+	// 记录事件
+	a.emitJSON(map[string]interface{}{
+		"type":      "async_task_start",
+		"task_id":   taskID,
+		"command":   cmd,
+		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+	})
+
+	// 增加计数（复用 pendingSubAgents）
+	a.subMu.Lock()
+	a.pendingSubAgents++
+	a.subMu.Unlock()
+
+	// 启动 goroutine
+	go func() {
+		// 用独立 context（不继承 RunLoop 的 cancel）
+		bgCtx := context.Background()
+		var execCmd *exec.Cmd
+		if timeoutSecs > 0 {
+			var cancel context.CancelFunc
+			bgCtx, cancel = context.WithTimeout(bgCtx, time.Duration(timeoutSecs)*time.Second)
+			defer cancel()
+		}
+		execCmd = exec.CommandContext(bgCtx, "bash", "-lc", cmd)
+		execCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		var stdout, stderr bytes.Buffer
+		execCmd.Stdout = &stdout
+		execCmd.Stderr = &stderr
+		go func() {
+			<-bgCtx.Done()
+			if execCmd.Process != nil {
+				syscall.Kill(-execCmd.Process.Pid, syscall.SIGKILL)
+			}
+		}()
+
+		err := execCmd.Run()
+		exitCode := 0
+		if err != nil {
+			if execCmd.ProcessState != nil {
+				exitCode = execCmd.ProcessState.ExitCode()
+			} else {
+				exitCode = 1
+			}
+		}
+		output := string(sanitizeUTF8(stdout.Bytes()))
+		if stderr.Len() > 0 {
+			if output != "" {
+				output += "\n"
+			}
+			output += string(sanitizeUTF8(stderr.Bytes()))
+		}
+		// 截断到 8192 字节
+		if len(output) > 8192 {
+			output = output[len(output)-8192:]
+		}
+
+		result := SubAgentResult{
+			Kind:     "async_task",
+			TaskID:   taskID,
+			ExitCode: exitCode,
+			Output:   output,
+		}
+		a.subResultCh <- result
+	}()
+
+	return fmt.Sprintf("Async task started: task_id=%s", taskID), nil
+}
+
 func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string) SubAgentResult {
 	result := SubAgentResult{
 		SessionID: sessionID,
@@ -1131,6 +1211,11 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 
 // handleSubAgentResult 处理子 agent 结果
 func (a *Agent) handleSubAgentResult(r SubAgentResult) {
+	// async_task 分支
+	if r.Kind == "async_task" {
+		a.handleAsyncTaskResult(r)
+		return
+	}
 	// 记录 usage 事件（带 kind=sub_agent, sub_session_id）
 	usageEvent := map[string]interface{}{
 		"type":                        "usage",
@@ -1193,4 +1278,48 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 	// 注入为用户消息（不记录 user_input 事件，与 bash 版 agent_loop turn_kind=sub_agent_result 一致）
 	_ = a.store.AddUserMessage(injectMsg)
 
+}
+
+// handleAsyncTaskResult 处理异步 bash 任务结果
+func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
+	// 1. 记录 async_task_result 事件
+	a.emitJSON(map[string]interface{}{
+		"type":       "async_task_result",
+		"task_id":    r.TaskID,
+		"exit_code":  r.ExitCode,
+		"output":     r.Output,
+	})
+
+	// 2. 记录 async_task_end 事件
+	a.emitJSON(map[string]interface{}{
+		"type":      "async_task_end",
+		"task_id":   r.TaskID,
+		"exit_code": r.ExitCode,
+		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+	})
+
+	// 3. 递减活跃计数（async task 无 token 消耗，跳过 stats）
+	a.subMu.Lock()
+	a.pendingSubAgents--
+	a.subMu.Unlock()
+
+	// 4. 显示结果
+	preview := r.Output
+	if len(preview) > 120 {
+		preview = preview[:120] + "…"
+	}
+	a.EmitDisplay(Event{
+		Type: EventSubAgentResult,
+		Fields: []string{
+			"ASYNC_TASK_RESULT",
+			r.TaskID,
+			fmt.Sprintf("%d", r.ExitCode),
+			r.Output,
+		},
+	})
+
+	// 5. 注入 conversation
+	injectMsg := fmt.Sprintf("[async-task %s] exit_code=%d\nOutput: %s",
+		r.TaskID, r.ExitCode, r.Output)
+	_ = a.store.AddUserMessage(injectMsg)
 }

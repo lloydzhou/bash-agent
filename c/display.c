@@ -134,6 +134,14 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             sb_append_json_string(&buf, msg->content ? msg->content : "");
             sb_append_char(&buf, '}');
             break;
+        case DISPLAY_ASYNC_TASK_RESULT:
+            sb_append(&buf, "{\"type\":\"async_task_result\",\"task_id\":");
+            sb_append_json_string(&buf, msg->session_id ? msg->session_id : "");
+            sb_appendf(&buf, ",\"exit_code\":%d", msg->tool_exit_code);
+            sb_append(&buf, ",\"output\":");
+            sb_append_json_string(&buf, msg->content ? msg->content : "");
+            sb_append_char(&buf, '}');
+            break;
         case DISPLAY_CONTEXT_UPDATE:
             sb_append(&buf, "{\"type\":\"context_update\",\"kind\":\"compact\",\"trigger\":");
             sb_append_json_string(&buf, msg->tool_name ? msg->tool_name : "auto");
@@ -281,6 +289,29 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                 linenoisePrintf("\x1b[90m%.*s%s\x1b[0m\n",
                         tlen, msg->tool_name,
                         strlen(msg->tool_name) > 120 ? "…" : "");
+            }
+            if (msg->content && msg->content[0]) {
+                int clen = (int)util_utf8_truncate_len(msg->content, 120);
+                linenoisePrintf("%.*s%s\n",
+                        clen, msg->content,
+                        strlen(msg->content) > 120 ? "…" : "");
+            }
+            ds->last_char[0] = '\n';
+            ds->prev_was_thinking = 0;
+            break;
+        }
+
+        case DISPLAY_ASYNC_TASK_RESULT: {
+            if (interactive && ds->last_char[0] == '\n') {
+                linenoiseWrite("\r\033[K", 4);
+            }
+            ensure_newline(ds);
+            if (msg->tool_exit_code == 0) {
+                linenoisePrintf("\x1b[36m[async-task %s] completed (exit_code=0)\x1b[0m\n",
+                        msg->session_id ? msg->session_id : "?");
+            } else {
+                linenoisePrintf("\x1b[31m[async-task %s] failed (exit_code=%d)\x1b[0m\n",
+                        msg->session_id ? msg->session_id : "?", msg->tool_exit_code);
             }
             if (msg->content && msg->content[0]) {
                 int clen = (int)util_utf8_truncate_len(msg->content, 120);

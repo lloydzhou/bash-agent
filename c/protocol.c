@@ -19,6 +19,10 @@ void input_message_free(InputMessage *msg) {
             FREE_PTR(msg->data.agent_result.thinking);
             FREE_PTR(msg->data.agent_result.text);
             break;
+        case MSG_ASYNC_TASK_RESULT:
+            FREE_PTR(msg->data.async_task_result.task_id);
+            FREE_PTR(msg->data.async_task_result.output);
+            break;
     }
 }
 
@@ -111,6 +115,17 @@ DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *
     m.out_tokens = out_tokens;
     /* 把 thinking 存入 tool_name 字段复用（避免改结构体） */
     m.tool_name = util_strdup(thinking ? thinking : "");
+    return m;
+}
+
+DisplayMessage display_msg_async_task_result(const char *task_id, int exit_code,
+                                             const char *output) {
+    DisplayMessage m;
+    memset(&m, 0, sizeof(m));
+    m.type = DISPLAY_ASYNC_TASK_RESULT;
+    m.session_id = util_strdup(task_id);
+    m.tool_exit_code = exit_code;
+    m.content = util_strdup(output ? output : "");
     return m;
 }
 
