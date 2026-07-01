@@ -1164,6 +1164,14 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 	}
 	a.emitJSON(endEvent)
 
+	// 更新 store 的 stats（对齐 bash 顺序：events → stats → counter → display → conversation）
+	a.store.UpdateSubAgentStats(r.InputTokens, r.OutputTokens, r.CacheRead, r.CacheWrite, r.Requests)
+
+	// 递减活跃子 agent 计数（在事件和统计之后）
+	a.subMu.Lock()
+	a.pendingSubAgents--
+	a.subMu.Unlock()
+
 	// 显示结果（统一走 Display 接口）
 	a.EmitDisplay(Event{
 		Type: EventSubAgentResult,
@@ -1177,14 +1185,6 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 			r.Text,
 		},
 	})
-
-	// 更新 store 的 stats（与 bash 版 store_stats_update total_input_tokens=+_in ... agent_request_count=+_reqs 一致）
-	a.store.UpdateSubAgentStats(r.InputTokens, r.OutputTokens, r.CacheRead, r.CacheWrite, r.Requests)
-
-	// 递减活跃子 agent 计数（在事件和统计之后，对齐 bash 顺序）
-	a.subMu.Lock()
-	a.pendingSubAgents--
-	a.subMu.Unlock()
 
 	// 构造注入消息
 	injectMsg := fmt.Sprintf("[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
