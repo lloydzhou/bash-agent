@@ -1132,22 +1132,7 @@ impl Agent {
             "sub_session_id": session_id,
         }));
 
-        // 2. 更新 stats
-        store::store_stats_update(&self.paths.stats, |stats| {
-            Self::add_stat_usize(stats, "sub_agent_request_count", 1);
-            Self::add_stat_usize(stats, "agent_request_count", request_count);
-            Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
-            Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
-            Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
-            Self::add_stat_usize(
-                stats,
-                "total_cache_creation_tokens",
-                cache_creation_tokens,
-            );
-        })?;
-        self.update_term_title();
-
-        // 3. 记录 sub_agent_result 事件，供 replay / stream-json 复现子 agent 回显
+        // 2. 记录 sub_agent_result 事件，供 replay / stream-json 复现子 agent 回显
         let _ = self.emit_and_append_event(json!({
             "type": "sub_agent_result",
             "session_id": session_id,
@@ -1161,13 +1146,28 @@ impl Agent {
             "text": text,
         }));
 
-        // 4. 记录 sub_agent_end 事件
+        // 3. 记录 sub_agent_end 事件
         let _ = self.append_event(json!({
             "type": "sub_agent_end",
             "session_id": session_id,
             "timestamp": chrono_like_now(),
             "status": status,
         }));
+
+        // 4. 更新 stats（对齐 bash 顺序：events → stats → counter → display → conversation）
+        store::store_stats_update(&self.paths.stats, |stats| {
+            Self::add_stat_usize(stats, "sub_agent_request_count", 1);
+            Self::add_stat_usize(stats, "agent_request_count", request_count);
+            Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
+            Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
+            Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
+            Self::add_stat_usize(
+                stats,
+                "total_cache_creation_tokens",
+                cache_creation_tokens,
+            );
+        })?;
+        self.update_term_title();
 
         // 5. 更新活跃子 agent 计数
         self.active_sub_count -= 1;

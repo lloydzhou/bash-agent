@@ -2,20 +2,22 @@
 
 ## 项目定位
 
-`bash-agent` 是一个纯 `bash`/`awk` 的轻量 agent 内核。
+`bash-agent` 是一个轻量编码 agent，在终端中运行，支持四种语言实现（Bash/Go/Rust/C），共享同一套 system prompt、tools 定义和会话格式。
 
 目标不是做完整平台，而是做一个：
 
 - 可在终端独立运行的 agent
 - 可被其他程序嵌入和编排的命令行内核
-- 运行时依赖尽量少
-- 协议和状态边界清楚（awk → bash 使用 RESP-like 二进制安全协议）
+- 运行时依赖尽量少（Bash 版仅需 `bash` + `curl` + `gawk`）
+- 协议和状态边界清楚
 
 当前核心方向是：
 
-- `bash` 负责流程、文件、进程、会话、请求调度
-- `awk` 负责 JSON/SSE 解析、字符串变换、文本抽取
-- 三个 runtime 都保持同样的交互分层：
+- **Bash 版**（`src/agent.sh`）：基准实现，`bash` 负责流程/文件/进程/会话，`awk` 负责 JSON/SSE 解析/字符串变换
+- **Go 版**（`go/`）：编译为单二进制，goroutine + channel 替代 FIFO
+- **Rust 版**（`rust/`）：编译为单二进制，`std::thread` + `mpsc::channel`
+- **C 版**（`c/`）：编译为单二进制，`pthread` + 消息队列
+- 四版本保持同样的交互分层：
   - stream 层负责状态机、事件消费、tool 执行
   - display 层负责终端输出
   - history 统一写入 `~/.bash-agent/history`
@@ -86,20 +88,17 @@ src/awk/*
 - 不为“函数更短”而拆
 - 不把流程状态通过一堆薄壳函数来回传递
 
-### `goagent` / `rustagent` 当前停点
+### `goagent` / `rustagent` / `cagent` 当前停点
 
-Go 和 Rust 版本当前也保持和 bash 一致的两层结构：
+Go、Rust、C 版本保持和 Bash 一致的职责分层，用各自语言的并发原语替代 Bash 的 FIFO + 子进程模型：
 
-- `agentLoopStream()`
-  - 负责读取模型流、消费事件、执行 tool、维护会话状态
-- `displayEvent()`
-  - 负责把事件渲染到终端，或输出成 `stream-json`
+- **Go**：goroutine + channel（`inputCh` / `subResultCh` / display event channel）
+- **Rust**：`std::thread` + `mpsc::channel`（`msg_rx` / `sub_result_rx` / display worker thread）
+- **C**：`pthread` + 消息队列（`input_queue` / `sub_result_queue` / `display_queue`）
 
-这样做的目的不是复制同样的代码行数，而是让三端的职责边界一致：
+三者的 agent_loop 退出后，main_loop 层都有 `while (active_sub_count > 0)` 阻塞等待 SubAgent 结果，确保 idle 状态下 SubAgent 结果仍能触发新 agent_loop。
 
-- 交互状态只在 display 层处理
-- 原始事件和会话状态只在 stream 层处理
-- interactive history 统一使用 `~/.bash-agent/history`
+交互状态只在 display 层处理，原始事件和会话状态只在 stream 层处理，interactive history 统一使用 `~/.bash-agent/history`。
 
 ### `awk` 负责什么
 

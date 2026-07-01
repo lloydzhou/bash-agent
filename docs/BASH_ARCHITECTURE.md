@@ -10,41 +10,58 @@
 
 ### 1.1 进程模型
 
-```
-┌─────────────────────────────────────────────────────┐
-│ 主进程 (main → agent_main_loop)                      │
-│  FD 3 ← INPUT_FIFO (读端)                            │
-│  FD 5 → INPUT_FIFO (写端, 防止 EOF)                   │
-│  FD 4 → display_stream 子进程 (RESP 消息)              │
-│  FD 6 ↔ NOTIFY_FIFO (双端打开, 读 sub-agent 结果)      │
-│  FD 7 ← agent_loop_stream 管道                        │
-│  FD 8 ← llm_call 管道                                │
-│                                                      │
-│  ┌──────────────────────┐                           │
-│  │ agent_loop_stream()   │ (process substitution)    │
-│  │  FD 8 ← llm_call 管道 │                          │
-│  │  → FD 7 (agent_loop)  │                          │
-│  │  agent_drain_notify_  │                          │
-│  │    buf() 消费结果      │                          │
-│  └──────────────────────┘                           │
-│                                                      │
-│  ┌──────────────────────┐                           │
-│  │ notify reader (子shell)│ (background)              │
-│  │  FD 6 ← NOTIFY_FIFO   │                          │
-│  │  → NOTIFY_BUF (文件)   │                          │
-│  │  → FD 5 NOTIFY_PENDING│                          │
-│  └──────────────────────┘                           │
-│                                                      │
-│  ┌──────────────────────┐                           │
-│  │ display_stream()      │ (process substitution)    │
-│  │  ← FD 4 (RESP 消息)   │                          │
-│  │  → stdout (终端渲染)   │                          │
-│  └──────────────────────┘                           │
-└─────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Main["主进程 (agent_main_loop)"]
+        MainLoop["main loop<br/>util_read_msg &lt;&amp;3"]
+        FD3["FD 3 ← INPUT_FIFO (读)"]
+        FD5["FD 5 → INPUT_FIFO (写, 防 EOF)"]
+        FD4["FD 4 → display_stream"]
+        FD7["FD 7 ← agent_loop_stream"]
+        FD8["FD 8 ← llm_call"]
+        FD9["FD 9 ← NOTIFY_BUF"]
 
-Sub-Agent (后台子进程):
-  ( ... ) &  — 在子 shell 中执行 agent_loop
-  完成后通过 store_sub_send_result 写入父进程的 NOTIFY_FIFO
+        MainLoop --- FD3
+        MainLoop --- FD7
+
+        subgraph ALS["agent_loop_stream (process sub)"]
+            ALSBody["LLM 调用 + 工具执行<br/>agent_drain_notify_buf()"]
+            Flag["AGENT_RUNNING_FLAG<br/>(运行中标记)"]
+            ALSBody --- Flag
+        end
+
+        subgraph NR["notify reader (background)"]
+            NRBody["阻塞读 NOTIFY_FIFO<br/>写 NOTIFY_BUF<br/>更新 ACTIVE_SUB_FILE"]
+            NRCheck{"AGENT_RUNNING_FLAG<br/>不存在?"}
+            NRBody --> NRCheck
+            NRCheck -- "是" --> NPPending["发 NOTIFY_PENDING → FD 5"]
+            NRCheck -- "否" --> NRSkip["不发 (靠 drain 消费)"]
+        end
+
+        subgraph DS["display_stream (process sub)"]
+            DSBody["RESP → 终端渲染"]
+        end
+
+        MainLoop --> FD4
+        ALSBody --> FD8
+        ALSBody --> FD7
+        NRBody --> FD5
+    end
+
+    subgraph SA["Sub-Agent (后台子进程)"]
+        SABody["agent_loop (子 shell)<br/>完成后 store_sub_send_result"]
+    end
+
+    Terminal["终端 stdin"]
+    StdinReader["stdin_reader (background)<br/>readline → USER_INPUT"]
+
+    Terminal --> StdinReader
+    StdinReader -->|FD 5| FD5
+    SABody -->|写入| NOTIFY_FIFO
+    NOTIFY_FIFO -->|FD 6| NRBody
+
+    style Flag fill:#ff9,stroke:#333
+    style NRCheck fill:#fdf,stroke:#333
 ```
 
 ### 1.2 FD 分配（固定）
@@ -605,18 +622,69 @@ agent_compact_context() {
 - 这些变更反映到下一次 `store_conv_get_messages` 调用
 - 如果在 LLM call 之后 compact，当前请求发送旧 conversation（可能超限）
 
-### 6.3 store_conv_dp_decision()
+### 6.3 store_conv_dp_decision() — DP 决策公式
 
-调用 `compact_dp.awk`，传入大量 DP 参数：
+调用 `compact_dp.awk`，遍历所有可能的 keep_lines `k`，计算每个 `k` 的经济收益，选择收益最大的 `k`。
+
+#### 输入参数
+
+| 符号 | 来源 | 含义 |
+|------|------|------|
+| `t` | stats: `current_turn_count` | 当前用户输入轮次数 |
+| `total_requests` | stats: `agent_request_count` | 累计 LLM 请求次数 |
+| `total_compact` | stats: `compact_request_count` | 历史压缩次数 |
+| `total_input` | stats: `total_input_tokens` | 累计输入 token |
+| `baseline_e` | env `DP_BASELINE_E`, 默认 8 | 预期总轮次基准 |
+| `V` | 计算值, 默认 5000 | 固定前缀 token（system prompt + tools + old summary） |
+| `p_input` | env `DP_P_INPUT`, 默认 3.0 | 未缓存输入价格 ($/MTok) |
+| `p_cache` | env `DP_P_CACHE`, 默认 0.30 | 缓存输入价格 ($/MTok) |
+| `p_out` | env `DP_P_OUT`, 默认 15.0 | 输出价格 ($/MTok) |
+| `S` | 固定 500 | summary 输出长度 (tokens) |
+| `min_keep_ratio` | env, 默认 0.25 | 最小保留比例 |
+| `r` | 默认 0.8 | 单次摘要信息保留率 |
+| `beta` | 默认 0.03 | 信息损失惩罚系数 |
+| `max_context` | `MAX_CONTEXT_TOKENS`, 默认 200000 | 模型上下文窗口 |
+| `quality_penalty` | env `DP_QUALITY_PENALTY`, 默认 0.2 | 质量衰减惩罚 |
+
+#### 派生变量
+
 ```
-t, total_requests, total_compact, total_input,
-baseline_e(8), e_fixed(0), L_fixed(0), V(5000),
-p_input(3.0), p_cache(0.30), p_out(15.0),
-S(500), min_keep_ratio(0.25), r(0.8), beta(0.03),
-max_context(200000), quality_penalty(0.2)
+E = max(baseline_e - t, floor(baseline_e / 2))    # 预期剩余用户输入轮次
+L = max(total_requests / t, 1)                      # 每轮用户输入的平均 LLM 调用次数
+avg = total_input / total_requests                  # 每次请求的平均输入 token
+R = E × L                                           # 预期剩余 LLM 调用总次数
+r_t = max(r^(c+1), 0.37)                            # 累积信息保留率（c = total_compact）
+N_remain = R × avg                                  # 预期剩余输入 token 总量
 ```
 
-返回值：keep_lines（0 = 不压缩，>0 = 保留最后 N 行）
+#### 核心决策公式
+
+对每个候选 `k`（保留最后 k 行消息，`min_keep ≤ k ≤ max_keep`）：
+
+```
+K = sum(sizes[NR-k+1 .. NR])                        # 保留部分的 token 数
+H = total_tokens - K                                # 丢弃部分的 token 数
+
+① savings       = (R-1) × p_cache × H / 1e6         # 后续 R-1 次调用省下的缓存费用
+② cache_miss    = (S+K) × (p_input - p_cache) / 1e6 # 首次调用 prefix 失效的额外费用
+③ compact_cost  = (p_cache×V + p_input×(H+l_instr) + p_out×S) / 1e6  # 压缩调用本身
+④ info_loss     = beta × (1-r_t) × N_remain × p_input / 1e6         # 信息损失惩罚（与 k 无关）
+⑤ quality_savings = quality_penalty × p_input × ((V+T)² - (V+K)²) / (max_context × 1e6)
+                     （仅当 total_tokens > max_context × 30% 时计入）
+
+benefit = ① - ② - ③ - ④ + ⑤
+```
+
+选择 `benefit` 最大的 `k` 作为 `best_k`。
+
+#### 后处理
+
+1. **Turn 对齐**：`best_k` 向前调整到最近的 `user` 消息边界
+2. **护栏检查**：
+   - 对齐后的 `adj ≤ max_keep`（不超过上限）
+   - `H_actual ≥ H_min`（丢弃量 ≥ `20 × S`，确保压缩值得）
+3. 任一护栏不满足 → 输出 `0`（不压缩）
+4. `best_benefit ≤ 0` → 输出 `0`
 
 ### 6.4 store_conv_turn_keep()
 
@@ -1250,6 +1318,173 @@ _cnt=$(cat "$ACTIVE_SUB_FILE")
 ```
 
 `cat` 而非 `$(<file)`：因为 `$(<file 2>/dev/null || echo 0)` 对已存在文件返回空字符串（Bash `$(<file)` 特殊语法被 `||` 破坏）。
+
+---
+
+## 11A. 四版本通道架构对比
+
+Bash 是基准实现，C/Go/Rust 是 Port 版本，用各自语言的并发原语替代 Bash 的 FIFO + 子进程模型。
+
+### 通道总览
+
+| 通道 | Bash | C | Go | Rust |
+|------|------|---|----|------|
+| 用户输入 | `INPUT_FIFO` (named pipe) | `input_queue` (MsgQueue) | `rl.Input()` channel | `msg_rx` (mpsc) |
+| SubAgent 结果 | `NOTIFY_FIFO` + `NOTIFY_BUF` | `sub_result_queue` (MsgQueue) | `subResultCh` channel | `sub_result_rx` (mpsc) |
+| Display 输出 | `FD 4` → display_stream 子进程 | `display_queue` (MsgQueue) | display event channel | display worker thread channel |
+| Agent 运行标记 | `AGENT_RUNNING_FLAG` (文件) | `agent->running` (原子变量) | `agent.running` (atomic) | `self.running` (AtomicBool) |
+| 活跃 SubAgent 计数 | `ACTIVE_SUB_FILE` (文件) | `agent->active_sub_count` (原子变量) | `pendingSubAgents` (mutex) | `active_sub_count` (i64) |
+
+### Bash 版 — 双 FIFO + 文件标记
+
+```mermaid
+graph TB
+    subgraph Bash["Bash (FIFO + 文件)"]
+        direction TB
+        BL["stdin_reader 子进程"]
+        BInput["INPUT_FIFO (FD 3/5)"]
+        BMain["main loop<br/>agent_run_loop"]
+        BAgent["agent_loop_stream<br/>(LLM call + tool exec)"]
+        BDrain["agent_drain_notify_buf()<br/>NOTIFY_BUF (FD 9)"]
+        BNR["notify reader 子 shell"]
+        BNRFifo["NOTIFY_FIFO (FD 6)"]
+        BDisp["display_stream 子进程<br/>(FD 4)"]
+        BFlag["AGENT_RUNNING_FLAG"]
+        BActive["ACTIVE_SUB_FILE"]
+    end
+    BSub["Sub-Agent 子 shell"]
+
+    BL -->|"USER_INPUT"| BInput
+    BInput --> BMain
+    BMain --> BAgent
+    BAgent -->|"每轮 + end_turn 后"| BDrain
+    BAgent --> BDisp
+    BAgent -->|"运行中写标记"| BFlag
+    BSub -->|"AGENT_RESULT"| BNRFifo
+    BNRFifo --> BNR
+    BNR -->|"写入"| BDrain
+    BNR -->|"递减"| BActive
+    BNR -->|"idle 时检查"| BFlag
+    BNR -.->|"NOTIFY_PENDING"| BInput
+```
+
+**关键机制**：
+- `AGENT_RUNNING_FLAG`：agent_loop_stream 运行中创建，退出时删除（含 error 路径）
+- notify reader 检查 flag：存在 → 不发 NOTIFY_PENDING（靠 drain 消费）；不存在 → 发 NOTIFY_PENDING
+- `ACTIVE_SUB_FILE`：tool_sub_agent 中递增（先加后创建），notify reader 中递减
+
+### C 版本 — pthread + MsgQueue（三队列分离）
+
+```mermaid
+graph TB
+    subgraph C["C (pthread + MsgQueue)"]
+        direction TB
+        CL["readline 线程"]
+        CInput["input_queue"]
+        CMain["main loop<br/>agent_run_loop"]
+        CAgent["agent_loop_stream<br/>(LLM call + tool exec)"]
+        CDrain["agent_drain_sub_results()<br/>mq_try_pop"]
+        CResultQ["sub_result_queue"]
+        CDispQ["display_queue"]
+        CDisp["display 线程"]
+        CRunning["agent->running"]
+        CActive["active_sub_count"]
+    end
+    CSub["Sub-Agent 线程"]
+
+    CL -->|"USER_INPUT"| CInput
+    CInput --> CMain
+    CMain --> CAgent
+    CAgent -->|"每轮 + end_turn 后"| CDrain
+    CAgent --> CDispQ
+    CDispQ --> CDisp
+    CAgent -->|"运行中置 1"| CRunning
+    CSub -->|"AGENT_RESULT"| CResultQ
+    CResultQ --> CDrain
+    CResultQ -->|"main loop idle 时<br/>mq_pop 阻塞等待"| CMain
+```
+
+**关键机制**：
+- 三队列完全分离：`input_queue` / `sub_result_queue` / `display_queue`
+- main loop 在 agent_run_loop 返回后，`while (active_sub_count > 0)` 阻塞等待 `sub_result_queue`
+- `agent->running` 原子变量供 readline 线程判断 Ctrl+C 是否应中断
+
+### Go 版本 — goroutine + channel
+
+```mermaid
+graph TB
+    subgraph Go["Go (goroutine + channel)"]
+        direction TB
+        GL["readline goroutine"]
+        GInput["inputCh (rl.Input)"]
+        GMain["RunLoop<br/>(LLM call + tool exec)"]
+        GDrain["drainSubAgentResults()<br/>非阻塞 select"]
+        GResultQ["subResultCh"]
+        GDispQ["displayCh"]
+        GDisp["display goroutine"]
+        GRunning["agent.running"]
+        GPending["pendingSubAgents"]
+    end
+    GSub["Sub-Agent goroutine"]
+
+    GL -->|"USER_INPUT"| GInput
+    GInput --> GMain
+    GMain -->|"每轮 + end_turn/error 后"| GDrain
+    GMain --> GDispQ
+    GDispQ --> GDisp
+    GMain -->|"运行中置 true"| GRunning
+    GSub -->|"AGENT_RESULT"| GResultQ
+    GResultQ --> GDrain
+    GResultQ -->|"RunLoop idle 时<br/>select 阻塞等待"| GMain
+```
+
+**关键机制**：
+- `RunLoop` 内部每轮 LLM call 前 `drainSubAgentResults()`
+- end_turn / error 退出前检查 `pendingSubAgents`，有则 `select { case r := <-subResultCh }`
+- `runInteractive` 主循环 `for input := range rl.Input()`
+
+### Rust 版本 — std::thread + mpsc::channel
+
+```mermaid
+graph TB
+    subgraph Rust["Rust (thread + mpsc)"]
+        direction TB
+        RL["readline 线程"]
+        RInput["msg_tx → msg_rx"]
+        RMain["main_loop"]
+        RAgent["agent_loop<br/>(LLM call + tool exec)"]
+        RDrain["drain_sub_results()<br/>try_recv"]
+        RResultQ["sub_result_tx → sub_result_rx"]
+        RDispQ["DisplayEvent channel"]
+        RDisp["display worker 线程"]
+        RRunning["self.running"]
+        RActive["active_sub_count"]
+    end
+    RSub["Sub-Agent 线程"]
+
+    RL -->|"UserInput"| RInput
+    RInput --> RMain
+    RMain --> RAgent
+    RAgent -->|"每轮 + end_turn 后"| RDrain
+    RAgent --> RDispQ
+    RDispQ --> RDisp
+    RAgent -->|"运行中 store(true)"| RRunning
+    RSub -->|"AgentResult"| RResultQ
+    RResultQ --> RDrain
+    RResultQ -->|"main_loop idle 时<br/>recv 阻塞等待"| RMain
+```
+
+**关键机制**：
+- `msg_rx` 只接收 UserInput（readline 线程发）；`sub_result_rx` 只接收 AgentResult（SubAgent 线程发）——双通道分离，对齐 Bash 的 INPUT_FIFO + NOTIFY_FIFO
+- main_loop 在 agent_loop 返回后，`while active_sub_count > 0` 阻塞等待 `sub_result_rx`
+- display worker 独立线程，通过 `DisplayEvent` channel 序列化输出（含 title OSC 序列）
+
+### 通用约束（四版本共享）
+
+1. **SubAgent 结果在 LLM 调用边界 drain**：不打断流式 text delta
+2. **end_turn 后必须 drain**：有结果则 continue，触发新 agent_loop
+3. **error 退出后仍需消费 SubAgent**：Bash 清理 flag + notify reader 发 NOTIFY_PENDING；C/Rust main_loop 无条件 `while active_sub_count`；Go 在 error return 前检查 pending
+4. **结果处理顺序统一**：`usage → sub_agent_result → sub_agent_end → stats → counter → display → conversation`
 
 ---
 
