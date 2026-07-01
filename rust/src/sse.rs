@@ -456,15 +456,20 @@ pub mod openai {
                 for tc in tool_calls {
                     let idx = tc.get("index").and_then(Value::as_i64).unwrap_or(0);
                     let entry = pending_calls.entry(idx).or_default();
+                    /* 非标准 API（如 sensenova）在后续 chunk 发送空字符串 "" 而非省略字段 */
                     if let Some(v) = tc.get("id").and_then(Value::as_str) {
-                        entry.id = v.to_string();
+                        if !v.is_empty() {
+                            entry.id = v.to_string();
+                        }
                     }
                     if let Some(v) = tc
                         .get("function")
                         .and_then(|f| f.get("name"))
                         .and_then(Value::as_str)
                     {
-                        entry.name = v.to_string();
+                        if !v.is_empty() {
+                            entry.name = v.to_string();
+                        }
                     }
                     if let Some(v) = tc
                         .get("function")

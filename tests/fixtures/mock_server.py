@@ -726,6 +726,31 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        # --- sensenova-style OpenAI SSE (finish_reason:"" + name:"" in subsequent chunks) ---
+        if b'SENSENOVA_STYLE_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body:
+            if path.startswith('/v1/chat/completions'):
+                for c in [
+                    # chunk 1: reasoning + tool_call start (id+name present, finish_reason="")
+                    'data: {\"id\":\"chatcmpl-sn\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"Calling tool.\"},\"finish_reason\":\"\"}]}\n\n',
+                    # chunk 2: tool_call with id+name (finish_reason="")
+                    'data: {\"id\":\"chatcmpl-sn\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_sn_1\",\"type\":\"function\",\"function\":{\"name\":\"Write\",\"arguments\":\"\"}}]},\"finish_reason\":\"\"}]}\n\n',
+                    # chunk 3: arguments delta — sensenova sends id:"" and name:"" instead of omitting
+                    'data: {\"id\":\"chatcmpl-sn\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/bash-agent-sensenova-test.txt\\\"\"}}]},\"finish_reason\":\"\"}]}\n\n',
+                    # chunk 4: more arguments
+                    'data: {\"id\":\"chatcmpl-sn\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\",\\\"content\\\":\\\"sn-ok\\\"}\"}}]},\"finish_reason\":\"\"}]}\n\n',
+                    # chunk 5: finish_reason=tool_calls
+                    'data: {\"id\":\"chatcmpl-sn\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
+                    'data: [DONE]\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'SENSENOVA_STYLE_MARKER' in body and (b'"tool_result"' in body or b'"role":"tool"' in body):
+            if path.startswith('/v1/chat/completions'):
+                for c in [
+                    'data: {\"id\":\"chatcmpl-sn-done\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"finish_reason\":\"\"}]}\n\n',
+                    'data: {\"id\":\"chatcmpl-sn-done\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
+                    'data: [DONE]\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         if b'BASH_QUOTE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [

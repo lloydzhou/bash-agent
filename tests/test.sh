@@ -515,6 +515,24 @@ test_agent_openai_tool_write() {
     rm -f "$target_file"
 }
 
+test_agent_openai_sensenova_style() {
+    info "Test 11d: Agent e2e OpenAI sensenova-style SSE (finish_reason:\"\" + name:\"\" in subsequent chunks)"
+    local output target_file plain_output
+    target_file="/tmp/bash-agent-sensenova-test.txt"
+    rm -f "$target_file"
+    output=$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test -v 'SENSENOVA_STYLE_MARKER' 2>&1) || true
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if [[ -f "$target_file" ]] && \
+       grep -q 'sn-ok' "$target_file" && \
+       echo "$plain_output" | grep -Fq 'Write(/tmp/bash-agent-sensenova-test.txt) [' && \
+       echo "$plain_output" | grep -Fq 'Done.'; then
+        green "Agent e2e OpenAI sensenova-style SSE"; ((PASS++)) || true
+    else
+        red "Agent e2e OpenAI sensenova-style SSE"; echo "  Output: $output"; echo "  File: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
 test_agent_tool_result_persist_order() {
     info "Test 11c: assistant tool_use persisted before following tool_result"
     local output session_id conv_file
@@ -2606,6 +2624,7 @@ test_agent_e2e_claude
 test_agent_e2e_openai
 test_agent_openai_request_body
 test_agent_openai_tool_write
+test_agent_openai_sensenova_style
 test_agent_tool_result_persist_order
 test_agent_skill_injection
 test_agent_skill_injection_from_repo_skills_dir

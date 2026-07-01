@@ -146,13 +146,19 @@ static void parse_openai_sse_event(StreamCtx *sctx, const char *data, size_t dat
                 char *id = json_get_string(tc, "id");
                 char *name = json_get_string(fn, "name");
                 char *arguments = json_get_string(fn, "arguments");
-                if (id) {
+                /* 非标准 OpenAI 兼容 API（如 sensenova）在后续 chunk 中
+                 * 发送空字符串 "" 而非省略字段，必须用 [0] 检查避免覆盖 */
+                if (id && id[0]) {
                     FREE_PTR(tool->id);
                     tool->id = id;
+                } else {
+                    FREE_PTR(id);
                 }
-                if (name) {
+                if (name && name[0]) {
                     FREE_PTR(tool->name);
                     tool->name = name;
+                } else {
+                    FREE_PTR(name);
                 }
                 if (arguments) {
                     sb_append(&tool->arguments, arguments);
@@ -161,7 +167,9 @@ static void parse_openai_sse_event(StreamCtx *sctx, const char *data, size_t dat
             }
         }
         char *finish = json_get_string(choice, "finish_reason");
-        if (finish) {
+        /* 非标准 API 可能用空字符串 "" 代替 null（如 sensenova），
+         * 空字符串不应触发 STOP */
+        if (finish && finish[0]) {
             if (strcmp(finish, "tool_calls") == 0) {
                 streamctx_emit_openai_tool_calls(sctx);
                 emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "tool_use");
