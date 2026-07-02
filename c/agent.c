@@ -710,8 +710,6 @@ static int agent_drain_sub_results(Agent *agent) {
             sb_free(&ctx);
             drained++;
         } else if (sub_msg && sub_msg->type == MSG_ASYNC_TASK_RESULT) {
-            /* 记录事件 */
-            store_event_append(&agent->paths, "");
             StrBuf evt;
             sb_init(&evt);
             sb_appendf(&evt, "{\"type\":\"async_task_result\",\"task_id\":\"%s\",\"exit_code\":%d,\"output\":",
