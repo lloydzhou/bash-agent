@@ -1394,16 +1394,13 @@ agent_drain_notify_buf() {
     while util_read_msg <&9; do
         if [[ "${REPLY_MESSAGE[0]}" == "AGENT_RESULT" ]]; then
             util_is_stream_json || util_write_msg "AGENT_RESULT" "${REPLY_MESSAGE[@]:1}" >&4 2>/dev/null || true
-            local _sid="${REPLY_MESSAGE[1]}" _st="${REPLY_MESSAGE[2]}" _in="${REPLY_MESSAGE[3]}" _out="${REPLY_MESSAGE[4]}"
-            local _th="${REPLY_MESSAGE[5]}" _tx="${REPLY_MESSAGE[6]}"
-            _conv+="[sub-agent ${_sid}] ${_st} (in=${_in}, out=${_out})"$'\n'
-            [[ -n "$_th" ]] && _conv+="Thinking: ${_th}"$'\n'
-            [[ -n "$_tx" ]] && _conv+="Text: ${_tx}"$'\n'
+            _conv+="[sub-agent ${REPLY_MESSAGE[1]}] ${REPLY_MESSAGE[2]} (in=${REPLY_MESSAGE[3]}, out=${REPLY_MESSAGE[4]})"$'\n'
+            [[ -n "${REPLY_MESSAGE[5]}" ]] && _conv+="Thinking: ${REPLY_MESSAGE[5]}"$'\n'
+            [[ -n "${REPLY_MESSAGE[6]}" ]] && _conv+="Text: ${REPLY_MESSAGE[6]}"$'\n'
         elif [[ "${REPLY_MESSAGE[0]}" == "ASYNC_TASK_RESULT" ]]; then
             util_is_stream_json || util_write_msg "ASYNC_TASK_RESULT" "${REPLY_MESSAGE[@]:1}" >&4 2>/dev/null || true
-            local _tid="${REPLY_MESSAGE[1]}" _exit_code="${REPLY_MESSAGE[2]}" _output="${REPLY_MESSAGE[3]}"
-            _conv+="[async-task ${_tid}] exit_code=${_exit_code}"$'\n'
-            [[ -n "$_output" ]] && _conv+="Output: ${_output}"$'\n'
+            _conv+="[async-task ${REPLY_MESSAGE[1]}] exit_code=${REPLY_MESSAGE[2]}"$'\n'
+            [[ -n "${REPLY_MESSAGE[3]}" ]] && _conv+="Output: ${REPLY_MESSAGE[3]}"$'\n'
         fi
     done
     exec 9<&-
