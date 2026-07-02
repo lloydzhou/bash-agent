@@ -953,7 +953,6 @@ tool_bash() {
     if [[ "$async" == "true" ]]; then
         local task_id="async_$(util_new_session_id)"
         local output_file="$(store_session_get_dir)/${SESSION_ID}/${task_id}.log"
-        store_event_append "{\"type\":\"async_task_start\",\"task_id\":\"$(util_json_escape "$task_id")\",\"command\":\"$(util_json_escape "$cmd")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" >/dev/null
         { local __cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"; }
         (
             local _parent_notify_fifo="$NOTIFY_FIFO"

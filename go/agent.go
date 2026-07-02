@@ -1072,14 +1072,6 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int) (string, error) {
 	taskID := "async_" + UtilNewSessionID()
 
-	// 记录事件
-	a.emitJSON(map[string]interface{}{
-		"type":      "async_task_start",
-		"task_id":   taskID,
-		"command":   cmd,
-		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-	})
-
 	// 增加计数（复用 pendingTasks）
 	a.subMu.Lock()
 	a.pendingTasks++
