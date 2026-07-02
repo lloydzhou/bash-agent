@@ -1332,11 +1332,8 @@ agent_main_loop() {
         while util_read_msg <&6; do
             case "${REPLY_MESSAGE[0]}" in
                 AGENT_RESULT)
-                    local _sid="${REPLY_MESSAGE[1]}" _status="${REPLY_MESSAGE[2]}"
-                    local _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
-                    local _in="${REPLY_MESSAGE[5]:-0}" _out="${REPLY_MESSAGE[6]:-0}"
-                    local _cr="${REPLY_MESSAGE[7]:-0}" _cc="${REPLY_MESSAGE[8]:-0}"
-                    local _reqs="${REPLY_MESSAGE[9]:-0}"
+                    local _sid="${REPLY_MESSAGE[1]}" _status="${REPLY_MESSAGE[2]}" _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
+                    local _in="${REPLY_MESSAGE[5]:-0}" _out="${REPLY_MESSAGE[6]:-0}" _cr="${REPLY_MESSAGE[7]:-0}" _cc="${REPLY_MESSAGE[8]:-0}" _reqs="${REPLY_MESSAGE[9]:-0}"
                     store_event_append "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(util_json_escape "$_sid")\"}"
                     store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$_sid")\",\"status\":\"$_status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
@@ -1344,9 +1341,7 @@ agent_main_loop() {
                     util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
                     local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
-                    if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
-                        util_write_msg "NOTIFY_PENDING" >&5
-                    fi
+                    [[ ! -f "$AGENT_RUNNING_FLAG" ]] && util_write_msg "NOTIFY_PENDING" >&5
                     ;;
                 ASYNC_TASK_RESULT)
                     store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"exit_code\":${REPLY_MESSAGE[2]},\"output\":\"$(util_json_escape "${REPLY_MESSAGE[3]}")\"}"
