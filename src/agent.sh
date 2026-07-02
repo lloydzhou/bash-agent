@@ -421,10 +421,10 @@ store_session_init() {
     [[ -p "$INPUT_FIFO" ]] || { rm -f "$INPUT_FIFO"; mkfifo "$INPUT_FIFO"; }
     NOTIFY_FIFO="${session_dir}/notify.fifo"
     NOTIFY_BUF="${session_dir}/notify.buf"
-    ACTIVE_SUB_FILE="${session_dir}/active_sub.count"
+    ACTIVE_TASK_FILE="${session_dir}/active_task.count"
     AGENT_RUNNING_FLAG="${session_dir}/agent_running.flag"
     [[ -p "$NOTIFY_FIFO" ]] || { rm -f "$NOTIFY_FIFO"; mkfifo "$NOTIFY_FIFO"; }
-    printf '0\n' > "$ACTIVE_SUB_FILE"
+    printf '0\n' > "$ACTIVE_TASK_FILE"
 }
 
 store_session_fork() {
@@ -949,23 +949,20 @@ tool_bash() {
         echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
         return 1
     fi
-    # 异步模式：后台执行，立即返回 task_id + pid
+    # 异步模式：后台执行，立即返回 task_id，完成后通过 NOTIFY_FIFO 异步返回
     if [[ "$async" == "true" ]]; then
         local task_id="async_$(util_new_session_id)"
         local output_file="$(store_session_get_dir)/${SESSION_ID}/${task_id}.log"
         store_event_append "{\"type\":\"async_task_start\",\"task_id\":\"$(util_json_escape "$task_id")\",\"command\":\"$(util_json_escape "$cmd")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" >/dev/null
-        { local __cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"; }
+        { local __cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"; }
         (
             local _parent_notify_fifo="$NOTIFY_FIFO"
-            if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
-                util_run_timeout "$timeout_secs" bash -lc "$cmd" > "$output_file" 2>&1
-            else
-                bash -lc "$cmd" > "$output_file" 2>&1
-            fi
+            bash -lc "$cmd" > "$output_file" 2>&1
             local _exit_code=$?
-            # 通过 NOTIFY_FIFO 发送结果（复用 SubAgent 的 notify 通道）
+            local _output=""; [[ -s "$output_file" ]] && _output=$(util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$output_file" | tail -c 8192)
+            rm -f "$output_file" 2>/dev/null || true
             exec 6<>"$_parent_notify_fifo" 2>/dev/null
-            util_write_msg "ASYNC_TASK_RESULT" "$task_id" "$_exit_code" "$output_file" >&6 2>/dev/null || true
+            util_write_msg "ASYNC_TASK_RESULT" "$task_id" "$_exit_code" "$_output" >&6 2>/dev/null || true
             exec 6<&- 2>/dev/null
         ) &
         printf 'Async task started: task_id=%s, pid=%s' "$task_id" "$!"
@@ -1049,7 +1046,7 @@ tool_sub_agent() {
     [[ -z "$prompt" ]] && { echo "no prompt provided for sub-agent"; return 1; }
 
     store_event_append "{\"type\":\"sub_agent_start\",\"session_id\":\"$(util_json_escape "$sub_session_id")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"prompt\":\"$(util_json_escape "$prompt")\",\"description\":\"$(util_json_escape "$description")\",\"fork\":$fork}" >/dev/null
-    { local __cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"; }
+    { local __cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"; }
 
     (
         local _parent_notify_fifo="$NOTIFY_FIFO"
@@ -1066,7 +1063,7 @@ tool_sub_agent() {
         exec 3<&- 2>/dev/null; exec 4<&- 2>/dev/null; exec 5<&- 2>/dev/null
         exec 8<&- 2>/dev/null
         local _done=false _status="failed"
-        trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"; exec 6<&- 2>/dev/null; rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$ACTIVE_SUB_FILE"' EXIT
+        trap '[[ "$_done" == true ]] || store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"; exec 6<&- 2>/dev/null; rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$ACTIVE_TASK_FILE"' EXIT
         agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"
         _done=true
@@ -1112,15 +1109,9 @@ display_sub_agent_result() {
 
 display_async_task_result() {
     local task_id="$1" exit_code="$2" _output="$3"
-    if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then
-        env printf '\r\033[K'
-    fi
+    if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then env printf '\r\033[K'; fi
     display_ensure_newline
-    if [[ "$exit_code" == "0" ]]; then
-        printf '\033[36m[async-task %s] completed (exit_code=0)\033[0m\n' "$task_id"
-    else
-        printf '\033[31m[async-task %s] failed (exit_code=%s)\033[0m\n' "$task_id" "$exit_code"
-    fi
+    printf '\033[%sm[async-task %s] %s (exit_code=%s)\033[0m\n' "$([[ "$exit_code" == "0" ]] && echo 36 || echo 31)" "$task_id" "$([[ "$exit_code" == "0" ]] && echo completed || echo failed)" "$exit_code"
     [[ -n "$_output" ]] && printf '%s%s\n' "${_output:0:120}" "$([[ ${#_output} -gt 120 ]] && printf '…')"
     DISPLAY_LAST_CHAR=$'\n'
 }
@@ -1367,22 +1358,19 @@ agent_main_loop() {
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
                     util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
-                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
+                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
                     if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
                         util_write_msg "NOTIFY_PENDING" >&5
                     fi
                     ;;
                 ASYNC_TASK_RESULT)
-                    local _tid="${REPLY_MESSAGE[1]}" _exit_code="${REPLY_MESSAGE[2]}" _output_file="${REPLY_MESSAGE[3]}"
-                    local _output=""
-                    [[ -f "$_output_file" && -s "$_output_file" ]] && _output=$(util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$_output_file" | tail -c 8192)
-                    rm -f "$_output_file" 2>/dev/null || true
+                    local _tid="${REPLY_MESSAGE[1]}" _exit_code="${REPLY_MESSAGE[2]}" _output="${REPLY_MESSAGE[3]}"
                     store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "$_tid")\",\"exit_code\":$_exit_code,\"output\":\"$(util_json_escape "$_output")\"}"
                     store_event_append "{\"type\":\"async_task_end\",\"task_id\":\"$(util_json_escape "$_tid")\",\"exit_code\":$_exit_code,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
                     util_write_msg "ASYNC_TASK_RESULT" "$_tid" "$_exit_code" "$_output" >> "$NOTIFY_BUF"
-                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
-                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_SUB_FILE"
+                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
                     if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
                         util_write_msg "NOTIFY_PENDING" >&5
                     fi
@@ -1402,14 +1390,14 @@ agent_main_loop() {
                 saw_user_input=true
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
                 if [[ "$INTERACTIVE" != true ]]; then
-                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
                 fi
                 ;;
             NOTIFY_PENDING)
                 [[ -s "$NOTIFY_BUF" ]] && agent_run_loop "" notify
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
-                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
                 fi
                 ;;

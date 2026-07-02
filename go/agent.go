@@ -35,7 +35,7 @@ type Agent struct {
 	displayWG        sync.WaitGroup
 	toolDefs         string // JSON 格式工具定义
 	ctxTokens        int    // 当前上下文 token 数
-	pendingSubAgents int    // 等待中的子 agent 数量
+	pendingTasks int    // 等待中的子 agent 数量
 	subResultCh      chan SubAgentResult
 	subMu            sync.Mutex
 	runMu            sync.Mutex
@@ -961,7 +961,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
 			// error 退出后仍需消费 pending SubAgent 结果（对齐 C/Rust main_loop 的 active_sub_count 等待）
 			a.subMu.Lock()
-			hasPending := a.pendingSubAgents > 0
+			hasPending := a.pendingTasks > 0
 			a.subMu.Unlock()
 			if hasPending {
 				select {
@@ -991,7 +991,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 
 		// end_turn 但有等待中的子 agent → 等待结果并继续
 		a.subMu.Lock()
-		hasPending := a.pendingSubAgents > 0
+		hasPending := a.pendingTasks > 0
 		a.subMu.Unlock()
 		if hasPending {
 			select {
@@ -1048,7 +1048,7 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 
 	// 增加计数
 	a.subMu.Lock()
-	a.pendingSubAgents++
+	a.pendingTasks++
 	a.subMu.Unlock()
 
 	// fork 模式：在 goroutine 前同步复制 conversation，避免竞态
@@ -1080,9 +1080,9 @@ func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int
 		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 	})
 
-	// 增加计数（复用 pendingSubAgents）
+	// 增加计数（复用 pendingTasks）
 	a.subMu.Lock()
-	a.pendingSubAgents++
+	a.pendingTasks++
 	a.subMu.Unlock()
 
 	// 启动 goroutine
@@ -1254,7 +1254,7 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 
 	// 递减活跃子 agent 计数（在事件和统计之后）
 	a.subMu.Lock()
-	a.pendingSubAgents--
+	a.pendingTasks--
 	a.subMu.Unlock()
 
 	// 显示结果（统一走 Display 接口）
@@ -1300,7 +1300,7 @@ func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
 
 	// 3. 递减活跃计数（async task 无 token 消耗，跳过 stats）
 	a.subMu.Lock()
-	a.pendingSubAgents--
+	a.pendingTasks--
 	a.subMu.Unlock()
 
 	// 4. 显示结果

@@ -721,7 +721,7 @@ static int agent_drain_sub_results(Agent *agent) {
             store_event_append(&agent->paths, evt.data);
             sb_free(&evt);
             /* 递减计数器 */
-            if (agent->active_sub_count > 0) agent->active_sub_count--;
+            if (agent->active_task_count > 0) agent->active_task_count--;
             /* display */
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_async_task_result(
@@ -1107,7 +1107,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                         snprintf(output_file, sizeof(output_file), "%s/%s/%s.log",
                                  store_session_get_dir_str(agent), agent->session_id, task_id);
                         /* 递增计数器 */
-                        agent->active_sub_count++;
+                        agent->active_task_count++;
                         /* 后台线程 */
                         AsyncBashArgs *args = calloc(1, sizeof(AsyncBashArgs));
                         args->cmd = util_strdup(cmd);
@@ -1701,7 +1701,7 @@ int agent_main_loop(Agent *agent) {
                  * 模仿 bash 版 agent_run_loop 的单线程行为：
                  * bash 版是同步的，agent_loop 处理 sub-agent 结果后
                  * 才显示下一轮提示符。 */
-                while (agent->active_sub_count > 0) {
+                while (agent->active_task_count > 0) {
                     void *sub_data = NULL;
                     if (mq_pop(agent->sub_result_queue, &sub_data) != 0) break;
                     InputMessage *sub_msg = (InputMessage *)sub_data;
@@ -1740,7 +1740,7 @@ int agent_main_loop(Agent *agent) {
                         sb_append(&evt, "}");
                         store_event_append(&agent->paths, evt.data);
                         sb_free(&evt);
-                        if (agent->active_sub_count > 0) agent->active_sub_count--;
+                        if (agent->active_task_count > 0) agent->active_task_count--;
                         DisplayMessage *dm = malloc(sizeof(DisplayMessage));
                         *dm = display_msg_async_task_result(
                             sub_msg->data.async_task_result.task_id,
@@ -1774,7 +1774,7 @@ int agent_main_loop(Agent *agent) {
         free(msg);
 
         /* 非交互模式且无活跃子 agent 时退出 */
-        if (!agent->interactive && agent->active_sub_count <= 0) break;
+        if (!agent->interactive && agent->active_task_count <= 0) break;
     }
     return 0;
 }
@@ -1993,7 +1993,7 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     }
 
     /* 增加活跃子 agent 计数 */
-    agent->active_sub_count++;
+    agent->active_task_count++;
 
     /* fork 模式：在主线程中立即复制父会话（确保在 tool_result 写入之前） */
     if (fork) {
@@ -2097,7 +2097,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
     agent_update_title(agent);
 
     /* 递减活跃子 agent 计数 */
-    agent->active_sub_count--;
+    agent->active_task_count--;
 
     /* 显示结果（推 display 队列） */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
