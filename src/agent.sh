@@ -940,8 +940,6 @@ tool_edit() {
 tool_bash() {
     local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" background="${3:-false}" allowed_mode required_mode tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "no command provided"; return 1; }
-    # 归一化 background 参数
-    [[ "$background" == "true" || "$background" == "1" ]] && background=true || background=false
     allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
     tool_classify_bash_required_mode "$cmd" >/dev/null
     required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
@@ -949,8 +947,7 @@ tool_bash() {
         echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
         return 1
     fi
-    # 异步模式：后台执行，立即返回 task_id
-    if [[ "$background" == "true" ]]; then
+    if [[ "$background" == "true" || "$background" == "1" ]]; then
         local task_id="async_$(util_new_session_id)"
         { local __cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"; }
         tmpout=$(mktemp)
@@ -964,7 +961,6 @@ tool_bash() {
         printf 'Async task started: task_id=%s, pid=%s' "$task_id" "$!"
         return 0
     fi
-    # 同步模式
     tmpout=$(mktemp)
     if [[ -n "$timeout_secs" && "$timeout_secs" =~ ^[0-9]+$ && "$timeout_secs" -gt 0 ]]; then
         util_run_timeout "$timeout_secs" bash -lc "$cmd" > "$tmpout" 2>&1
@@ -1175,12 +1171,10 @@ display_message() {
             display_sub_agent_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" "${REPLY_MESSAGE[5]}" "${REPLY_MESSAGE[6]}"
             ;;
         ASYNC_TASK_RESULT)
-            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then env printf '\r\033[K'; fi
             display_ensure_newline
-            printf '\033[%sm[async-task %s] %s (exit_code=%s)\033[0m\n' "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo 36 || echo 31)" "${REPLY_MESSAGE[1]}" "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo completed || echo failed)" "${REPLY_MESSAGE[2]}"
-            [[ -n "${REPLY_MESSAGE[3]}" ]] && printf '%s%s\n' "${REPLY_MESSAGE[3]:0:120}" "$([[ ${#REPLY_MESSAGE[3]} -gt 120 ]] && printf '…')"
-            DISPLAY_LAST_CHAR=$'\n'
-            ;;
+            printf '\033[%sm[async-task %s] exit_code=%s\033[0m\n' "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo 36 || echo 31)" "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}"
+            [[ -n "${REPLY_MESSAGE[3]:0:120}" ]] && printf '%s\n' "${REPLY_MESSAGE[3]:0:120}"
+            DISPLAY_LAST_CHAR=$'\n' ;;
         IMAGE_DESCRIBE)
             [[ -n "${REPLY_MESSAGE[2]}" ]] && { display_human_text "$(printf '\033[36m📸 %s: %s\033[0m\n' "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}")"; DISPLAY_LAST_CHAR=$'\n'; }
             ;;
