@@ -952,14 +952,14 @@ tool_bash() {
     # 异步模式：后台执行，立即返回 task_id，完成后通过 NOTIFY_FIFO 异步返回
     if [[ "$background" == "true" ]]; then
         local task_id="async_$(util_new_session_id)"
-        local output_file="$(store_session_get_dir)/${SESSION_ID}/${task_id}.log"
+        local tmpout=$(mktemp)
         { local __cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"; }
         (
             local _parent_notify_fifo="$NOTIFY_FIFO"
-            bash -lc "$cmd" > "$output_file" 2>&1
+            bash -lc "$cmd" > "$tmpout" 2>&1
             local _exit_code=$?
-            local _output=""; [[ -s "$output_file" ]] && _output=$(util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$output_file" | tail -c 8192)
-            rm -f "$output_file" 2>/dev/null || true
+            local _output=""; [[ -s "$tmpout" ]] && _output=$(util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$tmpout" | tail -c 8192)
+            rm -f "$tmpout" 2>/dev/null || true
             exec 6<>"$_parent_notify_fifo" 2>/dev/null
             util_write_msg "ASYNC_TASK_RESULT" "$task_id" "$_exit_code" "$_output" >&6 2>/dev/null || true
             exec 6<&- 2>/dev/null
