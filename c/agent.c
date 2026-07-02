@@ -1090,12 +1090,12 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     tr.exit_code = 0;
                     free(prompt); free(description);
                 } else if (strcmp(tc->name, "Bash") == 0) {
-                    /* Bash async=true 特殊处理：后台执行，立即返回 task_id */
+                    /* Bash background=true 特殊处理：后台执行，立即返回 task_id */
                     JsonParse jp = json_parse_root(tc->input_json.data);
                     int is_async = 0;
                     char *cmd = NULL;
                     if (!jp.error) {
-                        is_async = json_get_bool(jp.val, "async", false) ? 1 : 0;
+                        is_async = json_get_bool(jp.val, "background", false) ? 1 : 0;
                         cmd = json_get_string(jp.val, "command");
                     }
                     if (is_async && cmd && cmd[0]) {
@@ -2416,7 +2416,7 @@ char *agent_build_prompt(Agent *agent) {
             "- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n"
             "- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n"
             "- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n"
-            "- Bash supports async=true for long-running commands (builds, tests, servers). The command starts in background, returns immediately with task_id and pid. When finished, the result arrives asynchronously as: [async-task <id>] exit_code=<code>\\nOutput: <output>. Results are delivered via the same notify mechanism as SubAgent.\n"
+            "- Bash supports background=true for long-running commands (builds, tests, servers). The command starts in background, returns immediately with task_id and pid. When finished, the result arrives asynchronously as: [async-task <id>] exit_code=<code>\\nOutput: <output>. Results are delivered via the same notify mechanism as SubAgent.\n"
             "- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.";
         prompt_append_section(&buf, "using-your-tools", tool_guidance, NULL);
     }

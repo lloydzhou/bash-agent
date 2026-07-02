@@ -1426,7 +1426,7 @@ impl Agent {
                                 break;
                             }
                             // Async bash 拦截：在 dispatch 之前检查
-                            let mut output = if call.name == "Bash" && call.fields.get("async").map(|s| s == "true" || s == "1").unwrap_or(false) {
+                            let mut output = if call.name == "Bash" && call.fields.get("background").map(|s| s == "true" || s == "1").unwrap_or(false) {
                                 let command = call.fields.get("command").cloned().unwrap_or_default();
                                 let task_id = format!("async_{}", chrono_like_now());
                                 self.active_task_count += 1;

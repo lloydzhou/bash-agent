@@ -43,7 +43,7 @@ type AsyncBashLauncher func(ctx context.Context, cmd string, timeoutSecs int) (s
 type ToolDispatcher struct {
 	cfg              Config
 	launcher         SubAgentLauncher
-	asyncBashLauncher AsyncBashLauncher
+	backgroundBashLauncher AsyncBashLauncher
 	planConfirmFn    func() (string, error)
 	planClearFn      func() (string, error)
 	skillLoader      func(name string) (string, error)
@@ -61,7 +61,7 @@ func (td *ToolDispatcher) SetSubAgentLauncher(fn SubAgentLauncher) {
 
 // SetAsyncBashLauncher 设置异步 bash 启动回调
 func (td *ToolDispatcher) SetAsyncBashLauncher(fn AsyncBashLauncher) {
-	td.asyncBashLauncher = fn
+	td.backgroundBashLauncher = fn
 }
 
 // SetPlanConfirm 设置 plan confirm 回调
@@ -90,7 +90,7 @@ func (td *ToolDispatcher) Dispatch(ctx context.Context, name string, params map[
 	case "Edit":
 		return td.toolEdit(params["path"], params["old_string"], params["new_string"])
 	case "Bash":
-		return td.toolBash(ctx, params["command"], params["timeout"], params["async"])
+		return td.toolBash(ctx, params["command"], params["timeout"], params["background"])
 	case "Glob":
 		return td.toolGlob(params["pattern"], params["path"])
 	case "Grep":
@@ -509,7 +509,7 @@ func ToolBashModeAllows(allowed, required string) bool {
 }
 
 // toolBash 执行 shell 命令
-func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr, asyncStr string) (string, error) {
+func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr, backgroundStr string) (string, error) {
 	if cmd == "" {
 		return "", fmt.Errorf("no command provided")
 	}
@@ -520,15 +520,15 @@ func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr, asyncSt
 	}
 
 	// 异步模式
-	isAsync := asyncStr == "true" || asyncStr == "1"
-	if isAsync && td.asyncBashLauncher != nil {
+	isAsync := backgroundStr == "true" || backgroundStr == "1"
+	if isAsync && td.backgroundBashLauncher != nil {
 		timeoutSecs := td.cfg.ToolTimeoutSecs
 		if timeoutStr != "" {
 			if t, err := time.ParseDuration(timeoutStr + "s"); err == nil {
 				timeoutSecs = int(t.Seconds())
 			}
 		}
-		return td.asyncBashLauncher(ctx, cmd, timeoutSecs)
+		return td.backgroundBashLauncher(ctx, cmd, timeoutSecs)
 	}
 
 	timeoutSecs := td.cfg.ToolTimeoutSecs

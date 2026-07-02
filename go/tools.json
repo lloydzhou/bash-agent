@@ -72,7 +72,7 @@
   },
   {
     "name": "Bash",
-    "description": "Execute a bash command. Returns stdout and stderr. For long-running commands (builds, tests, servers), use async=true to run in background — returns immediately with task_id/pid, results delivered asynchronously.",
+    "description": "Execute a bash command. Returns stdout and stderr. For long-running commands (builds, tests, servers), use background=true to run in background — returns immediately with task_id/pid, results delivered asynchronously.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -84,7 +84,7 @@
           "type": "integer",
           "description": "Timeout in seconds. If the command exceeds this duration, it will be killed. Only use for commands expected to take a long time (e.g. build, test, server start). Default: uses --tool-timeout setting."
         },
-        "async": {
+        "background": {
           "type": "boolean",
           "description": "If true, run the command in background. Returns immediately with task_id and pid. When the command finishes, the output is delivered asynchronously as an async_task_result event (similar to SubAgent results). Use for long-running commands. The result arrives as: [async-task <id>] exit_code=<code>\\nOutput: <output>"
         }
