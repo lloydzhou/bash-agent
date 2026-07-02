@@ -534,7 +534,7 @@ test_agent_openai_sensenova_style() {
 }
 
 test_agent_async_bash() {
-    info "Test 11e: Agent async bash (async=true returns task_id, result arrives via notify)"
+    info "Test 11e: Agent async bash (background=true returns task_id, result arrives via notify)"
     local output plain_output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'ASYNC_BASH_MARKER' 2>&1) || true
     plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')

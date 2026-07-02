@@ -1106,15 +1106,6 @@ display_sub_agent_result() {
     DISPLAY_LAST_CHAR=$'\n'
 }
 
-display_async_task_result() {
-    local task_id="$1" exit_code="$2" _output="$3"
-    if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then env printf '\r\033[K'; fi
-    display_ensure_newline
-    printf '\033[%sm[async-task %s] %s (exit_code=%s)\033[0m\n' "$([[ "$exit_code" == "0" ]] && echo 36 || echo 31)" "$task_id" "$([[ "$exit_code" == "0" ]] && echo completed || echo failed)" "$exit_code"
-    [[ -n "$_output" ]] && printf '%s%s\n' "${_output:0:120}" "$([[ ${#_output} -gt 120 ]] && printf '…')"
-    DISPLAY_LAST_CHAR=$'\n'
-}
-
 # Convert REPLY_MESSAGE to a stream event JSON string. Prints JSON to stdout;
 # returns 1 if type has no event representation.
 # Render a single RESP message from REPLY_MESSAGE in human-readable mode.
@@ -1187,7 +1178,11 @@ display_message() {
             display_sub_agent_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" "${REPLY_MESSAGE[5]}" "${REPLY_MESSAGE[6]}"
             ;;
         ASYNC_TASK_RESULT)
-            display_async_task_result "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}"
+            if [[ "$INTERACTIVE" == true && "$DISPLAY_LAST_CHAR" == $'\n' ]]; then env printf '\r\033[K'; fi
+            display_ensure_newline
+            printf '\033[%sm[async-task %s] %s (exit_code=%s)\033[0m\n' "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo 36 || echo 31)" "${REPLY_MESSAGE[1]}" "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo completed || echo failed)" "${REPLY_MESSAGE[2]}"
+            [[ -n "${REPLY_MESSAGE[3]}" ]] && printf '%s%s\n' "${REPLY_MESSAGE[3]:0:120}" "$([[ ${#REPLY_MESSAGE[3]} -gt 120 ]] && printf '…')"
+            DISPLAY_LAST_CHAR=$'\n'
             ;;
         IMAGE_DESCRIBE)
             [[ -n "${REPLY_MESSAGE[2]}" ]] && { display_human_text "$(printf '\033[36m📸 %s: %s\033[0m\n' "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}")"; DISPLAY_LAST_CHAR=$'\n'; }
@@ -1364,14 +1359,11 @@ agent_main_loop() {
                     fi
                     ;;
                 ASYNC_TASK_RESULT)
-                    local _tid="${REPLY_MESSAGE[1]}" _exit_code="${REPLY_MESSAGE[2]}" _output="${REPLY_MESSAGE[3]}"
-                    store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "$_tid")\",\"exit_code\":$_exit_code,\"output\":\"$(util_json_escape "$_output")\"}"
-                    util_write_msg "ASYNC_TASK_RESULT" "$_tid" "$_exit_code" "$_output" >> "$NOTIFY_BUF"
+                    store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"exit_code\":${REPLY_MESSAGE[2]},\"output\":\"$(util_json_escape "${REPLY_MESSAGE[3]}")\"}"
+                    util_write_msg "${REPLY_MESSAGE[@]}" >> "$NOTIFY_BUF"
                     local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
-                    if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
-                        util_write_msg "NOTIFY_PENDING" >&5
-                    fi
+                    [[ ! -f "$AGENT_RUNNING_FLAG" ]] && util_write_msg "NOTIFY_PENDING" >&5
                     ;;
             esac
         done
