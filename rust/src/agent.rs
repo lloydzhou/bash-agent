@@ -1114,7 +1114,6 @@ impl Agent {
                             }
                             Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
                                 let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
-                                let _ = self.append_event(json!({"type":"async_task_end","task_id":&task_id,"exit_code":exit_code,"timestamp":chrono_like_now()}));
                                 if self.active_task_count > 0 { self.active_task_count -= 1; }
                                 let ctx = format!("[async-task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
                                 let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
@@ -1257,7 +1256,6 @@ impl Agent {
             }
             MainLoopMessage::AsyncResult { task_id, exit_code, output } => {
                 let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
-                let _ = self.append_event(json!({"type":"async_task_end","task_id":&task_id,"exit_code":exit_code,"timestamp":chrono_like_now()}));
                 if self.active_task_count > 0 { self.active_task_count -= 1; }
                 let ctx = format!("[async-task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
                 let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });

@@ -1290,14 +1290,6 @@ func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
 		"output":     r.Output,
 	})
 
-	// 2. 记录 async_task_end 事件
-	a.emitJSON(map[string]interface{}{
-		"type":      "async_task_end",
-		"task_id":   r.TaskID,
-		"exit_code": r.ExitCode,
-		"timestamp": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
-	})
-
 	// 3. 递减活跃计数（async task 无 token 消耗，跳过 stats）
 	a.subMu.Lock()
 	a.pendingTasks--

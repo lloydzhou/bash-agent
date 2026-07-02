@@ -1367,7 +1367,6 @@ agent_main_loop() {
                 ASYNC_TASK_RESULT)
                     local _tid="${REPLY_MESSAGE[1]}" _exit_code="${REPLY_MESSAGE[2]}" _output="${REPLY_MESSAGE[3]}"
                     store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "$_tid")\",\"exit_code\":$_exit_code,\"output\":\"$(util_json_escape "$_output")\"}"
-                    store_event_append "{\"type\":\"async_task_end\",\"task_id\":\"$(util_json_escape "$_tid")\",\"exit_code\":$_exit_code,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
                     util_write_msg "ASYNC_TASK_RESULT" "$_tid" "$_exit_code" "$_output" >> "$NOTIFY_BUF"
                     local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
