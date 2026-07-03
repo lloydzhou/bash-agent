@@ -1284,7 +1284,7 @@ func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
 	})
 
 	// 5. 注入 conversation
-	injectMsg := fmt.Sprintf("[task %s] exit_code=%d\nOutput: %s",
+	injectMsg := fmt.Sprintf("[bg-bash %s] exit_code=%d\nOutput: %s",
 		r.TaskID, r.ExitCode, r.Output)
 	_ = a.store.AddUserMessage(injectMsg)
 }

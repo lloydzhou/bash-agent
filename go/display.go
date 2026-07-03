@@ -187,7 +187,7 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 			if exitCode == "0" {
 				color = "36"
 			}
-			d.writef("\033[%sm[task %s] exit_code=%s\033[0m\n", color, taskID, exitCode)
+			d.writef("\033[%sm[bg-bash %s] exit_code=%s\033[0m\n", color, taskID, exitCode)
 			if output != "" {
 				if len(output) > 120 {
 					d.writef("%s…\n", output[:120])

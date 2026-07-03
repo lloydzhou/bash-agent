@@ -306,7 +306,7 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                 linenoiseWrite("\r\033[K", 4);
             }
             ensure_newline(ds);
-            linenoisePrintf("\x1b[%sm[task %s] exit_code=%d\x1b[0m\n",
+            linenoisePrintf("\x1b[%sm[bg-bash %s] exit_code=%d\x1b[0m\n",
                     msg->tool_exit_code == 0 ? "36" : "31",
                     msg->session_id ? msg->session_id : "?", msg->tool_exit_code);
             if (msg->content && msg->content[0]) {

@@ -516,7 +516,7 @@ fn render_display_event(
             }
             ensure_newline(ds, &lw);
             let color = if exit_code == 0 { "36" } else { "31" };
-            lw(&format!("\x1b[{}m[task {}] exit_code={}\x1b[0m\n", color, task_id, exit_code));
+            lw(&format!("\x1b[{}m[bg-bash {}] exit_code={}\x1b[0m\n", color, task_id, exit_code));
             if !output.is_empty() {
                 lw(&format!("{}\n", truncate_str(&output, 120)));
             }
@@ -1114,7 +1114,7 @@ impl Agent {
                             Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
                                 let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
                                 if self.active_task_count > 0 { self.active_task_count -= 1; }
-                                let ctx = format!("[task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
+                                let ctx = format!("[bg-bash {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
                                 let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
                                 let _ = self.agent_loop_with_kind(ctx, "async_task_result");
                                 self.flush_display();
@@ -1256,7 +1256,7 @@ impl Agent {
             MainLoopMessage::AsyncResult { task_id, exit_code, output } => {
                 let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
                 if self.active_task_count > 0 { self.active_task_count -= 1; }
-                let ctx = format!("[task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
+                let ctx = format!("[bg-bash {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
                 let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
                 let _ = self.conv.add_user(&ctx);
                 drained = true;

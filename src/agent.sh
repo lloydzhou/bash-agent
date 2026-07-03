@@ -1170,7 +1170,7 @@ display_message() {
             ;;
         ASYNC_TASK_RESULT)
             display_ensure_newline
-            printf '\033[%sm[task %s] exit_code=%s\033[0m\n' "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo 36 || echo 31)" "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}"
+            printf '\033[%sm[bg-bash %s] exit_code=%s\033[0m\n' "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo 36 || echo 31)" "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}"
             [[ -n "${REPLY_MESSAGE[3]:0:120}" ]] && printf '%s\n' "${REPLY_MESSAGE[3]:0:120}"
             DISPLAY_LAST_CHAR=$'\n' ;;
         IMAGE_DESCRIBE)
@@ -1397,7 +1397,7 @@ agent_drain_notify_buf() {
             [[ -n "${REPLY_MESSAGE[6]}" ]] && _conv+="Text: ${REPLY_MESSAGE[6]}"$'\n'
         elif [[ "${REPLY_MESSAGE[0]}" == "ASYNC_TASK_RESULT" ]]; then
             util_write_msg "ASYNC_TASK_RESULT" "${REPLY_MESSAGE[@]:1}"
-            _conv+="[task ${REPLY_MESSAGE[1]}] exit_code=${REPLY_MESSAGE[2]}"$'\n'
+            _conv+="[bg-bash ${REPLY_MESSAGE[1]}] exit_code=${REPLY_MESSAGE[2]}"$'\n'
             [[ -n "${REPLY_MESSAGE[3]}" ]] && _conv+="Output: ${REPLY_MESSAGE[3]}"$'\n'
         fi
     done
