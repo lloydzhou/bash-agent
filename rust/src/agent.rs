@@ -1431,26 +1431,15 @@ impl Agent {
                                 let task_id = format!("async_{}", chrono_like_now());
                                 self.active_task_count += 1;
                                 let tx = self.sub_result_tx.clone();
-                                let timeout = self.cfg.tool_timeout_secs;
                                 let tid = task_id.clone();
-                                let session_dir = self.paths.session_dir.to_string_lossy().to_string();
-                                let output_file = format!("{}/{}.log", session_dir, task_id);
                                 thread::spawn(move || {
-                                    let mut cmd = std::process::Command::new("bash");
-                                    cmd.arg("-lc").arg(&command);
-                                    let output_result = if timeout > 0 {
-                                        // 简化：不设精确超时（对齐其他版本的行为）
-                                        cmd.output()
-                                    } else {
-                                        cmd.output()
-                                    };
-                                    let (exit_code, stdout) = match output_result {
+                                    let output = std::process::Command::new("bash").arg("-lc").arg(&command).output();
+                                    let (exit_code, stdout) = match output {
                                         Ok(o) => (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)),
                                         Err(e) => (127, e.to_string()),
                                     };
                                     let _ = tx.send(MainLoopMessage::AsyncResult { task_id: tid, exit_code, output: stdout });
                                 });
-                                let _ = std::fs::remove_file(&output_file); // 预清理
                                 format!("Async task started: task_id={}", task_id)
                             } else {
                                 let dispatch_result = runner.dispatch(&call.name, &call.input_json);

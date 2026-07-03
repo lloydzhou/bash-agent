@@ -34,12 +34,9 @@ static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayM
 typedef struct {
     char *cmd;
     char *task_id;
-    char *output_file;
-    int timeout_secs;
     MsgQueue *sub_result_queue;
 } AsyncBashArgs;
 
-static const char *store_session_get_dir_str(Agent *agent);
 static void *async_bash_thread_fn(void *arg);
 
 /* ============================================================
@@ -1100,18 +1097,12 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                         /* 生成 task_id */
                         char task_id[64];
                         snprintf(task_id, sizeof(task_id), "async_%ld_%d", (long)time(NULL), getpid() & 0xFFFF);
-                        /* 输出文件 */
-                        char output_file[1024];
-                        snprintf(output_file, sizeof(output_file), "%s/%s/%s.log",
-                                 store_session_get_dir_str(agent), agent->session_id, task_id);
                         /* 递增计数器 */
                         agent->active_task_count++;
                         /* 后台线程 */
                         AsyncBashArgs *args = calloc(1, sizeof(AsyncBashArgs));
                         args->cmd = util_strdup(cmd);
                         args->task_id = util_strdup(task_id);
-                        args->output_file = util_strdup(output_file);
-                        args->timeout_secs = agent->tool_timeout_secs;
                         args->sub_result_queue = agent->sub_result_queue;
                         pthread_t thread;
                         pthread_create(&thread, NULL, async_bash_thread_fn, args);
@@ -1781,35 +1772,35 @@ int agent_main_loop(Agent *agent) {
  * SubAgent 处理
  * ============================================================ */
 
-/* store_session_get_dir 辅助：返回 session 目录字符串 */
-static const char *store_session_get_dir_str(Agent *agent) {
-    static char buf[1024];
-    /* 复用 Bash 版的逻辑：project_dir/session_id */
-    const char *home = agent->home;
-    const char *cwd = agent->cwd;
-    char project_key[512];
-    /* 简化：直接用 cwd 的转义路径作为 key（与 store.c 的逻辑一致） */
-    snprintf(project_key, sizeof(project_key), "%s", cwd);
-    /* 替换 / 为 _ */
-    for (char *p = project_key; *p; p++) if (*p == '/') *p = '_';
-    snprintf(buf, sizeof(buf), "%s/.bash-agent/projects/%s/%s", home, project_key, agent->session_id);
-    return buf;
-}
 
 /* Async Bash 后台线程：执行命令，输出写入文件，完成后 push 到 sub_result_queue */
 static void *async_bash_thread_fn(void *arg) {
     AsyncBashArgs *args = (AsyncBashArgs *)arg;
 
-    /* 执行命令，输出写入文件（对齐 Bash 版：无 timeout） */
+    /* 用 mkstemp 创建临时文件（对齐 Bash 版 mktemp） */
+    char tmp_template[] = "/tmp/async_bash_XXXXXXX";
+    int fd = mkstemp(tmp_template);
+    if (fd < 0) {
+        InputMessage *msg = calloc(1, sizeof(InputMessage));
+        msg->type = MSG_ASYNC_TASK_RESULT;
+        msg->data.async_task_result.task_id = util_strdup(args->task_id);
+        msg->data.async_task_result.exit_code = 1;
+        msg->data.async_task_result.output = util_strdup("Failed to create temp file");
+        mq_push(args->sub_result_queue, msg);
+        free(args->cmd); free(args->task_id); free(args);
+        return NULL;
+    }
+    close(fd);
+
+    /* 执行命令，输出写入临时文件 */
     char cmd_buf[8192];
-    snprintf(cmd_buf, sizeof(cmd_buf), "bash -lc '%s' > '%s' 2>&1",
-             args->cmd, args->output_file);
+    snprintf(cmd_buf, sizeof(cmd_buf), "bash -lc '%s' > '%s' 2>&1", args->cmd, tmp_template);
     int rc = system(cmd_buf);
     int exit_code = WEXITSTATUS(rc);
 
-    /* 读取全部输出（对齐 Bash 版：不截断） */
+    /* 读取全部输出 */
     char *output = NULL;
-    FILE *f = fopen(args->output_file, "r");
+    FILE *f = fopen(tmp_template, "r");
     if (f) {
         fseek(f, 0, SEEK_END);
         long fsize = ftell(f);
@@ -1818,8 +1809,7 @@ static void *async_bash_thread_fn(void *arg) {
         size_t n = fread(output, 1, fsize, f);
         output[n] = '\0';
         fclose(f);
-        /* 删除临时文件 */
-        remove(args->output_file);
+        remove(tmp_template);
     }
 
     /* 构造 MSG_ASYNC_TASK_RESULT 并 push 到 sub_result_queue */
@@ -1834,7 +1824,6 @@ static void *async_bash_thread_fn(void *arg) {
     /* 清理 */
     free(args->cmd);
     free(args->task_id);
-    free(args->output_file);
     free(args);
 
     return NULL;
