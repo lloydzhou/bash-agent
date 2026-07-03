@@ -31,7 +31,7 @@ graph TB
         end
 
         subgraph NR["notify reader (background)"]
-            NRBody["阻塞读 NOTIFY_FIFO<br/>写 NOTIFY_BUF<br/>更新 ACTIVE_SUB_FILE"]
+            NRBody["阻塞读 NOTIFY_FIFO<br/>写 NOTIFY_BUF<br/>更新 ACTIVE_TASK_FILE"]
             NRCheck{"AGENT_RUNNING_FLAG<br/>不存在?"}
             NRBody --> NRCheck
             NRCheck -- "是" --> NPPending["发 NOTIFY_PENDING → FD 5"]
@@ -360,8 +360,8 @@ agent_main_loop() {
                     # AGENT_RESULT RESP 追加到 NOTIFY_BUF
                     util_write_msg "AGENT_RESULT" ... >> "$NOTIFY_BUF"
 
-                    # 递减 ACTIVE_SUB_FILE 计数器（大于 0 才减）
-                    _cnt=$(cat "$ACTIVE_SUB_FILE"); (( _cnt > 0 )) && _cnt--
+                    # 递减 ACTIVE_TASK_FILE 计数器（大于 0 才减）
+                    _cnt=$(cat "$ACTIVE_TASK_FILE"); (( _cnt > 0 )) && _cnt--
 
                     # idle 时（无 AGENT_RUNNING_FLAG）触发 notify turn
                     if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
@@ -382,14 +382,14 @@ agent_main_loop() {
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
                 # 非交互模式：无活跃子 agent 且无待读结果 → 退出
                 if [[ "$INTERACTIVE" != true ]]; then
-                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
                 fi
                 ;;
             NOTIFY_PENDING)
                 [[ -s "$NOTIFY_BUF" ]] && agent_run_loop "" notify
                 if [[ "$INTERACTIVE" != true && "$saw_user_input" == true ]]; then
-                    local _cnt=$(cat "$ACTIVE_SUB_FILE" 2>/dev/null || echo 0)
+                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
                 fi
                 ;;
@@ -405,11 +405,15 @@ agent_main_loop() {
 ```
 
 **关键设计变化（vs 旧版）**：
-- **双 FIFO**：INPUT_FIFO（用户输入 + NOTIFY_PENDING）+ NOTIFY_FIFO（SubAgent 结果）
-- **notify reader 子 shell**：后台阻塞读 NOTIFY_FIFO，解析 AGENT_RESULT，写入 NOTIFY_BUF
-- **ACTIVE_SUB_FILE**：文件计数器（替代旧的内存变量 `active_sub_count`），在 `tool_sub_agent` 中子进程创建前递增，在 notify reader 中递减
+- **双 FIFO**：INPUT_FIFO（用户输入 + NOTIFY_PENDING）+ NOTIFY_FIFO（SubAgent / bg-bash 结果）
+- **notify reader 子 shell**：后台阻塞读 NOTIFY_FIFO，解析 AGENT_RESULT / ASYNC_TASK_RESULT，写入 NOTIFY_BUF
+- **ACTIVE_TASK_FILE**：文件计数器（同时跟踪 SubAgent 和 bg-bash），在 `tool_sub_agent` / async bash 中子进程创建前递增，在 notify reader 中递减
 - **AGENT_RUNNING_FLAG**：标记 agent_loop_stream 是否运行中。运行中时 notify reader 不发 NOTIFY_PENDING（靠 `agent_drain_notify_buf` 在下一轮迭代消费）
 - **退出判断**：`_cnt <= 0 && NOTIFY_BUF 空 → SESSION_END`
+- **时序区别**（关键）：
+  - **INPUT_FIFO**：用户输入排队等待，必须等当前 turn 完全结束后 main loop 才能处理 → 启动新 turn
+  - **NOTIFY_BUF**：SubAgent / bg-bash 结果排队，但可以在 **turn 中间** 被 `agent_drain_notify_buf` 消费（每轮 LLM call 前 + end_turn 后）→ 结果注入 conversation 后 continue → 同一个 agent_loop_stream 内发起新的 LLM call，**不需要等 turn 结束**
+  - **idle 时**：agent_loop_stream 未运行时，notify reader 发 NOTIFY_PENDING 到 INPUT_FIFO → main loop 收到后启动新的 `agent_run_loop "" notify`
 
 ### 5.3 agent_loop()
 
@@ -439,7 +443,7 @@ agent_loop() {
     # 6. 读取 agent_loop_stream 的 RESP 消息
     while util_read_msg <&7; do
         # 记录 SubAgent 计数
-        [[ TOOL_CALL && SubAgent ]] && active_sub_count++
+        [[ TOOL_CALL && SubAgent ]] && active_task_count++
         # 序列化为 stream event，记录到 events.jsonl
         _se=$(util_msg_to_stream) && store_event_append "$_se"
         # 转发给 display（非 stream-json 模式）
@@ -828,7 +832,7 @@ tool_sub_agent() {
     store_event_append '{"type":"sub_agent_start",...}' >/dev/null
     
     # 子进程创建前递增计数器（消除竞态：先加后创建）
-    __cnt=$(cat "$ACTIVE_SUB_FILE"); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_SUB_FILE"
+    __cnt=$(cat "$ACTIVE_TASK_FILE"); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"
     
     # 后台子 shell
     (
@@ -843,7 +847,7 @@ tool_sub_agent() {
         # Silence：在 store_session_init 之后关闭 FD
         exec </dev/null >/dev/null 2>&1
         exec 3<&- 4<&- 5<&- 8<&-
-        trap 'store_sub_send_result ... "$_parent_notify_fifo"; exec 6<&-; rm -f $INPUT_FIFO $NOTIFY_FIFO $NOTIFY_BUF $ACTIVE_SUB_FILE' EXIT
+        trap 'store_sub_send_result ... "$_parent_notify_fifo"; exec 6<&-; rm -f $INPUT_FIFO $NOTIFY_FIFO $NOTIFY_BUF $ACTIVE_TASK_FILE' EXIT
         agent_loop "$prompt" && _status="ok"
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"
     ) &
@@ -1020,7 +1024,7 @@ tool_bash_mode_allows() {
   input.fifo          — 用户输入管道（运行时）
   notify.fifo         — SubAgent 结果通知管道（运行时）
   notify.buf          — SubAgent 结果缓冲（NOTIFY_BUF，RESP 格式）
-  active_sub.count    — 活跃 SubAgent 计数器
+  active_task.count    — 活跃 SubAgent 计数器
   agent_running.flag  — agent_loop_stream 运行中标记
 ```
 
@@ -1254,7 +1258,7 @@ INPUT_FIFO:  用户输入 + NOTIFY_PENDING（主循环读）
 NOTIFY_FIFO: SubAgent 结果（notify reader 读）
 
 NOTIFY_BUF:  SubAgent 结果缓冲文件（RESP 格式）
-ACTIVE_SUB_FILE: 活跃计数器（文件）
+ACTIVE_TASK_FILE: 活跃计数器（文件）
 AGENT_RUNNING_FLAG: agent_loop_stream 运行标记（文件）
 ```
 
@@ -1263,7 +1267,7 @@ AGENT_RUNNING_FLAG: agent_loop_stream 运行标记（文件）
 1. `sub_session_id = "sub_$(util_new_session_id)"`
 2. `fork="${3:-false}"`，归一化为 `true` 或 `false`
 3. 记录 `sub_agent_start` 事件（`>/dev/null`）
-4. **子进程创建前**递增 `ACTIVE_SUB_FILE` 计数器
+4. **子进程创建前**递增 `ACTIVE_TASK_FILE` 计数器
 5. 后台子 shell：
    - 捕获父进程 `NOTIFY_FIFO` 路径
    - fork=true 时复制 conversation/summary/plan
@@ -1288,29 +1292,39 @@ store_sub_send_result() {
 
 ### 11.4 notify reader（后台子 shell）
 
-阻塞读 `NOTIFY_FIFO`，处理 `AGENT_RESULT` 消息：
+阻塞读 `NOTIFY_FIFO`，处理 `AGENT_RESULT` 和 `ASYNC_TASK_RESULT` 消息：
 
+**AGENT_RESULT**（SubAgent 完成）：
 1. 记录事件：`usage`(kind=sub_agent) + `sub_agent_result` + `sub_agent_end`
 2. 更新统计：`store_stats_update total_input_tokens=+N ...`
 3. 将 `AGENT_RESULT` RESP 追加到 `NOTIFY_BUF`
-4. 递减 `ACTIVE_SUB_FILE`（大于 0 才减）
-5. 如果 `AGENT_RUNNING_FLAG` 不存在（idle）→ 发 `NOTIFY_PENDING` 到 `INPUT_FIFO`
+
+**ASYNC_TASK_RESULT**（bg-bash 完成）：
+1. 记录事件：`async_task_result`
+2. 将 `ASYNC_TASK_RESULT` RESP 追加到 `NOTIFY_BUF`
+
+**公共**（两种消息类型）：
+3. 递减 `ACTIVE_TASK_FILE`（大于 0 才减）
+4. 如果 `AGENT_RUNNING_FLAG` 不存在（idle）→ 发 `NOTIFY_PENDING` 到 `INPUT_FIFO`
 
 ### 11.5 agent_drain_notify_buf()
 
-在 `agent_loop_stream` 每轮迭代开头和 end_turn 后调用：
+在 `agent_loop_stream` 每轮迭代开头和 end_turn 后调用。**关键：drain 写 stdout（走 agent_loop 管道），不直接写 FD 4，避免与 TEXT 流的 display 顺序错乱。**
 
 1. 原子 `mv` NOTIFY_BUF 到临时文件
 2. `exec 9< tmpfile`；逐条 `util_read_msg <&9` 解析 RESP
 3. 对每条 `AGENT_RESULT`：
-   - **display**：转发 RESP 到 FD 4 → `display_sub_agent_result`（完全复用原始格式）
+   - **display**：写 stdout → agent_loop 转发 → `display_sub_agent_result`
    - **conversation**：从结构化字段构建纯文本，`store_conv_add_user`
+4. 对每条 `ASYNC_TASK_RESULT`：
+   - **display**：写 stdout → agent_loop 转发 → `[bg-bash task_xxx] exit_code=N`
+   - **conversation**：`[bg-bash task_xxx] exit_code=N\nOutput: ...`
 
 ### 11.6 非交互模式退出逻辑
 
 ```bash
 # USER_INPUT handler:
-_cnt=$(cat "$ACTIVE_SUB_FILE")
+_cnt=$(cat "$ACTIVE_TASK_FILE")
 (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && SESSION_END
 
 # NOTIFY_PENDING handler:
@@ -1333,7 +1347,7 @@ Bash 是基准实现，C/Go/Rust 是 Port 版本，用各自语言的并发原�
 | SubAgent 结果 | `NOTIFY_FIFO` + `NOTIFY_BUF` | `sub_result_queue` (MsgQueue) | `subResultCh` channel | `sub_result_rx` (mpsc) |
 | Display 输出 | `FD 4` → display_stream 子进程 | `display_queue` (MsgQueue) | display event channel | display worker thread channel |
 | Agent 运行标记 | `AGENT_RUNNING_FLAG` (文件) | `agent->running` (原子变量) | `agent.running` (atomic) | `self.running` (AtomicBool) |
-| 活跃 SubAgent 计数 | `ACTIVE_SUB_FILE` (文件) | `agent->active_sub_count` (原子变量) | `pendingSubAgents` (mutex) | `active_sub_count` (i64) |
+| 活跃任务计数 | `ACTIVE_TASK_FILE` (文件) | `agent->active_task_count` (原子变量) | `pendingTasks` (mutex) | `active_task_count` (i64) |
 
 ### Bash 版 — 双 FIFO + 文件标记
 
@@ -1350,7 +1364,7 @@ graph TB
         BNRFifo["NOTIFY_FIFO (FD 6)"]
         BDisp["display_stream 子进程<br/>(FD 4)"]
         BFlag["AGENT_RUNNING_FLAG"]
-        BActive["ACTIVE_SUB_FILE"]
+        BActive["ACTIVE_TASK_FILE"]
     end
     BSub["Sub-Agent 子 shell"]
 
@@ -1371,7 +1385,7 @@ graph TB
 **关键机制**：
 - `AGENT_RUNNING_FLAG`：agent_loop_stream 运行中创建，退出时删除（含 error 路径）
 - notify reader 检查 flag：存在 → 不发 NOTIFY_PENDING（靠 drain 消费）；不存在 → 发 NOTIFY_PENDING
-- `ACTIVE_SUB_FILE`：tool_sub_agent 中递增（先加后创建），notify reader 中递减
+- `ACTIVE_TASK_FILE`：tool_sub_agent 中递增（先加后创建），notify reader 中递减
 
 ### C 版本 — pthread + MsgQueue（三队列分离）
 
@@ -1388,7 +1402,7 @@ graph TB
         CDispQ["display_queue"]
         CDisp["display 线程"]
         CRunning["agent->running"]
-        CActive["active_sub_count"]
+        CActive["active_task_count"]
     end
     CSub["Sub-Agent 线程"]
 
@@ -1406,7 +1420,7 @@ graph TB
 
 **关键机制**：
 - 三队列完全分离：`input_queue` / `sub_result_queue` / `display_queue`
-- main loop 在 agent_run_loop 返回后，`while (active_sub_count > 0)` 阻塞等待 `sub_result_queue`
+- main loop 在 agent_run_loop 返回后，`while active_task_count > 0` 阻塞等待 `sub_result_queue`
 - `agent->running` 原子变量供 readline 线程判断 Ctrl+C 是否应中断
 
 ### Go 版本 — goroutine + channel
@@ -1423,7 +1437,7 @@ graph TB
         GDispQ["displayCh"]
         GDisp["display goroutine"]
         GRunning["agent.running"]
-        GPending["pendingSubAgents"]
+        GPending["pendingTasks"]
     end
     GSub["Sub-Agent goroutine"]
 
@@ -1458,7 +1472,7 @@ graph TB
         RDispQ["DisplayEvent channel"]
         RDisp["display worker 线程"]
         RRunning["self.running"]
-        RActive["active_sub_count"]
+        RActive["active_task_count"]
     end
     RSub["Sub-Agent 线程"]
 
@@ -1476,15 +1490,17 @@ graph TB
 
 **关键机制**：
 - `msg_rx` 只接收 UserInput（readline 线程发）；`sub_result_rx` 只接收 AgentResult（SubAgent 线程发）——双通道分离，对齐 Bash 的 INPUT_FIFO + NOTIFY_FIFO
-- main_loop 在 agent_loop 返回后，`while active_sub_count > 0` 阻塞等待 `sub_result_rx`
+- main_loop 在 agent_loop 返回后，`while active_task_count > 0` 阻塞等待 `sub_result_rx`
 - display worker 独立线程，通过 `DisplayEvent` channel 序列化输出（含 title OSC 序列）
 
 ### 通用约束（四版本共享）
 
-1. **SubAgent 结果在 LLM 调用边界 drain**：不打断流式 text delta
-2. **end_turn 后必须 drain**：有结果则 continue，触发新 agent_loop
-3. **error 退出后仍需消费 SubAgent**：Bash 清理 flag + notify reader 发 NOTIFY_PENDING；C/Rust main_loop 无条件 `while active_sub_count`；Go 在 error return 前检查 pending
-4. **结果处理顺序统一**：`usage → sub_agent_result → sub_agent_end → stats → counter → display → conversation`
+1. **SubAgent / bg-bash 结果在 LLM 调用边界 drain**：不打断流式 text delta
+2. **结果可在 turn 中间消费**：drain 发生在每轮 LLM call 前 + end_turn 后。有结果则 continue → 同一个 agent_loop_stream 内发起新的 LLM call，不需要等 turn 结束回到 main loop
+3. **用户输入必须等 turn 结束**：USER_INPUT 在 INPUT_FIFO 中排队，main loop 在 agent_run_loop 中阻塞，直到当前 turn 完全结束才能处理
+4. **idle 时启动新 turn**：agent_loop_stream 未运行时，notify 通道的结果触发 main loop 启动新的 `agent_run_loop "" notify`
+5. **error 退出后仍需消费**：Bash 清理 flag + notify reader 发 NOTIFY_PENDING；C/Rust main_loop 无条件 `while active_task_count`；Go 在 error return 前检查 pendingTasks
+6. **结果处理顺序统一**：`usage → sub_agent_result → sub_agent_end → stats → counter → display → conversation`
 
 ---
 
