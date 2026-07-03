@@ -533,6 +533,20 @@ test_agent_openai_sensenova_style() {
     rm -f "$target_file"
 }
 
+test_agent_async_bash() {
+    info "Test 11e: Agent async bash (background=true returns task_id, result arrives via notify)"
+    local output plain_output
+    output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'ASYNC_BASH_MARKER' 2>&1) || true
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if echo "$plain_output" | grep -Fq 'Async task started: task_id=' && \
+       echo "$plain_output" | grep -Fq 'async-bash-ok' && \
+       echo "$plain_output" | grep -Fq 'Done.'; then
+        green "Agent async bash"; ((PASS++)) || true
+    else
+        red "Agent async bash"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 test_agent_tool_result_persist_order() {
     info "Test 11c: assistant tool_use persisted before following tool_result"
     local output session_id conv_file
@@ -2625,6 +2639,7 @@ test_agent_e2e_openai
 test_agent_openai_request_body
 test_agent_openai_tool_write
 test_agent_openai_sensenova_style
+test_agent_async_bash
 test_agent_tool_result_persist_order
 test_agent_skill_injection
 test_agent_skill_injection_from_repo_skills_dir

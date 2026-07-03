@@ -28,6 +28,18 @@ static void push_display_event(const SessionPaths *paths, MsgQueue *dq, DisplayM
 /* 图像粘贴回调的路劲 — 从 cagent.c 设置，由 linenoise readline 线程调用 */
 
 /* ============================================================
+ * 前向声明
+ * ============================================================ */
+
+typedef struct {
+    char *cmd;
+    char *task_id;
+    MsgQueue *sub_result_queue;
+} AsyncBashArgs;
+
+static void *async_bash_thread_fn(void *arg);
+
+/* ============================================================
  * 图片占位符支持
  * ============================================================ */
 
@@ -425,6 +437,14 @@ static char *display_msg_to_event(DisplayMessage *msg) {
         sb_append_json_string(&buf, msg->content ? msg->content : "");
         sb_append_char(&buf, '}');
         break;
+    case DISPLAY_ASYNC_TASK_RESULT:
+        sb_append(&buf, "{\"type\":\"async_task_result\",\"task_id\":");
+        sb_append_json_string(&buf, msg->session_id ? msg->session_id : "");
+        sb_appendf(&buf, ",\"exit_code\":%d", msg->tool_exit_code);
+        sb_append(&buf, ",\"output\":");
+        sb_append_json_string(&buf, msg->content ? msg->content : "");
+        sb_append_char(&buf, '}');
+        break;
     case DISPLAY_IMAGE_DESCRIBE:
         sb_append(&buf, "{\"type\":\"image_describe\",\"images\":\"");
         sb_append(&buf, msg->tool_name ? msg->tool_name : "");
@@ -683,6 +703,34 @@ static int agent_drain_sub_results(Agent *agent) {
                        sub_msg->data.agent_result.out_tokens,
                        sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
                        sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
+            store_conv_add_user(agent->paths.conversation, ctx.data);
+            sb_free(&ctx);
+            drained++;
+        } else if (sub_msg && sub_msg->type == MSG_ASYNC_TASK_RESULT) {
+            StrBuf evt;
+            sb_init(&evt);
+            sb_appendf(&evt, "{\"type\":\"async_task_result\",\"task_id\":\"%s\",\"exit_code\":%d,\"output\":",
+                       sub_msg->data.async_task_result.task_id, sub_msg->data.async_task_result.exit_code);
+            sb_append_json_string(&evt, sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+            sb_append(&evt, "}");
+            store_event_append(&agent->paths, evt.data);
+            sb_free(&evt);
+            /* 递减计数器 */
+            if (agent->active_task_count > 0) agent->active_task_count--;
+            /* display */
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_async_task_result(
+                sub_msg->data.async_task_result.task_id,
+                sub_msg->data.async_task_result.exit_code,
+                sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+            push_display_event(&agent->paths, agent->display_queue, dm);
+            /* conversation 注入 */
+            StrBuf ctx;
+            sb_init(&ctx);
+            sb_appendf(&ctx, "[bg-bash %s] exit_code=%d\nOutput: %s",
+                       sub_msg->data.async_task_result.task_id,
+                       sub_msg->data.async_task_result.exit_code,
+                       sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
             store_conv_add_user(agent->paths.conversation, ctx.data);
             sb_free(&ctx);
             drained++;
@@ -1036,6 +1084,45 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     tr.output = result;
                     tr.exit_code = 0;
                     free(prompt); free(description);
+                } else if (strcmp(tc->name, "Bash") == 0) {
+                    /* Bash background=true 特殊处理：后台执行，立即返回 task_id */
+                    JsonParse jp = json_parse_root(tc->input_json.data);
+                    int is_async = 0;
+                    char *cmd = NULL;
+                    if (!jp.error) {
+                        is_async = json_get_bool(jp.val, "background", false) ? 1 : 0;
+                        cmd = json_get_string(jp.val, "command");
+                    }
+                    if (is_async && cmd && cmd[0]) {
+                        /* 生成 task_id */
+                        char *task_id_raw = util_new_session_id();
+                        char task_id[80];
+                        snprintf(task_id, sizeof(task_id), "task_%s", task_id_raw);
+                        free(task_id_raw);
+                        /* 递增计数器 */
+                        agent->active_task_count++;
+                        /* 后台线程 */
+                        AsyncBashArgs *args = calloc(1, sizeof(AsyncBashArgs));
+                        args->cmd = util_strdup(cmd);
+                        args->task_id = util_strdup(task_id);
+                        args->sub_result_queue = agent->sub_result_queue;
+                        pthread_t thread;
+                        pthread_create(&thread, NULL, async_bash_thread_fn, args);
+                        pthread_detach(thread);
+                        /* 立即返回 */
+                        StrBuf result;
+                        sb_init(&result);
+                        sb_appendf(&result, "Async task started: task_id=%s", task_id);
+                        tr.output = result.data;
+                        tr.exit_code = 0;
+                    } else {
+                        free(cmd);
+                        tr = tool_dispatch(tc->name, tc->input_json.data,
+                                          agent->cwd, agent->home,
+                                          agent->tool_timeout_secs,
+                                          agent->tool_result_max_bytes,
+                                          &agent->paths);
+                    }
                 } else {
                     tr = tool_dispatch(tc->name, tc->input_json.data,
                                       agent->cwd, agent->home,
@@ -1605,7 +1692,7 @@ int agent_main_loop(Agent *agent) {
                  * 模仿 bash 版 agent_run_loop 的单线程行为：
                  * bash 版是同步的，agent_loop 处理 sub-agent 结果后
                  * 才显示下一轮提示符。 */
-                while (agent->active_sub_count > 0) {
+                while (agent->active_task_count > 0) {
                     void *sub_data = NULL;
                     if (mq_pop(agent->sub_result_queue, &sub_data) != 0) break;
                     InputMessage *sub_msg = (InputMessage *)sub_data;
@@ -1634,6 +1721,31 @@ int agent_main_loop(Agent *agent) {
                                    sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
                         agent_run_loop(agent, ctx.data, "sub_agent_result");
                         sb_free(&ctx);
+                    } else if (sub_msg->type == MSG_ASYNC_TASK_RESULT) {
+                        /* 记录事件 + display + conversation 注入 */
+                        StrBuf evt;
+                        sb_init(&evt);
+                        sb_appendf(&evt, "{\"type\":\"async_task_result\",\"task_id\":\"%s\",\"exit_code\":%d,\"output\":",
+                                   sub_msg->data.async_task_result.task_id, sub_msg->data.async_task_result.exit_code);
+                        sb_append_json_string(&evt, sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+                        sb_append(&evt, "}");
+                        store_event_append(&agent->paths, evt.data);
+                        sb_free(&evt);
+                        if (agent->active_task_count > 0) agent->active_task_count--;
+                        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                        *dm = display_msg_async_task_result(
+                            sub_msg->data.async_task_result.task_id,
+                            sub_msg->data.async_task_result.exit_code,
+                            sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+                        push_display_event(&agent->paths, agent->display_queue, dm);
+                        StrBuf ctx;
+                        sb_init(&ctx);
+                        sb_appendf(&ctx, "[bg-bash %s] exit_code=%d\nOutput: %s",
+                                   sub_msg->data.async_task_result.task_id,
+                                   sub_msg->data.async_task_result.exit_code,
+                                   sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+                        agent_run_loop(agent, ctx.data, "async_task_result");
+                        sb_free(&ctx);
                     }
                     input_message_free(sub_msg);
                     free(sub_msg);
@@ -1653,7 +1765,7 @@ int agent_main_loop(Agent *agent) {
         free(msg);
 
         /* 非交互模式且无活跃子 agent 时退出 */
-        if (!agent->interactive && agent->active_sub_count <= 0) break;
+        if (!agent->interactive && agent->active_task_count <= 0) break;
     }
     return 0;
 }
@@ -1661,6 +1773,63 @@ int agent_main_loop(Agent *agent) {
 /* ============================================================
  * SubAgent 处理
  * ============================================================ */
+
+
+/* Async Bash 后台线程：执行命令，输出写入文件，完成后 push 到 sub_result_queue */
+static void *async_bash_thread_fn(void *arg) {
+    AsyncBashArgs *args = (AsyncBashArgs *)arg;
+
+    /* 用 mkstemp 创建临时文件（对齐 Bash 版 mktemp） */
+    char tmp_template[] = "/tmp/async_bash_XXXXXXX";
+    int fd = mkstemp(tmp_template);
+    if (fd < 0) {
+        InputMessage *msg = calloc(1, sizeof(InputMessage));
+        msg->type = MSG_ASYNC_TASK_RESULT;
+        msg->data.async_task_result.task_id = util_strdup(args->task_id);
+        msg->data.async_task_result.exit_code = 1;
+        msg->data.async_task_result.output = util_strdup("Failed to create temp file");
+        mq_push(args->sub_result_queue, msg);
+        free(args->cmd); free(args->task_id); free(args);
+        return NULL;
+    }
+    close(fd);
+
+    /* 执行命令，输出写入临时文件 */
+    char cmd_buf[8192];
+    snprintf(cmd_buf, sizeof(cmd_buf), "bash -lc '%s' > '%s' 2>&1", args->cmd, tmp_template);
+    int rc = system(cmd_buf);
+    int exit_code = WEXITSTATUS(rc);
+
+    /* 读取全部输出 */
+    char *output = NULL;
+    FILE *f = fopen(tmp_template, "r");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        long fsize = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        output = malloc(fsize + 1);
+        size_t n = fread(output, 1, fsize, f);
+        output[n] = '\0';
+        fclose(f);
+        remove(tmp_template);
+    }
+
+    /* 构造 MSG_ASYNC_TASK_RESULT 并 push 到 sub_result_queue */
+    InputMessage *msg = calloc(1, sizeof(InputMessage));
+    msg->type = MSG_ASYNC_TASK_RESULT;
+    msg->data.async_task_result.task_id = util_strdup(args->task_id);
+    msg->data.async_task_result.exit_code = exit_code;
+    msg->data.async_task_result.output = output ? output : util_strdup("");
+
+    mq_push(args->sub_result_queue, msg);
+
+    /* 清理 */
+    free(args->cmd);
+    free(args->task_id);
+    free(args);
+
+    return NULL;
+}
 
 static void *sub_agent_thread_fn(void *arg) {
     SubAgentArgs *args = (SubAgentArgs *)arg;
@@ -1803,7 +1972,7 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     }
 
     /* 增加活跃子 agent 计数 */
-    agent->active_sub_count++;
+    agent->active_task_count++;
 
     /* fork 模式：在主线程中立即复制父会话（确保在 tool_result 写入之前） */
     if (fork) {
@@ -1907,7 +2076,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
     agent_update_title(agent);
 
     /* 递减活跃子 agent 计数 */
-    agent->active_sub_count--;
+    agent->active_task_count--;
 
     /* 显示结果（推 display 队列） */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -2226,6 +2395,7 @@ char *agent_build_prompt(Agent *agent) {
             "- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n"
             "- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n"
             "- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n"
+            "- Bash supports background=true for long-running commands. Returns task_id immediately; output delivered asynchronously like SubAgent.\n"
             "- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.";
         prompt_append_section(&buf, "using-your-tools", tool_guidance, NULL);
     }

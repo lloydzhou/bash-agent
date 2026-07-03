@@ -402,7 +402,7 @@ int main(int argc, char *argv[]) {
         agent_main_loop(agent);
 
         /* 等待子 agent 完成 */
-        while (agent->active_sub_count > 0) {
+        while (agent->active_task_count > 0) {
             void *data = NULL;
             if (mq_pop(&input_queue, &data) != 0) break;
             InputMessage *msg = (InputMessage *)data;

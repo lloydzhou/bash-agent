@@ -72,7 +72,7 @@ typedef struct {
     int last_output_tokens;
     int last_cache_read_tokens;
     int last_cache_creation_tokens;
-    int active_sub_count;
+    int active_task_count;
 
     /* 消息队列 */
     MsgQueue *input_queue;      /* 外部传入，agent_loop 从中读取 */

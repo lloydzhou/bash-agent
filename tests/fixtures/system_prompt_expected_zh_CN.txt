@@ -22,6 +22,7 @@ shell: __SHELL__
 - Prefer dedicated tools over Bash when a dedicated tool fits the task.
 - For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.
 - For skills, first check the skill-index section, then use Skill(name) for the matching skill.
+- Bash supports background=true for long-running commands. Returns task_id immediately; output delivered asynchronously like SubAgent.
 - SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.
 </using-your-tools>
 <sub-agent-guidance>

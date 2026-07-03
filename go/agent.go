@@ -35,7 +35,7 @@ type Agent struct {
 	displayWG        sync.WaitGroup
 	toolDefs         string // JSON 格式工具定义
 	ctxTokens        int    // 当前上下文 token 数
-	pendingSubAgents int    // 等待中的子 agent 数量
+	pendingTasks int    // 等待中的子 agent 数量
 	subResultCh      chan SubAgentResult
 	subMu            sync.Mutex
 	runMu            sync.Mutex
@@ -45,6 +45,7 @@ type Agent struct {
 }
 
 type SubAgentResult struct {
+	Kind         string // "sub_agent" (默认) 或 "async_task"
 	SessionID    string
 	Status       string // "ok" or "failed"
 	Thinking     string
@@ -54,6 +55,10 @@ type SubAgentResult struct {
 	CacheRead    int
 	CacheWrite   int
 	Requests     int
+	// async_task 字段
+	TaskID    string
+	ExitCode  int
+	Output    string
 }
 
 // imageNextName returns the next sequential image filename.
@@ -238,6 +243,7 @@ func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatch
 	}
 	// 设置回调
 	a.tools.SetSubAgentLauncher(a.LaunchSubAgent)
+	a.tools.SetAsyncBashLauncher(a.LaunchAsyncBash)
 	a.tools.SetPlanConfirm(a.HandlePlanConfirm)
 	a.tools.SetPlanClear(a.HandlePlanClear)
 	a.tools.SetSkillLoader(a.LoadSkill)
@@ -365,6 +371,7 @@ func (a *Agent) BuildPrompt() string {
 		"- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n" +
 		"- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n" +
 		"- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n" +
+		"- Bash supports background=true for long-running commands. Returns task_id immediately; output delivered asynchronously like SubAgent.\n" +
 		"- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules."
 	appendSection("using-your-tools", toolGuidance, "")
 
@@ -954,7 +961,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
 			// error 退出后仍需消费 pending SubAgent 结果（对齐 C/Rust main_loop 的 active_sub_count 等待）
 			a.subMu.Lock()
-			hasPending := a.pendingSubAgents > 0
+			hasPending := a.pendingTasks > 0
 			a.subMu.Unlock()
 			if hasPending {
 				select {
@@ -984,7 +991,7 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 
 		// end_turn 但有等待中的子 agent → 等待结果并继续
 		a.subMu.Lock()
-		hasPending := a.pendingSubAgents > 0
+		hasPending := a.pendingTasks > 0
 		a.subMu.Unlock()
 		if hasPending {
 			select {
@@ -1041,7 +1048,7 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 
 	// 增加计数
 	a.subMu.Lock()
-	a.pendingSubAgents++
+	a.pendingTasks++
 	a.subMu.Unlock()
 
 	// fork 模式：在 goroutine 前同步复制 conversation，避免竞态
@@ -1058,6 +1065,52 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 	}()
 
 	return fmt.Sprintf("Sub-agent started: session_id=%s", sessionID), nil
+}
+
+// ─── Async Bash 启动（后台 goroutine）───
+
+func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int) (string, error) {
+	taskID := "task_" + UtilNewSessionID()
+
+	// 增加计数（复用 pendingTasks）
+	a.subMu.Lock()
+	a.pendingTasks++
+	a.subMu.Unlock()
+
+	// 启动 goroutine（对齐 Bash 版：无 timeout，无截断）
+	go func() {
+		execCmd := exec.Command("bash", "-lc", cmd)
+		var stdout, stderr bytes.Buffer
+		execCmd.Stdout = &stdout
+		execCmd.Stderr = &stderr
+
+		err := execCmd.Run()
+		exitCode := 0
+		if err != nil {
+			if execCmd.ProcessState != nil {
+				exitCode = execCmd.ProcessState.ExitCode()
+			} else {
+				exitCode = 1
+			}
+		}
+		output := string(sanitizeUTF8(stdout.Bytes()))
+		if stderr.Len() > 0 {
+			if output != "" {
+				output += "\n"
+			}
+			output += string(sanitizeUTF8(stderr.Bytes()))
+		}
+
+		result := SubAgentResult{
+			Kind:     "async_task",
+			TaskID:   taskID,
+			ExitCode: exitCode,
+			Output:   output,
+		}
+		a.subResultCh <- result
+	}()
+
+	return fmt.Sprintf("Async task started: task_id=%s", taskID), nil
 }
 
 func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string) SubAgentResult {
@@ -1131,6 +1184,11 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 
 // handleSubAgentResult 处理子 agent 结果
 func (a *Agent) handleSubAgentResult(r SubAgentResult) {
+	// async_task 分支
+	if r.Kind == "async_task" {
+		a.handleAsyncTaskResult(r)
+		return
+	}
 	// 记录 usage 事件（带 kind=sub_agent, sub_session_id）
 	usageEvent := map[string]interface{}{
 		"type":                        "usage",
@@ -1169,7 +1227,7 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 
 	// 递减活跃子 agent 计数（在事件和统计之后）
 	a.subMu.Lock()
-	a.pendingSubAgents--
+	a.pendingTasks--
 	a.subMu.Unlock()
 
 	// 显示结果（统一走 Display 接口）
@@ -1193,4 +1251,40 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 	// 注入为用户消息（不记录 user_input 事件，与 bash 版 agent_loop turn_kind=sub_agent_result 一致）
 	_ = a.store.AddUserMessage(injectMsg)
 
+}
+
+// handleAsyncTaskResult 处理异步 bash 任务结果
+func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
+	// 1. 记录 async_task_result 事件
+	a.emitJSON(map[string]interface{}{
+		"type":       "async_task_result",
+		"task_id":    r.TaskID,
+		"exit_code":  r.ExitCode,
+		"output":     r.Output,
+	})
+
+	// 3. 递减活跃计数（async task 无 token 消耗，跳过 stats）
+	a.subMu.Lock()
+	a.pendingTasks--
+	a.subMu.Unlock()
+
+	// 4. 显示结果
+	preview := r.Output
+	if len(preview) > 120 {
+		preview = preview[:120] + "…"
+	}
+	a.EmitDisplay(Event{
+		Type: EventSubAgentResult,
+		Fields: []string{
+			"ASYNC_TASK_RESULT",
+			r.TaskID,
+			fmt.Sprintf("%d", r.ExitCode),
+			r.Output,
+		},
+	})
+
+	// 5. 注入 conversation
+	injectMsg := fmt.Sprintf("[bg-bash %s] exit_code=%d\nOutput: %s",
+		r.TaskID, r.ExitCode, r.Output)
+	_ = a.store.AddUserMessage(injectMsg)
 }

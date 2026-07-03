@@ -63,7 +63,7 @@
   },
   {
     "name": "Bash",
-    "description": "Execute a bash command. Returns stdout and stderr.",
+    "description": "Execute a bash command. Returns stdout and stderr. For long-running commands, use background=true to run in background.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -74,6 +74,10 @@
         "timeout": {
           "type": "integer",
           "description": "Timeout in seconds. If the command exceeds this duration, it will be killed. Only use for commands expected to take a long time (e.g. build, test, server start). Default: uses --tool-timeout setting."
+        },
+        "background": {
+          "type": "boolean",
+          "description": "If true, run in background. Returns task_id immediately; output delivered asynchronously via async_task_result event."
         }
       },
       "required": ["command"]

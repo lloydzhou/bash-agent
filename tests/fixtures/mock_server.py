@@ -751,6 +751,32 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        # --- Async Bash: model calls Bash(background=true), then end_turn, then async result arrives ---
+        if b'ASYNC_BASH_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_async\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Starting async build.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_async\",\"name\":\"Bash\",\"input\":{}}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"echo async-bash-ok\\\",\\\"background\\\":true}\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":5}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'ASYNC_BASH_MARKER' in body and (b'"tool_result"' in body or b'"role":"tool"' in body):
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_async_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                    'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                    'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Done.\"}}\n\n',
+                    'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                    'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                    'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         if b'BASH_QUOTE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
