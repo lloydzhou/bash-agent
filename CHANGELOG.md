@@ -8,6 +8,50 @@
 
 ---
 
+## [4.2.13] - 2026-07-03
+
+> **Bash 工具异步执行 + 架构文档大修**：Bash 工具新增 `background=true` 参数，长时间运行的命令可后台执行，完成后通过 SubAgent 的 notify 通道异步返回结果（四版本同步实现）；架构文档全面更新（mermaid 通道图、四版本对比、DP 决策公式），清理 4 个过时文档。
+
+### Added — Bash 工具 `background=true` 异步执行（四版本）
+
+长时间运行的命令（builds, tests, servers）可以后台执行，立即返回 task_id，完成后通过 SubAgent 的双 FIFO / 消息队列架构异步返回结果。
+
+- **tools.json**：Bash 工具新增 `background` 参数（boolean）
+- **机制**：复用 SubAgent 的 notify 通道，新增 `ASYNC_TASK_RESULT` 消息类型
+- **事件**：仅新增一个 `async_task_result` 事件（不冗余，`tool_call` + `tool_result` 已记录启动信息）
+- **命名统一**：task ID 格式 `task_YYYYMMDD-HHMMSS-XXXX`（与 SubAgent `sub_xxx` 一致）；display 前缀 `[bg-bash]`
+- **计数器 rename**：`active_sub_count` / `ACTIVE_SUB_FILE` → `active_task_count` / `ACTIVE_TASK_FILE`（同时跟踪 SubAgent 和 bg-bash）
+
+### Changed — SubAgent 结果处理顺序对齐（Go + Rust）
+
+审查四版本实现时发现 Go 和 Rust 的 SubAgent 结果处理顺序与 Bash 基准不一致。
+
+- **Go**：`handleSubAgentResult` 中 display 和 stats 顺序互换（stats → counter → display）
+- **Rust** `handle_sub_agent_result`：stats 从事件之前移到之后
+
+### Fixed
+
+- **Bash `agent_drain_notify_buf`**：drain 改为写 stdout（走 agent_loop 管道），替代直接写 FD 4。修复 bg-bash 结果在 TEXT 之前显示的顺序错乱（管道缓冲 vs 直接写入竞态）。
+- **C**：drain 中空的 `store_event_append("")`（写入空事件到 events.jsonl）
+- **C/Go**：删除 async bash 的 timeout 和 output 截断（对齐 Bash 基准——Bash 版无 timeout、无截断）
+- **C**：async bash 用 `mkstemp` 替代 session 目录路径（修复 `No such file or directory`）
+- **Go display**：`handleAsyncTaskResult` 复用 `EventSubAgentResult` 导致渲染为 `[sub-agent] failed`。修复：display.go 区分 `ASYNC_TASK_RESULT` 字段。
+
+### Docs — 架构文档大修
+
+- **BASH_ARCHITECTURE.md**：进程模型图改为 mermaid（补全 `AGENT_RUNNING_FLAG` / `stdin_reader`）；新增 §11A 四版本通道架构对比（Bash/C/Go/Rust 各一张 mermaid 图）；§6.3 DP 决策公式从参数列表补全为完整公式
+- **architecture.md**：项目定位从"纯 bash/awk"更新为四版本
+- **sessions.md**：补充运行时文件
+- 删除 4 个过时文档：`COMPARISON_ALL.md`、`DIFF_CHECKLIST.md`、`refactor-7class.md`、`ROADMAP.md`
+
+### Tests
+
+- 新增 `test_agent_async_bash` e2e 测试（`ASYNC_BASH_MARKER` mock）
+- 新增 `test_agent_openai_sensenova_style` 测试（v4.2.12 遗漏）
+- 四版本 181/181 通过。
+
+---
+
 ## [4.2.12] - 2026-07-01
 
 > **OpenAI SSE 兼容性修复 + agent error 退出后 SubAgent 结果处理**：修复 C/Rust 在接入 sensenova 等非标准 OpenAI 兼容 API 时 tool_call 解析失败的问题；修复 Bash/Go 在主 agent LLM 调用失败后 SubAgent 结果无法触发新 agent_loop 的问题。
