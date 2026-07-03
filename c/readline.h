@@ -26,4 +26,12 @@ int readline_thread_start(pthread_t *thread, const ReadlineConfig *cfg);
  * running: agent_loop 执行中为 1，readline 据此判断 Ctrl+C 是否应中断 */
 void readline_set_agent_interrupted(volatile int *interrupted, const volatile int *running);
 
+/* 设置 inject callback 使用的队列指针（Ctrl+O 中间介入）
+ * sub_queue: 写入 USER_NOTIFY pending
+ * input_queue: 写入 MSG_NOTIFY_PENDING 唤醒主循环 */
+void readline_set_inject_queues(MsgQueue *sub_queue, MsgQueue *input_queue);
+
+/* Ctrl+O inject callback — 供 linenoise 调用 */
+int inject_callback(char *buf, size_t len);
+
 #endif /* READLINE_H */

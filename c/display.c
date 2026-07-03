@@ -158,6 +158,10 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
             signal_flush(msg);
             sb_free(&buf);
             return;
+        case DISPLAY_USER_NOTIFY:
+            /* USER_NOTIFY 不输出到 stream-json（与 Rust/Go 一致） */
+            sb_free(&buf);
+            return;
         }
         fprintf(out, "%s\n", buf.data);
         fflush(out);
@@ -323,6 +327,15 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
         case DISPLAY_FLUSH:
             signal_flush(msg);
             break;
+
+        case DISPLAY_USER_NOTIFY: {
+            ensure_newline(ds);
+            linenoisePrintf("\x1b[33m[user inject] %s\x1b[0m\n",
+                    msg->content ? msg->content : "");
+            ds->last_char[0] = '\n';
+            ds->prev_was_thinking = 0;
+            break;
+        }
     }
 }
 

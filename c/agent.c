@@ -734,6 +734,16 @@ static int agent_drain_sub_results(Agent *agent) {
             store_conv_add_user(agent->paths.conversation, ctx.data);
             sb_free(&ctx);
             drained++;
+        } else if (sub_msg && sub_msg->type == MSG_USER_NOTIFY) {
+            /* 用户 Ctrl+O 中间介入 */
+            const char *text = sub_msg->data.user_notify.text ? sub_msg->data.user_notify.text : "";
+            /* display */
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_user_notify(text);
+            push_display_event(&agent->paths, agent->display_queue, dm);
+            /* conversation 注入：保留原始用户文本，不污染上下文 */
+            store_conv_add_user(agent->paths.conversation, text);
+            drained++;
         }
         input_message_free(sub_msg);
         free(sub_msg);
@@ -752,7 +762,9 @@ int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) 
  * ============================================================ */
 
 int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
-    if (!user_input || !user_input[0]) return 0;
+    int is_notify = (turn_kind != NULL && strcmp(turn_kind, "notify") == 0);
+    if ((!user_input || !user_input[0]) && !is_notify) return 0;
+    if (is_notify && agent_drain_sub_results(agent) <= 0) return 0;
 
     /* 记录 user_input 事件 — 仅当 turn_kind 为 "user_input" 时记录
      * （与 bash 版对齐：sub_agent_result turn 不记录 user_input 事件） */
@@ -850,7 +862,9 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     agent->interrupted = 0;
 
     /* 添加 user 消息到 conversation */
-    store_conv_add_user(agent->paths.conversation, user_input);
+    if (!is_notify) {
+        store_conv_add_user(agent->paths.conversation, user_input);
+    }
 
     /* 递增 turn 计数 — 对齐 bash 版 store_stats_update current_turn_count=+1 */
     store_stats_set_int_file(agent->paths.stats, "current_turn_count",
@@ -1746,12 +1760,29 @@ int agent_main_loop(Agent *agent) {
                                    sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
                         agent_run_loop(agent, ctx.data, "async_task_result");
                         sb_free(&ctx);
+                    } else if (sub_msg->type == MSG_USER_NOTIFY) {
+                        /* 用户 Ctrl+O 介入：display + 原文 conversation 注入 + 触发一轮 */
+                        const char *ntext = sub_msg->data.user_notify.text ? sub_msg->data.user_notify.text : "";
+                        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+                        *dm = display_msg_user_notify(ntext);
+                        push_display_event(&agent->paths, agent->display_queue, dm);
+                        agent_run_loop(agent, ntext, "user_notify");
                     }
                     input_message_free(sub_msg);
                     free(sub_msg);
                 }
 
                 /* 所有轮次完成：等待 display 队列写完 */
+                if (agent->interactive) {
+                    display_flush(agent->display_queue);
+                }
+                break;
+            }
+            case MSG_NOTIFY_PENDING: {
+                agent->interrupted = 0;
+                agent->running = 1;
+                agent_run_loop(agent, "", "notify");
+                agent->running = 0;
                 if (agent->interactive) {
                     display_flush(agent->display_queue);
                 }

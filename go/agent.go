@@ -35,7 +35,7 @@ type Agent struct {
 	displayWG        sync.WaitGroup
 	toolDefs         string // JSON 格式工具定义
 	ctxTokens        int    // 当前上下文 token 数
-	pendingTasks int    // 等待中的子 agent 数量
+	pendingTasks     int    // 等待中的子 agent 数量
 	subResultCh      chan SubAgentResult
 	subMu            sync.Mutex
 	runMu            sync.Mutex
@@ -56,9 +56,9 @@ type SubAgentResult struct {
 	CacheWrite   int
 	Requests     int
 	// async_task 字段
-	TaskID    string
-	ExitCode  int
-	Output    string
+	TaskID   string
+	ExitCode int
+	Output   string
 }
 
 // imageNextName returns the next sequential image filename.
@@ -722,8 +722,13 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 	a.running.Store(true)
 	defer a.running.Store(false)
 
-	// 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
-	if turnKind == "user_input" {
+	// notify turn 只负责消费 pending sub_result；stale wakeup 直接忽略
+	if turnKind == "notify" {
+		if !a.drainSubAgentResults(ctx) {
+			return nil
+		}
+	} else if turnKind == "user_input" {
+		// 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
 		a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
 	}
 
@@ -760,8 +765,10 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		userInput = expandedInput
 	}
 
-	// 添加用户消息
-	_ = a.store.AddUserMessage(userInput)
+	// 添加用户消息；notify turn 的消息已由 drainSubAgentResults 注入
+	if turnKind != "notify" {
+		_ = a.store.AddUserMessage(userInput)
+	}
 
 	// 用户输入时递增 turn（与 bash 版一致：store_stats_update current_turn_count=+1）
 	_ = a.store.IncrementTurn()
@@ -989,6 +996,11 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 			continue
 		}
 
+		// end_turn 后先消费已到达的 notify/user inject；有内容则继续下一轮
+		if a.drainSubAgentResults(ctx) {
+			continue
+		}
+
 		// end_turn 但有等待中的子 agent → 等待结果并继续
 		a.subMu.Lock()
 		hasPending := a.pendingTasks > 0
@@ -1014,15 +1026,17 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 }
 
 // drainSubAgentResults 消费所有已到达但未处理的 SubAgent 结果（对齐 bash agent_drain_notify_buf）
-func (a *Agent) drainSubAgentResults(ctx context.Context) {
+func (a *Agent) drainSubAgentResults(ctx context.Context) bool {
+	drained := false
 	for {
 		select {
 		case r := <-a.subResultCh:
 			a.handleSubAgentResult(r)
+			drained = true
 		case <-ctx.Done():
-			return
+			return drained
 		default:
-			return
+			return drained
 		}
 	}
 }
@@ -1184,6 +1198,11 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 
 // handleSubAgentResult 处理子 agent 结果
 func (a *Agent) handleSubAgentResult(r SubAgentResult) {
+	// user_notify 分支（Ctrl+O 中间介入）
+	if r.Kind == "user_notify" {
+		a.handleUserNotify(r.Text)
+		return
+	}
 	// async_task 分支
 	if r.Kind == "async_task" {
 		a.handleAsyncTaskResult(r)
@@ -1257,10 +1276,10 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
 	// 1. 记录 async_task_result 事件
 	a.emitJSON(map[string]interface{}{
-		"type":       "async_task_result",
-		"task_id":    r.TaskID,
-		"exit_code":  r.ExitCode,
-		"output":     r.Output,
+		"type":      "async_task_result",
+		"task_id":   r.TaskID,
+		"exit_code": r.ExitCode,
+		"output":    r.Output,
 	})
 
 	// 3. 递减活跃计数（async task 无 token 消耗，跳过 stats）
@@ -1287,4 +1306,21 @@ func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
 	injectMsg := fmt.Sprintf("[bg-bash %s] exit_code=%d\nOutput: %s",
 		r.TaskID, r.ExitCode, r.Output)
 	_ = a.store.AddUserMessage(injectMsg)
+}
+
+// handleUserNotify 处理用户 Ctrl+O 中间介入的输入
+func (a *Agent) handleUserNotify(text string) {
+	// 显示（统一走 Display 接口）
+	a.EmitDisplay(Event{
+		Type:   EventUserNotify,
+		Fields: []string{"USER_NOTIFY", text},
+	})
+
+	// Ctrl+O 是用户自然输入；conversation 中保存原文，显示层才加 [user inject]
+	_ = a.store.AddUserMessage(text)
+}
+
+// EnqueueUserNotify 将用户 Ctrl+O 输入写入 notify/sub_result 通道。
+func (a *Agent) EnqueueUserNotify(text string) {
+	a.subResultCh <- SubAgentResult{Kind: "user_notify", Text: text}
 }

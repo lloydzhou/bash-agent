@@ -63,6 +63,7 @@ static struct edit_feed_result linenoise_edit_feed_safe(struct linenoiseState *l
 
 // C wrapper that calls the Go export below.
 extern void goImagePasteCallback(char **out, size_t *outlen);
+extern int goInjectCallback(char *buf, size_t len);
 
 static void linenoise_write(const char *s, size_t len) {
 	linenoiseWrite(s, len);
@@ -119,6 +120,26 @@ func goImagePasteCallback(cout **C.char, coutlen *C.size_t) {
 func SetImagePasteCallback(fn func() string) {
 	imagePasteFn = fn
 	C.linenoiseSetImagePasteCallback(C.linenoiseImagePasteCallback(C.goImagePasteCallback))
+}
+
+// injectFn is set by SetInjectCallback.
+var injectFn func(string)
+
+//export goInjectCallback
+func goInjectCallback(cbuf *C.char, clen C.size_t) C.int {
+	if injectFn == nil || clen == 0 {
+		return 1
+	}
+	injectFn(C.GoStringN(cbuf, C.int(clen)))
+	return 0
+}
+
+// SetInjectCallback registers a function to be called when
+// Ctrl+O is pressed in linenoise. The function receives
+// the current edit buffer text.
+func SetInjectCallback(fn func(string)) {
+	injectFn = fn
+	C.linenoiseSetInjectCallback(C.linenoiseInjectCallback(C.goInjectCallback))
 }
 
 // Line reads a line of input using linenoise's blocking API.

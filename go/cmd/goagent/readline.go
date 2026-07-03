@@ -14,6 +14,8 @@ import (
 // with the agent main goroutine via channels.
 //
 // Display output uses linenoiseWrite which handles Hide/OPOST/Show internally.
+const notifyWakeupInput = "\x00notify"
+
 type Readline struct {
 	inputCh     chan string
 	histPath    string
@@ -43,6 +45,17 @@ func (r *Readline) Start() {
 // SetImagePasteCallback registers a function to be called when Ctrl+V is pressed.
 func (r *Readline) SetImagePasteCallback(fn func() string) {
 	linenoise.SetImagePasteCallback(fn)
+}
+
+// SetInjectCallback registers a function to be called when Ctrl+O is pressed.
+// The function receives the current edit buffer text.
+func (r *Readline) SetInjectCallback(fn func(string)) {
+	linenoise.SetInjectCallback(fn)
+}
+
+// SendNotifyWakeup wakes the main loop to process pending notify messages.
+func (r *Readline) SendNotifyWakeup() {
+	r.inputCh <- notifyWakeupInput
 }
 
 // Input returns the channel on which user input lines are delivered.

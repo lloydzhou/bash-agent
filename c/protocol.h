@@ -19,6 +19,8 @@ typedef enum {
     MSG_USER_INPUT,       /* 用户从 stdin 输入 */
     MSG_AGENT_RESULT,     /* SubAgent 完成后发送结果 */
     MSG_ASYNC_TASK_RESULT,/* 异步 Bash 任务完成 */
+    MSG_USER_NOTIFY,      /* 用户 Ctrl+O 中间介入（走 sub_result_queue） */
+    MSG_NOTIFY_PENDING,   /* 唤醒主循环消费 pending notify */
 } InputMsgType;
 
 typedef struct {
@@ -43,6 +45,9 @@ typedef struct {
             int exit_code;
             char *output;           /* 可能为 NULL */
         } async_task_result;
+        struct {
+            char *text;             /* 用户 Ctrl+O 介入的文本 */
+        } user_notify;
     } data;
 } InputMessage;
 
@@ -67,6 +72,7 @@ typedef enum {
     DISPLAY_CONTEXT_UPDATE,      /* 上下文压缩通知 */
     DISPLAY_FLUSH,               /* display 队列同步屏障 */
     DISPLAY_IMAGE_DESCRIBE,      /* 图片描述结果 */
+    DISPLAY_USER_NOTIFY,         /* 用户 Ctrl+O 介入输入 */
 } DisplayMsgType;
 
 typedef struct {
@@ -108,6 +114,7 @@ DisplayMessage display_msg_async_task_result(const char *task_id, int exit_code,
                                              const char *output);
 DisplayMessage display_msg_context_update(const char *trigger);
 DisplayMessage display_msg_image_describe(const char *images, const char *description);
+DisplayMessage display_msg_user_notify(const char *text);
 
 /* 释放 DisplayMessage 内部动态分配的内存 */
 void display_message_free(DisplayMessage *msg);

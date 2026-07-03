@@ -272,5 +272,13 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 			d.EnsureNewline()
 			d.writef("\033[33m> %s\033[0m\n", content)
 		}
+
+	case EventUserNotify:
+		text := ""
+		if len(ev.Fields) > 1 {
+			text = ev.Fields[1]
+		}
+		d.EnsureNewline()
+		d.writef("\033[33m[user inject] %s\033[0m\n", text)
 	}
 }

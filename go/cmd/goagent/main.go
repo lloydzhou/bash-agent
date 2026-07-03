@@ -274,11 +274,20 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	rl := NewReadline(home)
 	rl.SetImagePasteCallback(a.ImagePasteCallback)
 	rl.SetInterruptCallback(a.Interrupt)
+	rl.SetInjectCallback(func(text string) {
+		a.EnqueueUserNotify(text)
+		rl.SendNotifyWakeup()
+	})
 	rl.Start()
 
 	// 主循环：从 readline goroutine 接收输入，交给 agent 处理
 	for input := range rl.Input() {
-		if err := a.RunLoop(ctx, input, "user_input"); err != nil {
+		turnKind := "user_input"
+		if input == notifyWakeupInput {
+			input = ""
+			turnKind = "notify"
+		}
+		if err := a.RunLoop(ctx, input, turnKind); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		a.FlushDisplay()

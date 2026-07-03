@@ -125,7 +125,7 @@ graph TB
         Drain["agent_drain_notify_buf<br/>每轮 LLM call 前 + end_turn 后"]
         NotifyReader["notify reader<br/>阻塞读 NOTIFY_FIFO"]
         NotifyBuf["NOTIFY_BUF<br/>结果缓冲"]
-        Running["AGENT_RUNNING_FLAG"]
+        Wakeup["NOTIFY_PENDING<br/>统一 wakeup"]
     end
 
     Stdin["stdin_reader<br/>read -p &gt; &lt; /dev/tty"] -->|"USER_INPUT / SESSION_END<br/>INPUT_FIFO"| Main
@@ -162,7 +162,7 @@ graph TB
 | FIFO fd 5 | stdin_reader → agent_main_loop | 用户输入传递（INPUT_FIFO 写入端） | write 后非阻塞，read 阻塞 |
 | FIFO fd 3 | agent_main_loop | INPUT_FIFO 读取端 | read 阻塞 |
 | FIFO | agent_loop_stream → SubAgent | 启动子 agent | 写入后非阻塞 |
-| NOTIFY_FIFO | SubAgent / bg-bash → notify reader | `AGENT_RESULT` / `ASYNC_TASK_RESULT` 回传 | read 阻塞 |
+| NOTIFY_FIFO | SubAgent / bg-bash / Ctrl+O inject → notify reader | `AGENT_RESULT` / `ASYNC_TASK_RESULT` / `USER_NOTIFY` 回传 | read 阻塞 |
 | NOTIFY_BUF | notify reader → agent_drain_notify_buf | 后台结果缓冲；可在 LLM 调用边界 drain | 原子 append + mv |
 | stdin | 用户 → stdin_reader | 交互模式输入（后台进程） | read 阻塞 |
 
@@ -221,7 +221,7 @@ graph TB
 | 通道 | 类型 | 方向 | 用途 | 同步机制 |
 |------|------|------|------|---------|
 | `inputCh` / `msg_rx` / `input_queue` | channel / queue | input → main_loop | 用户输入排队；必须等当前 turn 结束后启动新 turn | 阻塞收取 |
-| `subResultCh` / `sub_result_rx` / `sub_result_queue` | channel / queue | SubAgent/bg-bash → agent_loop/main_loop | `AGENT_RESULT` / `ASYNC_TASK_RESULT` 回传；可在 LLM 调用边界 drain | 非阻塞 drain + idle 阻塞等待 |
+| `subResultCh` / `sub_result_rx` / `sub_result_queue` | channel / queue | SubAgent/bg-bash/Ctrl+O inject → agent_loop/main_loop | `AGENT_RESULT` / `ASYNC_TASK_RESULT` / `USER_NOTIFY` 回传；可在 LLM 调用边界 drain | 非阻塞 drain + idle 阻塞等待 |
 | display channel / display queue | channel / queue | agent_loop → display worker | 渲染事件 | 阻塞收取 |
 | HTTP stream | `io.Reader` / `Read` | API → agent_loop | SSE 流式读取 | read 阻塞 |
 

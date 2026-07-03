@@ -253,6 +253,10 @@ enum MainLoopMessage {
         exit_code: i32,
         output: String,
     },
+    UserNotify {
+        text: String,
+    },
+    NotifyPending,
 }
 
 struct Agent {
@@ -361,6 +365,9 @@ enum DisplayEvent {
     ImageDescribe {
         images: String,
         description: String,
+    },
+    UserNotify {
+        text: String,
     },
     Title(String), // 终端标题（OSC 序列），通过 display worker 序列化避免与 text 交织
 }
@@ -502,6 +509,12 @@ fn render_display_event(
             if !description.is_empty() {
                 lw(&format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, description));
             }
+            ds.last_char = "\n".to_string();
+            ds.prev_was_thinking = false;
+        }
+        DisplayEvent::UserNotify { text } => {
+            ensure_newline(ds, &lw);
+            lw(&format!("\x1b[33m[user inject] {}\x1b[0m\n", text));
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
@@ -913,12 +926,17 @@ impl Agent {
         ffi::set_image_dir(self.paths.session_dir.join("images"));
         ffi::register_paste_callback();
 
+        // 注册 inject callback（Ctrl+O），将文本发送到 channel
+        let (inject_tx, inject_rx) = mpsc::channel::<String>();
+        ffi::register_inject_callback(inject_tx);
+
         // 使用 Agent 结构体中的共享 interrupted / running，供 Ctrl+C 中断 agent
         let interrupted_flag = self.interrupted.clone();
         let running_flag = self.running.clone();
 
         // 启动 readline 线程，将用户输入发送到消息队列
         let msg_tx_arc = self.msg_tx.clone();
+        let sub_result_tx = self.sub_result_tx.clone();
         let history_path_clone = history_path.to_string_lossy().to_string();
         let readline_handle = std::thread::spawn(move || {
             ffi::set_multiline(true);
@@ -964,6 +982,16 @@ impl Agent {
                         let result = unsafe { ffi::edit_feed_raw(ls_ptr) };
                         let more_ptr = ffi::edit_more_ptr();
                         if result == more_ptr {
+                            // Check inject channel (Ctrl+O while editing)
+                            if let Ok(text) = inject_rx.try_recv() {
+                                if !text.is_empty() {
+                                    let _ = sub_result_tx.send(MainLoopMessage::UserNotify { text });
+                                    let tx_guard = msg_tx_arc.lock().unwrap();
+                                    if let Some(tx) = tx_guard.as_ref() {
+                                        let _ = tx.send(MainLoopMessage::NotifyPending);
+                                    }
+                                }
+                            }
                             continue; // 还在编辑
                         }
                         if result.is_null() {
@@ -1062,6 +1090,12 @@ impl Agent {
                 }
             };
             match msg {
+                MainLoopMessage::NotifyPending => {
+                    self.running.store(true, Ordering::SeqCst);
+                    let _ = self.agent_loop_with_kind(String::new(), "notify");
+                    self.running.store(false, Ordering::SeqCst);
+                    self.flush_display();
+                }
                 MainLoopMessage::UserInput { input } => {
                     if self.cfg.interactive {
                         // 清除当前行（包括提示符）
@@ -1111,12 +1145,18 @@ impl Agent {
                                 // 将其放回队列末尾，等当前子 agent 完成后再处理。
                                 // TODO: 暂时忽略，后续可改为队列缓存。
                             }
+                            Ok(MainLoopMessage::NotifyPending) => {}
                             Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
                                 let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
                                 if self.active_task_count > 0 { self.active_task_count -= 1; }
                                 let ctx = format!("[bg-bash {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
                                 let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
                                 let _ = self.agent_loop_with_kind(ctx, "async_task_result");
+                                self.flush_display();
+                            }
+                            Ok(MainLoopMessage::UserNotify { text }) => {
+                                let _ = self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
+                                let _ = self.agent_loop_with_kind(text, "user_notify");
                                 self.flush_display();
                             }
                             Err(std::sync::mpsc::RecvError) => {
@@ -1261,6 +1301,11 @@ impl Agent {
                 let _ = self.conv.add_user(&ctx);
                 drained = true;
             }
+            MainLoopMessage::UserNotify { text } => {
+                let _ = self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
+                let _ = self.conv.add_user(&text);
+                drained = true;
+            }
             _ => {}
             }
         }
@@ -1292,8 +1337,11 @@ impl Agent {
         crate::tools::drain_fd(self.cancel_read_fd);
 
         let result = (|| -> Result<()> {
-            // 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
-            if turn_kind == "user_input" {
+            // notify turn 只消费 pending sub_result；stale wakeup 直接返回
+            if turn_kind == "notify" {
+                if !self.drain_sub_results() { return Ok(()); }
+            } else if turn_kind == "user_input" {
+                // 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
                 self.append_event(json!({"type":"user_input","content":user_input}))?;
             }
 
@@ -1338,7 +1386,9 @@ impl Agent {
                 user_input
             };
 
-            self.conv.add_user(&user_input)?;
+            if turn_kind != "notify" {
+                self.conv.add_user(&user_input)?;
+            }
             // Increment turn count
             self.increment_turn_count();
 
@@ -1661,6 +1711,7 @@ impl Agent {
             DisplayEvent::SubAgentResult { .. } => {}
             DisplayEvent::AsyncTaskResult { .. } => {}
             DisplayEvent::ImageDescribe { .. } => {}
+            DisplayEvent::UserNotify { .. } => {}
             DisplayEvent::Title(_) => {}
         }
         if let Some(tx) = &self.display_tx {

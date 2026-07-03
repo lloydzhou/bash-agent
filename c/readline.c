@@ -30,9 +30,19 @@ static volatile sig_atomic_t g_sigint_received = 0;
 static volatile int *g_agent_interrupted = NULL;
 static const volatile int *g_agent_running = NULL;
 
+/* sub_result_queue 指针 — 供 inject callback 写入 USER_NOTIFY */
+static MsgQueue *g_inject_sub_queue = NULL;
+/* input_queue 指针 — 供 inject callback 发送 MSG_NOTIFY_PENDING 唤醒主循环 */
+static MsgQueue *g_inject_input_queue = NULL;
+
 void readline_set_agent_interrupted(volatile int *interrupted, const volatile int *running) {
     g_agent_interrupted = interrupted;
     g_agent_running = running;
+}
+
+void readline_set_inject_queues(MsgQueue *sub_queue, MsgQueue *input_queue) {
+    g_inject_sub_queue = sub_queue;
+    g_inject_input_queue = input_queue;
 }
 
 static void sigint_handler(int sig) {
@@ -61,6 +71,41 @@ static char *build_history_path(const char *home) {
     sb_init(&path);
     sb_appendf(&path, "%s/.bash-agent/history", home ? home : "/");
     return path.data; /* 调用者负责 free */
+}
+
+/* ============================================================
+ * Ctrl+O inject callback — linenoise calls this
+ * when the user presses Ctrl+O. The current edit buffer text is always
+ * queued as pending notify, then the main loop is woken up.
+ * ============================================================ */
+
+int inject_callback(char *buf, size_t len) {
+    if (!buf || len == 0 || !g_inject_sub_queue || !g_inject_input_queue) return 1;
+
+    char *text = malloc(len + 1);
+    if (!text) return 1;
+    memcpy(text, buf, len);
+    text[len] = '\0';
+
+    InputMessage *msg = calloc(1, sizeof(InputMessage));
+    if (!msg) { free(text); return 1; }
+    msg->type = MSG_USER_NOTIFY;
+    msg->data.user_notify.text = text;
+    if (mq_push(g_inject_sub_queue, msg) != 0) {
+        input_message_free(msg);
+        free(msg);
+        return 1;
+    }
+
+    InputMessage *wakeup = calloc(1, sizeof(InputMessage));
+    if (wakeup) {
+        wakeup->type = MSG_NOTIFY_PENDING;
+        if (mq_push(g_inject_input_queue, wakeup) != 0) {
+            input_message_free(wakeup);
+            free(wakeup);
+        }
+    }
+    return 0;
 }
 
 /* ============================================================
