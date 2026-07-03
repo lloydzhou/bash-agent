@@ -1391,12 +1391,12 @@ agent_drain_notify_buf() {
     exec 9<"$_nb_tmp"
     while util_read_msg <&9; do
         if [[ "${REPLY_MESSAGE[0]}" == "AGENT_RESULT" ]]; then
-            util_is_stream_json || util_write_msg "AGENT_RESULT" "${REPLY_MESSAGE[@]:1}" >&4 2>/dev/null || true
+            util_write_msg "AGENT_RESULT" "${REPLY_MESSAGE[@]:1}"
             _conv+="[sub-agent ${REPLY_MESSAGE[1]}] ${REPLY_MESSAGE[2]} (in=${REPLY_MESSAGE[3]}, out=${REPLY_MESSAGE[4]})"$'\n'
             [[ -n "${REPLY_MESSAGE[5]}" ]] && _conv+="Thinking: ${REPLY_MESSAGE[5]}"$'\n'
             [[ -n "${REPLY_MESSAGE[6]}" ]] && _conv+="Text: ${REPLY_MESSAGE[6]}"$'\n'
         elif [[ "${REPLY_MESSAGE[0]}" == "ASYNC_TASK_RESULT" ]]; then
-            util_is_stream_json || util_write_msg "ASYNC_TASK_RESULT" "${REPLY_MESSAGE[@]:1}" >&4 2>/dev/null || true
+            util_write_msg "ASYNC_TASK_RESULT" "${REPLY_MESSAGE[@]:1}"
             _conv+="[async-task ${REPLY_MESSAGE[1]}] exit_code=${REPLY_MESSAGE[2]}"$'\n'
             [[ -n "${REPLY_MESSAGE[3]}" ]] && _conv+="Output: ${REPLY_MESSAGE[3]}"$'\n'
         fi
