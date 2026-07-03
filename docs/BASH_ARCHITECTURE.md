@@ -11,57 +11,85 @@
 ### 1.1 进程模型
 
 ```mermaid
-graph TB
-    subgraph Main["主进程 (agent_main_loop)"]
-        MainLoop["main loop<br/>util_read_msg &lt;&amp;3"]
-        FD3["FD 3 ← INPUT_FIFO (读)"]
-        FD5["FD 5 → INPUT_FIFO (写, 防 EOF)"]
-        FD4["FD 4 → display_stream"]
-        FD7["FD 7 ← agent_loop_stream"]
-        FD8["FD 8 ← llm_call"]
-        FD9["FD 9 ← NOTIFY_BUF"]
-
-        MainLoop --- FD3
-        MainLoop --- FD7
-
-        subgraph ALS["agent_loop_stream (process sub)"]
-            ALSBody["LLM 调用 + 工具执行<br/>agent_drain_notify_buf()"]
-            Flag["AGENT_RUNNING_FLAG<br/>(运行中标记)"]
-            ALSBody --- Flag
-        end
-
-        subgraph NR["notify reader (background)"]
-            NRBody["阻塞读 NOTIFY_FIFO<br/>写 NOTIFY_BUF<br/>更新 ACTIVE_TASK_FILE"]
-            NRCheck{"AGENT_RUNNING_FLAG<br/>不存在?"}
-            NRBody --> NRCheck
-            NRCheck -- "是" --> NPPending["发 NOTIFY_PENDING → FD 5"]
-            NRCheck -- "否" --> NRSkip["不发 (靠 drain 消费)"]
-        end
-
-        subgraph DS["display_stream (process sub)"]
-            DSBody["RESP → 终端渲染"]
-        end
-
-        MainLoop --> FD4
-        ALSBody --> FD8
-        ALSBody --> FD7
-        NRBody --> FD5
+graph LR
+    subgraph Input["输入 / 唤醒"]
+        direction TB
+        TTY["终端 stdin"]
+        StdinReader["stdin_reader<br/>readline → USER_INPUT / SESSION_END"]
+        InputFIFO["INPUT_FIFO<br/>FD3 读 / FD5 写保活"]
+        TTY --> StdinReader -->|"USER_INPUT / SESSION_END"| InputFIFO
     end
 
-    subgraph SA["Sub-Agent (后台子进程)"]
-        SABody["agent_loop (子 shell)<br/>完成后 store_sub_send_result"]
+    subgraph Main["主进程：agent_main_loop / agent_loop"]
+        direction TB
+        MainLoop["agent_main_loop<br/>util_read_msg &lt;&amp;3"]
+        RunLoop["agent_run_loop"]
+        AgentLoop["agent_loop<br/>写 user_input / 读 FD7 / 转发 FD4"]
+        DisplayPipe["FD4 → display_stream"]
+        MainLoop -->|"USER_INPUT"| RunLoop --> AgentLoop
+        MainLoop -->|"NOTIFY_PENDING"| RunLoop
+        AgentLoop --> DisplayPipe
     end
 
-    Terminal["终端 stdin"]
-    StdinReader["stdin_reader (background)<br/>readline → USER_INPUT"]
+    subgraph Stream["agent_loop_stream 子进程"]
+        direction TB
+        Running["AGENT_RUNNING_FLAG<br/>进入每轮 LLM 前创建；结束/error 删除"]
+        Drain["agent_drain_notify_buf<br/>LLM 调用前 + end_turn 后"]
+        Compact["agent_compact_context auto"]
+        LLM["llm_call<br/>FD8 读取 SSE 解析结果"]
+        Tools["tool dispatch<br/>SubAgent / Bash background=true"]
+        FD7["stdout RESP → FD7"]
+        Running --> Drain --> Compact --> LLM --> Tools --> FD7
+        Drain -->|"AGENT_RESULT / ASYNC_TASK_RESULT<br/>写 stdout"| FD7
+    end
 
-    Terminal --> StdinReader
-    StdinReader -->|FD 5| FD5
-    SABody -->|写入| NOTIFY_FIFO
-    NOTIFY_FIFO -->|FD 6| NRBody
+    subgraph Notify["notify 通道"]
+        direction TB
+        NotifyFIFO["NOTIFY_FIFO<br/>FD6 双端打开"]
+        NotifyReader["notify reader<br/>阻塞读 FD6"]
+        NotifyBuf["NOTIFY_BUF<br/>RESP 结果缓冲"]
+        Store["events.jsonl / stats.json<br/>记录事件；SubAgent 统计"]
+        Active["ACTIVE_TASK_FILE<br/>SubAgent + bg-bash 活跃计数"]
+        IdleCheck{"AGENT_RUNNING_FLAG 存在?"}
+        Hold["不唤醒<br/>等待 agent_drain_notify_buf"]
+        NotifyFIFO --> NotifyReader
+        NotifyReader -->|"写结果 RESP"| NotifyBuf
+        NotifyReader --> Store
+        NotifyReader -->|"递减"| Active
+        NotifyReader --> IdleCheck
+        IdleCheck -->|"否：idle，写 NOTIFY_PENDING"| InputFIFO
+        IdleCheck -->|"是：运行中"| Hold
+    end
 
-    style Flag fill:#ff9,stroke:#333
-    style NRCheck fill:#fdf,stroke:#333
+    subgraph Workers["后台任务"]
+        direction TB
+        SubAgent["SubAgent 子 shell<br/>store_sub_send_result"]
+        BgBash["bg-bash 子 shell<br/>Bash background=true"]
+        SubAgent -->|"AGENT_RESULT<br/>sid status thinking text in out cr cc reqs"| NotifyFIFO
+        BgBash -->|"ASYNC_TASK_RESULT<br/>task_id exit_code output"| NotifyFIFO
+    end
+
+    subgraph Display["输出"]
+        direction TB
+        DisplayStream["display_stream 子进程"]
+        Terminal["终端 stderr"]
+        DisplayStream --> Terminal
+    end
+
+    DisplayPipe --> DisplayStream
+    InputFIFO --> MainLoop
+    AgentLoop -->|"启动 process substitution"| Running
+    FD7 -->|"util_read_msg &lt;&amp;7"| AgentLoop
+    LLM -->|"HTTP stream"| API["LLM API"]
+    Tools -.->|"启动后台任务；递增 ACTIVE_TASK_FILE"| SubAgent
+    Tools -.->|"启动后台任务；递增 ACTIVE_TASK_FILE"| BgBash
+
+    classDef hot fill:#fff3cd,stroke:#d39e00,color:#111
+    classDef queue fill:#e3f2fd,stroke:#1976d2,color:#111
+    classDef worker fill:#f3e5f5,stroke:#7b1fa2,color:#111
+    class Running,IdleCheck hot
+    class InputFIFO,NotifyFIFO,NotifyBuf queue
+    class SubAgent,BgBash worker
 ```
 
 ### 1.2 FD 分配（固定）
@@ -101,12 +129,15 @@ $len1\r\ndata1\r\n   — 字段1
 | ERROR | message | LLM/内部 |
 | RETRY | (无) | LLM SSE (retry 信号) |
 | CONTEXT_UPDATE | kind, trigger | compact |
-| AGENT_RESULT | session_id, status, in, out, thinking, text | sub-agent 完成（NOTIFY_FIFO） |
-| NOTIFY_PENDING | (无) | notify reader → 主循环（触发 notify turn） |
+| AGENT_RESULT | session_id, status, in, out, thinking, text | notify reader → NOTIFY_BUF → drain；SubAgent 完成结果 |
+| ASYNC_TASK_RESULT | task_id, exit_code, output | notify reader → NOTIFY_BUF → drain；bg-bash 完成结果 |
+| NOTIFY_PENDING | (无) | notify reader → INPUT_FIFO；idle 时触发 notify turn |
 | USER_INPUT | seq, content | 用户输入 |
 | SESSION_END | code | 退出 |
 | IMAGE_DESCRIBE | images, description | 图片描述 |
 | USER_MESSAGE | content | 用户消息回显 |
+
+> 注意：SubAgent 写入 `NOTIFY_FIFO` 的原始 `AGENT_RESULT` 字段顺序是 `session_id, status, thinking, text, in, out, cr, cc, reqs`；notify reader 写入 `NOTIFY_BUF` 并转发给 display/conversation 时规范化为 `session_id, status, in, out, thinking, text`。
 
 ---
 
@@ -326,11 +357,14 @@ curl output → http_stream.awk (解析 HTTP headers/chunked) → sse_convert (p
 
 ### 5.1 三层循环架构
 
-```
-agent_main_loop()       — 最外层：读 INPUT_FIFO，分发 USER_INPUT / AGENT_RESULT
-  └─ agent_run_loop()   — 包装层：调用 agent_loop + 更新终端标题 + 交互提示符
-      └─ agent_loop()   — 中间层：用户输入处理 + 图片展开 + 事件记录 + SIGINT
-          └─ agent_loop_stream() — 最内层：LLM 调用 + 工具执行 + compact
+```mermaid
+graph TB
+    Main["agent_main_loop()<br/>最外层：读 INPUT_FIFO<br/>分发 USER_INPUT / NOTIFY_PENDING / SESSION_END"]
+    Run["agent_run_loop()<br/>包装层：调用 agent_loop<br/>更新终端标题 + 交互提示符"]
+    Loop["agent_loop()<br/>中间层：用户输入处理 + 图片展开<br/>事件记录 + SIGINT + display 转发"]
+    Stream["agent_loop_stream()<br/>最内层：drain notify + compact<br/>LLM 调用 + 工具执行"]
+
+    Main --> Run --> Loop --> Stream
 ```
 
 ### 5.2 agent_main_loop()
@@ -349,24 +383,28 @@ agent_main_loop() {
         while util_read_msg <&6; do
             case "${REPLY_MESSAGE[0]}" in
                 AGENT_RESULT)
-                    # 解析字段
+                    # NOTIFY_FIFO 原始字段：sid status thinking text in out cr cc reqs
                     _sid="${REPLY_MESSAGE[1]}" _status="${REPLY_MESSAGE[2]}"
                     _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
-                    _in="${REPLY_MESSAGE[5]}" _out="${REPLY_MESSAGE[6]}" ...
+                    _in="${REPLY_MESSAGE[5]:-0}" _out="${REPLY_MESSAGE[6]:-0}" ...
 
-                    # 记录事件（usage, sub_agent_result, sub_agent_end）
+                    # 记录事件（usage, sub_agent_result, sub_agent_end）并更新 stats
                     store_event_append ...
+                    store_stats_update ...
 
-                    # AGENT_RESULT RESP 追加到 NOTIFY_BUF
-                    util_write_msg "AGENT_RESULT" ... >> "$NOTIFY_BUF"
-
-                    # 递减 ACTIVE_TASK_FILE 计数器（大于 0 才减）
-                    _cnt=$(cat "$ACTIVE_TASK_FILE"); (( _cnt > 0 )) && _cnt--
-
-                    # idle 时（无 AGENT_RUNNING_FLAG）触发 notify turn
-                    if [[ ! -f "$AGENT_RUNNING_FLAG" ]]; then
-                        util_write_msg "NOTIFY_PENDING" >&5
-                    fi
+                    # NOTIFY_BUF 规范化字段：sid status in out thinking text
+                    util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
+                    _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
+                    [[ ! -f "$AGENT_RUNNING_FLAG" ]] && util_write_msg "NOTIFY_PENDING" >&5
+                    ;;
+                ASYNC_TASK_RESULT)
+                    # 字段：task_id exit_code output
+                    store_event_append '{"type":"async_task_result",...}'
+                    util_write_msg "${REPLY_MESSAGE[@]}" >> "$NOTIFY_BUF"
+                    _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
+                    [[ ! -f "$AGENT_RUNNING_FLAG" ]] && util_write_msg "NOTIFY_PENDING" >&5
                     ;;
             esac
         done
@@ -380,7 +418,7 @@ agent_main_loop() {
             USER_INPUT)
                 saw_user_input=true
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
-                # 非交互模式：无活跃子 agent 且无待读结果 → 退出
+                # 非交互模式：无活跃后台任务且无待读结果 → 退出
                 if [[ "$INTERACTIVE" != true ]]; then
                     local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
                     (( _cnt <= 0 )) && [[ ! -s "$NOTIFY_BUF" ]] && util_write_msg "SESSION_END" >&5
@@ -407,7 +445,7 @@ agent_main_loop() {
 **关键设计变化（vs 旧版）**：
 - **双 FIFO**：INPUT_FIFO（用户输入 + NOTIFY_PENDING）+ NOTIFY_FIFO（SubAgent / bg-bash 结果）
 - **notify reader 子 shell**：后台阻塞读 NOTIFY_FIFO，解析 AGENT_RESULT / ASYNC_TASK_RESULT，写入 NOTIFY_BUF
-- **ACTIVE_TASK_FILE**：文件计数器（同时跟踪 SubAgent 和 bg-bash），在 `tool_sub_agent` / async bash 中子进程创建前递增，在 notify reader 中递减
+- **ACTIVE_TASK_FILE**：文件计数器（同时跟踪 SubAgent 和 bg-bash），在 `tool_sub_agent` / `Bash background=true` 中子进程创建前递增，在 notify reader 中递减
 - **AGENT_RUNNING_FLAG**：标记 agent_loop_stream 是否运行中。运行中时 notify reader 不发 NOTIFY_PENDING（靠 `agent_drain_notify_buf` 在下一轮迭代消费）
 - **退出判断**：`_cnt <= 0 && NOTIFY_BUF 空 → SESSION_END`
 - **时序区别**（关键）：
@@ -430,8 +468,8 @@ agent_loop() {
     #    - 记录 image_describe 事件
     #    - 将描述追加到 user_input 后面
     
-    # 3. 写入 conversation
-    store_conv_add_user "$user_input"
+    # 3. 写入 conversation（notify turn 不写空 user_input）
+    [[ "$turn_kind" != notify ]] && store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
     
     # 4. SIGINT trap：关闭 FD 7 + 杀 curl
@@ -442,9 +480,8 @@ agent_loop() {
     
     # 6. 读取 agent_loop_stream 的 RESP 消息
     while util_read_msg <&7; do
-        # 记录 SubAgent 计数
-        [[ TOOL_CALL && SubAgent ]] && active_task_count++
         # 序列化为 stream event，记录到 events.jsonl
+        # 注意：后台任务计数在 tool_sub_agent / Bash background=true 中递增，不在这里递增
         _se=$(util_msg_to_stream) && store_event_append "$_se"
         # 转发给 display（非 stream-json 模式）
         util_is_stream_json || ( util_write_msg ... ) >&4
@@ -470,7 +507,7 @@ agent_loop_stream() {
         # ① agent_loop 运行中标记（notify reader 见此标记不发 NOTIFY_PENDING）
         : > "$AGENT_RUNNING_FLAG"
         
-        # ② 消费 NOTIFY_BUF（SubAgent 结果），在 LLM 调用前处理
+        # ② 消费 NOTIFY_BUF（SubAgent / bg-bash 结果），在 LLM 调用前处理
         agent_drain_notify_buf || true
         
         # ③ Compact before LLM call
@@ -518,7 +555,7 @@ agent_loop_stream() {
         if stop == tool_use|tool_calls → continue loop
         else:
             rm -f "$AGENT_RUNNING_FLAG"       # 移除运行标记
-            agent_drain_notify_buf && continue  # 有 SubAgent 结果 → 继续处理
+            agent_drain_notify_buf && continue  # 有 SubAgent / bg-bash 结果 → 继续处理
             util_write_msg "STOP" "$stop"
             break
     done
@@ -531,9 +568,9 @@ agent_loop_stream() {
 
 **新增设计（vs 旧版）**：
 - 每轮迭代开头创建 `AGENT_RUNNING_FLAG`，结束时移除
-- 每轮迭代开头和 end_turn 后都调用 `agent_drain_notify_buf` 消费 SubAgent 结果
-- end_turn 后如果有 SubAgent 结果 → `continue` 继续处理（不打断流式输出）
-- **`agent_drain_notify_buf` 消费时**：RESP 解析 → AGENT_RESULT 转发 FD 4（display_sub_agent_result 原始格式）→ 从字段构建纯文本注入 conversation
+- 每轮迭代开头和 end_turn 后都调用 `agent_drain_notify_buf` 消费 SubAgent / bg-bash 结果
+- end_turn 后如果有后台结果 → `continue` 继续处理（不打断流式输出）
+- **`agent_drain_notify_buf` 消费时**：RESP 解析 → AGENT_RESULT / ASYNC_TASK_RESULT 写 stdout → agent_loop 转发 FD4 → 从字段构建纯文本注入 conversation
 
 **RETRY 处理细节**：
 当收到 RETRY 消息时，重置所有累积变量：`text="" thinking="" tool_calls="" tool_conv_results="" _ctx_tokens=""`。这是为了丢弃 retry 前的部分响应。
@@ -1012,20 +1049,34 @@ tool_bash_mode_allows() {
 
 ### 9.1 目录结构
 
-```
-~/.bash-agent/projects/<project-key>/<session-id>/
-  conversation.jsonl  — 对话历史（每行一个 JSON 消息）
-  events.jsonl        — 事件日志
-  stats.json          — 统计数据
-  summary.txt         — 上下文摘要
-  plan.md             — 已确认计划
-  plan.draft          — 计划草稿
-  images/             — 粘贴的图片
-  input.fifo          — 用户输入管道（运行时）
-  notify.fifo         — SubAgent 结果通知管道（运行时）
-  notify.buf          — SubAgent 结果缓冲（NOTIFY_BUF，RESP 格式）
-  active_task.count    — 活跃 SubAgent 计数器
-  agent_running.flag  — agent_loop_stream 运行中标记
+```mermaid
+graph TB
+    Root["~/.bash-agent/projects/&lt;project-key&gt;/&lt;session-id&gt;/"]
+    Conv["conversation.jsonl<br/>对话历史，每行一个 JSON 消息"]
+    Events["events.jsonl<br/>事件日志"]
+    Stats["stats.json<br/>统计数据"]
+    Summary["summary.txt<br/>上下文摘要"]
+    Plan["plan.md<br/>已确认计划"]
+    Draft["plan.draft<br/>计划草稿"]
+    Images["images/<br/>粘贴的图片"]
+    Input["input.fifo<br/>用户输入 + NOTIFY_PENDING，运行时"]
+    NotifyFifo["notify.fifo<br/>SubAgent / bg-bash 结果通知，运行时"]
+    NotifyBuf["notify.buf<br/>后台结果缓冲，RESP 格式"]
+    Active["active_task.count<br/>活跃 SubAgent / bg-bash 计数器"]
+    Running["agent_running.flag<br/>agent_loop_stream 运行中标记"]
+
+    Root --> Conv
+    Root --> Events
+    Root --> Stats
+    Root --> Summary
+    Root --> Plan
+    Root --> Draft
+    Root --> Images
+    Root --> Input
+    Root --> NotifyFifo
+    Root --> NotifyBuf
+    Root --> Active
+    Root --> Running
 ```
 
 ### 9.2 project_key 计算
@@ -1209,6 +1260,7 @@ display_stream() { while util_read_msg; do display_message; done }
 | TOOL_CALL | 黄色 `\033[33m[tool] summary\033[0m`；调用 `tool_call_summary` |
 | TOOL_RESULT | Edit→全量输出+换行；Read/Write→第一行+换行；其他→全量+换行 |
 | AGENT_RESULT | 紫色/红色状态行；thinking 截断 120 字符；text 截断 120 字符 |
+| ASYNC_TASK_RESULT | 青色/红色 `[bg-bash task_id] exit_code=N`；output 截断 120 字符 |
 | IMAGE_DESCRIBE | 青色 `📸 images: description` |
 | USER_MESSAGE | 绿色 `> text`（截断 80 字符） |
 | STOP | interrupted → 青色 "Interrupted."；其他 → 确保换行 |
@@ -1249,21 +1301,28 @@ fi
 
 ---
 
-## 11. SubAgent 机制
+## 11. SubAgent / bg-bash 后台结果机制
 
-### 11.1 双 FIFO 架构
+### 11.1 双 FIFO + notify buffer 架构
 
-```
-INPUT_FIFO:  用户输入 + NOTIFY_PENDING（主循环读）
-NOTIFY_FIFO: SubAgent 结果（notify reader 读）
+```mermaid
+graph LR
+    User["stdin_reader"] -->|"USER_INPUT"| Input["INPUT_FIFO<br/>主循环读"]
+    NotifyReader["notify reader"] -->|"NOTIFY_PENDING<br/>仅 idle 时"| Input
+    Input --> Main["agent_main_loop"]
 
-NOTIFY_BUF:  SubAgent 结果缓冲文件（RESP 格式）
-ACTIVE_TASK_FILE: 活跃计数器（文件）
-AGENT_RUNNING_FLAG: agent_loop_stream 运行标记（文件）
+    Sub["SubAgent 子 shell"] -->|"AGENT_RESULT"| NotifyFifo["NOTIFY_FIFO<br/>notify reader 阻塞读"]
+    Bg["bg-bash 子 shell"] -->|"ASYNC_TASK_RESULT"| NotifyFifo
+    NotifyFifo --> NotifyReader
+    NotifyReader -->|"结果 RESP"| Buf["NOTIFY_BUF<br/>后台结果缓冲"]
+    NotifyReader -->|"递减"| Active["ACTIVE_TASK_FILE<br/>活跃任务计数"]
+    Stream["agent_loop_stream"] -->|"LLM 边界 drain"| Buf
+    Buf -->|"display + conversation 注入"| Stream
 ```
 
 ### 11.2 启动流程
 
+**SubAgent**：
 1. `sub_session_id = "sub_$(util_new_session_id)"`
 2. `fork="${3:-false}"`，归一化为 `true` 或 `false`
 3. 记录 `sub_agent_start` 事件（`>/dev/null`）
@@ -1278,6 +1337,14 @@ AGENT_RUNNING_FLAG: agent_loop_stream 运行标记（文件）
    - `agent_loop "$prompt"`
    - `store_sub_send_result`
 
+**bg-bash (`Bash background=true`)**：
+1. `task_id = "task_$(util_new_session_id)"`
+2. **子 shell 创建前**递增 `ACTIVE_TASK_FILE` 计数器
+3. `mktemp` 捕获 stdout/stderr
+4. 后台子 shell 执行 `bash -lc "$cmd" > "$tmpout" 2>&1`
+5. 使用 `sanitize_utf8.awk` 清理输出
+6. 写入父进程 `NOTIFY_FIFO`：`ASYNC_TASK_RESULT task_id exit_code output`
+
 ### 11.3 结果传递
 
 ```bash
@@ -1285,8 +1352,10 @@ store_sub_send_result() {
     # 使用 send_sub_result.awk 从子会话的 stats.json 和 conversation.jsonl 提取:
     # - thinking (最后一条 assistant 的 thinking)
     # - text (最后一条 assistant 的 text)
-    # - usage 统计 (in/out/cr/cc)
+    # - usage 统计 (in/out/cr/cc/reqs)
     # 写入父进程的 NOTIFY_FIFO（不是 INPUT_FIFO）
+    # 原始字段：AGENT_RESULT session_id status thinking text in out cr cc reqs
+    # notify reader 写入 NOTIFY_BUF 时规范化为：AGENT_RESULT session_id status in out thinking text
 }
 ```
 
@@ -1344,7 +1413,7 @@ Bash 是基准实现，C/Go/Rust 是 Port 版本，用各自语言的并发原�
 | 通道 | Bash | C | Go | Rust |
 |------|------|---|----|------|
 | 用户输入 | `INPUT_FIFO` (named pipe) | `input_queue` (MsgQueue) | `rl.Input()` channel | `msg_rx` (mpsc) |
-| SubAgent 结果 | `NOTIFY_FIFO` + `NOTIFY_BUF` | `sub_result_queue` (MsgQueue) | `subResultCh` channel | `sub_result_rx` (mpsc) |
+| 后台结果（SubAgent / bg-bash） | `NOTIFY_FIFO` + `NOTIFY_BUF` | `sub_result_queue` (MsgQueue) | `subResultCh` channel | `sub_result_rx` (mpsc) |
 | Display 输出 | `FD 4` → display_stream 子进程 | `display_queue` (MsgQueue) | display event channel | display worker thread channel |
 | Agent 运行标记 | `AGENT_RUNNING_FLAG` (文件) | `agent->running` (原子变量) | `agent.running` (atomic) | `self.running` (AtomicBool) |
 | 活跃任务计数 | `ACTIVE_TASK_FILE` (文件) | `agent->active_task_count` (原子变量) | `pendingTasks` (mutex) | `active_task_count` (i64) |
@@ -1352,145 +1421,193 @@ Bash 是基准实现，C/Go/Rust 是 Port 版本，用各自语言的并发原�
 ### Bash 版 — 双 FIFO + 文件标记
 
 ```mermaid
-graph TB
-    subgraph Bash["Bash (FIFO + 文件)"]
+graph LR
+    subgraph In["输入"]
         direction TB
-        BL["stdin_reader 子进程"]
-        BInput["INPUT_FIFO (FD 3/5)"]
-        BMain["main loop<br/>agent_run_loop"]
-        BAgent["agent_loop_stream<br/>(LLM call + tool exec)"]
-        BDrain["agent_drain_notify_buf()<br/>NOTIFY_BUF (FD 9)"]
-        BNR["notify reader 子 shell"]
-        BNRFifo["NOTIFY_FIFO (FD 6)"]
-        BDisp["display_stream 子进程<br/>(FD 4)"]
-        BFlag["AGENT_RUNNING_FLAG"]
-        BActive["ACTIVE_TASK_FILE"]
+        BL["stdin_reader"]
+        BInput["INPUT_FIFO<br/>FD3/FD5"]
+        BL -->|"USER_INPUT"| BInput
     end
-    BSub["Sub-Agent 子 shell"]
 
-    BL -->|"USER_INPUT"| BInput
+    subgraph Bash["Bash 主流程"]
+        direction TB
+        BMain["agent_main_loop"]
+        BRun["agent_run_loop / agent_loop"]
+        BAgent["agent_loop_stream<br/>LLM call + tool exec"]
+        BDrain["agent_drain_notify_buf()<br/>读 NOTIFY_BUF (FD9)"]
+        BDisp["display_stream<br/>FD4"]
+        BFlag["AGENT_RUNNING_FLAG"]
+        BMain --> BRun --> BAgent
+        BAgent -->|"LLM 前 + end_turn 后"| BDrain
+        BAgent --> BDisp
+        BAgent -->|"每轮创建 / 退出删除"| BFlag
+    end
+
+    subgraph Notify["后台结果通道"]
+        direction TB
+        BNRFifo["NOTIFY_FIFO<br/>FD6 双端打开"]
+        BNR["notify reader"]
+        BBuf["NOTIFY_BUF"]
+        BActive["ACTIVE_TASK_FILE"]
+        BNRFifo --> BNR --> BBuf
+        BNR -->|"递减"| BActive
+        BNR -->|"检查"| BFlag
+    end
+
+    subgraph Bg["后台任务"]
+        direction TB
+        BSub["SubAgent 子 shell"]
+        BBash["bg-bash 子 shell"]
+        BSub -->|"AGENT_RESULT"| BNRFifo
+        BBash -->|"ASYNC_TASK_RESULT"| BNRFifo
+    end
+
     BInput --> BMain
-    BMain --> BAgent
-    BAgent -->|"每轮 + end_turn 后"| BDrain
-    BAgent --> BDisp
-    BAgent -->|"运行中写标记"| BFlag
-    BSub -->|"AGENT_RESULT"| BNRFifo
-    BNRFifo --> BNR
-    BNR -->|"写入"| BDrain
-    BNR -->|"递减"| BActive
-    BNR -->|"idle 时检查"| BFlag
-    BNR -.->|"NOTIFY_PENDING"| BInput
+    BNR -.->|"idle: NOTIFY_PENDING"| BInput
+    BBuf --> BDrain
+    BDrain -->|"display + conversation"| BAgent
 ```
 
 **关键机制**：
 - `AGENT_RUNNING_FLAG`：agent_loop_stream 运行中创建，退出时删除（含 error 路径）
 - notify reader 检查 flag：存在 → 不发 NOTIFY_PENDING（靠 drain 消费）；不存在 → 发 NOTIFY_PENDING
-- `ACTIVE_TASK_FILE`：tool_sub_agent 中递增（先加后创建），notify reader 中递减
+- `ACTIVE_TASK_FILE`：`tool_sub_agent` / `Bash background=true` 中递增（先加后创建），notify reader 中递减
 
 ### C 版本 — pthread + MsgQueue（三队列分离）
 
 ```mermaid
-graph TB
-    subgraph C["C (pthread + MsgQueue)"]
+graph LR
+    subgraph CIn["输入"]
         direction TB
         CL["readline 线程"]
         CInput["input_queue"]
-        CMain["main loop<br/>agent_run_loop"]
-        CAgent["agent_loop_stream<br/>(LLM call + tool exec)"]
-        CDrain["agent_drain_sub_results()<br/>mq_try_pop"]
-        CResultQ["sub_result_queue"]
+        CL -->|"USER_INPUT"| CInput
+    end
+
+    subgraph CMainFlow["C 主流程"]
+        direction TB
+        CMain["main loop"]
+        CRun["agent_run_loop"]
+        CAgent["agent_loop_stream<br/>LLM call + tool exec"]
+        CDrain["agent_drain_sub_results()<br/>mq_try_pop(sub_result_queue)"]
         CDispQ["display_queue"]
         CDisp["display 线程"]
-        CRunning["agent->running"]
-        CActive["active_task_count"]
+        CRunning["agent-&gt;running"]
+        CMain --> CRun --> CAgent
+        CAgent -->|"LLM 前 + end_turn 后"| CDrain
+        CAgent --> CDispQ --> CDisp
+        CAgent -->|"运行中置 1"| CRunning
     end
-    CSub["Sub-Agent 线程"]
 
-    CL -->|"USER_INPUT"| CInput
+    subgraph CBg["后台任务"]
+        direction TB
+        CSub["SubAgent pthread"]
+        CBash["bg-bash pthread"]
+        CResultQ["sub_result_queue"]
+        CSub -->|"MSG_AGENT_RESULT"| CResultQ
+        CBash -->|"MSG_ASYNC_TASK_RESULT"| CResultQ
+    end
+
     CInput --> CMain
-    CMain --> CAgent
-    CAgent -->|"每轮 + end_turn 后"| CDrain
-    CAgent --> CDispQ
-    CDispQ --> CDisp
-    CAgent -->|"运行中置 1"| CRunning
-    CSub -->|"AGENT_RESULT"| CResultQ
     CResultQ --> CDrain
-    CResultQ -->|"main loop idle 时<br/>mq_pop 阻塞等待"| CMain
+    CResultQ -->|"idle: active_task_count > 0<br/>mq_pop 阻塞等待"| CMain
 ```
 
 **关键机制**：
 - 三队列完全分离：`input_queue` / `sub_result_queue` / `display_queue`
-- main loop 在 agent_run_loop 返回后，`while active_task_count > 0` 阻塞等待 `sub_result_queue`
+- `sub_result_queue` 同时承载 `MSG_AGENT_RESULT` 与 `MSG_ASYNC_TASK_RESULT`
+- main loop 在 `agent_run_loop` 返回后，`while active_task_count > 0` 阻塞等待 `sub_result_queue`
 - `agent->running` 原子变量供 readline 线程判断 Ctrl+C 是否应中断
 
 ### Go 版本 — goroutine + channel
 
 ```mermaid
-graph TB
-    subgraph Go["Go (goroutine + channel)"]
+graph LR
+    subgraph GIn["输入"]
         direction TB
         GL["readline goroutine"]
-        GInput["inputCh (rl.Input)"]
-        GMain["RunLoop<br/>(LLM call + tool exec)"]
-        GDrain["drainSubAgentResults()<br/>非阻塞 select"]
-        GResultQ["subResultCh"]
+        GInput["inputCh / rl.Input()"]
+        GL -->|"USER_INPUT"| GInput
+    end
+
+    subgraph GMainFlow["Go 主流程"]
+        direction TB
+        GLoop["runInteractive / RunLoop"]
+        GDrain["drainSubAgentResults()<br/>非阻塞 select(subResultCh)"]
         GDispQ["displayCh"]
         GDisp["display goroutine"]
         GRunning["agent.running"]
         GPending["pendingTasks"]
+        GLoop -->|"LLM 前 + end_turn/error 后"| GDrain
+        GLoop --> GDispQ --> GDisp
+        GLoop -->|"运行中置 true"| GRunning
+        GLoop -->|"递增/递减"| GPending
     end
-    GSub["Sub-Agent goroutine"]
 
-    GL -->|"USER_INPUT"| GInput
-    GInput --> GMain
-    GMain -->|"每轮 + end_turn/error 后"| GDrain
-    GMain --> GDispQ
-    GDispQ --> GDisp
-    GMain -->|"运行中置 true"| GRunning
-    GSub -->|"AGENT_RESULT"| GResultQ
+    subgraph GBg["后台任务"]
+        direction TB
+        GSub["SubAgent goroutine"]
+        GBash["bg-bash goroutine"]
+        GResultQ["subResultCh"]
+        GSub -->|"Kind=sub_agent"| GResultQ
+        GBash -->|"Kind=async_task"| GResultQ
+    end
+
+    GInput --> GLoop
     GResultQ --> GDrain
-    GResultQ -->|"RunLoop idle 时<br/>select 阻塞等待"| GMain
+    GResultQ -->|"pendingTasks > 0<br/>select 阻塞等待"| GLoop
 ```
 
 **关键机制**：
 - `RunLoop` 内部每轮 LLM call 前 `drainSubAgentResults()`
-- end_turn / error 退出前检查 `pendingSubAgents`，有则 `select { case r := <-subResultCh }`
+- `subResultCh` 同时承载 `SubAgentResult{Kind:"sub_agent"}` 与 `SubAgentResult{Kind:"async_task"}`
+- end_turn / error 退出前检查 `pendingTasks`，有则 `select { case r := <-subResultCh }`
 - `runInteractive` 主循环 `for input := range rl.Input()`
 
 ### Rust 版本 — std::thread + mpsc::channel
 
 ```mermaid
-graph TB
-    subgraph Rust["Rust (thread + mpsc)"]
+graph LR
+    subgraph RIn["输入"]
         direction TB
         RL["readline 线程"]
-        RInput["msg_tx → msg_rx"]
+        RInput["msg_tx → msg_rx<br/>UserInput"]
+        RL --> RInput
+    end
+
+    subgraph RMainFlow["Rust 主流程"]
+        direction TB
         RMain["main_loop"]
-        RAgent["agent_loop<br/>(LLM call + tool exec)"]
-        RDrain["drain_sub_results()<br/>try_recv"]
-        RResultQ["sub_result_tx → sub_result_rx"]
+        RAgent["agent_loop<br/>LLM call + tool exec"]
+        RDrain["drain_sub_results()<br/>try_recv(sub_result_rx)"]
         RDispQ["DisplayEvent channel"]
         RDisp["display worker 线程"]
         RRunning["self.running"]
         RActive["active_task_count"]
+        RMain --> RAgent
+        RAgent -->|"LLM 前 + end_turn 后"| RDrain
+        RAgent --> RDispQ --> RDisp
+        RAgent -->|"运行中 store(true)"| RRunning
+        RAgent -->|"递增/递减"| RActive
     end
-    RSub["Sub-Agent 线程"]
 
-    RL -->|"UserInput"| RInput
+    subgraph RBg["后台任务"]
+        direction TB
+        RSub["SubAgent 线程"]
+        RBash["bg-bash 线程"]
+        RResultQ["sub_result_tx → sub_result_rx"]
+        RSub -->|"MainLoopMessage::AgentResult"| RResultQ
+        RBash -->|"MainLoopMessage::AsyncResult"| RResultQ
+    end
+
     RInput --> RMain
-    RMain --> RAgent
-    RAgent -->|"每轮 + end_turn 后"| RDrain
-    RAgent --> RDispQ
-    RDispQ --> RDisp
-    RAgent -->|"运行中 store(true)"| RRunning
-    RSub -->|"AgentResult"| RResultQ
     RResultQ --> RDrain
-    RResultQ -->|"main_loop idle 时<br/>recv 阻塞等待"| RMain
+    RResultQ -->|"idle: active_task_count > 0<br/>recv 阻塞等待"| RMain
 ```
 
 **关键机制**：
-- `msg_rx` 只接收 UserInput（readline 线程发）；`sub_result_rx` 只接收 AgentResult（SubAgent 线程发）——双通道分离，对齐 Bash 的 INPUT_FIFO + NOTIFY_FIFO
-- main_loop 在 agent_loop 返回后，`while active_task_count > 0` 阻塞等待 `sub_result_rx`
+- `msg_rx` 只接收 `UserInput`（readline 线程发）；`sub_result_rx` 接收 `AgentResult` / `AsyncResult`（SubAgent / bg-bash 线程发）——双通道分离，对齐 Bash 的 INPUT_FIFO + NOTIFY_FIFO
+- main_loop 在 `agent_loop` 返回后，`while active_task_count > 0` 阻塞等待 `sub_result_rx`
 - display worker 独立线程，通过 `DisplayEvent` channel 序列化输出（含 title OSC 序列）
 
 ### 通用约束（四版本共享）

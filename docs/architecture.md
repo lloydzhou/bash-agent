@@ -35,27 +35,25 @@
 
 ## 运行时分层
 
-```text
-stdin / args / env
-        |
-        v
-src/agent.sh
-├─ 配置与 CLI
-├─ session/context 管理
-├─ prompt 组装
-├─ agent loop
-├─ tool runtime
-├─ API 请求
-└─ stream-json / human 输出
-        |
-        v
-src/awk/*
-├─ JSON helper library
-├─ JSON helper CLI entrypoints
-├─ SSE parser
-├─ 格式转换
-├─ RESP-like 协议输出 / 文本抽取
-└─ tool 专用变换
+```mermaid
+graph TB
+    Input["stdin / args / env"] --> Agent["src/agent.sh"]
+
+    Agent --> CLI["配置与 CLI"]
+    Agent --> Session["session/context 管理"]
+    Agent --> Prompt["prompt 组装"]
+    Agent --> Loop["agent loop"]
+    Agent --> Tools["tool runtime"]
+    Agent --> API["API 请求"]
+    Agent --> Output["stream-json / human 输出"]
+
+    Agent --> AWK["src/awk/*"]
+    AWK --> JSONLib["JSON helper library"]
+    AWK --> JSONCli["JSON helper CLI entrypoints"]
+    AWK --> SSE["SSE parser"]
+    AWK --> Format["格式转换"]
+    AWK --> RESP["RESP-like 协议输出 / 文本抽取"]
+    AWK --> ToolTransform["tool 专用变换"]
 ```
 
 ### `bash` 负责什么
@@ -96,7 +94,7 @@ Go、Rust、C 版本保持和 Bash 一致的职责分层，用各自语言的并
 - **Rust**：`std::thread` + `mpsc::channel`（`msg_rx` / `sub_result_rx` / display worker thread）
 - **C**：`pthread` + 消息队列（`input_queue` / `sub_result_queue` / `display_queue`）
 
-三者的 agent_loop 退出后，main_loop 层都有 `while (active_sub_count > 0)` 阻塞等待 SubAgent 结果，确保 idle 状态下 SubAgent 结果仍能触发新 agent_loop。
+三者的 agent_loop 退出后，main_loop 层都有 `while (active_task_count > 0)` / `pendingTasks > 0` 阻塞等待 SubAgent / bg-bash 结果，确保 idle 状态下后台结果仍能触发新 agent_loop。
 
 交互状态只在 display 层处理，原始事件和会话状态只在 stream 层处理，interactive history 统一使用 `~/.bash-agent/history`。
 
@@ -116,47 +114,41 @@ Go、Rust、C 版本保持和 Bash 一致的职责分层，用各自语言的并
 
 ### bash 版本的通道
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           主进程                                     │
-│  ┌──────────────┐    RESP-like     ┌──────────────────┐            │
-│  │   agent_loop  │ ←──── fd 7/8 ───│ agent_loop_stream│            │
-│  │   (外层)      │                  │     (内层)        │            │
-│  └──────┬───────┘                  └────────┬─────────┘            │
-│         │                                    │                      │
-│         │                                    │ RESP-like            │
-│         │                                    │ (fd)                 │
-│         │                                    ↓                      │
-│         │                           ┌─────────────────┐            │
-│         │                           │  awk SSE 解析    │            │
-│         │                           └────────┬────────┘            │
-│         │                                    │ HTTP stream          │
-│         │                                    ↓                      │
-│         │                              ┌──────────┐                │
-│         │                              │ API 服务  │                │
-│         │                              └──────────┘                │
-│         │                                                          │
-│         │ RESP via fd 4 pipe                                       │
-│         ↓                                                          │
-│  ┌──────────────┐                                                  │
-│  │ display_stream│ ←── fd 4 ──── agent_loop                        │
-│  │ (子进程)      │     display_message → display_human_text        │
-│  └──────────────┘     display_ensure_newline / display_term_title   │
-│         │ stderr                                                    │
-│         ↓                                                          │
-│     [终端]                                                         │
-│                                                                    │
-│  ┌──────────────┐                                                  │
-│  │ stdin_reader  │ ── FIFO ──── agent_main_loop                     │
-│  │ (后台进程)    │     read -p "> " < /dev/tty                      │
-│  └──────────────┘     → USER_INPUT / SESSION_END                    │
-│                                                                    │
-│  ┌──────────────┐                                                  │
-│  │ 子 agent      │ ←── FIFO (启动) ─── agent_loop_stream           │
-│  │ (子进程)      │ ── FIFO (结果) ──→ agent_main_loop               │
-│  │ FD 3-9 关闭，不与主进程争管道                                     │
-│  └──────────────┘                                                  │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Bash["Bash 主进程"]
+        direction TB
+        Main["agent_main_loop"]
+        Loop["agent_loop<br/>外层"]
+        Stream["agent_loop_stream<br/>内层：LLM call + tool exec"]
+        Display["display_stream<br/>子进程"]
+        Drain["agent_drain_notify_buf<br/>每轮 LLM call 前 + end_turn 后"]
+        NotifyReader["notify reader<br/>阻塞读 NOTIFY_FIFO"]
+        NotifyBuf["NOTIFY_BUF<br/>结果缓冲"]
+        Running["AGENT_RUNNING_FLAG"]
+    end
+
+    Stdin["stdin_reader<br/>read -p &gt; &lt; /dev/tty"] -->|"USER_INPUT / SESSION_END<br/>INPUT_FIFO"| Main
+    Main -->|"USER_INPUT / NOTIFY_PENDING"| Loop
+    Loop -->|"fd 7 RESP"| Stream
+    Stream -->|"stdout RESP"| Loop
+    Loop -->|"fd 4 RESP"| Display
+    Display -->|"stderr"| Terminal["终端"]
+
+    Stream -->|"llm_call"| Awk["awk SSE 解析"]
+    Awk -->|"HTTP stream"| API["API 服务"]
+    Awk -->|"RESP-like"| Stream
+
+    Stream -->|"创建 / 清理"| Running
+    Stream -->|"SubAgent / bg-bash 启动"| Worker["SubAgent 子进程 / bg-bash 子 shell"]
+    Worker -->|"AGENT_RESULT / ASYNC_TASK_RESULT<br/>NOTIFY_FIFO"| NotifyReader
+    NotifyReader -->|"追加 RESP"| NotifyBuf
+    NotifyReader -->|"idle 时：NOTIFY_PENDING<br/>INPUT_FIFO"| Main
+    Stream -->|"运行中：drain"| Drain
+    Loop -->|"end_turn 后：drain"| Drain
+    Drain -->|"原子 mv + 解析 RESP"| NotifyBuf
+    Drain -->|"写 stdout → agent_loop 转发 FD4"| Display
+    Drain -->|"store_conv_add_user"| Conv["conversation.jsonl"]
 ```
 
 **通道说明**：
@@ -169,8 +161,9 @@ Go、Rust、C 版本保持和 Bash 一致的职责分层，用各自语言的并
 | RESP fd 4 | agent_loop → display_stream | 渲染消息传递给子进程显示 | write_message / read_message |
 | FIFO fd 5 | stdin_reader → agent_main_loop | 用户输入传递（INPUT_FIFO 写入端） | write 后非阻塞，read 阻塞 |
 | FIFO fd 3 | agent_main_loop | INPUT_FIFO 读取端 | read 阻塞 |
-| FIFO | 主 → 子 | 启动子 agent | 写入后非阻塞 |
-| FIFO | 子 → 主 | 子 agent 结果回传 | read 阻塞 |
+| FIFO | agent_loop_stream → SubAgent | 启动子 agent | 写入后非阻塞 |
+| NOTIFY_FIFO | SubAgent / bg-bash → notify reader | `AGENT_RESULT` / `ASYNC_TASK_RESULT` 回传 | read 阻塞 |
+| NOTIFY_BUF | notify reader → agent_drain_notify_buf | 后台结果缓冲；可在 LLM 调用边界 drain | 原子 append + mv |
 | stdin | 用户 → stdin_reader | 交互模式输入（后台进程） | read 阻塞 |
 
 ### 文件描述符分层约定
@@ -187,54 +180,62 @@ FD 按所在进程层级分配，全局可见的 FD 用连续小数字（3-6）�
 | 8  | 子进程 | llm_call 管道读取端 | agent_loop_stream |
 | 9  | 子进程 | curl 管道读取端 | llm_stream_curl |
 
-### Go/Rust 版本的通道
+### Go/Rust/C 版本的通道
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           主 goroutine/task                          │
-│  ┌──────────────┐        msgChan        ┌──────────────────┐       │
-│  │   agent_loop  │ ←────────────────────│ agent_loop_stream│       │
-│  │   (外层)      │                       │     (内层)        │       │
-│  └──────┬───────┘                       └────────┬─────────┘       │
-│         │                                        │                 │
-│         │                                        │ HTTP stream     │
-│         │                                        ↓                 │
-│         │                                  ┌──────────┐            │
-│         │                                  │ API 服务  │            │
-│         │                                  └──────────┘            │
-│         │                                                          │
-│         │ msgChan (AGENT_RESULT)                                   │
-│         ↓                                                          │
-│  ┌──────────────┐                                                  │
-│  │ 子 agent      │ ←── goroutine/task 启动                         │
-│  │ (异步执行)    │                                                  │
-│  └──────────────┘                                                  │
-│                                                                    │
-│  ┌──────────────┐                                                  │
-│  │ interactive   │ ←── done channel (同步等待)                      │
-│  │ mode          │                                                  │
-│  └──────────────┘                                                  │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Port["Go / Rust / C 通道模型"]
+        direction TB
+        Input["readline / stdin goroutine-thread"]
+        Main["main_loop / RunLoop"]
+        Agent["agent_loop<br/>LLM call + tool exec"]
+        Drain["drain_sub_results()<br/>每轮 LLM call 前 + end_turn 后"]
+        ResultQ["subResultCh / sub_result_rx / sub_result_queue"]
+        DisplayQ["display channel / display queue"]
+        Display["display worker"]
+        Running["running flag"]
+        Pending["pendingTasks / active_task_count"]
+    end
+
+    Input -->|"USER_INPUT"| Main
+    Main --> Agent
+    Agent -->|"运行中置 true"| Running
+    Agent -->|"LLM HTTP stream"| API["API 服务"]
+    API --> Agent
+    Agent -->|"display event"| DisplayQ
+    DisplayQ --> Display
+    Display --> Terminal["终端"]
+
+    Agent -->|"SubAgent / bg-bash 启动"| Worker["SubAgent goroutine-thread / bg-bash goroutine-thread"]
+    Worker -->|"AGENT_RESULT / ASYNC_TASK_RESULT"| ResultQ
+    ResultQ --> Drain
+    ResultQ -->|"idle 时 main_loop 阻塞等待"| Main
+    Agent -->|"运行中：非阻塞 drain"| Drain
+    Drain -->|"display event"| DisplayQ
+    Drain -->|"store_conv_add_user"| Conv["conversation.jsonl"]
+    Worker --> Pending
 ```
 
 **通道说明**：
 
 | 通道 | 类型 | 方向 | 用途 | 同步机制 |
 |------|------|------|------|---------|
-| msgChan | `chan MainLoopMessage` | stream → loop | 内层消息传递给外层 | channel 阻塞 |
-| msgChan | `chan MainLoopMessage` | 子 → 主 | 子 agent 结果回传 | channel 阻塞 |
-| done | `chan struct{}` | mainLoop → interactive | 交互模式同步 | channel 阻塞 |
-| HTTP stream | `io.Reader` | API → stream | SSE 流式读取 | read 阻塞 |
+| `inputCh` / `msg_rx` / `input_queue` | channel / queue | input → main_loop | 用户输入排队；必须等当前 turn 结束后启动新 turn | 阻塞收取 |
+| `subResultCh` / `sub_result_rx` / `sub_result_queue` | channel / queue | SubAgent/bg-bash → agent_loop/main_loop | `AGENT_RESULT` / `ASYNC_TASK_RESULT` 回传；可在 LLM 调用边界 drain | 非阻塞 drain + idle 阻塞等待 |
+| display channel / display queue | channel / queue | agent_loop → display worker | 渲染事件 | 阻塞收取 |
+| HTTP stream | `io.Reader` / `Read` | API → agent_loop | SSE 流式读取 | read 阻塞 |
 
 ### 关键差异
 
-| 方面 | bash | Go/Rust |
-|------|------|---------|
-| API 解析层 | 独立 awk 进程 | 内嵌在 agent_loop_stream |
-| stream → loop 通道 | RESP-like fd 7/8 | msgChan |
-| 子 agent 结果回传 | FIFO | msgChan |
-| 交互模式同步 | read 阻塞 | done channel |
-| 子 agent 计数回收 | FIFO 消息触发 | msgChan 消息触发 |
+| 方面 | bash | Go/Rust/C |
+|------|------|-----------|
+| API 解析层 | 独立 awk 进程 | 内嵌在 agent_loop |
+| stream → loop 通道 | RESP-like fd 7/8 | 函数内事件/消息对象 |
+| 用户输入 | `INPUT_FIFO`，当前 turn 结束后消费 | input channel/queue，当前 turn 结束后消费 |
+| 后台结果回传 | `NOTIFY_FIFO` → `NOTIFY_BUF` | `subResultCh` / `sub_result_rx` / `sub_result_queue` |
+| 后台结果消费 | `agent_drain_notify_buf` 在 LLM 调用边界消费 | `drain_sub_results` 在 LLM 调用边界消费 |
+| idle 唤醒 | notify reader 写 `NOTIFY_PENDING` 到 `INPUT_FIFO` | main_loop 阻塞等待后台结果 |
+| 后台任务计数回收 | `ACTIVE_TASK_FILE` | `pendingTasks` / `active_task_count` |
 
 ### 消息格式
 
@@ -243,17 +244,24 @@ FD 按所在进程层级分配，全局可见的 FD 用连续小数字（3-6）�
 *N\r\n$len\r\ndata\r\n...
 ```
 
-**Go/Rust MainLoopMessage**：
+**Go/Rust 后台结果消息**：
 ```go
-type MainLoopMessage struct {
-    Type      string // "USER_INPUT" or "AGENT_RESULT"
-    Input     string
-    SessionID string
-    Status    string // "ok" or "failed"
-    Result    string
-    InTokens  int
-    OutTokens int
-    Done      chan<- struct{} // 交互模式同步
+type SubAgentResult struct {
+    Kind      string // "sub_agent" 或 "async_task"
+    SessionID string // SubAgent
+    Status    string // "ok" 或 "failed"
+    Thinking  string
+    Text      string
+
+    InputTokens  int
+    OutputTokens int
+    CacheRead    int
+    CacheWrite   int
+    Requests     int
+
+    TaskID   string // bg-bash
+    ExitCode int
+    Output   string
 }
 ```
 
@@ -263,14 +271,15 @@ type MainLoopMessage struct {
 
 session 数据按当前项目目录归档：
 
-```text
-~/.bash-agent/projects/<project_key>/<session_id>/
-    conversation.jsonl
-    events.jsonl
-    summary.txt
-    plan.md
-    plan.draft
-    stats.json
+```mermaid
+graph TB
+    Root["~/.bash-agent/projects/&lt;project_key&gt;/&lt;session_id&gt;/"]
+    Root --> Conv["conversation.jsonl"]
+    Root --> Events["events.jsonl"]
+    Root --> Summary["summary.txt"]
+    Root --> Plan["plan.md"]
+    Root --> Draft["plan.draft"]
+    Root --> Stats["stats.json"]
 ```
 
 职责分工：
@@ -298,13 +307,17 @@ compact 使用**缓存对齐摘要（Cache-Aligned Summarization）**和基于�
 
 compact 在 `agent_loop_stream()` 的 **每次 LLM 调用前** 执行：
 
-```text
-while turn < MAX_TURNS:
-    ① compact_context_window auto     ← 使用上一轮 USAGE 记录的 ctx_tokens
-    ② llm_call()
-    ③ 流式处理：TEXT / THINKING / TOOL_CALL / USAGE / STOP
-    ④ 持久化 assistant + tool_results
-    ⑤ stats_set current_context_tokens = _ctx_tokens   ← 供下一轮 compact 使用
+```mermaid
+flowchart TB
+    Start{"turn < MAX_TURNS?"}
+    Compact["① compact_context_window auto<br/>读取上一轮 USAGE 记录的 ctx_tokens"]
+    Call["② llm_call()"]
+    Stream["③ 流式处理<br/>TEXT / THINKING / TOOL_CALL / USAGE / STOP"]
+    Persist["④ 持久化 assistant + tool_results"]
+    Stats["⑤ stats_set current_context_tokens = _ctx_tokens<br/>供下一轮 compact 使用"]
+
+    Start -->|"是"| Compact --> Call --> Stream --> Persist --> Stats --> Start
+    Start -->|"否"| End["结束"]
 ```
 
 数据流时序：
@@ -369,10 +382,20 @@ Safety valve 也改用 `compact_turn_keep()` 实现 turn 对齐（替换原简�
 
 summary 调用（`run_summary_call`）采用与正常请求**完全相同的前缀结构**，实现前缀缓存命中：
 
-```
-正常请求：  [System prompt + Tools + Summary] + [全部消息]
-summary请求：[System prompt + Tools + Summary] + [dropped 消息 H] + [summary 指令]
-            ←────── 缓存命中，按 P_cache 计费 ──────→  ← P_input →
+```mermaid
+flowchart TB
+    Prefix["共享前缀<br/>System prompt + Tools + Summary"]
+    NormalTail["正常请求尾部<br/>全部消息"]
+    SummaryTail1["summary 请求缓存命中段<br/>dropped 消息 H"]
+    SummaryTail2["summary 请求新增段<br/>summary 指令"]
+
+    Prefix --> NormalTail
+    Prefix --> SummaryTail1 --> SummaryTail2
+
+    classDef cached fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
+    classDef input fill:#fff3e0,stroke:#ef6c00,color:#e65100
+    class Prefix,SummaryTail1 cached
+    class SummaryTail2 input
 ```
 
 由于 dropped 消息是 CONV_FILE 开头的行，它们与之前请求中的前缀完全一致。summary 请求只追加了一条 user 消息作为总结指令，不影响前缀匹配。这就是 **Cache-Aligned Summarization**：摘要 agent 的前缀与主 agent 对齐，确保前缀缓存命中。
@@ -450,13 +473,11 @@ system prompt 首尾都是语言约束，中间内容无论多长、是否变化
 
 ### 4. Skills
 
-skills 当前优先读取：
+skills 当前按以下优先级读取：
 
-```text
-./.claude/skills/<name>/SKILL.md
-./skills/<name>/SKILL.md
-~/.claude/skills/<name>/SKILL.md
-```
+1. `<当前项目>/.claude/skills/<name>/SKILL.md`
+2. `<当前项目>/skills/<name>/SKILL.md`
+3. `<用户 Home>/.claude/skills/<name>/SKILL.md`
 
 策略分两层：
 
