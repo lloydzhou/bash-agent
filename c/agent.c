@@ -727,7 +727,7 @@ static int agent_drain_sub_results(Agent *agent) {
             /* conversation 注入 */
             StrBuf ctx;
             sb_init(&ctx);
-            sb_appendf(&ctx, "[async-task %s] exit_code=%d\nOutput: %s",
+            sb_appendf(&ctx, "[task %s] exit_code=%d\nOutput: %s",
                        sub_msg->data.async_task_result.task_id,
                        sub_msg->data.async_task_result.exit_code,
                        sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
@@ -1096,7 +1096,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     if (is_async && cmd && cmd[0]) {
                         /* 生成 task_id */
                         char task_id[64];
-                        snprintf(task_id, sizeof(task_id), "async_%ld_%d", (long)time(NULL), getpid() & 0xFFFF);
+                        snprintf(task_id, sizeof(task_id), "task_%ld_%d", (long)time(NULL), getpid() & 0xFFFF);
                         /* 递增计数器 */
                         agent->active_task_count++;
                         /* 后台线程 */
@@ -1738,7 +1738,7 @@ int agent_main_loop(Agent *agent) {
                         push_display_event(&agent->paths, agent->display_queue, dm);
                         StrBuf ctx;
                         sb_init(&ctx);
-                        sb_appendf(&ctx, "[async-task %s] exit_code=%d\nOutput: %s",
+                        sb_appendf(&ctx, "[task %s] exit_code=%d\nOutput: %s",
                                    sub_msg->data.async_task_result.task_id,
                                    sub_msg->data.async_task_result.exit_code,
                                    sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");

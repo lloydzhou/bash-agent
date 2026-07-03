@@ -175,6 +175,29 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 			d.write("\r\033[K")
 		}
 		d.EnsureNewline()
+		// async task: Fields = ["ASYNC_TASK_RESULT", task_id, exit_code, output]
+		if len(ev.Fields) >= 1 && ev.Fields[0] == "ASYNC_TASK_RESULT" {
+			taskID := ev.Fields[1]
+			exitCode := ev.Fields[2]
+			output := ""
+			if len(ev.Fields) > 3 {
+				output = ev.Fields[3]
+			}
+			color := "31"
+			if exitCode == "0" {
+				color = "36"
+			}
+			d.writef("\033[%sm[task %s] exit_code=%s\033[0m\n", color, taskID, exitCode)
+			if output != "" {
+				if len(output) > 120 {
+					d.writef("%s…\n", output[:120])
+				} else {
+					d.writef("%s\n", output)
+				}
+			}
+			break
+		}
+		// sub-agent: Fields = ["AGENT_RESULT", session_id, status, in, out, thinking, text]
 		if len(ev.Fields) >= 4 {
 			sessionID := ev.Fields[1]
 			status := ev.Fields[2]

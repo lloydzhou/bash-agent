@@ -517,7 +517,7 @@ fn render_display_event(
             ensure_newline(ds, &lw);
             let color = if exit_code == 0 { "36" } else { "31" };
             let status = if exit_code == 0 { "completed" } else { "failed" };
-            lw(&format!("\x1b[{}m[async-task {}] {} (exit_code={})\x1b[0m\n", color, task_id, status, exit_code));
+            lw(&format!("\x1b[{}m[task {}] {} (exit_code={})\x1b[0m\n", color, task_id, status, exit_code));
             if !output.is_empty() {
                 lw(&format!("{}\n", truncate_str(&output, 120)));
             }
@@ -1115,7 +1115,7 @@ impl Agent {
                             Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
                                 let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
                                 if self.active_task_count > 0 { self.active_task_count -= 1; }
-                                let ctx = format!("[async-task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
+                                let ctx = format!("[task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
                                 let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
                                 let _ = self.agent_loop_with_kind(ctx, "async_task_result");
                                 self.flush_display();
@@ -1257,7 +1257,7 @@ impl Agent {
             MainLoopMessage::AsyncResult { task_id, exit_code, output } => {
                 let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
                 if self.active_task_count > 0 { self.active_task_count -= 1; }
-                let ctx = format!("[async-task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
+                let ctx = format!("[task {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
                 let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
                 let _ = self.conv.add_user(&ctx);
                 drained = true;
@@ -1428,7 +1428,7 @@ impl Agent {
                             // Async bash 拦截：在 dispatch 之前检查
                             let mut output = if call.name == "Bash" && call.fields.get("background").map(|s| s == "true" || s == "1").unwrap_or(false) {
                                 let command = call.fields.get("command").cloned().unwrap_or_default();
-                                let task_id = format!("async_{}", chrono_like_now());
+                                let task_id = format!("task_{}", chrono_like_now());
                                 self.active_task_count += 1;
                                 let tx = self.sub_result_tx.clone();
                                 let tid = task_id.clone();

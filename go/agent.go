@@ -1070,7 +1070,7 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 // ─── Async Bash 启动（后台 goroutine）───
 
 func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int) (string, error) {
-	taskID := "async_" + UtilNewSessionID()
+	taskID := "task_" + UtilNewSessionID()
 
 	// 增加计数（复用 pendingTasks）
 	a.subMu.Lock()
@@ -1284,7 +1284,7 @@ func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
 	})
 
 	// 5. 注入 conversation
-	injectMsg := fmt.Sprintf("[async-task %s] exit_code=%d\nOutput: %s",
+	injectMsg := fmt.Sprintf("[task %s] exit_code=%d\nOutput: %s",
 		r.TaskID, r.ExitCode, r.Output)
 	_ = a.store.AddUserMessage(injectMsg)
 }
