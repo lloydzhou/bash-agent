@@ -306,13 +306,9 @@ static void render_message(FILE *out, DisplayState *ds, OutputFormat format,
                 linenoiseWrite("\r\033[K", 4);
             }
             ensure_newline(ds);
-            if (msg->tool_exit_code == 0) {
-                linenoisePrintf("\x1b[36m[async-task %s] completed (exit_code=0)\x1b[0m\n",
-                        msg->session_id ? msg->session_id : "?");
-            } else {
-                linenoisePrintf("\x1b[31m[async-task %s] failed (exit_code=%d)\x1b[0m\n",
-                        msg->session_id ? msg->session_id : "?", msg->tool_exit_code);
-            }
+            linenoisePrintf("\x1b[%sm[task %s] exit_code=%d\x1b[0m\n",
+                    msg->tool_exit_code == 0 ? "36" : "31",
+                    msg->session_id ? msg->session_id : "?", msg->tool_exit_code);
             if (msg->content && msg->content[0]) {
                 int clen = (int)util_utf8_truncate_len(msg->content, 120);
                 linenoisePrintf("%.*s%s\n",

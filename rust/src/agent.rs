@@ -516,8 +516,7 @@ fn render_display_event(
             }
             ensure_newline(ds, &lw);
             let color = if exit_code == 0 { "36" } else { "31" };
-            let status = if exit_code == 0 { "completed" } else { "failed" };
-            lw(&format!("\x1b[{}m[task {}] {} (exit_code={})\x1b[0m\n", color, task_id, status, exit_code));
+            lw(&format!("\x1b[{}m[task {}] exit_code={}\x1b[0m\n", color, task_id, exit_code));
             if !output.is_empty() {
                 lw(&format!("{}\n", truncate_str(&output, 120)));
             }
