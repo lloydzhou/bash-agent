@@ -1448,8 +1448,7 @@ impl Agent {
                                         Ok(o) => (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)),
                                         Err(e) => (127, e.to_string()),
                                     };
-                                    let truncated = if stdout.len() > 8192 { stdout[stdout.len()-8192..].to_string() } else { stdout };
-                                    let _ = tx.send(MainLoopMessage::AsyncResult { task_id: tid, exit_code, output: truncated });
+                                    let _ = tx.send(MainLoopMessage::AsyncResult { task_id: tid, exit_code, output: stdout });
                                 });
                                 let _ = std::fs::remove_file(&output_file); // 预清理
                                 format!("Async task started: task_id={}", task_id)

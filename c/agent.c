@@ -1800,32 +1800,22 @@ static const char *store_session_get_dir_str(Agent *agent) {
 static void *async_bash_thread_fn(void *arg) {
     AsyncBashArgs *args = (AsyncBashArgs *)arg;
 
-    /* 执行命令，输出写入文件 */
+    /* 执行命令，输出写入文件（对齐 Bash 版：无 timeout） */
     char cmd_buf[8192];
-    if (args->timeout_secs > 0) {
-        snprintf(cmd_buf, sizeof(cmd_buf), "timeout %d bash -lc '%s' > '%s' 2>&1",
-                 args->timeout_secs, args->cmd, args->output_file);
-    } else {
-        snprintf(cmd_buf, sizeof(cmd_buf), "bash -lc '%s' > '%s' 2>&1",
-                 args->cmd, args->output_file);
-    }
-    /* 简化：直接用 system()，通过 $? 获取退出码 */
+    snprintf(cmd_buf, sizeof(cmd_buf), "bash -lc '%s' > '%s' 2>&1",
+             args->cmd, args->output_file);
     int rc = system(cmd_buf);
     int exit_code = WEXITSTATUS(rc);
 
-    /* 读取输出（截断到 8192 字节） */
+    /* 读取全部输出（对齐 Bash 版：不截断） */
     char *output = NULL;
     FILE *f = fopen(args->output_file, "r");
     if (f) {
         fseek(f, 0, SEEK_END);
         long fsize = ftell(f);
-        if (fsize > 8192) {
-            fseek(f, fsize - 8192, SEEK_SET);
-        } else {
-            fseek(f, 0, SEEK_SET);
-        }
-        output = malloc(8193);
-        size_t n = fread(output, 1, 8192, f);
+        fseek(f, 0, SEEK_SET);
+        output = malloc(fsize + 1);
+        size_t n = fread(output, 1, fsize, f);
         output[n] = '\0';
         fclose(f);
         /* 删除临时文件 */

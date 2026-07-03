@@ -1077,27 +1077,12 @@ func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int
 	a.pendingTasks++
 	a.subMu.Unlock()
 
-	// 启动 goroutine
+	// 启动 goroutine（对齐 Bash 版：无 timeout，无截断）
 	go func() {
-		// 用独立 context（不继承 RunLoop 的 cancel）
-		bgCtx := context.Background()
-		var execCmd *exec.Cmd
-		if timeoutSecs > 0 {
-			var cancel context.CancelFunc
-			bgCtx, cancel = context.WithTimeout(bgCtx, time.Duration(timeoutSecs)*time.Second)
-			defer cancel()
-		}
-		execCmd = exec.CommandContext(bgCtx, "bash", "-lc", cmd)
-		execCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		execCmd := exec.Command("bash", "-lc", cmd)
 		var stdout, stderr bytes.Buffer
 		execCmd.Stdout = &stdout
 		execCmd.Stderr = &stderr
-		go func() {
-			<-bgCtx.Done()
-			if execCmd.Process != nil {
-				syscall.Kill(-execCmd.Process.Pid, syscall.SIGKILL)
-			}
-		}()
 
 		err := execCmd.Run()
 		exitCode := 0
@@ -1114,10 +1099,6 @@ func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int
 				output += "\n"
 			}
 			output += string(sanitizeUTF8(stderr.Bytes()))
-		}
-		// 截断到 8192 字节
-		if len(output) > 8192 {
-			output = output[len(output)-8192:]
 		}
 
 		result := SubAgentResult{
