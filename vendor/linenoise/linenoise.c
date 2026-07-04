@@ -129,6 +129,7 @@ static linenoiseCompletionCallback *completionCallback = NULL;
 static linenoiseHintsCallback *hintsCallback = NULL;
 static linenoiseFreeHintsCallback *freeHintsCallback = NULL;
 static linenoiseImagePasteCallback imagePasteCallback = NULL;
+static linenoiseInjectCallback injectCallback = NULL;
 static char *linenoiseReadLine(FILE *fp, int *err);
 static char *linenoiseNoTTY(void);
 static void refreshLineWithCompletion(struct linenoiseState *ls, linenoiseCompletions *lc, int flags);
@@ -498,6 +499,7 @@ enum KEY_ACTION{
 	CTRL_L = 12,        /* Ctrl+l */
 	ENTER = 13,         /* Enter */
 	CTRL_N = 14,        /* Ctrl-n */
+	CTRL_O = 15,        /* Ctrl+o (inject input) */
 	CTRL_P = 16,        /* Ctrl-p */
 	CTRL_T = 20,        /* Ctrl-t */
 	CTRL_U = 21,        /* Ctrl+u */
@@ -825,6 +827,10 @@ void linenoiseSetHintsCallback(linenoiseHintsCallback *fn) {
 
 void linenoiseSetImagePasteCallback(linenoiseImagePasteCallback cb) {
     imagePasteCallback = cb;
+}
+
+void linenoiseSetInjectCallback(linenoiseInjectCallback cb) {
+    injectCallback = cb;
 }
 
 /* Register a function to free the hints returned by the hints callback
@@ -2010,6 +2016,7 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
          * Use two calls to handle slow terminals returning the two
          * chars at different times. */
         if (read(l->ifd,seq,1) == -1) break;
+
         if (read(l->ifd,seq+1,1) == -1) break;
 
         /* ESC [ sequences. */
@@ -2124,6 +2131,13 @@ char *linenoiseEditFeed(struct linenoiseState *l) {
                 linenoiseEditInsert(l, out, outlen);
                 free(out);
             }
+        }
+        break;
+    case CTRL_O: /* ctrl+o, inject input */
+        if (injectCallback && l->len > 0 && injectCallback(l->buf, l->len) == 0) {
+            l->buf[0] = '\0';
+            l->pos = l->len = 0;
+            refreshLine(l);
         }
         break;
     }

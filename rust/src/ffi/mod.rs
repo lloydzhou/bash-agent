@@ -3,11 +3,16 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+use std::sync::mpsc;
 
 /// Global image directory path, set once during agent initialization.
 /// Used by the image paste callback to know where to save clipboard images.
 static IMAGE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Global inject callback data: channel sender.
+/// Set by register_inject_callback before linenoise is used.
+static INJECT_TX: Mutex<Option<mpsc::Sender<String>>> = Mutex::new(None);
 
 /// Set the global image directory path for the paste callback.
 /// Should be called once during agent initialization.
@@ -47,6 +52,7 @@ unsafe extern "C" {
     fn linenoiseHistoryLoad(filename: *const c_char) -> libc::c_int;
     fn linenoiseSetMultiLine(ml: libc::c_int);
     fn linenoiseSetImagePasteCallback(cb: Option<unsafe extern "C" fn(*mut *mut libc::c_char, *mut libc::size_t)>);
+    fn linenoiseSetInjectCallback(cb: Option<unsafe extern "C" fn(*mut libc::c_char, libc::size_t) -> libc::c_int>);
     fn linenoiseWrite(s: *const c_char, len: libc::size_t);
     fn linenoiseRegisterState(ls: *mut LinenoiseState);
     fn linenoiseSetActive(active: libc::c_int);
@@ -249,6 +255,36 @@ pub fn register_paste_callback() {
     unsafe {
         linenoiseSetImagePasteCallback(Some(image_paste_callback_impl));
     }
+}
+
+/// Register the inject callback with linenoise.
+/// Called when Ctrl+O is pressed.
+/// The callback sends the edit buffer text to the provided channel.
+/// The readline thread always queues it as pending notify and wakes the main loop.
+pub fn register_inject_callback(tx: mpsc::Sender<String>) {
+    *INJECT_TX.lock().unwrap() = Some(tx);
+    unsafe {
+        linenoiseSetInjectCallback(Some(inject_callback_impl));
+    }
+}
+
+/// Extern "C" function called by linenoise when the user presses Ctrl+O.
+#[unsafe(no_mangle)]
+pub extern "C" fn inject_callback_impl(buf: *mut libc::c_char, len: libc::size_t) -> libc::c_int {
+    if buf.is_null() || len == 0 {
+        return 1;
+    }
+    let text = unsafe {
+        let slice = std::slice::from_raw_parts(buf as *const u8, len as usize);
+        String::from_utf8_lossy(slice).into_owned()
+    };
+    if text.is_empty() {
+        return 1;
+    }
+    if let Some(tx) = INJECT_TX.lock().unwrap().as_ref() {
+        let _ = tx.send(text);
+    }
+    0
 }
 
 /// Extern "C" function called by linenoise when the user presses Ctrl+V.

@@ -422,7 +422,6 @@ store_session_init() {
     NOTIFY_FIFO="${session_dir}/notify.fifo"
     NOTIFY_BUF="${session_dir}/notify.buf"
     ACTIVE_TASK_FILE="${session_dir}/active_task.count"
-    AGENT_RUNNING_FLAG="${session_dir}/agent_running.flag"
     [[ -p "$NOTIFY_FIFO" ]] || { rm -f "$NOTIFY_FIFO"; mkfifo "$NOTIFY_FIFO"; }
     printf '0\n' > "$ACTIVE_TASK_FILE"
 }
@@ -1173,6 +1172,10 @@ display_message() {
             printf '\033[%sm[bg-bash %s] exit_code=%s\033[0m\n' "$([[ "${REPLY_MESSAGE[2]}" == "0" ]] && echo 36 || echo 31)" "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}"
             [[ -n "${REPLY_MESSAGE[3]:0:120}" ]] && printf '%s\n' "${REPLY_MESSAGE[3]:0:120}"
             DISPLAY_LAST_CHAR=$'\n' ;;
+        USER_NOTIFY)
+            display_ensure_newline
+            printf '\033[33m[user inject] %s\033[0m\n' "${REPLY_MESSAGE[1]}"
+            DISPLAY_LAST_CHAR=$'\n' ;;
         IMAGE_DESCRIBE)
             [[ -n "${REPLY_MESSAGE[2]}" ]] && { display_human_text "$(printf '\033[36m📸 %s: %s\033[0m\n' "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}")"; DISPLAY_LAST_CHAR=$'\n'; }
             ;;
@@ -1337,18 +1340,21 @@ agent_main_loop() {
                     store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
                     store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
                     util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
-                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
-                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
-                    [[ ! -f "$AGENT_RUNNING_FLAG" ]] && util_write_msg "NOTIFY_PENDING" >&5
                     ;;
                 ASYNC_TASK_RESULT)
                     store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"exit_code\":${REPLY_MESSAGE[2]},\"output\":\"$(util_json_escape "${REPLY_MESSAGE[3]}")\"}"
                     util_write_msg "${REPLY_MESSAGE[@]}" >> "$NOTIFY_BUF"
-                    local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
-                    (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
-                    [[ ! -f "$AGENT_RUNNING_FLAG" ]] && util_write_msg "NOTIFY_PENDING" >&5
                     ;;
+                USER_NOTIFY)
+                    util_write_msg "USER_NOTIFY" "${REPLY_MESSAGE[1]}" >> "$NOTIFY_BUF"
+                    ;;
+                *) continue ;;
             esac
+            if [[ "${REPLY_MESSAGE[0]}" != "USER_NOTIFY" ]]; then
+                local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+                (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
+            fi
+            util_write_msg "NOTIFY_PENDING" >&5
         done
     ) &
     local _notify_pid=$!
@@ -1381,7 +1387,7 @@ agent_main_loop() {
     exec 4>&-
     wait "$display_pid" 2>/dev/null || true
     cleanup_all_pipes
-    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "$AGENT_RUNNING_FLAG"
+    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF"
 }
 
 agent_drain_notify_buf() {
@@ -1399,6 +1405,9 @@ agent_drain_notify_buf() {
             util_write_msg "ASYNC_TASK_RESULT" "${REPLY_MESSAGE[@]:1}"
             _conv+="[bg-bash ${REPLY_MESSAGE[1]}] exit_code=${REPLY_MESSAGE[2]}"$'\n'
             [[ -n "${REPLY_MESSAGE[3]}" ]] && _conv+="Output: ${REPLY_MESSAGE[3]}"$'\n'
+        elif [[ "${REPLY_MESSAGE[0]}" == "USER_NOTIFY" ]]; then
+            util_write_msg "USER_NOTIFY" "${REPLY_MESSAGE[1]}"
+            _conv+="${REPLY_MESSAGE[1]}"$'\n'
         fi
     done
     exec 9<&-
@@ -1410,11 +1419,9 @@ agent_drain_notify_buf() {
 agent_loop_stream() {
     local user_input="$1" turn=0
     # Trap SIGINT: close pipe FD to unblock read
-    trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes; rm -f "$AGENT_RUNNING_FLAG"' INT
+    trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
-        # agent_loop 运行中标记（notify reader 见此标记不发 NOTIFY_PENDING，靠 drain 消费）
-        : > "$AGENT_RUNNING_FLAG"
         agent_drain_notify_buf || true
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
@@ -1458,7 +1465,6 @@ agent_loop_stream() {
         # Fatal stop reasons exit immediately
         case "$stop" in
             error|max_tokens|length)
-                rm -f "$AGENT_RUNNING_FLAG"
                 [[ "$stop" != "error" ]] && { util_write_msg "ERROR" "Response truncated (max_tokens reached)"; }
                 return 1
                 ;;
@@ -1475,7 +1481,6 @@ agent_loop_stream() {
             fi
             # tool_use/tool_calls → loop continues; otherwise exit unless a sub-agent result arrived meanwhile
             if [[ "$stop" != "tool_use" && "$stop" != "tool_calls" ]]; then
-                rm -f "$AGENT_RUNNING_FLAG"
                 agent_drain_notify_buf && continue
                 util_write_msg "STOP" "$stop"
                 break
@@ -1488,7 +1493,6 @@ agent_loop_stream() {
     if (( turn >= MAX_TURNS )); then
         util_write_msg "ERROR" "Max turns ($MAX_TURNS) reached"
     fi
-    rm -f "$AGENT_RUNNING_FLAG"
 }
 
 agent_loop() {
@@ -1694,6 +1698,13 @@ validate_config() {
     sse_parse() { util_awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"; }
 }
 
+# Ctrl+O: inject input through NOTIFY_FIFO.
+agent_user_inject_readline() {
+    [[ -n "${READLINE_LINE:-}" ]] || return
+    util_write_msg "USER_NOTIFY" "$READLINE_LINE" >&9 2>/dev/null
+    READLINE_LINE="" READLINE_POINT=0
+}
+
 interactive_mode() {
     local history_file="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/history" line
     mkdir -p "$(dirname "$history_file")" 2>/dev/null || true
@@ -1711,8 +1722,10 @@ interactive_mode() {
     display_term_title "idle"
     {
         exec 5> "$INPUT_FIFO"
+        exec 9<> "$NOTIFY_FIFO"
         set -o emacs 2>/dev/null || true
         bind -x '"\C-v": agent_image_insert_placeholder_readline' 2>/dev/null || true
+        bind -x '"\C-o": agent_user_inject_readline' 2>/dev/null || true
         while true; do
             stty echo 2>/dev/null || true
             if ! IFS= read -e -r -p $'\033[32m>\033[0m ' line < /dev/tty; then

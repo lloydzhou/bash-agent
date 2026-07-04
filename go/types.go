@@ -106,6 +106,7 @@ const (
 	EventSubAgentResult                  // SUB_AGENT_RESULT (replay 用)
 	EventDisplayFlush                    // display queue 同步屏障
 	EventImageDescribe                   // IMAGE_DESCRIBE
+	EventUserNotify                      // USER_NOTIFY (Ctrl+O 中间介入)
 )
 
 // Usage 记录 token 使用量

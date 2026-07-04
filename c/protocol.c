@@ -23,6 +23,11 @@ void input_message_free(InputMessage *msg) {
             FREE_PTR(msg->data.async_task_result.task_id);
             FREE_PTR(msg->data.async_task_result.output);
             break;
+        case MSG_USER_NOTIFY:
+            FREE_PTR(msg->data.user_notify.text);
+            break;
+        case MSG_NOTIFY_PENDING:
+            break;
     }
 }
 
@@ -126,6 +131,14 @@ DisplayMessage display_msg_async_task_result(const char *task_id, int exit_code,
     m.session_id = util_strdup(task_id);
     m.tool_exit_code = exit_code;
     m.content = util_strdup(output ? output : "");
+    return m;
+}
+
+DisplayMessage display_msg_user_notify(const char *text) {
+    DisplayMessage m;
+    memset(&m, 0, sizeof(m));
+    m.type = DISPLAY_USER_NOTIFY;
+    m.content = util_strdup(text ? text : "");
     return m;
 }
 

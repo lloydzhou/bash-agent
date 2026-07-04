@@ -347,6 +347,10 @@ int main(int argc, char *argv[]) {
         linenoiseSetImagePasteCallback(image_paste_wrapper);
         g_paste_session_dir = agent->paths.session_dir;
 
+        /* 注册 Ctrl+O inject callback */
+        readline_set_inject_queues(agent->sub_result_queue, &input_queue);
+        linenoiseSetInjectCallback(inject_callback);
+
         readline_thread_start(&readline_thread, &rcfg);
 
         /* 主循环 */

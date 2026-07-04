@@ -107,6 +107,12 @@ void linenoiseAddCompletion(linenoiseCompletions *, const char *);
 typedef void (*linenoiseImagePasteCallback)(char **out, size_t *outlen);
 void linenoiseSetImagePasteCallback(linenoiseImagePasteCallback cb);
 
+/* Inject callback — called when Ctrl+O is pressed.
+ * cb() receives the current edit buffer content and length.
+ * Return 0 to consume (clear buffer), non-zero to keep editing. */
+typedef int (*linenoiseInjectCallback)(char *buf, size_t len);
+void linenoiseSetInjectCallback(linenoiseInjectCallback cb);
+
 /* History API. */
 int linenoiseHistoryAdd(const char *line);
 int linenoiseHistorySetMaxLen(int len);
