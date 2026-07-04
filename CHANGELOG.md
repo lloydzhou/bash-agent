@@ -8,6 +8,37 @@
 
 ---
 
+## [4.2.14] - 2026-07-04
+
+> **Ctrl+O 用户输入注入**：agent 运行中或空闲时，用户按 Ctrl+O 可将当前编辑行内容作为追加指令注入 conversation，不中断当前 LLM turn。输入通过 notify/sub_result channel 在安全边界（LLM call 前 / end_turn 后）统一 flush，复用既有 SubAgent/bg-bash 的 pending 通道。删除了 Bash 版的 `AGENT_RUNNING_FLAG` 文件标记，改为 notify reader 统一发送 wakeup + main loop 过滤 stale wakeup。
+
+### Added — Ctrl+O 输入注入（四版本）
+
+- **linenoise**：枚举新增 `CTRL_O = 15`，`case CTRL_O` 调用 `injectCallback`，返回 0 则清空 edit buffer；新增 `linenoiseSetInjectCallback` API
+- **Bash**：`bind -x '"\C-o"'` 绑定 `agent_user_inject_readline`，通过 fd9（NOTIFY_FIFO）发送 `USER_NOTIFY` 消息
+- **C**：新增 `inject_callback`（readline.c）、`MSG_USER_NOTIFY` / `MSG_NOTIFY_PENDING` 消息类型、`DISPLAY_USER_NOTIFY` 渲染
+- **Go**：新增 `SetInjectCallback`、`EnqueueUserNotify`、`EventUserNotify`、`notifyWakeupInput` 哨兵值
+- **Rust**：新增 `MainLoopMessage::UserNotify` / `NotifyPending`、`DisplayEvent::UserNotify`、`register_inject_callback` FFI
+- **conversation 原文注入**：`USER_NOTIFY` 写 conversation 使用原始用户文本（不加 `[user inject]` 前缀），显示层才加黄色 `[user inject]`
+
+### Changed — 删除 AGENT_RUNNING_FLAG（Bash）
+
+- **notify reader 统一发送 NOTIFY_PENDING**：不再判断 agent 是否运行中；main loop 收到后通过 `[[ -s "$NOTIFY_BUF" ]]` 检查 pending 是否为空，空则忽略（stale wakeup 过滤）
+- **active count 递减合并**：从 `AGENT_RESULT` / `ASYNC_TASK_RESULT` 两个分支各自处理，改为 case 后统一（`USER_NOTIFY` 不递减）
+- **notify reader case 重构**：新增 `USER_NOTIFY` 分支 + `*) continue ;;`（未知消息不发 wakeup）
+
+### Fixed
+
+- **Bash 提示符不显示**：`exec 9> "$NOTIFY_FIFO" 2>/dev/null` 中的 `2>/dev/null` 是 exec 级永久重定向，把子 shell stderr 吞掉，导致 `read -e -p '>'` 的提示符（写到 stderr）不显示。修复：改为 `exec 9<> "$NOTIFY_FIFO"`（O_RDWR 不阻塞 + 不重定向 stderr）
+- **Bash unbound variable**：`[[ -z "$READLINE_LINE" ]]` 在 `set -u` 模式下 READLINE_LINE 未设置时报错。修复：改为 `[[ -n "${READLINE_LINE:-}" ]]`
+
+### Docs
+
+- `BASH_ARCHITECTURE.md` / `architecture.md`：删除全部 `AGENT_RUNNING_FLAG` 引用（架构图节点、流程判断分支、代码示例、行为说明），更新为统一 NOTIFY_PENDING + stale wakeup 过滤逻辑
+- 所有注释中 `Ctrl+Enter / ESC+CR` → `Ctrl+O`
+
+---
+
 ## [4.2.13] - 2026-07-03
 
 > **Bash 工具异步执行 + 架构文档大修**：Bash 工具新增 `background=true` 参数，长时间运行的命令可后台执行，完成后通过 SubAgent 的 notify 通道异步返回结果（四版本同步实现）；架构文档全面更新（mermaid 通道图、四版本对比、DP 决策公式），清理 4 个过时文档。
@@ -1277,7 +1308,11 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.10...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.14...HEAD
+[4.2.14]: https://github.com/lloydzhou/bash-agent/compare/v4.2.13...v4.2.14
+[4.2.13]: https://github.com/lloydzhou/bash-agent/compare/v4.2.12...v4.2.13
+[4.2.12]: https://github.com/lloydzhou/bash-agent/compare/v4.2.11...v4.2.12
+[4.2.11]: https://github.com/lloydzhou/bash-agent/compare/v4.2.10...v4.2.11
 [4.2.10]: https://github.com/lloydzhou/bash-agent/compare/v4.2.9...v4.2.10
 [4.2.9]: https://github.com/lloydzhou/bash-agent/compare/v4.2.8...v4.2.9
 [4.2.8]: https://github.com/lloydzhou/bash-agent/compare/v4.2.7...v4.2.8
