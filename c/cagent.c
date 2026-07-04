@@ -231,6 +231,10 @@ int main(int argc, char *argv[]) {
     int interactive = force_interactive ||
         (!prompt && isatty(STDIN_FILENO));
 
+    /* 忽略 SIGPIPE：多线程中 SubAgent/bg-bash 线程的 HTTP 或 pipe 写入
+     * 可能触发 SIGPIPE，默认行为是终止整个进程 */
+    signal(SIGPIPE, SIG_IGN);
+
     /* 初始化 curl */
     curl_global_init(CURL_GLOBAL_DEFAULT);
 

@@ -266,6 +266,7 @@ HttpResponse http_post(const char *url, const char **headers, int header_count,
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
     CurlBuffer buf = {0};
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
@@ -330,6 +331,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
     StreamCtx sctx;
     sctx.callback = callback;

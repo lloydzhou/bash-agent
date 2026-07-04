@@ -1470,6 +1470,7 @@ char *agent_image_describe(char **paths, int count) {
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &wb);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
     struct curl_slist *slist = NULL;
     for (int i = 0; i < hdr_count; i++) {

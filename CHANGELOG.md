@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- **C SubAgent 偶发崩溃**：SubAgent 子线程通过 curl 发 HTTP 请求时，未忽略 SIGPIPE 且未设 `CURLOPT_NOSIGNAL`，连接关闭或 pipe 写入触发 SIGPIPE 直接杀死整个进程。修复：进程启动时 `signal(SIGPIPE, SIG_IGN)` + 所有 curl 调用设 `CURLOPT_NOSIGNAL`
 - **Bash 提示符不显示**：`exec 9> "$NOTIFY_FIFO" 2>/dev/null` 中的 `2>/dev/null` 是 exec 级永久重定向，把子 shell stderr 吞掉，导致 `read -e -p '>'` 的提示符（写到 stderr）不显示。修复：改为 `exec 9<> "$NOTIFY_FIFO"`（O_RDWR 不阻塞 + 不重定向 stderr）
 - **Bash unbound variable**：`[[ -z "$READLINE_LINE" ]]` 在 `set -u` 模式下 READLINE_LINE 未设置时报错。修复：改为 `[[ -n "${READLINE_LINE:-}" ]]`
 

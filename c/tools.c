@@ -908,6 +908,7 @@ static char *web_get(const char *url, const char **headers, int header_count, lo
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_secs);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
     struct curl_slist *slist = NULL;
     for (int i = 0; i < header_count; i++) {
