@@ -717,65 +717,13 @@ func (a *Agent) emitJSON(obj map[string]interface{}) {
 	}
 }
 
-func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
+func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind string) error {
 	// 设置 running 标志：1 表示 agent 正在处理，readline 据此判断 Ctrl+C 是否应中断
 	a.running.Store(true)
 	defer a.running.Store(false)
 
-	// notify turn 只负责消费 pending sub_result；stale wakeup 直接忽略
-	if turnKind == "notify" {
-		if !a.drainSubAgentResults(ctx) {
-			return nil
-		}
-	} else if turnKind == "user_input" {
-		// 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
-		a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
-	}
-
-	// 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
-	if turnKind == "user_input" && strings.Contains(userInput, "[Image #") {
-		expandedInput := a.expandImagePlaceholders(userInput)
-
-		// 提取 <attached-images> 中的描述内容
-		desc := ""
-		if start := strings.Index(expandedInput, "<attached-images>"); start >= 0 {
-			start += len("<attached-images>")
-			if end := strings.Index(expandedInput[start:], "</attached-images>"); end >= 0 {
-				desc = expandedInput[start : start+end]
-			}
-		}
-
-		// 收集所有 [Image #N] 占位符
-		re := regexp.MustCompile(`\[Image #\d+\]`)
-		matches := re.FindAllString(userInput, -1)
-		if len(matches) > 0 {
-			images := strings.Join(matches, " ")
-
-			// 记录 image_describe 事件
-			a.emitJSON(map[string]interface{}{
-				"type":    "image_describe",
-				"images":  images,
-				"content": desc,
-			})
-
-			// 推送 IMAGE_DESCRIBE 到 display
-			a.EmitDisplay(Event{Type: EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
-		}
-
-		userInput = expandedInput
-	}
-
-	// 添加用户消息；notify turn 的消息已由 drainSubAgentResults 注入
-	if turnKind != "notify" {
-		_ = a.store.AddUserMessage(userInput)
-	}
-
-	// 用户输入时递增 turn（与 bash 版一致：store_stats_update current_turn_count=+1）
-	_ = a.store.IncrementTurn()
-	// 对齐 bash版: store_stats_update 末尾调 display_term_title
-	a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, ""))
-
-	// 中断处理：用 context.WithCancel 包装，Ctrl+C 同时取消 context（取消 HTTP 请求）
+	// 中断处理：在整个 RunLoop 期间共享一个 cancellable context
+	// Ctrl+C 同时取消 context（取消 HTTP 请求和工具执行）
 	var interrupted atomic.Bool
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -806,216 +754,297 @@ func (a *Agent) RunLoop(ctx context.Context, userInput, turnKind string) error {
 		}
 	}()
 
-	for turn := 0; turn < a.cfg.MaxTurns; turn++ {
-		// Drain SubAgent results that arrived during previous LLM call（对齐 bash agent_drain_notify_buf）
-		a.drainSubAgentResults(ctx)
+	userInput := initialUserInput
+	turnKind := initialTurnKind
 
-		// Compact
-		if compacted, _ := a.CompactContext(ctx, "auto"); compacted {
-			a.EmitDisplay(Event{Type: EventContextUpdate, Fields: []string{"CONTEXT_UPDATE", "compact", "auto"}})
+	// 外层循环：每个 phase（user_input / sub_agent_result / async_task_result / user_notify）获得独立的 max_turns 预算
+	// 对齐 Bash 版：agent_drain_notify_buf 在 turn loop 内消费（共享预算），
+	// NOTIFY_PENDING 触发的 agent_run_loop "" notify 是嵌套调用（独立预算）
+	for {
+		// === Phase setup ===
+
+		// notify turn 只负责消费 pending sub_result；stale wakeup 直接忽略
+		if turnKind == "notify" {
+			if !a.drainSubAgentResults(ctx) {
+				return nil
+			}
+		} else if turnKind == "user_input" {
+			// 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
+			a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
 		}
 
-		// 获取 messages
-		messages, err := a.store.GetMessages()
-		if err != nil {
-			return fmt.Errorf("get messages: %w", err)
-		}
-		systemPrompt := a.BuildPrompt()
+		// 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+		if turnKind == "user_input" && strings.Contains(userInput, "[Image #") {
+			expandedInput := a.expandImagePlaceholders(userInput)
 
-		// LLM 调用
-		ch, err := a.llm.Call(ctx, messages, systemPrompt, a.toolDefs, a.cfg.MaxTokens, a.cfg.Thinking)
-		if err != nil {
-			a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", err.Error()}})
-			return err
-		}
-
-		var text, thinking string
-		var toolCalls []ToolCallInfo
-		var toolResults []ToolResultInfo
-		var stopReason string
-		var usage Usage
-		var loopErr string
-
-		for ev := range ch {
-			if interrupted.Load() {
-				stopReason = "interrupted"
-				break
+			// 提取 <attached-images> 中的描述内容
+			desc := ""
+			if start := strings.Index(expandedInput, "<attached-images>"); start >= 0 {
+				start += len("<attached-images>")
+				if end := strings.Index(expandedInput[start:], "</attached-images>"); end >= 0 {
+					desc = expandedInput[start : start+end]
+				}
 			}
 
-			switch ev.Type {
-			case EventText:
-				a.EmitDisplay(ev)
-				if len(ev.Fields) > 1 {
-					text += ev.Fields[1]
-					a.emitJSON(map[string]interface{}{"type": "text", "content": ev.Fields[1]})
-				}
-			case EventThinking:
-				a.EmitDisplay(ev)
-				if len(ev.Fields) > 1 {
-					thinking += ev.Fields[1]
-					a.emitJSON(map[string]interface{}{"type": "thinking", "content": ev.Fields[1]})
-				}
-			case EventToolCall:
-				if len(ev.Fields) >= 4 {
-					tc := ToolCallInfo{
-						Name:  ev.Fields[1],
-						ID:    ev.Fields[2],
-						Input: ev.Fields[3],
-					}
-					toolCalls = append(toolCalls, tc)
+			// 收集所有 [Image #N] 占位符
+			re := regexp.MustCompile(`\[Image #\d+\]`)
+			matches := re.FindAllString(userInput, -1)
+			if len(matches) > 0 {
+				images := strings.Join(matches, " ")
 
-					// 生成 CallSummary 并显示（替代 transport 的原始事件）
-					params := ExtractToolParams(tc.Name, json.RawMessage(tc.Input))
-					callSummary := a.tools.CallSummary(tc.Name, params)
-					a.EmitDisplay(Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", tc.Name, tc.ID, tc.Input, callSummary}})
+				// 记录 image_describe 事件
+				a.emitJSON(map[string]interface{}{
+					"type":    "image_describe",
+					"images":  images,
+					"content": desc,
+				})
 
-					// 执行工具
-					output, toolErr := a.tools.Dispatch(ctx, tc.Name, params)
-					if toolErr != nil {
-						output = "Error: " + toolErr.Error()
-					}
-					output = FormatToolResult(output)
-					convOutput := output
-
-					switch tc.Name {
-					case "Read", "Write":
-						pathParam := params["path"]
-						fs := FileSummary(tc.Name, pathParam, params["offset"], params["limit"])
-						output = fs + "\n" + output
-					case "Edit":
-						convOutput = firstLine(output)
-					}
-
-					// 显示结果
-					a.EmitDisplay(Event{Type: EventToolResult, Fields: []string{"TOOL_RESULT", tc.ID, tc.Name, output}})
-
-					// stream-json + events.jsonl: 分别写 tool_call 和 tool_result（与 bash 版一致）
-					a.emitJSON(map[string]interface{}{
-						"type":  "tool_call",
-						"name":  tc.Name,
-						"id":    tc.ID,
-						"input": json.RawMessage(tc.Input),
-					})
-					a.emitJSON(map[string]interface{}{
-						"type":        "tool_result",
-						"tool_use_id": tc.ID,
-						"name":        tc.Name,
-						"content":     output,
-					})
-
-					toolResults = append(toolResults, ToolResultInfo{ToolID: tc.ID, ToolName: tc.Name, Output: output, ConvOutput: convOutput})
-				}
-			case EventUsage:
-				if u, ok := ev.Payload.(Usage); ok {
-					usage = u
-					a.emitJSON(map[string]interface{}{
-						"type":                        "usage",
-						"input_tokens":                u.InputTokens,
-						"output_tokens":               u.OutputTokens,
-						"cache_read_input_tokens":     u.CacheRead,
-						"cache_creation_input_tokens": u.CacheWrite,
-						"kind":                        "agent",
-					})
-				}
-			case EventStop:
-				a.EmitDisplay(ev)
-				if len(ev.Fields) > 1 {
-					stopReason = ev.Fields[1]
-				}
-				a.emitJSON(map[string]interface{}{"type": "stop", "reason": stopReason})
-			case EventError:
-				a.EmitDisplay(ev)
-				if len(ev.Fields) > 1 {
-					loopErr = ev.Fields[1]
-				}
-				stopReason = "error"
-				a.emitJSON(map[string]interface{}{"type": "error", "message": loopErr})
-				// 与 bash 版对齐：ERROR 立即 break 出事件循环
-				break
-			case EventRetry:
-				// 对齐 Rust: 清空当前累积状态
-				text = ""
-				thinking = ""
-				toolCalls = nil
-				toolResults = nil
-				usage = Usage{}
-				a.emitJSON(map[string]interface{}{"type": "retry"})
-			default:
-				a.EmitDisplay(ev)
+				// 推送 IMAGE_DESCRIBE 到 display
+				a.EmitDisplay(Event{Type: EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
 			}
+
+			userInput = expandedInput
 		}
 
-		// 记录 usage
-		ctxTokens := a.RecordUsage(usage, "agent", a.cfg.Model)
-		_ = ctxTokens
+		// 添加用户消息；notify turn 的消息已由 drainSubAgentResults 注入
+		if turnKind != "notify" {
+			_ = a.store.AddUserMessage(userInput)
+		}
 
-		// 更新终端标题（与 bash 版 store_stats_update 后调 display_term_title 一致）
+		// 用户输入时递增 turn（与 bash 版一致：store_stats_update current_turn_count=+1）
+		_ = a.store.IncrementTurn()
+		// 对齐 bash版: store_stats_update 末尾调 display_term_title
 		a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, ""))
 
+		// === Turn loop（独立 max_turns 预算）===
+		phaseFatalErr := error(nil)
+
+	TurnLoop:
+		for turn := 0; turn < a.cfg.MaxTurns; turn++ {
+			// Drain SubAgent results that arrived during previous LLM call（对齐 bash agent_drain_notify_buf）
+			a.drainSubAgentResults(ctx)
+
+			// Compact
+			if compacted, _ := a.CompactContext(ctx, "auto"); compacted {
+				a.EmitDisplay(Event{Type: EventContextUpdate, Fields: []string{"CONTEXT_UPDATE", "compact", "auto"}})
+			}
+
+			// 获取 messages
+			messages, err := a.store.GetMessages()
+			if err != nil {
+				cancel()
+				close(sigDone)
+				signal.Stop(sigCh)
+				a.runMu.Lock()
+				if a.currentInterrupt == &interrupted {
+					a.currentInterrupt = nil
+					a.currentCancel = nil
+				}
+				a.runMu.Unlock()
+				return fmt.Errorf("get messages: %w", err)
+			}
+			systemPrompt := a.BuildPrompt()
+
+			// LLM 调用
+			ch, err := a.llm.Call(ctx, messages, systemPrompt, a.toolDefs, a.cfg.MaxTokens, a.cfg.Thinking)
+			if err != nil {
+				a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", err.Error()}})
+				break
+			}
+
+			var text, thinking string
+			var toolCalls []ToolCallInfo
+			var toolResults []ToolResultInfo
+			var stopReason string
+			var usage Usage
+			var loopErr string
+
+			for ev := range ch {
+				if interrupted.Load() {
+					stopReason = "interrupted"
+					break
+				}
+
+				switch ev.Type {
+				case EventText:
+					a.EmitDisplay(ev)
+					if len(ev.Fields) > 1 {
+						text += ev.Fields[1]
+						a.emitJSON(map[string]interface{}{"type": "text", "content": ev.Fields[1]})
+					}
+				case EventThinking:
+					a.EmitDisplay(ev)
+					if len(ev.Fields) > 1 {
+						thinking += ev.Fields[1]
+						a.emitJSON(map[string]interface{}{"type": "thinking", "content": ev.Fields[1]})
+					}
+				case EventToolCall:
+					if len(ev.Fields) >= 4 {
+						tc := ToolCallInfo{
+							Name:  ev.Fields[1],
+							ID:    ev.Fields[2],
+							Input: ev.Fields[3],
+						}
+						toolCalls = append(toolCalls, tc)
+
+						// 生成 CallSummary 并显示（替代 transport 的原始事件）
+						params := ExtractToolParams(tc.Name, json.RawMessage(tc.Input))
+						callSummary := a.tools.CallSummary(tc.Name, params)
+						a.EmitDisplay(Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", tc.Name, tc.ID, tc.Input, callSummary}})
+
+						// 执行工具
+						output, toolErr := a.tools.Dispatch(ctx, tc.Name, params)
+						if toolErr != nil {
+							output = "Error: " + toolErr.Error()
+						}
+						output = FormatToolResult(output)
+						convOutput := output
+
+						switch tc.Name {
+						case "Read", "Write":
+							pathParam := params["path"]
+							fs := FileSummary(tc.Name, pathParam, params["offset"], params["limit"])
+							output = fs + "\n" + output
+						case "Edit":
+							convOutput = firstLine(output)
+						}
+
+						// 显示结果
+						a.EmitDisplay(Event{Type: EventToolResult, Fields: []string{"TOOL_RESULT", tc.ID, tc.Name, output}})
+
+						// stream-json + events.jsonl: 分别写 tool_call 和 tool_result（与 bash 版一致）
+						a.emitJSON(map[string]interface{}{
+							"type":  "tool_call",
+							"name":  tc.Name,
+							"id":    tc.ID,
+							"input": json.RawMessage(tc.Input),
+						})
+						a.emitJSON(map[string]interface{}{
+							"type":        "tool_result",
+							"tool_use_id": tc.ID,
+							"name":        tc.Name,
+							"content":     output,
+						})
+
+						toolResults = append(toolResults, ToolResultInfo{ToolID: tc.ID, ToolName: tc.Name, Output: output, ConvOutput: convOutput})
+					}
+				case EventUsage:
+					if u, ok := ev.Payload.(Usage); ok {
+						usage = u
+						a.emitJSON(map[string]interface{}{
+							"type":                        "usage",
+							"input_tokens":                u.InputTokens,
+							"output_tokens":               u.OutputTokens,
+							"cache_read_input_tokens":     u.CacheRead,
+							"cache_creation_input_tokens": u.CacheWrite,
+							"kind":                        "agent",
+						})
+					}
+				case EventStop:
+					a.EmitDisplay(ev)
+					if len(ev.Fields) > 1 {
+						stopReason = ev.Fields[1]
+					}
+					a.emitJSON(map[string]interface{}{"type": "stop", "reason": stopReason})
+				case EventError:
+					a.EmitDisplay(ev)
+					if len(ev.Fields) > 1 {
+						loopErr = ev.Fields[1]
+					}
+					stopReason = "error"
+					a.emitJSON(map[string]interface{}{"type": "error", "message": loopErr})
+					// 与 bash 版对齐：ERROR 立即 break 出事件循环
+					break
+				case EventRetry:
+					// 对齐 Rust: 清空当前累积状态
+					text = ""
+					thinking = ""
+					toolCalls = nil
+					toolResults = nil
+					usage = Usage{}
+					a.emitJSON(map[string]interface{}{"type": "retry"})
+				default:
+					a.EmitDisplay(ev)
+				}
+			}
+
+			// 记录 usage
+			ctxTokens := a.RecordUsage(usage, "agent", a.cfg.Model)
+			_ = ctxTokens
+
+			// 更新终端标题（与 bash 版 store_stats_update 后调 display_term_title 一致）
+			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, ""))
+
+			if interrupted.Load() {
+				a.EmitDisplay(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
+				a.emitJSON(map[string]interface{}{"type": "stop", "reason": "interrupted"})
+				break
+			}
+
+			// 致命停止原因
+			switch stopReason {
+			case "error", "max_tokens", "length":
+				if stopReason != "error" {
+					a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", "Response truncated (max_tokens reached)"}})
+				}
+				if loopErr != "" {
+					phaseFatalErr = fmt.Errorf("LLM error: %s", loopErr)
+				} else {
+					phaseFatalErr = fmt.Errorf("stopped: %s", stopReason)
+				}
+				break TurnLoop
+			}
+
+			// 保存 assistant 消息
+			_ = a.store.AddAssistantMessage(text, thinking, toolCalls)
+			if len(toolResults) > 0 {
+				_ = a.store.AddToolResults(toolResults)
+			}
+
+			// tool_use → 继续循环
+			if stopReason == "tool_use" || stopReason == "tool_calls" {
+				continue
+			}
+
+			// end_turn 后先消费已到达的 notify/user inject；有内容则继续下一轮（共享 turn 预算）
+			if a.drainSubAgentResults(ctx) {
+				continue
+			}
+
+			// end_turn，无 drained 结果 → 退出 turn loop
+			break
+		}
+
 		if interrupted.Load() {
-			a.EmitDisplay(Event{Type: EventStop, Fields: []string{"STOP", "interrupted"}})
-			a.emitJSON(map[string]interface{}{"type": "stop", "reason": "interrupted"})
 			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
 			return nil
 		}
 
-		// 致命停止原因
-		switch stopReason {
-		case "error", "max_tokens", "length":
-			if stopReason != "error" {
-				a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", "Response truncated (max_tokens reached)"}})
-			}
-			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
-			// error 退出后仍需消费 pending SubAgent 结果（对齐 C/Rust main_loop 的 active_sub_count 等待）
-			a.subMu.Lock()
-			hasPending := a.pendingTasks > 0
-			a.subMu.Unlock()
-			if hasPending {
-				select {
-				case r := <-a.subResultCh:
-					a.handleSubAgentResult(r)
-					continue
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			if loopErr != "" {
-				return fmt.Errorf("LLM error: %s", loopErr)
-			}
-			return fmt.Errorf("stopped: %s", stopReason)
-		}
-
-		// 保存 assistant 消息
-		_ = a.store.AddAssistantMessage(text, thinking, toolCalls)
-		if len(toolResults) > 0 {
-			_ = a.store.AddToolResults(toolResults)
-		}
-
-		// tool_use → 继续循环
-		if stopReason == "tool_use" || stopReason == "tool_calls" {
-			continue
-		}
-
-		// end_turn 后先消费已到达的 notify/user inject；有内容则继续下一轮
-		if a.drainSubAgentResults(ctx) {
-			continue
-		}
-
-		// end_turn 但有等待中的子 agent → 等待结果并继续
+		// === Post-phase：检查是否有等待中的子 agent 结果 ===
 		a.subMu.Lock()
 		hasPending := a.pendingTasks > 0
 		a.subMu.Unlock()
+
 		if hasPending {
 			select {
 			case r := <-a.subResultCh:
-				a.handleSubAgentResult(r)
-				continue
+				// 处理结果（events + stats + display），获取 context 和 turnKind
+				context, tk := a.handleSubAgentResult(r)
+				// 下一轮 phase：context 作为 userInput，由 phase setup 写入 conversation
+				userInput = context
+				turnKind = tk
+				continue // 外层循环 → 新的 turn 预算
 			case <-ctx.Done():
+				a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
 				return ctx.Err()
 			}
 		}
 
-		// 其他 stop reason → 退出
+		// 无 pending 子 agent → 退出
+		if phaseFatalErr != nil {
+			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
+			return phaseFatalErr
+		}
 		break
 	}
 
@@ -1031,7 +1060,10 @@ func (a *Agent) drainSubAgentResults(ctx context.Context) bool {
 	for {
 		select {
 		case r := <-a.subResultCh:
-			a.handleSubAgentResult(r)
+			context, _ := a.handleSubAgentResult(r)
+			if context != "" {
+				_ = a.store.AddUserMessage(context)
+			}
 			drained = true
 		case <-ctx.Done():
 			return drained
@@ -1141,18 +1173,11 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 		}
 	}()
 
-	homeDir := os.Getenv("BASH_AGENT_HOME")
-	if homeDir == "" {
-		homeDir = os.Getenv("HOME")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		result.Text = err.Error()
-		return result
-	}
+	homeDir := a.store.GetHomeDir()
+	cwd := a.store.GetCwd()
 
 	childCfg := a.cfg
-	childCfg.MaxTurns = 10
+	childCfg.MaxTurns = a.cfg.MaxTurns
 	// 子 agent 必须静默：不输出 stream-json，不写终端正文，不抢 title。
 	childCfg.OutputFormat = "human"
 	childCfg.Interactive = false
@@ -1198,16 +1223,16 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 }
 
 // handleSubAgentResult 处理子 agent 结果
-func (a *Agent) handleSubAgentResult(r SubAgentResult) {
+// 返回 (context, turnKind)：context 为注入 conversation 的文本，turnKind 为下一轮 RunLoop 的类型
+// 不写入 conversation — 由调用方（drainSubAgentResults 或 RunLoop 外层循环）负责写入
+func (a *Agent) handleSubAgentResult(r SubAgentResult) (string, string) {
 	// user_notify 分支（Ctrl+O 中间介入）
 	if r.Kind == "user_notify" {
-		a.handleUserNotify(r.Text)
-		return
+		return a.handleUserNotify(r.Text), "user_notify"
 	}
 	// async_task 分支
 	if r.Kind == "async_task" {
-		a.handleAsyncTaskResult(r)
-		return
+		return a.handleAsyncTaskResult(r), "async_task_result"
 	}
 	// 记录 usage 事件（带 kind=sub_agent, sub_session_id）
 	usageEvent := map[string]interface{}{
@@ -1268,13 +1293,11 @@ func (a *Agent) handleSubAgentResult(r SubAgentResult) {
 	injectMsg := fmt.Sprintf("[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
 		r.SessionID, r.Status, r.InputTokens, r.OutputTokens, r.Thinking, r.Text)
 
-	// 注入为用户消息（不记录 user_input 事件，与 bash 版 agent_loop turn_kind=sub_agent_result 一致）
-	_ = a.store.AddUserMessage(injectMsg)
-
+	return injectMsg, "sub_agent_result"
 }
 
-// handleAsyncTaskResult 处理异步 bash 任务结果
-func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
+// handleAsyncTaskResult 处理异步 bash 任务结果，返回注入 conversation 的文本
+func (a *Agent) handleAsyncTaskResult(r SubAgentResult) string {
 	// 1. 记录 async_task_result 事件
 	a.emitJSON(map[string]interface{}{
 		"type":      "async_task_result",
@@ -1303,14 +1326,14 @@ func (a *Agent) handleAsyncTaskResult(r SubAgentResult) {
 		},
 	})
 
-	// 5. 注入 conversation
+	// 5. 构造注入消息
 	injectMsg := fmt.Sprintf("[bg-bash %s] exit_code=%d\nOutput: %s",
 		r.TaskID, r.ExitCode, r.Output)
-	_ = a.store.AddUserMessage(injectMsg)
+	return injectMsg
 }
 
-// handleUserNotify 处理用户 Ctrl+O 中间介入的输入
-func (a *Agent) handleUserNotify(text string) {
+// handleUserNotify 处理用户 Ctrl+O 中间介入的输入，返回注入 conversation 的文本
+func (a *Agent) handleUserNotify(text string) string {
 	// 显示（统一走 Display 接口）
 	a.EmitDisplay(Event{
 		Type:   EventUserNotify,
@@ -1318,7 +1341,7 @@ func (a *Agent) handleUserNotify(text string) {
 	})
 
 	// Ctrl+O 是用户自然输入；conversation 中保存原文，显示层才加 [user inject]
-	_ = a.store.AddUserMessage(text)
+	return text
 }
 
 // EnqueueUserNotify 将用户 Ctrl+O 输入写入 notify/sub_result 通道。

@@ -136,16 +136,16 @@ type ToolResultInfo struct {
 
 // Stats 会话统计数据
 type Stats struct {
-	TurnCount        int     `json:"current_turn_count"`          // user turn count
-	TotalRequests    int     `json:"agent_request_count"`         // total LLM requests
-	TotalCompact     int     `json:"compact_request_count"`       // number of compactions
-	SubAgentRequests int     `json:"sub_agent_request_count"`     // sub-agent requests
-	InputTokens      int     `json:"total_input_tokens"`          // cumulative input
-	OutputTokens     int     `json:"total_output_tokens"`         // cumulative output
-	CacheRead        int     `json:"total_cache_read_tokens"`     // cumulative cache read
-	CacheWrite       int     `json:"total_cache_creation_tokens"` // cumulative cache write
-	ContextTokens    int     `json:"current_context_tokens"`      // current context size
-	LastUpdated      string  `json:"last_updated"`                // ISO 8601 timestamp
+	TurnCount        int    `json:"current_turn_count"`          // user turn count
+	TotalRequests    int    `json:"agent_request_count"`         // total LLM requests
+	TotalCompact     int    `json:"compact_request_count"`       // number of compactions
+	SubAgentRequests int    `json:"sub_agent_request_count"`     // sub-agent requests
+	InputTokens      int    `json:"total_input_tokens"`          // cumulative input
+	OutputTokens     int    `json:"total_output_tokens"`         // cumulative output
+	CacheRead        int    `json:"total_cache_read_tokens"`     // cumulative cache read
+	CacheWrite       int    `json:"total_cache_creation_tokens"` // cumulative cache write
+	ContextTokens    int    `json:"current_context_tokens"`      // current context size
+	LastUpdated      string `json:"last_updated"`                // ISO 8601 timestamp
 }
 
 // SessionRow session 列表行
@@ -163,6 +163,8 @@ type SessionStore interface {
 	Init(sessionID string) error
 	Fork(parentDir, childDir string) error
 	GetDir() string
+	GetHomeDir() string
+	GetCwd() string
 	ImageDir() string
 	GetLatestDir() (string, error)
 	ResolveContinue() (string, error)

@@ -1969,7 +1969,7 @@ static void *sub_agent_thread_fn(void *arg) {
     else sub->err = stderr;
     sub->output_format = 0;
     sub->verbose = 0;
-    sub->max_turns = 10;
+    sub->max_turns = args->parent->max_turns;
     sub->max_tokens = args->parent->max_tokens;
     sub->max_context_tokens = args->parent->max_context_tokens;
     sub->tool_timeout_secs = args->parent->tool_timeout_secs;

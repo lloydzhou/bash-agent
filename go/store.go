@@ -132,6 +132,9 @@ func NewFileStore(home, cwd string) *FileStore {
 	return &FileStore{home: home, cwd: cwd}
 }
 
+func (s *FileStore) GetHomeDir() string { return s.home }
+func (s *FileStore) GetCwd() string     { return s.cwd }
+
 // ─── Session lifecycle ───
 
 func (s *FileStore) Init(sessionID string) error {
