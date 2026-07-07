@@ -108,14 +108,15 @@ util_die() {
 }
 
 util_parse_size() {
-    local raw="${1:-}" lower num
-    lower=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
-    case "$lower" in
-        *k) num="${lower%k}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 )) ;;
-        *m) num="${lower%m}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 * 1000 )) ;;
-        *g) num="${lower%g}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 * 1000 * 1000 )) ;;
-        *)  [[ "$lower" =~ ^[0-9]+$ ]] || return 1; printf '%s' "$lower" ;;
+    local raw="${1:-}" num mult=1
+    case "$raw" in
+        *[kK]) num="${raw%?}"; mult=1000 ;;
+        *[mM]) num="${raw%?}"; mult=1000000 ;;
+        *[gG]) num="${raw%?}"; mult=1000000000 ;;
+        *)     num="$raw" ;;
     esac
+    [[ "$num" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' $(( num * mult ))
 }
 
 util_json_escape() {
@@ -546,8 +547,6 @@ store_plan_confirm() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && {
 store_plan_clear() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"; }
 
 store_plan_read() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '%s' "$(<"$PLAN_FILE")"; }
-
-store_plan_draft_read() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && printf '%s' "$(<"$PLAN_DRAFT_FILE")"; }
 
 store_plan_draft_has() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; }
 
