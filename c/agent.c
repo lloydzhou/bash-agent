@@ -2410,7 +2410,7 @@ char *agent_build_prompt(Agent *agent) {
 
     /* 3. rules */
     {
-        const char *rules = "- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n"
+        const char *rules = "- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.\n"
                             "- Prefer safe, exact edits.\n"
                             "- Report failures clearly.";
         prompt_append_section(&buf, "rules", rules, NULL);
@@ -3213,8 +3213,9 @@ void agent_update_title_status(Agent *agent, const char *status) {
     format_int_commas(ao, ao_s, sizeof(ao_s));
     format_int_commas(ct, ct_s, sizeof(ct_s));
 
-    const char *prefix = (status && strcmp(status, "idle") == 0) ? "" : "\xe2\x8f\xb3 ";
-    int progress = (status && strcmp(status, "idle") == 0) ? 0 : 3;
+    int idle = (status && strcmp(status, "idle") == 0 && agent->active_task_count <= 0);
+    const char *prefix = idle ? "" : "\xe2\x8f\xb3 ";
+    int progress = idle ? 0 : 3;
     fprintf(stderr, "\x1b]0;%s%s T:%s R:%s I:%s(%d%%) O:%s C:%s\x07\x1b]9;4;%d\x07",
             prefix, agent->model, tc_s, ar_s, total_i_s, pct, ao_s, ct_s, progress);
     fflush(stderr);

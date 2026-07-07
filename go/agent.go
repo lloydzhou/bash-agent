@@ -358,7 +358,7 @@ func (a *Agent) BuildPrompt() string {
 	appendSection("environment", env, "")
 
 	// rules
-	rules := "- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n" +
+	rules := "- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.\n" +
 		"- Prefer safe, exact edits.\n- Report failures clearly."
 	appendSection("rules", rules, "")
 
