@@ -8,6 +8,30 @@
 
 ---
 
+## [4.2.15] - 2026-07-07
+
+> **终端标题 / iTerm2 loading 一致性修复**：修复主 agent 等待 SubAgent 或后台 Bash 任务结果时，`idle` 状态过早清除 loading 的问题；统一 Bash / C / Go / Rust 四版本终端标题格式与 cache 百分比显示；新增 async Bash e2e 覆盖完整 title + progress 控制序列。同时精简 Bash 辅助函数并新增 live session monitor 脚本。
+
+### Added
+
+- 新增 `scripts/watch.sh`：实时观察 session 目录、conversation/events/stats 等运行状态，便于调试长会话和异步任务。
+- 新增 async Bash e2e 断言：检查完整终端标题格式（`⏳ model T/R/I/O/C`）和 iTerm2 progress loading 控制序列。
+
+### Fixed
+
+- **Bash / Rust**：当仍有活跃 SubAgent 或后台 Bash 任务时，run loop 结束进入 `idle` 不再清除 iTerm2 loading，只有 `idle && active_task_count == 0` 才清空 progress。
+- **C**：非交互 e2e 模式也输出终端 title/progress，避免与 Bash 基准不一致。
+- **C / Go / Rust**：终端标题 cache 百分比对齐 Bash：`input + cache_read == 0` 显示 `—`，有输入时显示四舍五入百分比（包括 `0%`）。
+- 四版本统一终端标题可见格式：`⏳ model T:<turn> R:<request> I:<input+cache>(<cache_pct>) O:<output> C:<context>`。
+
+### Changed
+
+- Bash 删除未使用的 `store_plan_draft_read()`。
+- Bash 删除单调用点的 `util_msg_to_stream()`，在 `agent_loop()` 内联 stream event 转换逻辑。
+- Bash 优化 `util_parse_size()`：改为纯 shell suffix 解析，减少子进程和重复校验，保持原有 `k/K`、`m/M`、`g/G` 语义。
+
+---
+
 ## [4.2.14] - 2026-07-04
 
 > **Ctrl+O 用户输入注入**：agent 运行中或空闲时，用户按 Ctrl+O 可将当前编辑行内容作为追加指令注入 conversation，不中断当前 LLM turn。输入通过 notify/sub_result channel 在安全边界（LLM call 前 / end_turn 后）统一 flush，复用既有 SubAgent/bg-bash 的 pending 通道。删除了 Bash 版的 `AGENT_RUNNING_FLAG` 文件标记，改为 notify reader 统一发送 wakeup + main loop 过滤 stale wakeup。
@@ -1309,7 +1333,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.14...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.15...HEAD
+[4.2.15]: https://github.com/lloydzhou/bash-agent/compare/v4.2.14...v4.2.15
 [4.2.14]: https://github.com/lloydzhou/bash-agent/compare/v4.2.13...v4.2.14
 [4.2.13]: https://github.com/lloydzhou/bash-agent/compare/v4.2.12...v4.2.13
 [4.2.12]: https://github.com/lloydzhou/bash-agent/compare/v4.2.11...v4.2.12
