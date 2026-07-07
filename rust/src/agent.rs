@@ -818,8 +818,8 @@ impl Agent {
                 sub_result_tx: Arc::new(sub_rtx),
                 active_task_count: 0,
                 sub_agent_request_count: 0,
-                stdout: RefCell::new(Box::new(io::empty())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
-                stderr: RefCell::new(Box::new(io::empty())),  // 子 agent 错误输出全部丢弃
+                stdout: RefCell::new(Box::new(io::sink())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
+                stderr: RefCell::new(Box::new(io::sink())),  // 子 agent 错误输出全部丢弃
                 display_tx: None,
                 display_handle: None,
                 cancel_read_fd: -1,
