@@ -1203,7 +1203,15 @@ display_message() {
     esac
 }
 
-display_term_title() { store_stats_format_title "$MODEL" "${1:-}"; }
+display_term_title() {
+    local status="${1:-}"
+    if [[ "$status" == "idle" && -n "${ACTIVE_TASK_FILE:-}" ]]; then
+        local _cnt
+        _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+        (( _cnt > 0 )) && status=""
+    fi
+    store_stats_format_title "$MODEL" "$status"
+}
 
 # 子进程渲染：从管道读取 RESP 消息，渲染到 stdout（终端）
 display_stream() { while util_read_msg; do display_message; done; }
