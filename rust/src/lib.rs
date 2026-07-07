@@ -1207,7 +1207,7 @@ pub mod prompt {
                 shell
             );
             sections.push(wrap_section("environment", &environment, None));
-            let rules_str = "- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.";
+            let rules_str = "- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.";
             sections.push(wrap_section("rules", &rules_str, None));
             sections.push(wrap_section(
                 "using-your-tools",

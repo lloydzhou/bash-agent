@@ -545,6 +545,11 @@ test_agent_async_bash() {
     else
         red "Agent async bash"; echo "  Output: $output"; ((FAIL++)) || true
     fi
+    if printf '%s' "$output" | grep -q $'\033]0;⏳ test T:[0-9,]* R:[0-9,]* I:[0-9,]*(0%) O:[0-9,]* C:[0-9,]*\a\033]9;4;3\a'; then
+        green "Agent async bash title keeps loading while pending"; ((PASS++)) || true
+    else
+        red "Agent async bash title keeps loading while pending"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
 }
 
 test_agent_tool_result_persist_order() {

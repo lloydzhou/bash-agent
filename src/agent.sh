@@ -108,14 +108,15 @@ util_die() {
 }
 
 util_parse_size() {
-    local raw="${1:-}" lower num
-    lower=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')
-    case "$lower" in
-        *k) num="${lower%k}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 )) ;;
-        *m) num="${lower%m}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 * 1000 )) ;;
-        *g) num="${lower%g}";  [[ "$num" =~ ^[0-9]+$ ]] || return 1; printf '%s' $(( num * 1000 * 1000 * 1000 )) ;;
-        *)  [[ "$lower" =~ ^[0-9]+$ ]] || return 1; printf '%s' "$lower" ;;
+    local raw="${1:-}" num mult=1
+    case "$raw" in
+        *[kK]) num="${raw%?}"; mult=1000 ;;
+        *[mM]) num="${raw%?}"; mult=1000000 ;;
+        *[gG]) num="${raw%?}"; mult=1000000000 ;;
+        *)     num="$raw" ;;
     esac
+    [[ "$num" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' $(( num * mult ))
 }
 
 util_json_escape() {
@@ -133,38 +134,6 @@ util_append_section() {
         wrapped=$(printf '<%s>\n%s\n</%s>' "$tag" "$content" "$tag")
     fi
     printf -v "$__outvar" '%s%s\n' "${!__outvar}" "$wrapped"
-}
-
-util_msg_to_stream() {
-    local _type="${REPLY_MESSAGE[0]}"
-    case "$_type" in
-        TEXT)        printf '{"type":"text","content":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        THINKING)    printf '{"type":"thinking","content":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        TOOL_CALL)
-            printf '{"type":"tool_call","name":"%s","id":"%s","input":%s}' \
-                "$(util_json_escape "${REPLY_MESSAGE[1]}")" \
-                "$(util_json_escape "${REPLY_MESSAGE[2]}")" \
-                "${REPLY_MESSAGE[3]}"
-            ;;
-        TOOL_RESULT)
-            printf '{"type":"tool_result","tool_use_id":"%s","name":"%s","content":"%s"}' \
-                "$(util_json_escape "${REPLY_MESSAGE[1]}")" \
-                "$(util_json_escape "${REPLY_MESSAGE[2]}")" \
-                "$(util_json_escape "${REPLY_MESSAGE[3]}")"
-            ;;
-        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"agent"}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
-        AGENT_RESULT) printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}' \
-            "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" \
-            "$(util_json_escape "${REPLY_MESSAGE[5]}")" "$(util_json_escape "${REPLY_MESSAGE[6]}")" ;;
-        ASYNC_TASK_RESULT) printf '{"type":"async_task_result","task_id":"%s","exit_code":%s,"output":"%s"}' \
-            "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "$(util_json_escape "${REPLY_MESSAGE[3]}")" ;;
-        STOP)        printf '{"type":"stop","reason":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        CONTEXT_UPDATE) printf '{"type":"context_update","kind":"%s","trigger":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" "$(util_json_escape "${REPLY_MESSAGE[2]}")" ;;
-        ERROR)       printf '{"type":"error","message":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        RETRY)       printf '{"type":"retry"}' ;;
-        *)           return 1 ;;
-    esac
-    return 0
 }
 
 util_read_optional() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
@@ -578,8 +547,6 @@ store_plan_confirm() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && {
 store_plan_clear() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '' > "$PLAN_FILE"; }
 
 store_plan_read() { [[ -n "$PLAN_FILE" && -s "$PLAN_FILE" ]] && printf '%s' "$(<"$PLAN_FILE")"; }
-
-store_plan_draft_read() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]] && printf '%s' "$(<"$PLAN_DRAFT_FILE")"; }
 
 store_plan_draft_has() { [[ -n "$PLAN_DRAFT_FILE" && -s "$PLAN_DRAFT_FILE" ]]; }
 
@@ -1203,7 +1170,11 @@ display_message() {
     esac
 }
 
-display_term_title() { store_stats_format_title "$MODEL" "${1:-}"; }
+display_term_title() {
+    local status="${1:-}" active=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+    [[ "$status" == "idle" ]] && (( active > 0 )) && status=""
+    store_stats_format_title "$MODEL" "$status"
+}
 
 # 子进程渲染：从管道读取 RESP 消息，渲染到 stdout（终端）
 display_stream() { while util_read_msg; do display_message; done; }
@@ -1251,7 +1222,7 @@ agent_build_prompt() {
     locale="${locale%%.*}"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     [[ "$locale" == zh* ]] && agent_identity='你是 bash-agent，一个在终端中运行的轻量级编码智能体。'
-    core_rules=$'- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.'
+    core_rules=$'- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.\n- Prefer safe, exact edits.\n- Report failures clearly.'
     output_language_reaffirm="MUST use \"${locale}\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
     [[ "$locale" == zh* ]] && output_language_reaffirm='再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！'
     environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
@@ -1496,7 +1467,7 @@ agent_loop_stream() {
 }
 
 agent_loop() {
-    local user_input="$1" turn_kind="${2:-user_input}" _se="" _type="" _reason="" had_error=false
+    local user_input="$1" turn_kind="${2:-user_input}" _type="" _reason="" had_error=false
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     # 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
@@ -1521,7 +1492,17 @@ agent_loop() {
     while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
-        _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
+        case "$_type" in
+            TEXT) store_event_append "{\"type\":\"text\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            THINKING) store_event_append "{\"type\":\"thinking\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            TOOL_CALL) store_event_append "{\"type\":\"tool_call\",\"name\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"id\":\"$(util_json_escape "${REPLY_MESSAGE[2]}")\",\"input\":${REPLY_MESSAGE[3]}}" ;;
+            TOOL_RESULT) store_event_append "{\"type\":\"tool_result\",\"tool_use_id\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"name\":\"$(util_json_escape "${REPLY_MESSAGE[2]}")\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[3]}")\"}" ;;
+            USAGE) store_event_append "{\"type\":\"usage\",\"input_tokens\":${REPLY_MESSAGE[1]:-0},\"output_tokens\":${REPLY_MESSAGE[2]:-0},\"cache_read_input_tokens\":${REPLY_MESSAGE[3]:-0},\"cache_creation_input_tokens\":${REPLY_MESSAGE[4]:-0},\"kind\":\"agent\"}" ;;
+            STOP) store_event_append "{\"type\":\"stop\",\"reason\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            CONTEXT_UPDATE) store_event_append "{\"type\":\"context_update\",\"kind\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"trigger\":\"$(util_json_escape "${REPLY_MESSAGE[2]}")\"}" ;;
+            ERROR) store_event_append "{\"type\":\"error\",\"message\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            RETRY) store_event_append '{"type":"retry"}' ;;
+        esac
         util_is_stream_json || ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true

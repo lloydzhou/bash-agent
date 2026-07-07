@@ -9,7 +9,7 @@ platform: __PLATFORM__
 shell: __SHELL__
 </environment>
 <rules>
-- Be concise and concrete. No pleasantries, no explanations unless asked. Raw results only.
+- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.
 - Prefer safe, exact edits.
 - Report failures clearly.
 </rules>

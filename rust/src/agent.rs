@@ -2084,13 +2084,14 @@ impl Agent {
         let cache_pct = {
             let total = ai + cr;
             if total > 0 {
-                format!("{}%", cr * 100 / total)
+                format!("{:.0}%", (cr as f64) / (total as f64) * 100.0)
             } else {
                 "—".to_string()
             }
         };
-        let prefix = if status == "idle" { "" } else { "⏳ " };
-        let progress = if status == "idle" { 0 } else { 3 };
+        let idle = status == "idle" && self.active_task_count == 0;
+        let prefix = if idle { "" } else { "⏳ " };
+        let progress = if idle { 0 } else { 3 };
         let title = format!(
             "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{}\x07\x1b]9;4;{}\x07",
             prefix,
