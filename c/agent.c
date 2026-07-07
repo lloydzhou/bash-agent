@@ -10,6 +10,9 @@
 #include <sys/utsname.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <time.h>
 #include <curl/curl.h>
 
@@ -253,6 +256,10 @@ Agent *agent_create(const char *provider, const char *model,
     a->cwd = util_strdup(cwd);
     a->home = util_strdup(home);
     a->interactive = interactive;
+    a->out = stdout;
+    a->err = stderr;
+    a->owns_out = 0;
+    a->owns_err = 0;
     a->input_queue = input_queue;
     a->display_queue = display_queue;
     a->sub_result_queue = malloc(sizeof(MsgQueue));
@@ -337,6 +344,8 @@ void agent_destroy(Agent *agent) {
         free(agent->skill_names);
     }
     store_session_paths_free(&agent->paths);
+    if (agent->owns_out && agent->out) fclose(agent->out);
+    if (agent->owns_err && agent->err) fclose(agent->err);
     if (agent->sub_result_queue) {
         mq_destroy(agent->sub_result_queue);
         free(agent->sub_result_queue);
@@ -933,7 +942,8 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         if (agent->verbose && body) {
             int body_len = (int)strlen(body);
             int preview_len = body_len > 200 ? 200 : body_len;
-            fprintf(stderr, "[verbose] Request body (%dKB): %.*s%s\n",
+            FILE *err = agent->err ? agent->err : stderr;
+            fprintf(err, "[verbose] Request body (%dKB): %.*s%s\n",
                     body_len / 1024, preview_len, body, body_len > 200 ? "..." : "");
         }
 
@@ -1121,14 +1131,27 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                         args->task_id = util_strdup(task_id);
                         args->sub_result_queue = agent->sub_result_queue;
                         pthread_t thread;
-                        pthread_create(&thread, NULL, async_bash_thread_fn, args);
-                        pthread_detach(thread);
-                        /* 立即返回 */
-                        StrBuf result;
-                        sb_init(&result);
-                        sb_appendf(&result, "Async task started: task_id=%s", task_id);
-                        tr.output = result.data;
-                        tr.exit_code = 0;
+                        int prc = pthread_create(&thread, NULL, async_bash_thread_fn, args);
+                        if (prc != 0) {
+                            agent->active_task_count--;
+                            free(args->cmd);
+                            free(args->task_id);
+                            free(args);
+                            StrBuf result;
+                            sb_init(&result);
+                            sb_append(&result, "Error: failed to start async bash thread");
+                            tr.output = result.data;
+                            tr.exit_code = 1;
+                        } else {
+                            pthread_detach(thread);
+                            /* 立即返回 */
+                            StrBuf result;
+                            sb_init(&result);
+                            sb_appendf(&result, "Async task started: task_id=%s", task_id);
+                            tr.output = result.data;
+                            tr.exit_code = 0;
+                        }
+                        free(cmd);
                     } else {
                         free(cmd);
                         tr = tool_dispatch(tc->name, tc->input_json.data,
@@ -1824,13 +1847,49 @@ static void *async_bash_thread_fn(void *arg) {
         free(args->cmd); free(args->task_id); free(args);
         return NULL;
     }
-    close(fd);
 
-    /* 执行命令，输出写入临时文件 */
-    char cmd_buf[8192];
-    snprintf(cmd_buf, sizeof(cmd_buf), "bash -lc '%s' > '%s' 2>&1", args->cmd, tmp_template);
-    int rc = system(cmd_buf);
-    int exit_code = WEXITSTATUS(rc);
+    /* 执行命令，输出写入临时文件：fork/exec，避免 system() quoting/stdin 风险 */
+    int exit_code = 0;
+    pid_t pid = fork();
+    if (pid < 0) {
+        exit_code = 127;
+        const char *msg = "Failed to fork async bash\n";
+        ssize_t unused = write(fd, msg, strlen(msg));
+        (void)unused;
+    } else if (pid == 0) {
+        setpgid(0, 0);
+
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            close(devnull);
+        }
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+        execl("/bin/bash", "bash", "-lc", args->cmd, (char *)NULL);
+        _exit(127);
+    } else {
+        setpgid(pid, pid);
+        close(fd);
+        fd = -1;
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0) {
+            if (errno == EINTR) continue;
+            status = -1;
+            break;
+        }
+        if (status == -1) {
+            exit_code = 127;
+        } else if (WIFEXITED(status)) {
+            exit_code = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+            exit_code = 128 + WTERMSIG(status);
+        } else {
+            exit_code = 1;
+        }
+    }
+    if (fd >= 0) close(fd);
 
     /* 读取全部输出 */
     char *output = NULL;
@@ -1844,6 +1903,9 @@ static void *async_bash_thread_fn(void *arg) {
         output[n] = '\0';
         fclose(f);
         remove(tmp_template);
+        char *sanitized = util_sanitize_utf8(output);
+        free(output);
+        output = sanitized;
     }
 
     /* 构造 MSG_ASYNC_TASK_RESULT 并 push 到 sub_result_queue */
@@ -1898,8 +1960,25 @@ static void *sub_agent_thread_fn(void *arg) {
         store_session_paths_free(&sub_paths);
     }
 
-    /* 重定向 stdout/stderr 到 /dev/null */
-    /* (在子线程中不做这个，因为工具执行用的是 popen) */
+    /* 子 agent 输出隔离：不要在线程里 dup2，全进程 fd 共享，会影响主 agent。 */
+    sub->out = fopen("/dev/null", "w");
+    if (sub->out) sub->owns_out = 1;
+    else sub->out = stdout;
+    sub->err = fopen("/dev/null", "w");
+    if (sub->err) sub->owns_err = 1;
+    else sub->err = stderr;
+    sub->output_format = 0;
+    sub->verbose = 0;
+    sub->max_turns = 10;
+    sub->max_tokens = args->parent->max_tokens;
+    sub->max_context_tokens = args->parent->max_context_tokens;
+    sub->tool_timeout_secs = args->parent->tool_timeout_secs;
+    sub->tool_result_max_bytes = args->parent->tool_result_max_bytes;
+    sub->dp_cfg = dp_config_init(sub->max_context_tokens);
+    free(sub->thinking);
+    sub->thinking = util_strdup(args->parent->thinking);
+    free(sub->effort);
+    sub->effort = util_strdup(args->parent->effort);
 
     /* 执行 agent_loop */
     int rc = agent_loop(sub, args->prompt, "user_input");
@@ -2025,7 +2104,16 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     args->sub_result_queue = agent->sub_result_queue;
 
     pthread_t thread;
-    pthread_create(&thread, NULL, sub_agent_thread_fn, args);
+    int prc = pthread_create(&thread, NULL, sub_agent_thread_fn, args);
+    if (prc != 0) {
+        agent->active_task_count--;
+        FREE_PTR(args->prompt);
+        FREE_PTR(args->description);
+        FREE_PTR(args->sub_session_id);
+        free(args);
+        free(sub_session_id);
+        return util_strdup("Error: failed to start sub-agent thread");
+    }
     pthread_detach(thread);
 
     StrBuf result;
@@ -3060,7 +3148,8 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     /* 对齐 bash 版 llm_summary_call: text 为空时报错退出，不 trim 不写 usage
      * bash: [[ -n "$text" ]] || util_die "Failed to generate context summary..." */
     if (rc != 0 || accum.text.len == 0) {
-        fprintf(stderr, "[compact] Failed to generate summary: rc=%d text_len=%zu stop=%s error=%s\n",
+        FILE *err = agent->err ? agent->err : stderr;
+        fprintf(err, "[compact] Failed to generate summary: rc=%d text_len=%zu stop=%s error=%s\n",
                 rc, accum.text.len,
                 accum.stop_reason ? accum.stop_reason : "none",
                 accum.error ? accum.error : "none");
@@ -3218,9 +3307,10 @@ void agent_update_title_status(Agent *agent, const char *status) {
     int idle = (status && strcmp(status, "idle") == 0 && agent->active_task_count <= 0);
     const char *prefix = idle ? "" : "\xe2\x8f\xb3 ";
     int progress = idle ? 0 : 3;
-    fprintf(stderr, "\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\x07\x1b]9;4;%d\x07",
+    FILE *err = agent->err ? agent->err : stderr;
+    fprintf(err, "\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\x07\x1b]9;4;%d\x07",
             prefix, agent->model, tc_s, ar_s, total_i_s, pct_s, ao_s, ct_s, progress);
-    fflush(stderr);
+    fflush(err);
 
     free(stats_content);
 }

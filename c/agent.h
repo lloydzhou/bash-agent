@@ -8,6 +8,7 @@
 #include "protocol.h"
 #include "json.h"
 #include "util.h"
+#include <stdio.h>
 
 /* DP Compact 配置结构体 */
 typedef struct {
@@ -50,6 +51,10 @@ typedef struct {
     int output_format;      /* 0=human, 1=stream-json */
     int verbose;
     int interactive;
+    FILE *out;              /* agent 专属 stdout，子 agent 指向 /dev/null */
+    FILE *err;              /* agent 专属 stderr/title，子 agent 指向 /dev/null */
+    int owns_out;
+    int owns_err;
     char *thinking;
     char *effort;
 

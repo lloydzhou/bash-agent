@@ -26,7 +26,9 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::io::IntoRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -1482,7 +1484,14 @@ impl Agent {
                                 let tx = self.sub_result_tx.clone();
                                 let tid = task_id.clone();
                                 thread::spawn(move || {
-                                    let output = std::process::Command::new("bash").arg("-lc").arg(&command).output();
+                                    let output = Command::new("bash")
+                                        .arg("-lc")
+                                        .arg(&command)
+                                        .stdin(Stdio::null())
+                                        .stdout(Stdio::piped())
+                                        .stderr(Stdio::piped())
+                                        .process_group(0)
+                                        .output();
                                     let (exit_code, stdout) = match output {
                                         Ok(o) => (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)),
                                         Err(e) => (127, e.to_string()),

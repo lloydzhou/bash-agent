@@ -41,12 +41,12 @@ type AsyncBashLauncher func(ctx context.Context, cmd string, timeoutSecs int) (s
 
 // ToolDispatcher 工具调度器
 type ToolDispatcher struct {
-	cfg              Config
-	launcher         SubAgentLauncher
+	cfg                    Config
+	launcher               SubAgentLauncher
 	backgroundBashLauncher AsyncBashLauncher
-	planConfirmFn    func() (string, error)
-	planClearFn      func() (string, error)
-	skillLoader      func(name string) (string, error)
+	planConfirmFn          func() (string, error)
+	planClearFn            func() (string, error)
+	skillLoader            func(name string) (string, error)
 }
 
 // NewToolDispatcher 创建工具调度器
@@ -549,6 +549,7 @@ func (td *ToolDispatcher) toolBash(ctx context.Context, cmd, timeoutStr, backgro
 
 	execCmd := exec.CommandContext(cmdCtx, "bash", "-lc", cmd)
 	execCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	execCmd.Stdin = nil
 	var stdout, stderr bytes.Buffer
 	execCmd.Stdout = &stdout
 	execCmd.Stderr = &stderr
