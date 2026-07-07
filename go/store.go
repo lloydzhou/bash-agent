@@ -785,7 +785,7 @@ func (s *FileStore) FormatTitle(model, status string) string {
 	st := s.stats
 	cacheTotal := st.InputTokens + st.CacheRead
 	cachePct := "—"
-	if cacheTotal > 0 && st.CacheRead > 0 {
+	if cacheTotal > 0 {
 		cachePct = fmt.Sprintf("%.0f%%", float64(st.CacheRead)/float64(cacheTotal)*100)
 	}
 	prefix := "⏳ "

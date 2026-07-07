@@ -2084,7 +2084,7 @@ impl Agent {
         let cache_pct = {
             let total = ai + cr;
             if total > 0 {
-                format!("{}%", cr * 100 / total)
+                format!("{:.0}%", (cr as f64) / (total as f64) * 100.0)
             } else {
                 "—".to_string()
             }

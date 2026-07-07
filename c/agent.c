@@ -3189,7 +3189,6 @@ void agent_update_title(Agent *agent) {
 }
 
 void agent_update_title_status(Agent *agent, const char *status) {
-    if (!agent->interactive) return;
     char *stats_content = store_stats_read(agent->paths.stats);
     if (!stats_content) return;
     JsonParse jp = json_parse_root(stats_content);
@@ -3204,7 +3203,10 @@ void agent_update_title_status(Agent *agent, const char *status) {
 
     /* 对齐 bash 版 term_title.awk: model T:turn R:req I:in+cr(pct) O:out C:ctx */
     long long total_i = ll_ai + ll_cr;
-    int pct = (total_i > 0) ? (int)(ll_cr * 100 / total_i) : 0;
+    int pct = (total_i > 0) ? (int)((ll_cr * 100.0 / total_i) + 0.5) : 0;
+    char pct_s[32];
+    if (total_i > 0) snprintf(pct_s, sizeof(pct_s), "%d%%", pct);
+    else snprintf(pct_s, sizeof(pct_s), "—");
 
     char tc_s[32], ar_s[32], total_i_s[32], ao_s[32], ct_s[32];
     format_int_commas(tc, tc_s, sizeof(tc_s));
@@ -3216,8 +3218,8 @@ void agent_update_title_status(Agent *agent, const char *status) {
     int idle = (status && strcmp(status, "idle") == 0 && agent->active_task_count <= 0);
     const char *prefix = idle ? "" : "\xe2\x8f\xb3 ";
     int progress = idle ? 0 : 3;
-    fprintf(stderr, "\x1b]0;%s%s T:%s R:%s I:%s(%d%%) O:%s C:%s\x07\x1b]9;4;%d\x07",
-            prefix, agent->model, tc_s, ar_s, total_i_s, pct, ao_s, ct_s, progress);
+    fprintf(stderr, "\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\x07\x1b]9;4;%d\x07",
+            prefix, agent->model, tc_s, ar_s, total_i_s, pct_s, ao_s, ct_s, progress);
     fflush(stderr);
 
     free(stats_content);
