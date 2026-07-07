@@ -1204,12 +1204,8 @@ display_message() {
 }
 
 display_term_title() {
-    local status="${1:-}"
-    if [[ "$status" == "idle" && -n "${ACTIVE_TASK_FILE:-}" ]]; then
-        local _cnt
-        _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
-        (( _cnt > 0 )) && status=""
-    fi
+    local status="${1:-}" active=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+    [[ "$status" == "idle" ]] && (( active > 0 )) && status=""
     store_stats_format_title "$MODEL" "$status"
 }
 
