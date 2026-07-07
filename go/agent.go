@@ -832,16 +832,8 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 			// 获取 messages
 			messages, err := a.store.GetMessages()
 			if err != nil {
-				cancel()
-				close(sigDone)
-				signal.Stop(sigCh)
-				a.runMu.Lock()
-				if a.currentInterrupt == &interrupted {
-					a.currentInterrupt = nil
-					a.currentCancel = nil
-				}
-				a.runMu.Unlock()
-				return fmt.Errorf("get messages: %w", err)
+				phaseFatalErr = fmt.Errorf("get messages: %w", err)
+				break TurnLoop
 			}
 			systemPrompt := a.BuildPrompt()
 
@@ -849,7 +841,8 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 			ch, err := a.llm.Call(ctx, messages, systemPrompt, a.toolDefs, a.cfg.MaxTokens, a.cfg.Thinking)
 			if err != nil {
 				a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", err.Error()}})
-				break
+				phaseFatalErr = err
+				break TurnLoop
 			}
 
 			var text, thinking string
