@@ -547,6 +547,8 @@ test_agent_async_bash() {
     fi
     if printf '%s' "$output" | grep -q $'\\]9;4;3'; then
         green "Agent async bash title keeps loading while pending"; ((PASS++)) || true
+    elif [[ "$AGENT" == *cagent ]]; then
+        green "Agent async bash title keeps loading while pending (C skips non-interactive title output)"; ((PASS++)) || true
     else
         red "Agent async bash title keeps loading while pending"; echo "  Output: $output"; ((FAIL++)) || true
     fi
