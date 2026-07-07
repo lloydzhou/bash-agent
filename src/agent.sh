@@ -135,38 +135,6 @@ util_append_section() {
     printf -v "$__outvar" '%s%s\n' "${!__outvar}" "$wrapped"
 }
 
-util_msg_to_stream() {
-    local _type="${REPLY_MESSAGE[0]}"
-    case "$_type" in
-        TEXT)        printf '{"type":"text","content":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        THINKING)    printf '{"type":"thinking","content":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        TOOL_CALL)
-            printf '{"type":"tool_call","name":"%s","id":"%s","input":%s}' \
-                "$(util_json_escape "${REPLY_MESSAGE[1]}")" \
-                "$(util_json_escape "${REPLY_MESSAGE[2]}")" \
-                "${REPLY_MESSAGE[3]}"
-            ;;
-        TOOL_RESULT)
-            printf '{"type":"tool_result","tool_use_id":"%s","name":"%s","content":"%s"}' \
-                "$(util_json_escape "${REPLY_MESSAGE[1]}")" \
-                "$(util_json_escape "${REPLY_MESSAGE[2]}")" \
-                "$(util_json_escape "${REPLY_MESSAGE[3]}")"
-            ;;
-        USAGE)       printf '{"type":"usage","input_tokens":%s,"output_tokens":%s,"cache_read_input_tokens":%s,"cache_creation_input_tokens":%s,"kind":"agent"}' "${REPLY_MESSAGE[1]:-0}" "${REPLY_MESSAGE[2]:-0}" "${REPLY_MESSAGE[3]:-0}" "${REPLY_MESSAGE[4]:-0}" ;;
-        AGENT_RESULT) printf '{"type":"sub_agent_result","session_id":"%s","status":"%s","input_tokens":%s,"output_tokens":%s,"thinking":"%s","text":"%s"}' \
-            "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}" "${REPLY_MESSAGE[4]}" \
-            "$(util_json_escape "${REPLY_MESSAGE[5]}")" "$(util_json_escape "${REPLY_MESSAGE[6]}")" ;;
-        ASYNC_TASK_RESULT) printf '{"type":"async_task_result","task_id":"%s","exit_code":%s,"output":"%s"}' \
-            "$(util_json_escape "${REPLY_MESSAGE[1]}")" "${REPLY_MESSAGE[2]}" "$(util_json_escape "${REPLY_MESSAGE[3]}")" ;;
-        STOP)        printf '{"type":"stop","reason":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        CONTEXT_UPDATE) printf '{"type":"context_update","kind":"%s","trigger":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" "$(util_json_escape "${REPLY_MESSAGE[2]}")" ;;
-        ERROR)       printf '{"type":"error","message":"%s"}' "$(util_json_escape "${REPLY_MESSAGE[1]}")" ;;
-        RETRY)       printf '{"type":"retry"}' ;;
-        *)           return 1 ;;
-    esac
-    return 0
-}
-
 util_read_optional() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 
 store_session_image_dir() { printf '%s/%s/images' "$(store_session_get_dir)" "${SESSION_ID:-}"; }
@@ -1500,7 +1468,7 @@ agent_loop_stream() {
 }
 
 agent_loop() {
-    local user_input="$1" turn_kind="${2:-user_input}" _se="" _type="" _reason="" had_error=false
+    local user_input="$1" turn_kind="${2:-user_input}" _type="" _reason="" had_error=false
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     # 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
@@ -1525,7 +1493,17 @@ agent_loop() {
     while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
-        _se=$(util_msg_to_stream) && [[ -n "$_se" ]] && store_event_append "$_se"
+        case "$_type" in
+            TEXT) store_event_append "{\"type\":\"text\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            THINKING) store_event_append "{\"type\":\"thinking\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            TOOL_CALL) store_event_append "{\"type\":\"tool_call\",\"name\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"id\":\"$(util_json_escape "${REPLY_MESSAGE[2]}")\",\"input\":${REPLY_MESSAGE[3]}}" ;;
+            TOOL_RESULT) store_event_append "{\"type\":\"tool_result\",\"tool_use_id\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"name\":\"$(util_json_escape "${REPLY_MESSAGE[2]}")\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[3]}")\"}" ;;
+            USAGE) store_event_append "{\"type\":\"usage\",\"input_tokens\":${REPLY_MESSAGE[1]:-0},\"output_tokens\":${REPLY_MESSAGE[2]:-0},\"cache_read_input_tokens\":${REPLY_MESSAGE[3]:-0},\"cache_creation_input_tokens\":${REPLY_MESSAGE[4]:-0},\"kind\":\"agent\"}" ;;
+            STOP) store_event_append "{\"type\":\"stop\",\"reason\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            CONTEXT_UPDATE) store_event_append "{\"type\":\"context_update\",\"kind\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"trigger\":\"$(util_json_escape "${REPLY_MESSAGE[2]}")\"}" ;;
+            ERROR) store_event_append "{\"type\":\"error\",\"message\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
+            RETRY) store_event_append '{"type":"retry"}' ;;
+        esac
         util_is_stream_json || ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true
