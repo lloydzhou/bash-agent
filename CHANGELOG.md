@@ -8,6 +8,34 @@
 
 ---
 
+## [4.2.16] - 2026-07-07
+
+> **SubAgent 与后台 Bash 进程隔离修复**：全面修复 C/Go/Rust 三版本在 SubAgent 和 `Bash(background=true)` 中的进程隔离、配置继承和结果处理不一致问题。以 Bash 版为基准，统一了子 agent `max_turns` 继承策略、end_turn 后子 agent 结果的嵌套处理模型、子进程 stdin/进程组隔离、以及 `handleSubAgentResult` 的职责边界。
+
+### Fixed — Bash 工具进程隔离（三版本）
+
+- **C 同步 Bash**：子进程 `stdin` 重定向到 `/dev/null`，不再继承主终端（修复与 readline 抢输入导致交互卡住）；设置独立进程组（`setpgid`）；timeout 时 kill 整个进程组；`waitpid` 处理 `EINTR`。
+- **C 后台 Bash**：移除 `system("bash -lc '%s' ...")`，改为 `fork/exec`，命令通过 argv 传递，消除 shell quoting 风险；子进程 `stdin` 接 `/dev/null`，设置独立进程组；输出增加 UTF-8 sanitize。
+- **C 后台 Bash / SubAgent 线程**：`pthread_create` 失败时正确回滚计数器和释放资源。
+- **Go 同步 / 后台 Bash**：显式 `Stdin = nil`；后台 Bash 设置 `Setpgid: true`。
+- **Rust 同步 / 后台 Bash**：设置 `stdin(Stdio::null())` 和 `process_group(0)`；cancel/timeout 改用 `libc::kill(-pid, SIGKILL)` 替代 spawn `kill` 命令。
+
+### Fixed — SubAgent 配置继承与结果处理一致性
+
+- **子 agent `max_turns`**：C/Go 此前硬编码为 10，修正为继承父 agent 的 `max_turns`（对齐 Bash 版子 shell 继承环境变量 `MAX_TURNS`）。
+- **Go RunLoop 重构**：end_turn 后到达的子 agent 结果此前用平铺 `for` 循环 `continue` 处理（共享 turn 预算），重构为外层 `for {}` + 内层 `TurnLoop`，每个 phase 获得独立 `max_turns` 预算（对齐 Bash/C/Rust 的嵌套调用模型）。
+- **Go `handleSubAgentResult` / `handleAsyncTaskResult` / `handleUserNotify`**：不再直接写 conversation，改为返回 context 字符串由调用方写入；`drainSubAgentResults`（turn loop 内，共享预算）和 RunLoop 外层循环（post-end_turn，独立预算）分别处理。
+- **Go `runSubAgent`**：从 `os.Executable()` + `exec.Command` 改为 goroutine 内创建独立 child agent；home/cwd 从父 agent store 继承，不再用 `os.Getenv`；增加 panic recover。
+- **Rust 子 agent**：`stdout/stderr` 从 `io::empty()` 修正为 `io::sink()`。
+- **C SubAgent 输出隔离**：为 `Agent` 增加 `out`/`err` 专属句柄，子 agent 指向 `/dev/null`；verbose、compact 错误、title 状态写 agent 专属 `err`。
+
+### Changed
+
+- Go `SessionStore` 接口新增 `GetHomeDir()` / `GetCwd()` 方法。
+- Go `ToolDispatcher` 结构体字段对齐（gofmt）。
+
+---
+
 ## [4.2.15] - 2026-07-07
 
 > **终端标题 / iTerm2 loading 一致性修复**：修复主 agent 等待 SubAgent 或后台 Bash 任务结果时，`idle` 状态过早清除 loading 的问题；统一 Bash / C / Go / Rust 四版本终端标题格式与 cache 百分比显示；新增 async Bash e2e 覆盖完整 title + progress 控制序列。同时精简 Bash 辅助函数并新增 live session monitor 脚本。
@@ -1333,7 +1361,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.15...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.16...HEAD
+[4.2.16]: https://github.com/lloydzhou/bash-agent/compare/v4.2.15...v4.2.16
 [4.2.15]: https://github.com/lloydzhou/bash-agent/compare/v4.2.14...v4.2.15
 [4.2.14]: https://github.com/lloydzhou/bash-agent/compare/v4.2.13...v4.2.14
 [4.2.13]: https://github.com/lloydzhou/bash-agent/compare/v4.2.12...v4.2.13
