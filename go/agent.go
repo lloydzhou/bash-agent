@@ -1094,6 +1094,8 @@ func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int
 	// 启动 goroutine（对齐 Bash 版：无 timeout，无截断）
 	go func() {
 		execCmd := exec.Command("bash", "-lc", cmd)
+		execCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		execCmd.Stdin = nil
 		var stdout, stderr bytes.Buffer
 		execCmd.Stdout = &stdout
 		execCmd.Stderr = &stderr
@@ -1127,48 +1129,49 @@ func (a *Agent) LaunchAsyncBash(ctx context.Context, cmd string, timeoutSecs int
 	return fmt.Sprintf("Async task started: task_id=%s", taskID), nil
 }
 
-func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string) SubAgentResult {
-	result := SubAgentResult{
+func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string) (result SubAgentResult) {
+	result = SubAgentResult{
 		SessionID: sessionID,
 		Status:    "failed",
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			result.Status = "failed"
+			result.Text = fmt.Sprintf("sub-agent panic: %v", r)
+		}
+	}()
 
-	// 构建子 agent 命令
-	self, err := os.Executable()
+	homeDir := os.Getenv("BASH_AGENT_HOME")
+	if homeDir == "" {
+		homeDir = os.Getenv("HOME")
+	}
+	cwd, err := os.Getwd()
 	if err != nil {
+		result.Text = err.Error()
 		return result
 	}
 
-	args := []string{
-		"-p", a.cfg.Provider,
-		"--base-url", a.cfg.BaseURL,
-		"-m", a.cfg.Model,
-		"--api-key", a.cfg.APIKey,
-		"--session", sessionID,
-		"--max-turns", "10",
-		prompt,
+	childCfg := a.cfg
+	childCfg.MaxTurns = 10
+	// 子 agent 必须静默：不输出 stream-json，不写终端正文，不抢 title。
+	childCfg.OutputFormat = "human"
+	childCfg.Interactive = false
+
+	childStore := NewFileStore(homeDir, cwd)
+	if err := childStore.Init(sessionID); err != nil {
+		result.Text = err.Error()
+		return result
 	}
 
-	// 设置 BASH_AGENT_HOME
-	homeDir := os.Getenv("BASH_AGENT_HOME")
-	if homeDir == "" {
-		homeDir = os.Getenv("HOME") + "/.bash-agent"
-	}
-	env := os.Environ()
-	env = append(env, "BASH_AGENT_HOME="+homeDir)
+	childDisplay := NewTermDisplay()
+	childDisplay.SetSilent(true)
+	childLLM := NewHTTPTransport(childCfg)
+	childTools := NewToolDispatcher(childCfg)
+	child := NewAgent(childCfg, childStore, childLLM, childTools, childDisplay)
+	child.SetToolDefs(a.toolDefs)
+	defer child.CloseDisplay()
 
-	cmd := exec.CommandContext(ctx, self, args...)
-	cmd.Env = env
-
-	// 子 agent 完全静默：stdin/stdout/stderr 全部指向 /dev/null
-	// （与 bash 版 exec </dev/null >/dev/null 2>&1 一致）
-	devNull, _ := os.Open(os.DevNull)
-	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
-
-	err = cmd.Run()
-	if err != nil {
+	if err := child.RunLoop(ctx, prompt, "user_input"); err != nil {
 		result.Status = "failed"
 		result.Text = err.Error()
 	} else {
@@ -1177,21 +1180,19 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 
 	// 从子 agent 的 conversation.jsonl 提取最后一条 assistant 消息的 thinking 和 text
 	// （与 bash 版 send_sub_result.awk 逻辑一致）
-	if thinking, text, err := a.store.GetSubAgentResult(sessionID); err == nil {
+	if thinking, text, err := childStore.GetSubAgentResult(sessionID); err == nil {
 		result.Thinking = thinking
 		if result.Status == "ok" {
 			result.Text = text
 		}
 	}
 
-	// 解析子 agent 的 stats 获取 token 信息
-	if stats, err := a.store.GetSubAgentStats(sessionID); err == nil {
-		result.InputTokens = stats.InputTokens
-		result.OutputTokens = stats.OutputTokens
-		result.CacheRead = stats.CacheRead
-		result.CacheWrite = stats.CacheWrite
-		result.Requests = stats.TotalRequests
-	}
+	stats := childStore.GetStats()
+	result.InputTokens = stats.InputTokens
+	result.OutputTokens = stats.OutputTokens
+	result.CacheRead = stats.CacheRead
+	result.CacheWrite = stats.CacheWrite
+	result.Requests = stats.TotalRequests
 
 	return result
 }

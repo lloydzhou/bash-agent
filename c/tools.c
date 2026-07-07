@@ -580,8 +580,15 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
     }
 
     if (pid == 0) {
-        /* 子进程 */
+        /* 子进程：独立进程组，stdin 不继承主终端，stdout/stderr 走 pipe */
+        setpgid(0, 0);
         close(pipefd[0]);
+
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            close(devnull);
+        }
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
@@ -590,6 +597,7 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
     }
 
     /* 父进程 */
+    setpgid(pid, pid);
     close(pipefd[1]);
 
     /* 设置 pipe 为非阻塞 */
@@ -618,7 +626,7 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
 
         /* 检查超时 */
         if (effective_timeout > 0 && time(NULL) >= deadline) {
-            kill(pid, SIGKILL);
+            if (kill(-pid, SIGKILL) < 0) kill(pid, SIGKILL);
             timed_out = 1;
             break;
         }
@@ -627,7 +635,10 @@ static ToolResult tool_bash(const char *input_json, int timeout_secs) {
     close(pipefd[0]);
 
     int status = 0;
-    waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
+        break;
+    }
 
     if (timed_out) {
         char tmsg[128];

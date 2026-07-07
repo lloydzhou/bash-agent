@@ -8,6 +8,7 @@ use crate::config::Config;
     use nix::unistd::pipe;
     use std::fs;
     use std::os::unix::io::{FromRawFd, IntoRawFd, OwnedFd};
+    use std::os::unix::process::CommandExt;
     use std::path::Path;
     use std::process::{Command, Stdio};
     use std::sync::atomic::AtomicBool;
@@ -292,8 +293,10 @@ use crate::config::Config;
             let mut child = Command::new("bash")
                 .arg("-lc")
                 .arg(command)
+                .stdin(Stdio::null())
                 .stdout(unsafe { Stdio::from_raw_fd(stdout_w.into_raw_fd()) })
                 .stderr(unsafe { Stdio::from_raw_fd(stderr_w.into_raw_fd()) })
+                .process_group(0)
                 .spawn()?;
 
             let stdout_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
@@ -338,16 +341,14 @@ use crate::config::Config;
                 }
                 Ok(WaitResult::Cancel) => {
                     timed_out = true; // 标记为截断
+                    let _ = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+                    let _ = child.try_wait();
                     // drain cancel pipe 防止后续 tool 调用立即收到 Cancel
                     drain_fd(self.cancel_fd);
                 }
                 Ok(WaitResult::Timeout) => {
                     timed_out = true;
-                    // SIGTERM 子进程
-                    let _ = Command::new("kill")
-                        .arg("--")
-                        .arg(format!("-{}", child.id()))
-                        .output();
+                    let _ = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
                     let _ = child.try_wait();
                 }
                 Err(e) => {
