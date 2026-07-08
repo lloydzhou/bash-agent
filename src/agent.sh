@@ -861,15 +861,46 @@ tool_bash_mode_allows() {
     (( (8#$required & (4095 ^ 8#$allowed)) == 0 ))
 }
 
+util_iconv_if_needed() {
+    # 读 stdin，若检测到非 UTF-8 编码则 iconv 转码，再 sanitize。
+    # 常见中文编码: iso-8859-1/iso-8859-x 在 file 命令里可能报 iso-8859，但实际是 GBK/GB18030。
+    local tmp; tmp=$(mktemp)
+    cat > "$tmp"
+    local enc=""
+    if command -v file >/dev/null 2>&1; then
+        enc=$(file -bi "$tmp" 2>/dev/null | sed -n 's/.*charset=\([^[:space:];]*\).*/\1/p')
+    fi
+    enc="${enc:-unknown}"
+    enc=$(printf '%s' "$enc" | tr 'A-Z' 'a-z')
+    # 已是 UTF-8 / ascii / unknown → 直接走 sanitize（idempotent，UTF-8 不受影响）
+    if [[ "$enc" == "utf-8" || "$enc" == "us-ascii" || "$enc" == "unknown" ]]; then
+        util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$tmp"
+    else
+        # 非 UTF-8 编码（gbk/gb18030/iso-8859-x 等）→ 先 iconv 转码
+        # file 对中文文件常报 iso-8859-1，实际多为 GBK/GB18030；GB18030 是 GBK 超集，优先用
+        local from_enc="$enc"
+        if [[ "$enc" == iso-8859* ]]; then
+            from_enc="gb18030"  # GB18030 兼容 GBK 和绝大多数中文编码
+        fi
+        if iconv -f "$from_enc" -t UTF-8//IGNORE "$tmp" 2>/dev/null | util_awk_run -f "$AWK_DIR/sanitize_utf8.awk"; then
+            :  # success
+        else
+            # iconv 失败 → 最后兜底：直接 sanitize 原始字节
+            util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$tmp"
+        fi
+    fi
+    rm -f "$tmp"
+}
+
 tool_read() {
     local path="$1" offset="${2:-1}" limit="${3:-0}"
     [[ -z "$path" ]] && { echo "no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "permission denied: $path"; return 1; }
     if (( limit > 0 )); then
-        sed -n "${offset},$((offset + limit - 1))p" "$path"
+        sed -n "${offset},$((offset + limit - 1))p" "$path" | util_iconv_if_needed
     else
-        sed -n "${offset},\$p" "$path"
+        sed -n "${offset},\$p" "$path" | util_iconv_if_needed
     fi
 }
 

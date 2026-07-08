@@ -84,8 +84,8 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
     int limit = json_get_int(jp.val, "limit");
 
     /* 读取文件 */
-    char *content = util_read_file(path);
-    if (!content) {
+    char *raw = util_read_file(path);
+    if (!raw) {
         StrBuf buf;
         sb_init(&buf);
         sb_appendf(&buf, "Error: file not found: %s", path);
@@ -94,6 +94,10 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
         free(path);
         return r;
     }
+
+    /* 编码处理：非 UTF-8（GBK 等）自动 iconv 转码，失败 sanitize 兜底 */
+    char *content = util_iconv_if_needed(raw);
+    free(raw);
 
     /* 按行分割，添加行号 */
     StrBuf buf;

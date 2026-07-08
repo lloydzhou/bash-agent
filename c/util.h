@@ -75,6 +75,10 @@ void util_truncate_chars(char *s, int max_chars);
 /* UTF-8 sanitize：将非法字节替换为 \ufffd 字面文本，返回新 malloc'd 字符串 */
 char *util_sanitize_utf8(const char *src);
 
+/* 编码检测+转换：若 content 非 UTF-8（如 GBK），调用系统 iconv 转码后 sanitize。
+ * 转码失败则 fallback 到 sanitize_utf8（保证 JSON 安全）。返回新 malloc'd 字符串。 */
+char *util_iconv_if_needed(const char *content);
+
 /* trim 尾部空白 */
 char *util_rtrim(char *s);
 
