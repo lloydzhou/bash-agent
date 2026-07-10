@@ -8,6 +8,32 @@
 
 ---
 
+## [4.2.18] - 2026-07-11
+
+> **跨运行时架构一致性修复**：以 Bash 版为基准，修复 C / Go / Rust 三版本在缓存策略、HTTP 传输层韧性、工具输出格式和压缩守卫逻辑上的 6 项不一致。确保四运行时行为完全对齐，同一 session 在不同版本间切换时不再产生差异。
+
+### Fixed — 高危
+
+- **C PlanClear 缓存顺序**（C 独有）：`tool_plan_clear()` 此前在工具分发阶段直接清空 `plan.md`，后续 compact 的 summary 请求因 system prompt 已不含旧计划而无法命中 KV cache 前缀，每次 PlanClear 额外产生一次完整冷启动。修复为先 `agent_compact_context("plan_clear")` 再 `store_plan_clear()`，对齐 Bash / Go / Rust。
+- **Go / C HTTP 传输层重试缺失**：Bash 使用 `curl --retry 2 --retry-delay 1 --retry-max-time 20`，Rust 有 `StreamClient` 应用层重试。Go 的 `client.Do(req)` 和 C 的 `curl_easy_perform()` 均为单次请求，遇到临时连接故障或 5xx 直接终止。已实现的 `SSE_RETRY` / `EventRetry` 累积器重置代码因无重试路径而成为不可达死代码。修复为添加重试循环（最多 2 次，延迟 1s，总窗口 20s），C 重试前发送 `SSE_RETRY` 重置累积器。
+
+### Fixed — 中危
+
+- **C / Go tool_read 行号不一致**：Bash（`sed -n`）和 Rust 不加行号输出原始文本；C 用 `%6d + 两空格`、Go 用 `%6d + Tab`——三版本输出互不相同。统一为 Bash / Rust 的原始文本输出（无行号）。
+- **C agent_wait_for_sub_agents 错误返回处理**：`mq_pop` 失败或收到无法处理的消息时函数直接 `return -1`，调用者忽略返回值后进入销毁流程，可能释放仍被 detached 线程使用的队列（use-after-free 风险）。修复为 `mq_pop` 失败时 `break`，`processed==0` 时 `continue`。
+
+### Fixed — 低危
+
+- **Go CompactContext plan 守卫对齐**：`plan_clear` / `plan_confirm` 时 `keepLines >= totalLines` 不再提前返回 `false`，对齐 Bash / C / Rust 的"plan 操作绕过守卫"行为。
+- **Rust update_stats_from_usage 守卫对齐**：移除 `if self.last_input_tokens > 0` 外层守卫，`agent_request_count` 和 token totals 无条件更新（对齐 Bash / Go），`current_context_tokens` 仍保留 `> 0` 守卫。
+
+### Changed
+
+- C `transport.c` 提取 `process_residual_json()` 辅助函数，消除非 SSE 响应解析的重复代码。
+- Go `transport.go` 新增 `time` 包导入。
+
+---
+
 ## [4.2.17] - 2026-07-10
 
 > **C 版并发子代理结果队列生命周期修复**：修复非交互模式下主循环提前结束后错误等待输入队列、未回收子代理结果即销毁队列的问题，避免多个并发子代理完成时进程因未定义行为直接退出。
@@ -1373,7 +1399,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.17...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.18...HEAD
+[4.2.18]: https://github.com/lloydzhou/bash-agent/compare/v4.2.17...v4.2.18
 [4.2.17]: https://github.com/lloydzhou/bash-agent/compare/v4.2.16...v4.2.17
 [4.2.16]: https://github.com/lloydzhou/bash-agent/compare/v4.2.15...v4.2.16
 [4.2.15]: https://github.com/lloydzhou/bash-agent/compare/v4.2.14...v4.2.15
