@@ -773,14 +773,17 @@ static int agent_drain_sub_results(Agent *agent) {
 int agent_wait_for_sub_agents(Agent *agent) {
     while (agent->active_task_count > 0) {
         void *sub_data = NULL;
-        if (mq_pop(agent->sub_result_queue, &sub_data) != 0) return -1;
+        /* mq_pop 失败表示队列已关闭/空 → break 而非 return -1
+         * processed==0 表示收到无法处理的消息 → continue 而非 return -1
+         * 避免因非任务消息（如 user_notify）或队列边界条件提前退出 */
+        if (mq_pop(agent->sub_result_queue, &sub_data) != 0) break;
         InputMessage *sub_msg = (InputMessage *)sub_data;
         int processed = agent_process_sub_result(agent, sub_msg, 1);
         input_message_free(sub_msg);
         free(sub_msg);
-        if (!processed) return -1;
+        if (!processed) continue;
     }
-    return 0;
+    return agent->active_task_count > 0 ? -1 : 0;
 }
 
 int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) {
@@ -1302,6 +1305,8 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                     break;
                 } else if (strcmp(accum->tools[i].name, "PlanClear") == 0) {
                     agent_compact_context(agent, "plan_clear");
+                    /* compact 后执行清空（对齐 bash 版 tool_plan_clear 顺序） */
+                    store_plan_clear(&agent->paths);
                     break;
                 }
             }

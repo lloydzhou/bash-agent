@@ -626,7 +626,9 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 		if trigger != "plan_clear" && trigger != "plan_confirm" {
 			return false, nil
 		}
-		if keepLines >= totalLines {
+		/* plan_clear/plan_confirm 绕过守卫继续执行（对齐 Bash/C/Rust）
+		 * 仅在 keepLines <= 0 时放弃 */
+		if keepLines <= 0 {
 			return false, nil
 		}
 	}

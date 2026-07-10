@@ -95,7 +95,7 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
         return r;
     }
 
-    /* 按行分割，添加行号 */
+    /* 按行分割（不加行号 — 对齐 Bash sed -n / Rust 原始文本输出） */
     StrBuf buf;
     sb_init(&buf);
     int line_num = 1;
@@ -107,7 +107,7 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
         if (line_num >= start_line && line_num <= end_line) {
             const char *eol = strchr(p, '\n');
             if (!eol) eol = p + strlen(p);
-            sb_appendf(&buf, "%6d  %.*s\n", line_num, (int)(eol - p), p);
+            sb_appendf(&buf, "%.*s\n", (int)(eol - p), p);
         }
         /* 跳到下一行 */
         const char *eol = strchr(p, '\n');
@@ -829,10 +829,10 @@ static ToolResult tool_plan_confirm(const SessionPaths *paths) {
 }
 
 static ToolResult tool_plan_clear(const SessionPaths *paths) {
+    (void)paths;
+    /* 不在这里清空 plan.md — 由 agent_loop 在 compact 之后执行
+     * 对齐 bash 版: agent_compact_context(plan_clear) → store_plan_clear */
     ToolResult r = {NULL, 0};
-    if (paths) {
-        store_plan_clear(paths);
-    }
     r.output = util_strdup("Plan cleared.");
     return r;
 }

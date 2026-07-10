@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
+#include <unistd.h>
 #include <curl/curl.h>
 
 /* ============================================================
@@ -311,182 +313,242 @@ static void fill_openai_usage_event(SseEvent *evt, JsonVal usage) {
     }
 }
 
+/* 处理非 SSE 响应：如果 line_buf 中有残留 JSON，作为完整响应解析 */
+static void process_residual_json(StreamCtx *sctx, const char *provider,
+                                  sse_callback_fn callback, void *ctx) {
+    if (!sctx->line_buf.data || sctx->line_buf.len == 0) return;
+    char *residual = sctx->line_buf.data;
+    while (*residual == ' ' || *residual == '\t' || *residual == '\r' || *residual == '\n') residual++;
+    if (*residual != '{') return;
+
+    size_t pos = 0;
+    JsonParse jp = json_parse(residual, &pos);
+    if (jp.error) return;
+
+    char *err_msg = json_get_string(jp.val, "error");
+    if (err_msg) {
+        emit_simple_event(callback, ctx, SSE_ERROR, err_msg);
+        free(err_msg);
+    } else if (strcmp(provider, "claude") == 0) {
+        JsonVal content = json_get(jp.val, "content");
+        if (content.type == JSON_ARRAY) {
+            int clen = json_array_len(content);
+            for (int i = 0; i < clen; i++) {
+                JsonVal block = json_array_get(content, i);
+                char *btype = json_get_string(block, "type");
+                if (btype && strcmp(btype, "text") == 0) {
+                    char *txt = json_get_string(block, "text");
+                    if (txt) { emit_simple_event(callback, ctx, SSE_TEXT, txt); free(txt); }
+                } else if (btype && strcmp(btype, "thinking") == 0) {
+                    char *txt = json_get_string(block, "thinking");
+                    if (txt) { emit_simple_event(callback, ctx, SSE_THINKING, txt); free(txt); }
+                } else if (btype && strcmp(btype, "tool_use") == 0) {
+                    char *id = json_get_string(block, "id");
+                    char *name = json_get_string(block, "name");
+                    SseEvent evt;
+                    memset(&evt, 0, sizeof(evt));
+                    evt.type = SSE_TOOL_CALL;
+                    evt.tool_id = id;
+                    evt.tool_name = name;
+                    evt.tool_input = "{}";
+                    callback(ctx, &evt);
+                    free(id); free(name);
+                }
+                free(btype);
+            }
+        }
+        char *stop_reason = json_get_string(jp.val, "stop_reason");
+        if (stop_reason) {
+            emit_simple_event(callback, ctx, SSE_STOP, stop_reason);
+            free(stop_reason);
+        }
+        JsonVal usage = json_get(jp.val, "usage");
+        if (usage.type != JSON_NULL) {
+            SseEvent evt;
+            memset(&evt, 0, sizeof(evt));
+            evt.type = SSE_USAGE;
+            evt.in_tokens = json_get_int(usage, "input_tokens");
+            evt.out_tokens = json_get_int(usage, "output_tokens");
+            evt.cache_read_tokens = json_get_int(usage, "cache_read_input_tokens");
+            evt.cache_creation_tokens = json_get_int(usage, "cache_creation_input_tokens");
+            callback(ctx, &evt);
+        }
+    } else {
+        JsonVal choices = json_get(jp.val, "choices");
+        if (choices.type == JSON_ARRAY) {
+            JsonVal choice = json_array_get(choices, 0);
+            JsonVal msg = json_get(choice, "message");
+            char *content = json_get_string(msg, "content");
+            if (content) {
+                emit_simple_event(callback, ctx, SSE_TEXT, content);
+                free(content);
+            }
+            char *reasoning = json_get_string(msg, "reasoning_content");
+            if (!reasoning) reasoning = json_get_string(msg, "reasoning");
+            if (reasoning) {
+                emit_simple_event(callback, ctx, SSE_THINKING, reasoning);
+                free(reasoning);
+            }
+            JsonVal tool_calls = json_get(msg, "tool_calls");
+            if (tool_calls.type == JSON_ARRAY) {
+                int tc_len = json_array_len(tool_calls);
+                for (int i = 0; i < tc_len; i++) {
+                    JsonVal tc = json_array_get(tool_calls, i);
+                    JsonVal fn = json_get(tc, "function");
+                    char *id = json_get_string(tc, "id");
+                    char *name = json_get_string(fn, "name");
+                    char *arguments = json_get_string(fn, "arguments");
+                    SseEvent evt;
+                    memset(&evt, 0, sizeof(evt));
+                    evt.type = SSE_TOOL_CALL;
+                    evt.tool_id = id;
+                    evt.tool_name = name;
+                    evt.tool_input = arguments ? arguments : (char *)"{}";
+                    callback(ctx, &evt);
+                    free(id);
+                    free(name);
+                    free(arguments);
+                }
+            }
+            char *finish = json_get_string(choice, "finish_reason");
+            if (finish) {
+                if (strcmp(finish, "tool_calls") == 0) emit_simple_event(callback, ctx, SSE_STOP, "tool_use");
+                else if (strcmp(finish, "stop") == 0) emit_simple_event(callback, ctx, SSE_STOP, "end_turn");
+                else emit_simple_event(callback, ctx, SSE_STOP, finish);
+                free(finish);
+            }
+        }
+        JsonVal usage = json_get(jp.val, "usage");
+        if (usage.type != JSON_NULL) {
+            SseEvent evt;
+            memset(&evt, 0, sizeof(evt));
+            evt.type = SSE_USAGE;
+            fill_openai_usage_event(&evt, usage);
+            callback(ctx, &evt);
+        }
+    }
+}
+
 int http_post_sse(const char *url, const char **headers, int header_count,
                   const char *body, size_t body_len,
                   const char *provider,
                   sse_callback_fn callback, void *ctx,
                   volatile int *cancelled) {
-    CURL *curl = curl_easy_init();
-    if (!curl) return -1;
+    /* 对齐 Bash curl --retry 2 --retry-delay 1 --retry-max-time 20
+     * 和 Rust StreamClient: 最多重试 2 次，延迟 1s，总窗口 20s */
+    const int max_retries = 2;
+    const long retry_max_time_ms = 20000;
+
+    struct timespec start_ts;
+    clock_gettime(CLOCK_MONOTONIC, &start_ts);
 
     struct curl_slist *hdrs = NULL;
     for (int i = 0; i < header_count; i++) {
         hdrs = curl_slist_append(hdrs, headers[i]);
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    StreamCtx sctx;
-    sctx.callback = callback;
-    sctx.ctx = ctx;
-    sb_init(&sctx.line_buf);
-    sctx.cancelled = cancelled;
-    sctx.provider = (char *)provider;
-    sctx.openai_tools = NULL;
-    sctx.openai_tool_count = 0;
-    sctx.openai_tool_cap = 0;
-
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sctx);
-
-    CURLcode rc = curl_easy_perform(curl);
-
+    CURLcode rc = CURLE_OK;
     long http_code = 0;
-    if (rc == CURLE_OK) {
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    }
 
-    /* 处理非 SSE 响应：如果 line_buf 中有残留 JSON，作为完整响应解析 */
-    if (rc == CURLE_OK && sctx.line_buf.data && sctx.line_buf.len > 0) {
-        char *residual = sctx.line_buf.data;
-        /* 去掉前导空白 */
-        while (*residual == ' ' || *residual == '\t' || *residual == '\r' || *residual == '\n') residual++;
-        if (*residual == '{') {
-            /* 非 SSE 的完整 JSON 响应 — 按格式解析 */
-            size_t pos = 0;
-            JsonParse jp = json_parse(residual, &pos);
-            if (!jp.error) {
-                char *err_msg = json_get_string(jp.val, "error");
-                if (err_msg) {
-                    emit_simple_event(callback, ctx, SSE_ERROR, err_msg);
-                    free(err_msg);
-                } else if (strcmp(provider, "claude") == 0) {
-                    /* Claude 非流式响应 */
-                    JsonVal content = json_get(jp.val, "content");
-                    if (content.type == JSON_ARRAY) {
-                        int clen = json_array_len(content);
-                        for (int i = 0; i < clen; i++) {
-                            JsonVal block = json_array_get(content, i);
-                            char *btype = json_get_string(block, "type");
-                            if (btype && strcmp(btype, "text") == 0) {
-                                char *txt = json_get_string(block, "text");
-                                if (txt) { emit_simple_event(callback, ctx, SSE_TEXT, txt); free(txt); }
-                            } else if (btype && strcmp(btype, "thinking") == 0) {
-                                char *txt = json_get_string(block, "thinking");
-                                if (txt) { emit_simple_event(callback, ctx, SSE_THINKING, txt); free(txt); }
-                            } else if (btype && strcmp(btype, "tool_use") == 0) {
-                                char *id = json_get_string(block, "id");
-                                char *name = json_get_string(block, "name");
-                                SseEvent evt;
-                                memset(&evt, 0, sizeof(evt));
-                                evt.type = SSE_TOOL_CALL;
-                                evt.tool_id = id;
-                                evt.tool_name = name;
-                                evt.tool_input = "{}"; /* 非 SSE 模式简化处理 */
-                                callback(ctx, &evt);
-                                free(id); free(name);
-                            }
-                            free(btype);
-                        }
-                    }
-                    /* stop_reason */
-                    char *stop_reason = json_get_string(jp.val, "stop_reason");
-                    if (stop_reason) {
-                        emit_simple_event(callback, ctx, SSE_STOP, stop_reason);
-                        free(stop_reason);
-                    }
-                    /* usage */
-                    JsonVal usage = json_get(jp.val, "usage");
-                    if (usage.type != JSON_NULL) {
-                        SseEvent evt;
-                        memset(&evt, 0, sizeof(evt));
-                        evt.type = SSE_USAGE;
-                        evt.in_tokens = json_get_int(usage, "input_tokens");
-                        evt.out_tokens = json_get_int(usage, "output_tokens");
-                        evt.cache_read_tokens = json_get_int(usage, "cache_read_input_tokens");
-                        evt.cache_creation_tokens = json_get_int(usage, "cache_creation_input_tokens");
-                        callback(ctx, &evt);
-                    }
-                } else {
-                    /* OpenAI 非流式响应 */
-                    JsonVal choices = json_get(jp.val, "choices");
-                    if (choices.type == JSON_ARRAY) {
-                        JsonVal choice = json_array_get(choices, 0);
-                        JsonVal msg = json_get(choice, "message");
-                        char *content = json_get_string(msg, "content");
-                        if (content) {
-                            emit_simple_event(callback, ctx, SSE_TEXT, content);
-                            free(content);
-                        }
-                        char *reasoning = json_get_string(msg, "reasoning_content");
-                        if (!reasoning) reasoning = json_get_string(msg, "reasoning");
-                        if (reasoning) {
-                            emit_simple_event(callback, ctx, SSE_THINKING, reasoning);
-                            free(reasoning);
-                        }
-                        JsonVal tool_calls = json_get(msg, "tool_calls");
-                        if (tool_calls.type == JSON_ARRAY) {
-                            int tc_len = json_array_len(tool_calls);
-                            for (int i = 0; i < tc_len; i++) {
-                                JsonVal tc = json_array_get(tool_calls, i);
-                                JsonVal fn = json_get(tc, "function");
-                                char *id = json_get_string(tc, "id");
-                                char *name = json_get_string(fn, "name");
-                                char *arguments = json_get_string(fn, "arguments");
-                                SseEvent evt;
-                                memset(&evt, 0, sizeof(evt));
-                                evt.type = SSE_TOOL_CALL;
-                                evt.tool_id = id;
-                                evt.tool_name = name;
-                                evt.tool_input = arguments ? arguments : (char *)"{}";
-                                callback(ctx, &evt);
-                                free(id);
-                                free(name);
-                                free(arguments);
-                            }
-                        }
-                        char *finish = json_get_string(choice, "finish_reason");
-                        if (finish) {
-                            if (strcmp(finish, "tool_calls") == 0) emit_simple_event(callback, ctx, SSE_STOP, "tool_use");
-                            else if (strcmp(finish, "stop") == 0) emit_simple_event(callback, ctx, SSE_STOP, "end_turn");
-                            else emit_simple_event(callback, ctx, SSE_STOP, finish);
-                            free(finish);
-                        }
-                    }
-                    JsonVal usage = json_get(jp.val, "usage");
-                    if (usage.type != JSON_NULL) {
-                        SseEvent evt;
-                        memset(&evt, 0, sizeof(evt));
-                        evt.type = SSE_USAGE;
-                        fill_openai_usage_event(&evt, usage);
-                        callback(ctx, &evt);
-                    }
-                }
-            }
+    for (int attempt = 0; attempt <= max_retries; attempt++) {
+        CURL *curl = curl_easy_init();
+        if (!curl) { curl_slist_free_all(hdrs); return -1; }
+
+        StreamCtx sctx;
+        sctx.callback = callback;
+        sctx.ctx = ctx;
+        sb_init(&sctx.line_buf);
+        sctx.cancelled = cancelled;
+        sctx.provider = (char *)provider;
+        sctx.openai_tools = NULL;
+        sctx.openai_tool_count = 0;
+        sctx.openai_tool_cap = 0;
+
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body_len);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 300L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, stream_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sctx);
+
+        rc = curl_easy_perform(curl);
+
+        http_code = 0;
+        if (rc == CURLE_OK) {
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
         }
+
+        /* 判断是否需要重试 */
+        int should_retry = 0;
+        if (rc != CURLE_OK) {
+            if (!(rc == CURLE_WRITE_ERROR && cancelled && *cancelled))
+                should_retry = 1;
+        } else if (http_code >= 500) {
+            should_retry = 1;
+        }
+
+        if (!should_retry) {
+            /* 成功或不可重试错误 → 处理残留 JSON */
+            if (rc == CURLE_OK) {
+                process_residual_json(&sctx, provider, callback, ctx);
+            }
+            sb_free(&sctx.line_buf);
+            streamctx_free_openai_tools(&sctx);
+            curl_easy_cleanup(curl);
+            curl_slist_free_all(hdrs);
+
+            if (rc == CURLE_WRITE_ERROR && cancelled && *cancelled) {
+                emit_simple_event(callback, ctx, SSE_STOP, "interrupted");
+                return 0;
+            }
+            if (rc != CURLE_OK) return -1;
+            if (http_code >= 400) return (int)http_code;
+            return 0;
+        }
+
+        /* 需要重试 → 清理本次尝试的状态 */
+        sb_free(&sctx.line_buf);
+        streamctx_free_openai_tools(&sctx);
+        curl_easy_cleanup(curl);
+
+        /* cancelled 不重试 */
+        if (rc == CURLE_WRITE_ERROR && cancelled && *cancelled) {
+            emit_simple_event(callback, ctx, SSE_STOP, "interrupted");
+            curl_slist_free_all(hdrs);
+            return 0;
+        }
+
+        /* 检查重试限制 */
+        struct timespec now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &now_ts);
+        long elapsed_ms = (now_ts.tv_sec - start_ts.tv_sec) * 1000L +
+                          (now_ts.tv_nsec - start_ts.tv_nsec) / 1000000L;
+        if (attempt >= max_retries || elapsed_ms >= retry_max_time_ms) {
+            /* 重试耗尽 */
+            curl_slist_free_all(hdrs);
+            if (rc != CURLE_OK) return -1;
+            if (http_code >= 400) return (int)http_code;
+            return 0;
+        }
+
+        /* 发送 SSE_RETRY 重置累积器（对齐 bash awk RETRY 事件） */
+        {
+            SseEvent retry_evt;
+            memset(&retry_evt, 0, sizeof(retry_evt));
+            retry_evt.type = SSE_RETRY;
+            callback(ctx, &retry_evt);
+        }
+
+        sleep(1);
     }
 
-    sb_free(&sctx.line_buf);
-    streamctx_free_openai_tools(&sctx);
+    /* 不应到达 */
     curl_slist_free_all(hdrs);
-    curl_easy_cleanup(curl);
-
-    /* 如果是被 cancelled 中断的，发送 STOP interrupted 让 agent_loop 正常结束 */
-    if (rc == CURLE_WRITE_ERROR && cancelled && *cancelled) {
-        emit_simple_event(callback, ctx, SSE_STOP, "interrupted");
-        return 0;  /* 不是错误——是被中断的正常退出 */
-    }
-
-    if (rc != CURLE_OK) return -1;
-    if (http_code >= 400) return (int)http_code;  /* HTTP 错误码作为负返回值的替代 */
-    return 0;
+    return -1;
 }
 
 /* ============================================================
