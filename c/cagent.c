@@ -409,41 +409,9 @@ int main(int argc, char *argv[]) {
 
         agent_main_loop(agent);
 
-        /* 等待子 agent 完成 */
-        while (agent->active_task_count > 0) {
-            void *data = NULL;
-            if (mq_pop(&input_queue, &data) != 0) break;
-            InputMessage *msg = (InputMessage *)data;
-            if (msg) {
-                if (msg->type == MSG_AGENT_RESULT) {
-                    agent_handle_sub_agent_result(agent,
-                        msg->data.agent_result.session_id,
-                        msg->data.agent_result.status,
-                        msg->data.agent_result.thinking,
-                        msg->data.agent_result.text,
-                        msg->data.agent_result.in_tokens,
-                        msg->data.agent_result.out_tokens,
-                        msg->data.agent_result.cache_read_tokens,
-                        msg->data.agent_result.cache_creation_tokens,
-                        msg->data.agent_result.request_count);
-
-                    /* 将结果注入 conversation 并触发新的 agent_loop */
-                    StrBuf ctx;
-                    sb_init(&ctx);
-                    sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
-                               msg->data.agent_result.session_id,
-                               msg->data.agent_result.status,
-                               msg->data.agent_result.in_tokens,
-                               msg->data.agent_result.out_tokens,
-                               msg->data.agent_result.thinking ? msg->data.agent_result.thinking : "",
-                               msg->data.agent_result.text ? msg->data.agent_result.text : "");
-                    agent_run_loop(agent, ctx.data, "sub_agent_result");
-                    sb_free(&ctx);
-                }
-                input_message_free(msg);
-                free(msg);
-            }
-        }
+        /* 主循环若因输入队列关闭而提前返回，仍须从子结果队列回收任务。
+         * 否则 agent_destroy 会释放仍被 detached 工作线程使用的队列。 */
+        agent_wait_for_sub_agents(agent);
 
         display_thread_stop(&display_queue);
         pthread_join(display_thread, NULL);
