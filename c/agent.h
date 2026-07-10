@@ -112,6 +112,9 @@ void agent_destroy(Agent *agent);
 /* 主循环（从 input_queue 取消息，驱动 LLM 调用） */
 int agent_main_loop(Agent *agent);
 
+/* 阻塞消费所有活跃异步任务的结果，直到计数归零 */
+int agent_wait_for_sub_agents(Agent *agent);
+
 /* 单次 agent loop：用户输入 → LLM → 工具调用 → 循环 */
 int agent_loop(Agent *agent, const char *user_input, const char *turn_kind);
 /* agent_loop wrapper：结束后恢复 idle 标题 */

@@ -685,6 +685,77 @@ int agent_replay_events(Agent *agent, int max_turns) {
  * 对齐 bash 版 agent_run_loop
  * ============================================================ */
 
+/* 处理一条异步任务结果：display + conversation 注入。 */
+static int agent_process_sub_result(Agent *agent, InputMessage *sub_msg, int run_loop) {
+    if (!sub_msg) return 0;
+
+    if (sub_msg->type == MSG_AGENT_RESULT) {
+        agent_handle_sub_agent_result(agent,
+            sub_msg->data.agent_result.session_id,
+            sub_msg->data.agent_result.status,
+            sub_msg->data.agent_result.thinking,
+            sub_msg->data.agent_result.text,
+            sub_msg->data.agent_result.in_tokens,
+            sub_msg->data.agent_result.out_tokens,
+            sub_msg->data.agent_result.cache_read_tokens,
+            sub_msg->data.agent_result.cache_creation_tokens,
+            sub_msg->data.agent_result.request_count);
+        StrBuf ctx;
+        sb_init(&ctx);
+        sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
+                   sub_msg->data.agent_result.session_id,
+                   sub_msg->data.agent_result.status,
+                   sub_msg->data.agent_result.in_tokens,
+                   sub_msg->data.agent_result.out_tokens,
+                   sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
+                   sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
+        if (run_loop) agent_run_loop(agent, ctx.data, "sub_agent_result");
+        else store_conv_add_user(agent->paths.conversation, ctx.data);
+        sb_free(&ctx);
+        return 1;
+    }
+
+    if (sub_msg->type == MSG_ASYNC_TASK_RESULT) {
+        StrBuf evt;
+        sb_init(&evt);
+        sb_appendf(&evt, "{\"type\":\"async_task_result\",\"task_id\":\"%s\",\"exit_code\":%d,\"output\":",
+                   sub_msg->data.async_task_result.task_id, sub_msg->data.async_task_result.exit_code);
+        sb_append_json_string(&evt, sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+        sb_append(&evt, "}");
+        store_event_append(&agent->paths, evt.data);
+        sb_free(&evt);
+        if (agent->active_task_count > 0) agent->active_task_count--;
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_async_task_result(
+            sub_msg->data.async_task_result.task_id,
+            sub_msg->data.async_task_result.exit_code,
+            sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+        push_display_event(&agent->paths, agent->display_queue, dm);
+        StrBuf ctx;
+        sb_init(&ctx);
+        sb_appendf(&ctx, "[bg-bash %s] exit_code=%d\nOutput: %s",
+                   sub_msg->data.async_task_result.task_id,
+                   sub_msg->data.async_task_result.exit_code,
+                   sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
+        if (run_loop) agent_run_loop(agent, ctx.data, "async_task_result");
+        else store_conv_add_user(agent->paths.conversation, ctx.data);
+        sb_free(&ctx);
+        return 1;
+    }
+
+    if (sub_msg->type == MSG_USER_NOTIFY) {
+        const char *text = sub_msg->data.user_notify.text ? sub_msg->data.user_notify.text : "";
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_user_notify(text);
+        push_display_event(&agent->paths, agent->display_queue, dm);
+        if (run_loop) agent_run_loop(agent, text, "user_notify");
+        else store_conv_add_user(agent->paths.conversation, text);
+        return 1;
+    }
+
+    return 0;
+}
+
 /* drain SubAgent 结果：display + conversation 注入，返回消费条数（对齐 bash agent_drain_notify_buf） */
 static int agent_drain_sub_results(Agent *agent) {
     int drained = 0;
@@ -692,72 +763,24 @@ static int agent_drain_sub_results(Agent *agent) {
         void *sub_data = NULL;
         if (mq_try_pop(agent->sub_result_queue, &sub_data) != 0) break;
         InputMessage *sub_msg = (InputMessage *)sub_data;
-        if (sub_msg && sub_msg->type == MSG_AGENT_RESULT) {
-            agent_handle_sub_agent_result(agent,
-                sub_msg->data.agent_result.session_id,
-                sub_msg->data.agent_result.status,
-                sub_msg->data.agent_result.thinking,
-                sub_msg->data.agent_result.text,
-                sub_msg->data.agent_result.in_tokens,
-                sub_msg->data.agent_result.out_tokens,
-                sub_msg->data.agent_result.cache_read_tokens,
-                sub_msg->data.agent_result.cache_creation_tokens,
-                sub_msg->data.agent_result.request_count);
-            StrBuf ctx;
-            sb_init(&ctx);
-            sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
-                       sub_msg->data.agent_result.session_id,
-                       sub_msg->data.agent_result.status,
-                       sub_msg->data.agent_result.in_tokens,
-                       sub_msg->data.agent_result.out_tokens,
-                       sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
-                       sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
-            store_conv_add_user(agent->paths.conversation, ctx.data);
-            sb_free(&ctx);
-            drained++;
-        } else if (sub_msg && sub_msg->type == MSG_ASYNC_TASK_RESULT) {
-            StrBuf evt;
-            sb_init(&evt);
-            sb_appendf(&evt, "{\"type\":\"async_task_result\",\"task_id\":\"%s\",\"exit_code\":%d,\"output\":",
-                       sub_msg->data.async_task_result.task_id, sub_msg->data.async_task_result.exit_code);
-            sb_append_json_string(&evt, sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
-            sb_append(&evt, "}");
-            store_event_append(&agent->paths, evt.data);
-            sb_free(&evt);
-            /* 递减计数器 */
-            if (agent->active_task_count > 0) agent->active_task_count--;
-            /* display */
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_async_task_result(
-                sub_msg->data.async_task_result.task_id,
-                sub_msg->data.async_task_result.exit_code,
-                sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
-            push_display_event(&agent->paths, agent->display_queue, dm);
-            /* conversation 注入 */
-            StrBuf ctx;
-            sb_init(&ctx);
-            sb_appendf(&ctx, "[bg-bash %s] exit_code=%d\nOutput: %s",
-                       sub_msg->data.async_task_result.task_id,
-                       sub_msg->data.async_task_result.exit_code,
-                       sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
-            store_conv_add_user(agent->paths.conversation, ctx.data);
-            sb_free(&ctx);
-            drained++;
-        } else if (sub_msg && sub_msg->type == MSG_USER_NOTIFY) {
-            /* 用户 Ctrl+O 中间介入 */
-            const char *text = sub_msg->data.user_notify.text ? sub_msg->data.user_notify.text : "";
-            /* display */
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_user_notify(text);
-            push_display_event(&agent->paths, agent->display_queue, dm);
-            /* conversation 注入：保留原始用户文本，不污染上下文 */
-            store_conv_add_user(agent->paths.conversation, text);
-            drained++;
-        }
+        drained += agent_process_sub_result(agent, sub_msg, 0);
         input_message_free(sub_msg);
         free(sub_msg);
     }
     return drained;
+}
+
+int agent_wait_for_sub_agents(Agent *agent) {
+    while (agent->active_task_count > 0) {
+        void *sub_data = NULL;
+        if (mq_pop(agent->sub_result_queue, &sub_data) != 0) return -1;
+        InputMessage *sub_msg = (InputMessage *)sub_data;
+        int processed = agent_process_sub_result(agent, sub_msg, 1);
+        input_message_free(sub_msg);
+        free(sub_msg);
+        if (!processed) return -1;
+    }
+    return 0;
 }
 
 int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) {
@@ -1723,78 +1746,8 @@ int agent_main_loop(Agent *agent) {
 
                   agent->running = 0;
 
-                /* 如果有活跃的 sub-agent，继续处理它们的结果，
-                 * 直到所有 sub-agent 完成才 signal done。
-                 * 这避免 readline 线程在 sub-agent 结果到达前显示提示符，
-                 * 导致输出与提示符交错混乱。
-                 * 模仿 bash 版 agent_run_loop 的单线程行为：
-                 * bash 版是同步的，agent_loop 处理 sub-agent 结果后
-                 * 才显示下一轮提示符。 */
-                while (agent->active_task_count > 0) {
-                    void *sub_data = NULL;
-                    if (mq_pop(agent->sub_result_queue, &sub_data) != 0) break;
-                    InputMessage *sub_msg = (InputMessage *)sub_data;
-                    if (!sub_msg) continue;
-
-                    if (sub_msg->type == MSG_AGENT_RESULT) {
-                        agent_handle_sub_agent_result(agent,
-                            sub_msg->data.agent_result.session_id,
-                            sub_msg->data.agent_result.status,
-                            sub_msg->data.agent_result.thinking,
-                            sub_msg->data.agent_result.text,
-                            sub_msg->data.agent_result.in_tokens,
-                            sub_msg->data.agent_result.out_tokens,
-                            sub_msg->data.agent_result.cache_read_tokens,
-                            sub_msg->data.agent_result.cache_creation_tokens,
-                            sub_msg->data.agent_result.request_count);
-
-                        StrBuf ctx;
-                        sb_init(&ctx);
-                        sb_appendf(&ctx, "[sub-agent %s] %s (in=%d, out=%d)\nThinking: %s\nText: %s",
-                                   sub_msg->data.agent_result.session_id,
-                                   sub_msg->data.agent_result.status,
-                                   sub_msg->data.agent_result.in_tokens,
-                                   sub_msg->data.agent_result.out_tokens,
-                                   sub_msg->data.agent_result.thinking ? sub_msg->data.agent_result.thinking : "",
-                                   sub_msg->data.agent_result.text ? sub_msg->data.agent_result.text : "");
-                        agent_run_loop(agent, ctx.data, "sub_agent_result");
-                        sb_free(&ctx);
-                    } else if (sub_msg->type == MSG_ASYNC_TASK_RESULT) {
-                        /* 记录事件 + display + conversation 注入 */
-                        StrBuf evt;
-                        sb_init(&evt);
-                        sb_appendf(&evt, "{\"type\":\"async_task_result\",\"task_id\":\"%s\",\"exit_code\":%d,\"output\":",
-                                   sub_msg->data.async_task_result.task_id, sub_msg->data.async_task_result.exit_code);
-                        sb_append_json_string(&evt, sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
-                        sb_append(&evt, "}");
-                        store_event_append(&agent->paths, evt.data);
-                        sb_free(&evt);
-                        if (agent->active_task_count > 0) agent->active_task_count--;
-                        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                        *dm = display_msg_async_task_result(
-                            sub_msg->data.async_task_result.task_id,
-                            sub_msg->data.async_task_result.exit_code,
-                            sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
-                        push_display_event(&agent->paths, agent->display_queue, dm);
-                        StrBuf ctx;
-                        sb_init(&ctx);
-                        sb_appendf(&ctx, "[bg-bash %s] exit_code=%d\nOutput: %s",
-                                   sub_msg->data.async_task_result.task_id,
-                                   sub_msg->data.async_task_result.exit_code,
-                                   sub_msg->data.async_task_result.output ? sub_msg->data.async_task_result.output : "");
-                        agent_run_loop(agent, ctx.data, "async_task_result");
-                        sb_free(&ctx);
-                    } else if (sub_msg->type == MSG_USER_NOTIFY) {
-                        /* 用户 Ctrl+O 介入：display + 原文 conversation 注入 + 触发一轮 */
-                        const char *ntext = sub_msg->data.user_notify.text ? sub_msg->data.user_notify.text : "";
-                        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                        *dm = display_msg_user_notify(ntext);
-                        push_display_event(&agent->paths, agent->display_queue, dm);
-                        agent_run_loop(agent, ntext, "user_notify");
-                    }
-                    input_message_free(sub_msg);
-                    free(sub_msg);
-                }
+                /* 等待所有异步任务完成，避免销毁仍被工作线程使用的队列。 */
+                agent_wait_for_sub_agents(agent);
 
                 /* 所有轮次完成：等待 display 队列写完 */
                 if (agent->interactive) {
