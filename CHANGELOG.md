@@ -8,6 +8,18 @@
 
 ---
 
+## [4.2.17] - 2026-07-10
+
+> **C 版并发子代理结果队列生命周期修复**：修复非交互模式下主循环提前结束后错误等待输入队列、未回收子代理结果即销毁队列的问题，避免多个并发子代理完成时进程因未定义行为直接退出。
+
+### Fixed
+
+- **C SubAgent / 后台 Bash 结果回收**：新增统一的异步结果处理与等待逻辑，所有收尾路径均从 `sub_result_queue` 消费结果，直至活跃任务计数归零。
+- **C 队列生命周期**：确保销毁 Agent 和消息队列前，所有 detached 异步工作线程均已完成并回收结果，避免向已释放队列写入。
+- **C 异步结果处理一致性**：子代理、后台 Bash 和用户通知复用统一处理逻辑，统一事件、统计、显示、conversation 注入及后续 agent 回合触发行为。
+
+---
+
 ## [4.2.16] - 2026-07-07
 
 > **SubAgent 与后台 Bash 进程隔离修复**：全面修复 C/Go/Rust 三版本在 SubAgent 和 `Bash(background=true)` 中的进程隔离、配置继承和结果处理不一致问题。以 Bash 版为基准，统一了子 agent `max_turns` 继承策略、end_turn 后子 agent 结果的嵌套处理模型、子进程 stdin/进程组隔离、以及 `handleSubAgentResult` 的职责边界。
@@ -1361,7 +1373,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.16...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.17...HEAD
+[4.2.17]: https://github.com/lloydzhou/bash-agent/compare/v4.2.16...v4.2.17
 [4.2.16]: https://github.com/lloydzhou/bash-agent/compare/v4.2.15...v4.2.16
 [4.2.15]: https://github.com/lloydzhou/bash-agent/compare/v4.2.14...v4.2.15
 [4.2.14]: https://github.com/lloydzhou/bash-agent/compare/v4.2.13...v4.2.14
