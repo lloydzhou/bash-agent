@@ -1619,9 +1619,9 @@ impl Agent {
                         // Note: granular tool_result events already written by display_event via emit_and_append_event
                     }
                     // Update context tokens from USAGE (used by next turn's compact check)
-                    if self.last_input_tokens > 0 {
-                        self.update_stats_from_usage();
-                    }
+                    // 对齐 Bash/Go: agent_request_count 和 token totals 无条件更新,
+                    // current_context_tokens 仅在 > 0 时写入
+                    self.update_stats_from_usage();
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         // end_turn 后尝试 drain（对齐 bash agent_drain_notify_buf && continue）

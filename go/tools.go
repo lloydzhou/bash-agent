@@ -235,10 +235,11 @@ func (td *ToolDispatcher) toolRead(p, offsetStr, limitStr string) (string, error
 		end = start + limit
 	}
 
-	// 带行号输出
+	// 不加行号 — 对齐 Bash sed -n / Rust 原始文本输出
 	var buf strings.Builder
 	for i := start; i < end; i++ {
-		buf.WriteString(fmt.Sprintf("%6d\t%s\n", i+1, lines[i]))
+		buf.WriteString(lines[i])
+		buf.WriteByte('\n')
 	}
 	return buf.String(), nil
 }

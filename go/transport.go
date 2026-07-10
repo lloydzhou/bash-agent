@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ═══════════════════════════════════════════
@@ -45,17 +46,50 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 		fmt.Fprintf(osStderr, "[verbose] Request body (%dKB): %s\n", len(body)/1024, preview)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", t.buildURL(), bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	req.Header = t.buildHeaders()
+	// 对齐 Bash curl --retry 2 --retry-delay 1 --retry-max-time 20
+	// 和 Rust StreamClient: 最多重试 2 次，延迟 1s，总窗口 20s
+	const maxRetries = 2
+	const retryDelay = 1 * time.Second
+	const retryMaxTime = 20 * time.Second
 
-	resp, err := t.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
+	start := time.Now()
+	var resp *http.Response
+	var httpErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "POST", t.buildURL(), bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header = t.buildHeaders()
+
+		resp, httpErr = t.client.Do(req)
+		if httpErr == nil && resp.StatusCode < 500 {
+			break // 成功（2xx）或客户端错误（4xx）
+		}
+
+		// 传输错误或 5xx → 可重试
+		if resp != nil {
+			resp.Body.Close()
+		}
+		if attempt < maxRetries && time.Since(start) < retryMaxTime {
+			time.Sleep(retryDelay)
+			continue
+		}
+
+		// 重试耗尽
+		if httpErr != nil {
+			return nil, fmt.Errorf("http request: %w", httpErr)
+		}
+		// 5xx 重试耗尽 → 返回错误事件
+		ch := make(chan Event, 2)
+		ch <- Event{Type: EventError, Fields: []string{"ERROR", fmt.Sprintf("HTTP %d (server error, retries exhausted)", resp.StatusCode)}}
+		ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
+		close(ch)
+		return ch, nil
 	}
 
+	// 4xx 错误处理（不重试）
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -66,7 +100,7 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 		return ch, nil
 	}
 
-	// 启动 SSE 解析 goroutine
+	// 成功 → 启动 SSE 解析 goroutine
 	ch := make(chan Event, 64)
 	go t.parseSSEStream(resp, ch)
 	return ch, nil
