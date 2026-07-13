@@ -873,16 +873,15 @@ tool_bash_mode_guard() {
 }
 
 tool_native_file_mode_guard() {
-    local name="$1" path="${2:-}" pattern="${3:-}" target probe
-    target="${path:-.}"
+    local name="$1" path="${2:-}" pattern="${3:-}" target="${2:-.}" probe
+    [[ "$name" == Glob && -z "$path" && ( "$pattern" == /* || "$pattern" == *..* ) ]] && target=/
     case "$target" in
         /*|~|~/*|./*|../*) ;;
         *) target="./$target" ;;
     esac
     case "$name" in
-        Read|Grep) probe="cat $target" ;;
+        Read|Grep|Glob) probe="cat $target" ;;
         Write|Edit) probe=": > $target" ;;
-        Glob) [[ -z "$path" && ( "$pattern" == /* || "$pattern" == *..* ) ]] && probe="cat /" || probe="cat $target" ;;
         *) return 0 ;;
     esac
     tool_bash_mode_guard "$probe"
