@@ -1012,6 +1012,19 @@ test_agent_bash_blocks_system_read_mode() {
         "4000"
 }
 
+test_agent_native_read_blocks_system_read_mode() {
+    local output
+    info "Test 25aca: Agent.sh native Read blocks system read (required=4000)"
+    output=$(BASH_AGENT_BASH_MODE=0447 "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'NATIVE_READ_SYSTEM_BLOCK_MARKER' 2>&1) || true
+    # 工具结果不会在终端展示；模拟服务仅在收到预期拒绝文本时才返回此确认语。
+    if [[ "$output" == *"[tool] Read(/etc/hosts)"* ]] && \
+       [[ "$output" == *"Blocked native system read handled."* ]]; then
+        green "Agent.sh native Read blocks system read"; ((PASS++)) || true
+    else
+        red "Agent.sh native Read blocks system read"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+}
+
 test_agent_bash_blocks_network_execute_mode() {
     test_agent_bash_mode_blocked_case \
         "Test 25ad: Agent.sh bash blocks network execute (required=0050)" \
@@ -2671,6 +2684,7 @@ test_agent_bash_quotes
 test_agent_bash_blocked_command
 test_agent_bash_blocked_delete_command
 test_agent_bash_blocks_system_read_mode
+test_agent_native_read_blocks_system_read_mode
 test_agent_bash_blocks_network_execute_mode
 test_agent_bash_blocks_external_write_mode
 test_agent_bash_invalid_mode_fails_closed
@@ -2739,6 +2753,8 @@ test_bash_mode_scanner() {
     eval "$(sed -n '/^tool_bash_scan_script()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
     eval "$(sed -n '/^tool_bash_mode_normalize()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
     eval "$(sed -n '/^tool_classify_bash_required_mode()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
+    eval "$(sed -n '/^tool_bash_mode_allows()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
+    eval "$(sed -n '/^tool_native_file_mode_guard()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
 
     local scan_pass=0 scan_fail=0
     local CWD="${ROOT_DIR}"
@@ -2753,6 +2769,27 @@ test_bash_mode_scanner() {
             red "bash-mode: $desc (got=$result want=$expect cmd=$cmd)"; ((scan_fail++)) || true
         fi
     }
+
+    assert_native_mode() {
+        local desc=$1 name=$2 path=$3 pattern=$4 allowed=$5 expect_rc=$6 expect_required=$7 output rc
+        output=$(BASH_AGENT_BASH_MODE="$allowed" tool_native_file_mode_guard "$name" "$path" "$pattern" 2>&1); rc=$?
+        if [[ "$rc" == "$expect_rc" ]] && { [[ "$expect_rc" != 0 ]] || [[ -z "$output" ]]; } && \
+           { [[ -z "$expect_required" ]] || [[ "$output" == *"required=$expect_required"* ]]; }; then
+            green "native-file-mode: $desc"; ((scan_pass++)) || true
+        else
+            red "native-file-mode: $desc (rc=$rc output=$output)"; ((scan_fail++)) || true
+        fi
+    }
+
+    assert_native_mode "workspace Read allowed" Read "$CWD/src/agent.sh" "" 0467 0 ""
+    assert_native_mode "system Read blocked" Read /etc/hosts "" 0467 1 4000
+    assert_native_mode "external Write blocked" Write "$HOME/native-file-mode-test.txt" "" 0467 1 0200
+    assert_native_mode "workspace Write blocked" Write "$CWD/native-file-mode-test.txt" "" 0465 1 0002
+    assert_native_mode "Grep default path uses workspace" Grep "" "" 0467 0 ""
+    assert_native_mode "Glob default path uses workspace" Glob "" "*.sh" 0467 0 ""
+    assert_native_mode "Glob absolute pattern without path fails closed" Glob "" "/etc/*" 0467 1 4000
+    assert_native_mode "Glob parent pattern without path fails closed" Glob "" "../*" 0467 1 4000
+    assert_native_mode "invalid mode fails closed" Read "$CWD/src/agent.sh" "" bad1 1 0004
 
     # --- workspace 绝对路径读（CWD 前缀）→ scope=1 ---
     assert_mode "workspace abs read: ls" \

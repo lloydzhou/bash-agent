@@ -853,6 +853,31 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing blocked delete tool_result content')
             return
+        if b'NATIVE_READ_SYSTEM_BLOCK_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_native_read_system_block","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_native_read_system_block_1","name":"Read","input":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'path':'/etc/hosts'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}\n\n',
+                    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'NATIVE_READ_SYSTEM_BLOCK_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                if b'command blocked by bash safety policy' in body and b'required=4000' in body and b'allowed=0447' in body:
+                    for c in [
+                        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_native_read_system_block_done","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Blocked native system read handled."}}\n\n',
+                        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+                        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'missing blocked native read tool_result content')
+            return
         if b'BASH_SYSTEM_READ_BLOCK_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [

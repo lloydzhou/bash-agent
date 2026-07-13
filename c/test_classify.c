@@ -15,6 +15,13 @@
 
 extern void bash_classify_required_mode(const char *cmd, char out[5]);
 
+typedef struct {
+    char *output;
+    int exit_code;
+} ToolResult;
+extern ToolResult native_file_mode_guard(const char *name, const char *input_json);
+extern void tool_result_free(ToolResult *r);
+
 static int g_pass = 0, g_fail = 0;
 
 static void t(const char *label, const char *cmd, const char *expect) {
@@ -98,6 +105,45 @@ int main(void) {
     T("true || cat /etc/passwd",                           "4000");
     T("cat > /tmp/test.sh << 'EOF' && bash /tmp/test.sh", "0001");
     T("git add -A && git commit -m fix && git push",      "0023");
+
+    printf("\n=== native file guards ===\n");
+    setenv("BASH_AGENT_BASH_MODE", "0467", 1);
+    ToolResult guard = native_file_mode_guard("Read", "{\"path\":\"src/agent.sh\"}");
+    if (!guard.output) { printf("\033[32m✓ PASS\033[0m: workspace Read allowed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: workspace Read allowed: %s\n", guard.output); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Read", "{\"path\":\"/etc/hosts\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: system Read blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: system Read blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Write", "{\"path\":\"~/note.txt\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: external Write blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: external Write blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    setenv("BASH_AGENT_BASH_MODE", "0465", 1);
+    guard = native_file_mode_guard("Edit", "{\"path\":\"src/agent.sh\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: workspace Edit without write blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: workspace Edit without write blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    setenv("BASH_AGENT_BASH_MODE", "0467", 1);
+    guard = native_file_mode_guard("Grep", "{\"pattern\":\"needle\"}");
+    if (!guard.output) { printf("\033[32m✓ PASS\033[0m: default Grep allowed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: default Grep allowed: %s\n", guard.output); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Glob", "{\"pattern\":\"/etc/*\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: absolute default Glob blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: absolute default Glob blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Glob", "{\"pattern\":\"../*\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: parent default Glob blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: parent default Glob blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    setenv("BASH_AGENT_BASH_MODE", "invalid", 1);
+    guard = native_file_mode_guard("Read", "{\"path\":\"src/agent.sh\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: invalid mode fails closed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: invalid mode fails closed\n"); g_fail++; }
+    tool_result_free(&guard);
+    unsetenv("BASH_AGENT_BASH_MODE");
 
     printf("\n==============================\n");
     printf("Results: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m\n", g_pass, g_fail);

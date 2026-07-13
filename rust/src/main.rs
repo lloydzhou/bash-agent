@@ -169,8 +169,12 @@ fn print_usage() {
     println!("  -m, --model MODEL       Model name");
     println!("  --max-tokens N          Max output tokens (default: 16384)");
     println!("  --tool-timeout N        Tool execution timeout in seconds (default: 600)");
-    println!("  --effort LEVEL          Thinking effort: low|medium|high|xhigh|max (default: high)");
-    println!("  --thinking MODE         Thinking mode: adaptive|enabled|disabled (default: adaptive)");
+    println!(
+        "  --effort LEVEL          Thinking effort: low|medium|high|xhigh|max (default: high)"
+    );
+    println!(
+        "  --thinking MODE         Thinking mode: adaptive|enabled|disabled (default: adaptive)"
+    );
     println!(
         "  --skill NAME            Load skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)"
     );
@@ -182,7 +186,9 @@ fn print_usage() {
     println!("  --print                 Alias for --output-format stream-json");
     println!("  --session [NAME]        Use named session");
     println!("  --continue              Continue most recent session");
-    println!("  --fork                   When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)");
+    println!(
+        "  --fork                   When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)"
+    );
     println!("  --list-sessions         List saved sessions");
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
@@ -192,7 +198,7 @@ fn print_usage() {
     println!("  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)");
     println!("  *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)");
     println!("  BASH_AGENT_HOME         Override session storage (default: $HOME)");
-    println!("  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)");
+    println!("  BASH_AGENT_BASH_MODE    Bash and local file tool permissions (default: 0467)");
 }
 
 fn list_sessions(home: &Path, cwd: &Path) -> Result<()> {

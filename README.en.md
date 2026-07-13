@@ -172,15 +172,15 @@ Without an API key, images can still be pasted (generating `[Image #N]` placehol
 | `OPENAI_BASE_URL` | OpenAI API base URL |
 | `JINA_API_KEY` | Jina AI API key (required for WebSearch/WebFetch tools) |
 | `BASH_AGENT_HOME` | Override session storage directory (default: `$HOME`) |
-| `BASH_AGENT_BASH_MODE` | Bash tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0467`) |
+| `BASH_AGENT_BASH_MODE` | Bash and local file tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0467`) |
 | `DESCRIBE_API_KEY` | Image description API key (defaults to GLM-4V-Flash, free) |
 | `DESCRIBE_MODEL` | Image description model name (default: `glm-4v-flash`) |
 | `DESCRIBE_BASE_URL` | Image description API base URL (default: `https://open.bigmodel.cn/api/paas/v4`) |
 | `THINKING_BUDGET` | Thinking token budget (default: `2048`) |
 
-## Bash Tool Permission Mode
+## Bash and Local File Tool Permission Mode
 
-`BASH_AGENT_BASH_MODE` controls what the `Bash` tool is allowed to touch. It is a 4-digit octal string:
+`BASH_AGENT_BASH_MODE` controls what the `Bash`, `Read`, `Write`, `Edit`, `Glob`, and `Grep` tools are allowed to touch. It is a 4-digit octal string:
 
 ```text
 system external network workspace
@@ -211,6 +211,8 @@ export BASH_AGENT_BASH_MODE=4447  # allow system read
 export BASH_AGENT_BASH_MODE=0457  # allow network execute
 export BASH_AGENT_BASH_MODE=7777  # fully open, trusted environments only
 ```
+
+Local file tools derive equivalent access probes from their paths: `Read`, `Grep`, and `Glob` require read access, while `Write` and `Edit` require write access. A missing path is checked against the current workspace. A pathless `Glob` with an absolute pattern or `..` segment fails closed as a system read.
 
 Invalid values fail closed to `0000`. The model is expressed like Linux-style `rwx` permission bits. Full classification rules, recommended settings, and the shared block message are documented in [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md).
 
@@ -300,7 +302,7 @@ Scopes: global (`~/.bash-agent/`) and project (current directory).
 | Document | Description |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, layering, protocols |
-| [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash tool permission mode, classification rules, recommended settings |
+| [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash and local file tool permission mode, classification rules, recommended settings |
 | [`docs/tools.md`](docs/tools.md) | 13 built-in tool references |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | Compaction algorithm derivation |
 | [`docs/sessions.md`](docs/sessions.md) | Session files and recovery |

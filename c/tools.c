@@ -523,6 +523,53 @@ static int bash_mode_allows(const char *allowed_mode, const char *required_mode)
     return (required_val & (4095 ^ allowed_val)) == 0;
 }
 
+STATIC ToolResult native_file_mode_guard(const char *name, const char *input_json) {
+    ToolResult r = {NULL, 0};
+    JsonParse jp = json_parse_root(input_json);
+    char *path, *pattern;
+    const char *raw_path;
+    char target[2048], probe[2100], allowed_mode[5], required_mode[5];
+    if (jp.error) return r;
+    path = json_get_string(jp.val, "path");
+    pattern = json_get_string(jp.val, "pattern");
+    raw_path = (path && path[0]) ? path : ".";
+    if (raw_path[0] == '/' || strcmp(raw_path, "~") == 0 ||
+        strncmp(raw_path, "~/", 2) == 0 || strncmp(raw_path, "./", 2) == 0 ||
+        strncmp(raw_path, "../", 3) == 0) {
+        snprintf(target, sizeof(target), "%s", raw_path);
+    } else {
+        snprintf(target, sizeof(target), "./%s", raw_path);
+    }
+    if (strcmp(name, "Read") == 0 || strcmp(name, "Grep") == 0) {
+        snprintf(probe, sizeof(probe), "cat %s", target);
+    } else if (strcmp(name, "Write") == 0 || strcmp(name, "Edit") == 0) {
+        snprintf(probe, sizeof(probe), ": > %s", target);
+    } else if (strcmp(name, "Glob") == 0) {
+        if ((!path || !path[0]) && pattern && (pattern[0] == '/' || strstr(pattern, ".."))) {
+            snprintf(probe, sizeof(probe), "cat /");
+        } else {
+            snprintf(probe, sizeof(probe), "cat %s", target);
+        }
+    } else {
+        free(path);
+        free(pattern);
+        return r;
+    }
+    free(path);
+    free(pattern);
+    bash_mode_normalize(util_env("BASH_AGENT_BASH_MODE", "0467"), allowed_mode);
+    bash_classify_required_mode(probe, required_mode);
+    if (!bash_mode_allows(allowed_mode, required_mode)) {
+        StrBuf deny_buf;
+        sb_init(&deny_buf);
+        sb_appendf(&deny_buf, "Error: command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)",
+                   required_mode, allowed_mode);
+        r.output = deny_buf.data;
+        r.exit_code = 1;
+    }
+    return r;
+}
+
 static ToolResult tool_bash(const char *input_json, int timeout_secs) {
     ToolResult r = {NULL, 0};
     JsonParse jp = json_parse_root(input_json);
@@ -1038,6 +1085,11 @@ ToolResult tool_dispatch(const char *name, const char *input_json,
                          const SessionPaths *paths) {
     (void)home;
 
+    if (strcmp(name, "Read") == 0 || strcmp(name, "Write") == 0 ||
+        strcmp(name, "Edit") == 0 || strcmp(name, "Glob") == 0 || strcmp(name, "Grep") == 0) {
+        ToolResult guard = native_file_mode_guard(name, input_json);
+        if (guard.output) return guard;
+    }
     if (strcmp(name, "Read") == 0) return tool_read(input_json, max_bytes);
     if (strcmp(name, "Write") == 0) return tool_write(input_json);
     if (strcmp(name, "Edit") == 0) return tool_edit(input_json);

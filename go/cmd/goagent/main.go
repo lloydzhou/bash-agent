@@ -71,7 +71,7 @@ Environment:
   *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)
   *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)
   BASH_AGENT_HOME         Override session storage (default: $HOME)
-  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)
+  BASH_AGENT_BASH_MODE    Bash and local file tool permissions (default: 0467)
 
 Examples:
   goagent "Read /etc/hostname and tell me what it says"

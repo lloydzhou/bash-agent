@@ -13,6 +13,7 @@
 - 默认结果上限 50KB，超出截断
 - 支持多文件读取（多次调用）
 - 编辑前先用 `offset`/`limit` 定位目标行
+- 受 `BASH_AGENT_BASH_MODE` 的读取权限限制
 
 ## `Write`
 
@@ -26,6 +27,7 @@
 - 自动创建父目录
 - 默认写入上限 1MB
 - 覆盖写入，不是追加
+- 受 `BASH_AGENT_BASH_MODE` 的写入权限限制
 
 ## `Edit`
 
@@ -41,6 +43,7 @@
 - 默认写入上限 1MB
 - 不支持正则，只做精确字符串替换
 - 适合精确的小范围修改
+- 受 `BASH_AGENT_BASH_MODE` 的写入权限限制
 
 ## `Bash`
 
@@ -83,6 +86,7 @@ export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
 
 - 基于 `rg --files -g`
 - 依赖 `rg`（ripgrep）
+- 受 `BASH_AGENT_BASH_MODE` 的读取权限限制；未提供 `path` 时使用当前工作目录，绝对或含 `..` 的无路径模式会失败关闭
 
 ## `Grep`
 
@@ -98,6 +102,9 @@ export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
 - 基于 `rg -n`
 - `context` 显示匹配行前后 N 行，便于直接定位编辑位置
 - 依赖 `rg`（ripgrep）
+- 受 `BASH_AGENT_BASH_MODE` 的读取权限限制；未提供 `path` 时使用当前工作目录
+
+更多分类规则见 [`bash-tool-policy.md`](bash-tool-policy.md)。
 
 ## `TodoWrite`
 

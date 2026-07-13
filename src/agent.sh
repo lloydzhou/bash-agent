@@ -625,12 +625,12 @@ llm_summary_call() {
 tool_dispatch() {
     local name="$1"; shift
     case "$name" in
-        Read)      tool_read "$@" ;;
-        Write)     tool_write "$1" "$2" ;;
-        Edit)      tool_edit "$@" ;;
+        Read)      tool_native_file_mode_guard "$name" "$1" || return 1; tool_read "$@" ;;
+        Write)     tool_native_file_mode_guard "$name" "$1" || return 1; tool_write "$1" "$2" ;;
+        Edit)      tool_native_file_mode_guard "$name" "$1" || return 1; tool_edit "$@" ;;
         Bash)      tool_bash "$1" "$2" "$3" ;;
-        Glob)      tool_glob "$1" "$2" ;;
-        Grep)      tool_grep "$1" "$2" "$3" "$4" ;;
+        Glob)      tool_native_file_mode_guard "$name" "$2" "$1" || return 1; tool_glob "$1" "$2" ;;
+        Grep)      tool_native_file_mode_guard "$name" "$2" || return 1; tool_grep "$1" "$2" "$3" "$4" ;;
         TodoWrite) printf '%s' "$1" ;;
         PlanConfirm) tool_plan_confirm ;;
         PlanClear) tool_plan_clear ;;
@@ -859,6 +859,34 @@ tool_bash_mode_allows() {
     allowed=$(tool_bash_mode_normalize "$1")
     required=$(tool_bash_mode_normalize "$2")
     (( (8#$required & (4095 ^ 8#$allowed)) == 0 ))
+}
+
+tool_native_file_mode_guard() {
+    local name="$1" path="${2:-}" pattern="${3:-}" target probe allowed_mode required_mode
+    target="${path:-.}"
+    case "$target" in
+        /*|~|~/*|./*|../*) ;;
+        *) target="./$target" ;;
+    esac
+    case "$name" in
+        Read|Grep) probe="cat $target" ;;
+        Write|Edit) probe=": > $target" ;;
+        Glob)
+            if [[ -z "$path" && ( "$pattern" == /* || "$pattern" == *..* ) ]]; then
+                probe="cat /"
+            else
+                probe="cat $target"
+            fi
+            ;;
+        *) return 0 ;;
+    esac
+    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
+    tool_classify_bash_required_mode "$probe" >/dev/null
+    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
+    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
+        echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
+        return 1
+    fi
 }
 
 tool_read() {
@@ -1547,7 +1575,7 @@ Environment:
   *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)
   *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)
   BASH_AGENT_HOME         Override session storage (default: $HOME)
-  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)
+  BASH_AGENT_BASH_MODE    Bash and local file tool permissions (default: 0467)
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"

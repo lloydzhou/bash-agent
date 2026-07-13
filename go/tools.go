@@ -84,16 +84,31 @@ func (td *ToolDispatcher) SetSkillLoader(fn func(name string) (string, error)) {
 func (td *ToolDispatcher) Dispatch(ctx context.Context, name string, params map[string]string) (string, error) {
 	switch name {
 	case "Read":
+		if err := nativeFileModeGuard(name, params["path"], ""); err != nil {
+			return "", err
+		}
 		return td.toolRead(params["path"], params["offset"], params["limit"])
 	case "Write":
+		if err := nativeFileModeGuard(name, params["path"], ""); err != nil {
+			return "", err
+		}
 		return td.toolWrite(params["path"], params["content"])
 	case "Edit":
+		if err := nativeFileModeGuard(name, params["path"], ""); err != nil {
+			return "", err
+		}
 		return td.toolEdit(params["path"], params["old_string"], params["new_string"])
 	case "Bash":
 		return td.toolBash(ctx, params["command"], params["timeout"], params["background"])
 	case "Glob":
+		if err := nativeFileModeGuard(name, params["path"], params["pattern"]); err != nil {
+			return "", err
+		}
 		return td.toolGlob(params["pattern"], params["path"])
 	case "Grep":
+		if err := nativeFileModeGuard(name, params["path"], ""); err != nil {
+			return "", err
+		}
 		return td.toolGrep(params["pattern"], params["path"], params["glob"], params["context"])
 	case "TodoWrite":
 		return td.toolTodoWrite(params)
@@ -507,6 +522,37 @@ func ToolBashModeAllows(allowed, required string) bool {
 	allowedVal, _ := strconv.ParseInt(toolBashModeNormalize(allowed), 8, 32)
 	requiredVal, _ := strconv.ParseInt(toolBashModeNormalize(required), 8, 32)
 	return requiredVal&(4095^allowedVal) == 0
+}
+
+func nativeFileModeGuard(name, path, pattern string) error {
+	target := path
+	if target == "" {
+		target = "."
+	}
+	if !strings.HasPrefix(target, "/") && target != "~" && !strings.HasPrefix(target, "~/") && !strings.HasPrefix(target, "./") && !strings.HasPrefix(target, "../") {
+		target = "./" + target
+	}
+	probe := ""
+	switch name {
+	case "Read", "Grep":
+		probe = "cat " + target
+	case "Write", "Edit":
+		probe = ": > " + target
+	case "Glob":
+		if path == "" && (strings.HasPrefix(pattern, "/") || strings.Contains(pattern, "..")) {
+			probe = "cat /"
+		} else {
+			probe = "cat " + target
+		}
+	default:
+		return nil
+	}
+	allowedMode := toolBashModeNormalize(os.Getenv("BASH_AGENT_BASH_MODE"))
+	requiredMode := ToolClassifyBashRequiredMode(probe)
+	if !ToolBashModeAllows(allowedMode, requiredMode) {
+		return fmt.Errorf("command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)", requiredMode, allowedMode)
+	}
+	return nil
 }
 
 // toolBash 执行 shell 命令
