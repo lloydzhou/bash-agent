@@ -2754,6 +2754,7 @@ test_bash_mode_scanner() {
     eval "$(sed -n '/^tool_bash_mode_normalize()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
     eval "$(sed -n '/^tool_classify_bash_required_mode()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
     eval "$(sed -n '/^tool_bash_mode_allows()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
+    eval "$(sed -n '/^tool_bash_mode_guard()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
     eval "$(sed -n '/^tool_native_file_mode_guard()/,/^}/p' "$ROOT_DIR/src/agent.sh")"
 
     local scan_pass=0 scan_fail=0

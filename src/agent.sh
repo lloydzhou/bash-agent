@@ -861,8 +861,19 @@ tool_bash_mode_allows() {
     (( (8#$required & (4095 ^ 8#$allowed)) == 0 ))
 }
 
+tool_bash_mode_guard() {
+    local cmd="$1" allowed_mode required_mode
+    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
+    tool_classify_bash_required_mode "$cmd" >/dev/null
+    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
+    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
+        echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
+        return 1
+    fi
+}
+
 tool_native_file_mode_guard() {
-    local name="$1" path="${2:-}" pattern="${3:-}" target probe allowed_mode required_mode
+    local name="$1" path="${2:-}" pattern="${3:-}" target probe
     target="${path:-.}"
     case "$target" in
         /*|~|~/*|./*|../*) ;;
@@ -871,22 +882,10 @@ tool_native_file_mode_guard() {
     case "$name" in
         Read|Grep) probe="cat $target" ;;
         Write|Edit) probe=": > $target" ;;
-        Glob)
-            if [[ -z "$path" && ( "$pattern" == /* || "$pattern" == *..* ) ]]; then
-                probe="cat /"
-            else
-                probe="cat $target"
-            fi
-            ;;
+        Glob) [[ -z "$path" && ( "$pattern" == /* || "$pattern" == *..* ) ]] && probe="cat /" || probe="cat $target" ;;
         *) return 0 ;;
     esac
-    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
-    tool_classify_bash_required_mode "$probe" >/dev/null
-    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
-    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
-        echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
-        return 1
-    fi
+    tool_bash_mode_guard "$probe"
 }
 
 tool_read() {
@@ -932,15 +931,9 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" background="${3:-false}" allowed_mode required_mode tool_rc tmpout
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" background="${3:-false}" tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "no command provided"; return 1; }
-    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
-    tool_classify_bash_required_mode "$cmd" >/dev/null
-    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
-    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
-        echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
-        return 1
-    fi
+    tool_bash_mode_guard "$cmd" || return 1
     if [[ "$background" == "true" || "$background" == "1" ]]; then
         local task_id="task_$(util_new_session_id)"
         { local __cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"; }
