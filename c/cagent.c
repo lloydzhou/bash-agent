@@ -71,7 +71,7 @@ static void crash_handler(int sig) {
 int main(int argc, char *argv[]) {
     srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
     /* 默认值 */
-    const char *provider = util_env("BASH_AGENT_PROVIDER", "claude");
+    const char *provider = "claude";
     const char *model = NULL;
     const char *api_key = NULL;
     const char *base_url = NULL;
@@ -182,42 +182,40 @@ int main(int argc, char *argv[]) {
     char *effective_model = NULL;
     char *effective_base_url = NULL;
 
+    /* 先解析当前 provider 的显式参数和环境变量；DeepSeek 回退后才设置模型与传输配置。 */
     if (strcmp(provider, "claude") == 0) {
-        effective_api_key = util_strdup(api_key ? api_key : util_env("ANTHROPIC_API_KEY", ""));
-        effective_base_url = util_strdup(base_url ? base_url : util_env("ANTHROPIC_BASE_URL", ""));
-        effective_model = util_strdup(model ? model : (getenv("MODEL") && getenv("MODEL")[0] ? getenv("MODEL") : "claude-sonnet-4-20250514"));
-
-        /* DeepSeek 自动检测 */
-        if (!effective_api_key[0] && !effective_base_url[0]) {
-            const char *ds_key = getenv("DEEPSEEK_API_KEY");
-            if (ds_key && ds_key[0]) {
-                free(effective_api_key);
-                free(effective_base_url);
-                effective_api_key = util_strdup(ds_key);
-                effective_base_url = util_strdup("https://api.deepseek.com/anthropic");
-                if (!model) {
-                    free(effective_model);
-                    effective_model = util_strdup("deepseek-v4-flash");
-                }
-            }
-        }
-
-        if (!effective_api_key[0] && !effective_base_url[0]) {
-            fprintf(stderr, "Error: no API key. Set ANTHROPIC_API_KEY or use --api-key\n");
-            return 1;
-        }
+        effective_api_key = util_strdup(api_key && api_key[0] ? api_key : util_env("ANTHROPIC_API_KEY", ""));
+        effective_base_url = util_strdup(base_url && base_url[0] ? base_url : util_env("ANTHROPIC_BASE_URL", ""));
     } else if (strcmp(provider, "openai") == 0) {
-        effective_api_key = util_strdup(api_key ? api_key : util_env("OPENAI_API_KEY", ""));
-        effective_base_url = util_strdup(base_url ? base_url : util_env("OPENAI_BASE_URL", ""));
-        effective_model = util_strdup(model ? model : (getenv("MODEL") && getenv("MODEL")[0] ? getenv("MODEL") : "gpt-4o"));
-
-        if (!effective_api_key[0] && !effective_base_url[0]) {
-            fprintf(stderr, "Error: no API key. Set OPENAI_API_KEY or use --api-key\n");
-            return 1;
-        }
+        effective_api_key = util_strdup(api_key && api_key[0] ? api_key : util_env("OPENAI_API_KEY", ""));
+        effective_base_url = util_strdup(base_url && base_url[0] ? base_url : util_env("OPENAI_BASE_URL", ""));
     } else {
         fprintf(stderr, "Error: unknown provider '%s' (use claude|openai)\n", provider);
         return 1;
+    }
+
+    /* 仅当前 provider 没有显式配置时，自动回退至 DeepSeek。 */
+    if (!effective_api_key[0] && !effective_base_url[0]) {
+        const char *ds_key = getenv("DEEPSEEK_API_KEY");
+        if (ds_key && ds_key[0]) {
+            provider = "claude";
+            free(effective_api_key);
+            free(effective_base_url);
+            effective_api_key = util_strdup(ds_key);
+            effective_base_url = util_strdup("https://api.deepseek.com/anthropic");
+            if (!model || !model[0]) effective_model = util_strdup("deepseek-v4-flash");
+        }
+    }
+
+    if (!effective_api_key[0] && !effective_base_url[0]) {
+        fprintf(stderr, "Error: no API key. Set %s_API_KEY or use --api-key\n",
+                strcmp(provider, "openai") == 0 ? "OPENAI" : "ANTHROPIC");
+        return 1;
+    }
+
+    if (!effective_model) {
+        effective_model = util_strdup(model && model[0] ? model :
+            (strcmp(provider, "openai") == 0 ? "gpt-4o" : "claude-sonnet-4-20250514"));
     }
 
     /* 继续 session */

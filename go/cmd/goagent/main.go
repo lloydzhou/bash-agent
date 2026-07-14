@@ -152,28 +152,14 @@ Examples:
 		cfg.Model = model
 	}
 
-	// Provider 默认值
+	// 先解析当前 provider 的显式参数和环境变量；DeepSeek 回退后才设置模型与传输配置。
 	switch cfg.Provider {
 	case "claude":
 		if cfg.APIKey == "" {
 			cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		}
-		// DeepSeek auto-detection: DEEPSEEK_API_KEY 且未显式配置其他 base URL
-		if cfg.APIKey == "" && cfg.BaseURL == "" &&
-			os.Getenv("DEEPSEEK_API_KEY") != "" &&
-			os.Getenv("ANTHROPIC_BASE_URL") == "" &&
-			os.Getenv("OPENAI_BASE_URL") == "" {
-			cfg.APIKey = os.Getenv("DEEPSEEK_API_KEY")
-			cfg.BaseURL = "https://api.deepseek.com/anthropic"
-			if cfg.Model == "" {
-				cfg.Model = "deepseek-v4-flash"
-			}
-		}
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = os.Getenv("ANTHROPIC_BASE_URL")
-		}
-		if cfg.Model == "" {
-			cfg.Model = "claude-sonnet-4-20250514"
 		}
 	case "openai":
 		if cfg.APIKey == "" {
@@ -182,8 +168,26 @@ Examples:
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = os.Getenv("OPENAI_BASE_URL")
 		}
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown provider: %s (use claude|openai)\n", cfg.Provider)
+		os.Exit(1)
+	}
+
+	// 仅当前 provider 没有显式配置时，自动回退至 DeepSeek。
+	if cfg.APIKey == "" && cfg.BaseURL == "" && os.Getenv("DEEPSEEK_API_KEY") != "" {
+		cfg.Provider = "claude"
+		cfg.APIKey = os.Getenv("DEEPSEEK_API_KEY")
+		cfg.BaseURL = "https://api.deepseek.com/anthropic"
 		if cfg.Model == "" {
+			cfg.Model = "deepseek-v4-flash"
+		}
+	}
+
+	if cfg.Model == "" {
+		if cfg.Provider == "openai" {
 			cfg.Model = "gpt-4o"
+		} else {
+			cfg.Model = "claude-sonnet-4-20250514"
 		}
 	}
 

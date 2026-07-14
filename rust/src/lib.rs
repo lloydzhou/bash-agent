@@ -198,34 +198,14 @@ pub mod config {
             }
         }
 
+        // 先解析当前 provider 的显式参数和环境变量；DeepSeek 回退后才设置模型与传输配置。
         match cfg.provider.as_str() {
             "claude" => {
                 if cfg.api_key.is_empty() {
                     cfg.api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
                 }
-                // DeepSeek auto-detection
-                if cfg.api_key.is_empty()
-                    && cfg.base_url.is_empty()
-                    && std::env::var("DEEPSEEK_API_KEY")
-                        .map(|v| !v.is_empty())
-                        .unwrap_or(false)
-                    && std::env::var("ANTHROPIC_BASE_URL").is_err()
-                    && std::env::var("OPENAI_BASE_URL").is_err()
-                {
-                    cfg.api_key = std::env::var("DEEPSEEK_API_KEY").unwrap();
-                    cfg.base_url = "https://api.deepseek.com/anthropic".to_string();
-                    if cfg.model.is_empty() {
-                        cfg.model = "deepseek-v4-flash".to_string();
-                    }
-                }
                 if cfg.base_url.is_empty() {
                     cfg.base_url = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
-                }
-                if cfg.model.is_empty() {
-                    cfg.model = "claude-sonnet-4-20250514".to_string();
-                }
-                if cfg.api_key.is_empty() && cfg.base_url.is_empty() {
-                    bail!("no API key. Set ANTHROPIC_API_KEY or use --api-key");
                 }
             }
             "openai" => {
@@ -235,14 +215,38 @@ pub mod config {
                 if cfg.base_url.is_empty() {
                     cfg.base_url = std::env::var("OPENAI_BASE_URL").unwrap_or_default();
                 }
-                if cfg.model.is_empty() {
-                    cfg.model = "gpt-4o".to_string();
-                }
-                if cfg.api_key.is_empty() && cfg.base_url.is_empty() {
-                    bail!("no API key. Set OPENAI_API_KEY or use --api-key");
-                }
             }
             _ => bail!("unknown provider: {} (use claude|openai)", cfg.provider),
+        }
+
+        // 仅当前 provider 没有显式配置时，自动回退至 DeepSeek。
+        if cfg.api_key.is_empty() && cfg.base_url.is_empty() {
+            if let Ok(ds_key) = std::env::var("DEEPSEEK_API_KEY") {
+                if !ds_key.is_empty() {
+                    cfg.provider = "claude".to_string();
+                    cfg.api_key = ds_key;
+                    cfg.base_url = "https://api.deepseek.com/anthropic".to_string();
+                    if cfg.model.is_empty() {
+                        cfg.model = "deepseek-v4-flash".to_string();
+                    }
+                }
+            }
+        }
+
+        if cfg.api_key.is_empty() && cfg.base_url.is_empty() {
+            match cfg.provider.as_str() {
+                "claude" => bail!("no API key. Set ANTHROPIC_API_KEY or use --api-key"),
+                "openai" => bail!("no API key. Set OPENAI_API_KEY or use --api-key"),
+                _ => unreachable!(),
+            }
+        }
+
+        if cfg.model.is_empty() {
+            cfg.model = match cfg.provider.as_str() {
+                "claude" => "claude-sonnet-4-20250514",
+                "openai" => "gpt-4o",
+                _ => unreachable!(),
+            }.to_string();
         }
         Ok(())
     }
@@ -255,7 +259,7 @@ pub mod config {
                 } else {
                     cfg.base_url.as_str()
                 };
-                format!("{}/messages", base.trim_end_matches('/'))
+                format!("{}/messages", base)
             }
             "openai" => {
                 let base = if cfg.base_url.is_empty() {
@@ -263,7 +267,7 @@ pub mod config {
                 } else {
                     cfg.base_url.as_str()
                 };
-                format!("{}/chat/completions", base.trim_end_matches('/'))
+                format!("{}/chat/completions", base)
             }
             _ => String::new(),
         }

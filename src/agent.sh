@@ -418,12 +418,20 @@ store_session_get_dir() {
 }
 
 store_session_get_latest_dir() {
-    local project_dir latest="" latest_ts=0 dir ts
+    local project_dir latest="" latest_ts=0 dir ts stat_cmd
     project_dir="$(store_session_get_dir)"
     [[ -d "$project_dir" ]] || return 1
+    if stat -c "%Y" "$project_dir" &>/dev/null; then
+        stat_cmd=(stat -c "%Y")
+    else
+        stat_cmd=(stat -f "%m")
+    fi
     for dir in "$project_dir"/*/; do
         [[ -d "$dir" ]] || continue
-        ts=$(stat -f "%m" "$dir/events.jsonl" 2>/dev/null || stat -c "%Y" "$dir/events.jsonl" 2>/dev/null || stat -f "%m" "$dir" 2>/dev/null || stat -c "%Y" "$dir" 2>/dev/null || echo 0)
+        local target="$dir"
+        [[ -f "$dir/events.jsonl" ]] && target="$dir/events.jsonl"
+        ts=$("${stat_cmd[@]}" "$target" 2>/dev/null || echo 0)
+        [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
         (( ts > latest_ts )) && { latest_ts=$ts; latest="$dir"; }
     done
     [[ -n "$latest" ]] && basename "$latest" || return 1
@@ -1651,41 +1659,24 @@ list_sessions() {
 }
 
 validate_config() {
+    # Resolve the selected provider's environment configuration first. Model defaults and
+    # transport settings are applied only after DeepSeek fallback selects the final provider.
     case "$PROVIDER" in
         claude)
-            : "${API_KEY:=$ANTHROPIC_API_KEY}"
+            : "${API_KEY:=${ANTHROPIC_API_KEY:-}}"
             : "${BASE_URL:=${ANTHROPIC_BASE_URL:-}}"
-            : "${MODEL:=claude-sonnet-4-20250514}"
-            API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages"
-            HEADER_ARGS=(
-                -H "Content-Type: application/json"
-                -H "x-api-key: ${API_KEY}"
-                -H "anthropic-version: 2023-06-01"
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
-                -H "x-app: cli"
-            )
-            util_body_convert() { cat; }
-            sse_convert()  { cat; }
             ;;
         openai)
-            : "${API_KEY:=$OPENAI_API_KEY}"
+            : "${API_KEY:=${OPENAI_API_KEY:-}}"
             : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
-            : "${MODEL:=gpt-4o}"
-            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
-            HEADER_ARGS=(
-                -H "Content-Type: application/json"
-                -H "Authorization: Bearer ${API_KEY}"
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
-            )
-            util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
-            sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
             ;;
         *)
             util_die "Unknown provider: $PROVIDER (use claude|openai)"
             ;;
     esac
 
-    # Auto-detect DeepSeek API key: if DEEPSEEK_API_KEY is set, use DeepSeek's Anthropic endpoint
+    # Auto-detect DeepSeek only when the selected provider has no explicit configuration.
+    # MODEL is still empty here unless the user supplied -m/--model.
     if [[ -z "$API_KEY" && -z "$BASE_URL" && -n "${DEEPSEEK_API_KEY:-}" ]]; then
         PROVIDER="claude"
         API_KEY="$DEEPSEEK_API_KEY"
@@ -1699,6 +1690,34 @@ validate_config() {
             openai) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
         esac
     fi
+
+    # Build the final transport only after provider fallback has completed.
+    case "$PROVIDER" in
+        claude)
+            : "${MODEL:=claude-sonnet-4-20250514}"
+            API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages"
+            HEADER_ARGS=(
+                -H "Content-Type: application/json"
+                -H "x-api-key: ${API_KEY}"
+                -H "anthropic-version: 2023-06-01"
+                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+                -H "x-app: cli"
+            )
+            util_body_convert() { cat; }
+            sse_convert()  { cat; }
+            ;;
+        openai)
+            : "${MODEL:=gpt-4o}"
+            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
+            HEADER_ARGS=(
+                -H "Content-Type: application/json"
+                -H "Authorization: Bearer ${API_KEY}"
+                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+            )
+            util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
+            sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
+            ;;
+    esac
 
     # Unified SSE parser — same for all providers (sse_convert normalizes to Claude format)
     sse_parse() { util_awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"; }
