@@ -38,6 +38,7 @@ void mq_destroy(MsgQueue *q) {
 }
 
 int mq_push(MsgQueue *q, void *data) {
+    if (!q || !data) return -1;
     MQNode *node = malloc(sizeof(MQNode));
     if (!node) return -1;
     node->data = data;
@@ -62,6 +63,7 @@ int mq_push(MsgQueue *q, void *data) {
 }
 
 int mq_pop(MsgQueue *q, void **data_out) {
+    if (!q || !data_out) return -1;
     pthread_mutex_lock(&q->mutex);
     while (!q->head && !q->closed) {
         pthread_cond_wait(&q->cond, &q->mutex);
@@ -83,6 +85,7 @@ int mq_pop(MsgQueue *q, void **data_out) {
 }
 
 int mq_try_pop(MsgQueue *q, void **data_out) {
+    if (!q || !data_out) return -1;
     pthread_mutex_lock(&q->mutex);
     if (!q->head) {
         pthread_mutex_unlock(&q->mutex);
