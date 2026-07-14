@@ -72,6 +72,13 @@ func (r *Readline) SetInterruptCallback(fn func()) {
 const promptStr = "\x1b[32m> \x1b[0m"
 
 func (r *Readline) loop() {
+	defer func() {
+		if rec := recover(); rec != nil {
+			linenoise.RestoreTerminal()
+			fmt.Fprintf(os.Stderr, "\nreadline panic: %v\n", rec)
+			os.Exit(1)
+		}
+	}()
 	buf := make([]byte, 65536)
 	stdinFd := int(os.Stdin.Fd())
 
