@@ -8,6 +8,18 @@
 
 ---
 
+## [4.2.20] - 2026-07-14
+
+> **Provider 配置优先级统一与 Bash 稳定性修复**：统一 Bash、C、Go、Rust 四个运行时的 provider 显式配置、环境变量与 DeepSeek 自动回退顺序；同时修复 Bash 在 `set -u` 模式下的未绑定变量崩溃，并使用跨平台方式识别最新会话。
+
+### Fixed
+
+- **跨运行时 Provider 配置优先级**：显式参数优先于当前 provider 的环境变量；未选中 provider 的环境变量不再干扰配置解析或 DeepSeek 自动回退。DeepSeek 回退统一采用 Claude 兼容端点与 `deepseek-v4-flash` 默认模型，最终 provider 确定后才设置模型、认证和传输格式。
+- **Bash `set -u` 未绑定变量崩溃**：为 `validate_config` 中的环境变量读取提供安全的空值默认值，修复未设置 API key 时的异常退出。
+- **最新会话时间戳跨平台兼容性**：`store_session_get_latest_dir` 启动时检测系统支持的 `stat` 参数，并只查询存在的事件文件或会话目录，避免 macOS / GNU 环境回退链不兼容导致的错误。
+
+---
+
 ## [4.2.19] - 2026-07-14
 
 > **本地文件工具 Bash 权限模式与稳定性修复**：为 Bash / Read / Write / Edit 提供统一的路径权限策略，封堵受信任目录的路径穿越绕过；同时恢复 Go / C 崩溃后的终端状态，并修复 awk 转义解析问题。
@@ -1415,7 +1427,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.19...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.20...HEAD
+[4.2.20]: https://github.com/lloydzhou/bash-agent/compare/v4.2.19...v4.2.20
 [4.2.19]: https://github.com/lloydzhou/bash-agent/compare/v4.2.18...v4.2.19
 [4.2.18]: https://github.com/lloydzhou/bash-agent/compare/v4.2.17...v4.2.18
 [4.2.17]: https://github.com/lloydzhou/bash-agent/compare/v4.2.16...v4.2.17
