@@ -139,6 +139,7 @@ JsonParse json_parse(const char *src, size_t *pos) {
 }
 
 JsonParse json_parse_root(const char *src) {
+    if (!src) return make_err("null input");
     size_t pos = 0;
     JsonParse p = json_parse_internal(src, &pos);
     if (p.error) return p;

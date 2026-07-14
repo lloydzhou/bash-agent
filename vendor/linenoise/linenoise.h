@@ -136,6 +136,10 @@ void linenoisePrintf(const char *fmt, ...);
 void linenoiseRegisterState(struct linenoiseState *ls);
 void linenoiseSetActive(int active);
 
+/* Restore terminal to pre-raw-mode state. Async-signal-safe wrapper
+ * around disableRawMode for use in crash signal handlers. */
+void linenoiseRestoreTerminal(void);
+
 #ifdef __cplusplus
 }
 #endif

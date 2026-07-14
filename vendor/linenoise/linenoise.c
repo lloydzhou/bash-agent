@@ -2324,6 +2324,13 @@ static void linenoiseAtExit(void) {
     freeHistory();
 }
 
+/* Public wrapper to restore terminal from a crash signal handler.
+ * disableRawMode only calls tcsetattr (async-signal-safe) and write
+ * (async-signal-safe), so this is safe to call from a signal handler. */
+void linenoiseRestoreTerminal(void) {
+    disableRawMode(STDIN_FILENO);
+}
+
 /* This is the API call to add a new entry in the linenoise history.
  * It uses a fixed array of char pointers that are shifted (memmoved)
  * when the history max length is reached in order to remove the older
