@@ -1634,14 +1634,6 @@ list_sessions() {
 }
 
 validate_config() {
-    # Auto-detect DeepSeek API key: if DEEPSEEK_API_KEY is set, use DeepSeek's Anthropic endpoint
-    if [[ -z "${API_KEY:-}" && -z "${BASE_URL:-}" && -n "${DEEPSEEK_API_KEY:-}" ]]; then
-        PROVIDER="claude"
-        API_KEY="$DEEPSEEK_API_KEY"
-        BASE_URL="https://api.deepseek.com/anthropic"
-        : "${MODEL:=deepseek-v4-flash}"
-    fi
-
     case "$PROVIDER" in
         claude)
             : "${API_KEY:=${ANTHROPIC_API_KEY:-}}"
@@ -1675,6 +1667,14 @@ validate_config() {
             util_die "Unknown provider: $PROVIDER (use claude|openai)"
             ;;
     esac
+
+    # Auto-detect DeepSeek API key: if DEEPSEEK_API_KEY is set, use DeepSeek's Anthropic endpoint
+    if [[ -z "$API_KEY" && -z "$BASE_URL" && -n "${DEEPSEEK_API_KEY:-}" ]]; then
+        PROVIDER="claude"
+        API_KEY="$DEEPSEEK_API_KEY"
+        BASE_URL="https://api.deepseek.com/anthropic"
+        : "${MODEL:=deepseek-v4-flash}"
+    fi
 
     if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
         case "$PROVIDER" in
