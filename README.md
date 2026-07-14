@@ -39,7 +39,7 @@ brew install lloydzhou/tap/bash-agent
 curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 
-# 设置 API key（DeepSeek / Claude 二选一）
+# 按所用服务配置 API key
 export DEEPSEEK_API_KEY="sk-..."
 # export ANTHROPIC_API_KEY="sk-ant-..."
 
@@ -49,7 +49,7 @@ bash-agent -i                    # 交互模式
 bash-agent --output-format stream-json "inspect"
 ```
 
-### DeepSeek 兼容（Anthropic 协议）
+### DeepSeek 兼容
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
