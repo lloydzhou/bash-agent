@@ -8,6 +8,22 @@
 
 ---
 
+## [4.2.19] - 2026-07-14
+
+> **本地文件工具 Bash 权限模式与稳定性修复**：为 Bash / Read / Write / Edit 提供统一的路径权限策略，封堵受信任目录的路径穿越绕过；同时恢复 Go / C 崩溃后的终端状态，并修复 awk 转义解析问题。
+
+### Added
+
+- **本地文件工具 Bash 权限模式**：为 `Read`、`Write`、`Edit` 引入与 Bash 命令一致的权限守卫与路径分类，覆盖用户目录、项目目录和内部临时目录；四个运行时同步实现并补充测试。
+
+### Fixed
+
+- **受信任路径穿越绕过**：对已获信任的用户、项目及内部目录，路径规范化后重新验证边界，阻止通过 `..` 访问受限位置。
+- **Go / C 崩溃后的终端恢复**：Go 增加 panic recovery 与崩溃信号处理，C 修复 SubAgent 显示队列和空 JSON 根节点导致的 SIGSEGV，避免 raw mode 终端在异常退出后无法恢复。
+- **awk 转义解析**：将 awk 内联终端控制字符改为通过 `sprintf` 构造，避免 PEBKAC 解析器误判转义序列。
+
+---
+
 ## [4.2.18] - 2026-07-11
 
 > **跨运行时架构一致性修复**：以 Bash 版为基准，修复 C / Go / Rust 三版本在缓存策略、HTTP 传输层韧性、工具输出格式和压缩守卫逻辑上的 6 项不一致。确保四运行时行为完全对齐，同一 session 在不同版本间切换时不再产生差异。
@@ -1399,7 +1415,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.18...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.19...HEAD
+[4.2.19]: https://github.com/lloydzhou/bash-agent/compare/v4.2.18...v4.2.19
 [4.2.18]: https://github.com/lloydzhou/bash-agent/compare/v4.2.17...v4.2.18
 [4.2.17]: https://github.com/lloydzhou/bash-agent/compare/v4.2.16...v4.2.17
 [4.2.16]: https://github.com/lloydzhou/bash-agent/compare/v4.2.15...v4.2.16
