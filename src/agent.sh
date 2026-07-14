@@ -418,12 +418,20 @@ store_session_get_dir() {
 }
 
 store_session_get_latest_dir() {
-    local project_dir latest="" latest_ts=0 dir ts
+    local project_dir latest="" latest_ts=0 dir ts stat_cmd
     project_dir="$(store_session_get_dir)"
     [[ -d "$project_dir" ]] || return 1
+    if stat -c "%Y" "$project_dir" &>/dev/null; then
+        stat_cmd=(stat -c "%Y")
+    else
+        stat_cmd=(stat -f "%m")
+    fi
     for dir in "$project_dir"/*/; do
         [[ -d "$dir" ]] || continue
-        ts=$(stat -f "%m" "$dir/events.jsonl" 2>/dev/null || stat -c "%Y" "$dir/events.jsonl" 2>/dev/null || stat -f "%m" "$dir" 2>/dev/null || stat -c "%Y" "$dir" 2>/dev/null || echo 0)
+        local target="$dir"
+        [[ -f "$dir/events.jsonl" ]] && target="$dir/events.jsonl"
+        ts=$("${stat_cmd[@]}" "$target" 2>/dev/null || echo 0)
+        [[ "$ts" =~ ^[0-9]+$ ]] || ts=0
         (( ts > latest_ts )) && { latest_ts=$ts; latest="$dir"; }
     done
     [[ -n "$latest" ]] && basename "$latest" || return 1
@@ -1626,9 +1634,17 @@ list_sessions() {
 }
 
 validate_config() {
+    # Auto-detect DeepSeek API key: if DEEPSEEK_API_KEY is set, use DeepSeek's Anthropic endpoint
+    if [[ -z "${API_KEY:-}" && -z "${BASE_URL:-}" && -n "${DEEPSEEK_API_KEY:-}" ]]; then
+        PROVIDER="claude"
+        API_KEY="$DEEPSEEK_API_KEY"
+        BASE_URL="https://api.deepseek.com/anthropic"
+        : "${MODEL:=deepseek-v4-flash}"
+    fi
+
     case "$PROVIDER" in
         claude)
-            : "${API_KEY:=$ANTHROPIC_API_KEY}"
+            : "${API_KEY:=${ANTHROPIC_API_KEY:-}}"
             : "${BASE_URL:=${ANTHROPIC_BASE_URL:-}}"
             : "${MODEL:=claude-sonnet-4-20250514}"
             API_URL="${BASE_URL:-https://api.anthropic.com/v1}/messages"
@@ -1643,7 +1659,7 @@ validate_config() {
             sse_convert()  { cat; }
             ;;
         openai)
-            : "${API_KEY:=$OPENAI_API_KEY}"
+            : "${API_KEY:=${OPENAI_API_KEY:-}}"
             : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
             : "${MODEL:=gpt-4o}"
             API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
@@ -1659,14 +1675,6 @@ validate_config() {
             util_die "Unknown provider: $PROVIDER (use claude|openai)"
             ;;
     esac
-
-    # Auto-detect DeepSeek API key: if DEEPSEEK_API_KEY is set, use DeepSeek's Anthropic endpoint
-    if [[ -z "$API_KEY" && -z "$BASE_URL" && -n "${DEEPSEEK_API_KEY:-}" ]]; then
-        PROVIDER="claude"
-        API_KEY="$DEEPSEEK_API_KEY"
-        BASE_URL="https://api.deepseek.com/anthropic"
-        : "${MODEL:=deepseek-v4-flash}"
-    fi
 
     if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
         case "$PROVIDER" in
