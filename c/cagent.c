@@ -55,6 +55,19 @@ static void image_paste_wrapper(char **out, size_t *outlen) {
     agent_image_clipboard_paste(g_paste_session_dir, out, outlen);
 }
 
+/* 崩溃信号处理：恢复终端 raw mode 后重新发出信号以生成 core dump。
+ * 仅使用 async-signal-safe 函数。 */
+static void crash_handler(int sig) {
+    linenoiseRestoreTerminal();
+    /* 输出换行，避免终端残留 prompt 行 */
+    const char msg[] = "\n\rcagent: fatal signal received, terminal restored.\n\r";
+    write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    /* 恢复默认 handler 并重新发送信号，让 OS 生成 core dump */
+    signal(sig, SIG_DFL);
+    raise(sig);
+    _exit(128 + sig); /* 理论上不会到达 */
+}
+
 int main(int argc, char *argv[]) {
     srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
     /* 默认值 */
@@ -234,6 +247,19 @@ int main(int argc, char *argv[]) {
     /* 忽略 SIGPIPE：多线程中 SubAgent/bg-bash 线程的 HTTP 或 pipe 写入
      * 可能触发 SIGPIPE，默认行为是终止整个进程 */
     signal(SIGPIPE, SIG_IGN);
+
+    /* SIGSEGV / SIGABRT handler：进程崩溃时恢复终端 raw mode，避免
+     * linenoise 设置的 raw mode 残留导致终端排版错乱。
+     * handler 内仅调用 async-signal-safe 函数（tcsetattr / write / _exit）。 */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = crash_handler;
+    sa.sa_flags = SA_RESETHAND; /* 恢复默认行为，允许 core dump */
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGFPE, &sa, NULL);
 
     /* 初始化 curl */
     curl_global_init(CURL_GLOBAL_DEFAULT);

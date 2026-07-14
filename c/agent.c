@@ -2033,7 +2033,7 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     /* 显示启动通知（事件已手动写入，只推显示队列不重复写事件） */
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_start(sub_session_id, description);
-    if (!store_event_stream_json_enabled()) {
+    if (!store_event_stream_json_enabled() && agent->display_queue) {
         mq_push(agent->display_queue, dm);
     } else {
         display_message_free(dm);
@@ -2160,7 +2160,7 @@ int agent_handle_sub_agent_result(Agent *agent, const char *session_id,
     DisplayMessage *dm = malloc(sizeof(DisplayMessage));
     *dm = display_msg_sub_agent_result(session_id, status, thinking,
                                        text, in_tokens, out_tokens);
-    if (!store_event_stream_json_enabled()) {
+    if (!store_event_stream_json_enabled() && agent->display_queue) {
         mq_push(agent->display_queue, dm);
     } else {
         display_message_free(dm);
