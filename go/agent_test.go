@@ -135,6 +135,8 @@ func TestToolClassifyBashRequiredModeCWD(t *testing.T) {
 		// 可信内部目录
 		"cat > /tmp/test.go << EOF":                           "0004",
 		"cat /tmp-other/file":                                 "0400",
+		"cat /tmp/../etc/hosts":                                "4000",
+		"echo hi > /tmp/../etc/native-file-mode-test":          "2000",
 		"cat > SAMPLE_HOME/.bash-agent/projects/session/file": "0004",
 		"cat SAMPLE_HOME/.bash-agent/projects-copy/file":      "0400",
 		// /dev/null
@@ -184,6 +186,9 @@ func TestNativeFileModeGuard(t *testing.T) {
 		{"tmp glob", "0004", "Glob", "/tmp", "*.txt", ""},
 		{"tmp mode zero", "0000", "Read", "/tmp/native-file-mode-test", "", "required=0004"},
 		{"tmp adjacent", "0000", "Read", "/tmp-other/native-file-mode-test", "", "required=0400"},
+		{"tmp traversal read", "0004", "Read", "/tmp/../etc/hosts", "", "required=4000"},
+		{"tmp traversal write", "0004", "Write", "/tmp/../etc/native-file-mode-test", "", "required=2000"},
+		{"tmp traversal edit", "0004", "Edit", "/tmp/../etc/hosts", "", "required=2000"},
 		{"absolute glob pattern", "0467", "Glob", "", "/etc/*", "required=4000"},
 		{"parent glob pattern", "0467", "Glob", "", "../*", "required=4000"},
 		{"invalid mode", "invalid", "Read", "src/agent.sh", "", "required=0004"},

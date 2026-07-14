@@ -790,18 +790,21 @@ use crate::config::Config;
             || path == projects
             || path.starts_with(&(projects + "/"))
         {
-            scope = 0;
-        } else if path.starts_with("/dev/tcp") {
+            // Traversal can escape a trusted root, so classify it conservatively as system.
+            scope = if path.contains("..") { 8 } else { 0 };
+        }
+        if scope == 1 && path.starts_with("/dev/tcp") {
             scope = 2;
-        } else if path == "/"
-            || path == "/*"
-            || RE_BASH_SENSITIVE_PATH.is_match(path)
-            || RE_BASH_SYSTEM_PATH.is_match(path)
+        } else if scope == 1
+            && (path == "/"
+                || path == "/*"
+                || RE_BASH_SENSITIVE_PATH.is_match(path)
+                || RE_BASH_SYSTEM_PATH.is_match(path))
         {
             scope = 8;
-        } else if !cwd.is_empty() && (path == cwd || path.starts_with(&format!("{}/", cwd))) {
+        } else if scope == 1 && !cwd.is_empty() && (path == cwd || path.starts_with(&format!("{}/", cwd))) {
             scope = 1;
-        } else if RE_BASH_EXTERNAL_PATH.is_match(path) || path.contains("..") {
+        } else if scope == 1 && (RE_BASH_EXTERNAL_PATH.is_match(path) || path.contains("..")) {
             scope = 4;
         }
         bash_add_mode(mask, scope, perms);
@@ -1343,6 +1346,10 @@ use crate::config::Config;
             assert!(runner.native_file_mode_guard("Glob", "/tmp", "*.txt").is_ok());
             unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0000") };
             assert!(runner.native_file_mode_guard("Read", "/tmp-other/native-file-mode-test", "").is_err());
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0004") };
+            assert!(runner.native_file_mode_guard("Read", "/tmp/../etc/hosts", "").is_err());
+            assert!(runner.native_file_mode_guard("Write", "/tmp/../etc/native-file-mode-test", "").is_err());
+            assert!(runner.native_file_mode_guard("Edit", "/tmp/../etc/hosts", "").is_err());
 
             unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0465") };
             assert!(
@@ -1413,6 +1420,8 @@ use crate::config::Config;
                   ("echo hi > ~/note.txt", "0200"),
                   ("cat > /tmp/test.go << EOF", "0004"),
                   ("cat /tmp-other/file", "0400"),
+                  ("cat /tmp/../etc/hosts", "4000"),
+                  ("echo hi > /tmp/../etc/native-file-mode-test", "2000"),
                   ("cat SAMPLE_HOME/.bash-agent/projects/session/file", "0004"),
                   ("cat SAMPLE_HOME/.bash-agent/projects-copy/file", "0400"),
                   ("echo hi >/dev/null", "0004"),

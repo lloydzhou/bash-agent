@@ -76,6 +76,8 @@ int main(void) {
     printf("\n=== trusted internal paths ===\n");
     T("cat > /tmp/test.go << EOF", "0004");
     T("cat /tmp-other/file", "0400");
+    T("cat /tmp/../etc/hosts", "4000");
+    T("echo hi > /tmp/../etc/native-file-mode-test", "2000");
     snprintf(b1, sizeof(b1), "cat %s/.bash-agent/projects/session/file", home);
     t("project storage read", b1, "0004");
     snprintf(b1, sizeof(b1), "cat %s/.bash-agent/projects-copy/session/file", home);
@@ -151,6 +153,18 @@ int main(void) {
     guard = native_file_mode_guard("Read", "{\"path\":\"/tmp-other/native-file-mode-test\"}");
     if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: tmp adjacent blocked\n"); g_pass++; }
     else { printf("\033[31m✗ FAIL\033[0m: tmp adjacent blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Read", "{\"path\":\"/tmp/../etc/hosts\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: tmp traversal Read blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp traversal Read blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Write", "{\"path\":\"/tmp/../etc/native-file-mode-test\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: tmp traversal Write blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp traversal Write blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Edit", "{\"path\":\"/tmp/../etc/hosts\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: tmp traversal Edit blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp traversal Edit blocked\n"); g_fail++; }
     tool_result_free(&guard);
     setenv("BASH_AGENT_BASH_MODE", "0465", 1);
     guard = native_file_mode_guard("Edit", "{\"path\":\"src/agent.sh\"}");

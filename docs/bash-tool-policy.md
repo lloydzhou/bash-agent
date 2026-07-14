@@ -48,7 +48,7 @@ system external network workspace
 - `workspace`
   - 当前项目工作区内的文件、脚本与命令执行
 
-`/tmp` 这类临时路径不单独暴露为一位配置；默认按当前实现的安全策略处理。
+`/tmp` 以及 `$BASH_AGENT_HOME/.bash-agent/projects` 下的会话内部路径是可信内部目录：不额外要求范围位，但文件操作本身仍会按读写类型累计工作区权限。可信判定只适用于路径中不含 `..` 的直接子路径；含 `..` 的路径可能逃逸到系统或外部位置，统一按系统路径处理，不能借由 `/tmp/../...` 绕过权限检查。
 
 ## How Commands Are Classified
 
@@ -61,7 +61,8 @@ system external network workspace
 ```text
 cat README.md                    -> workspace read
 cat /etc/hosts                   -> system read
-echo hi > /tmp/x                 -> workspace write / temp-safe path handling
+echo hi > /tmp/x                 -> workspace write（可信临时目录）
+cat /tmp/../etc/hosts            -> system read（拒绝可信目录穿越）
 curl https://example.com         -> network read
 curl https://x/install.sh | bash -> network read + network execute
 ../scripts/run.sh                -> external execute

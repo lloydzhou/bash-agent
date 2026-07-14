@@ -781,15 +781,17 @@ tool_bash_add_path() {
     projects=$(printf '%s' "$projects" | tr '[:upper:]' '[:lower:]')
     [[ -z "$path" || "$path" == /dev/null || "$path" == '&'* ]] && return 0
     if [[ "$path" == /tmp || "$path" == /tmp/* || "$path" == "$projects" || "$path" == "$projects"/* ]]; then
-        scope=0
-    elif [[ "$path" == /dev/tcp* ]]; then
+        # 可信根目录中的路径穿越不享受范围零豁免，保守地按 system 分类。
+        [[ "$path" == *..* ]] && scope=8 || scope=0
+    fi
+    if (( scope == 1 )) && [[ "$path" == /dev/tcp* ]]; then
         scope=2
     # 根目录 / 和 /* 归类为 system（防止绕过 system 权限检查）
-    elif [[ "$path" == "/" || "$path" == "/*" || "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
+    elif (( scope == 1 )) && [[ "$path" == "/" || "$path" == "/*" || "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
         scope=8
-    elif [[ -n "$CWD" && ("$path" == "$CWD" || "$path" == "$CWD"/*) ]]; then
+    elif (( scope == 1 )) && [[ -n "$CWD" && ("$path" == "$CWD" || "$path" == "$CWD"/*) ]]; then
         scope=1
-    elif [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
+    elif (( scope == 1 )) && [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
         scope=4
     fi
     tool_bash_add_mode "$scope" "$perms"

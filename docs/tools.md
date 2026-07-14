@@ -13,7 +13,7 @@
 - 默认结果上限 50KB，超出截断
 - 支持多文件读取（多次调用）
 - 编辑前先用 `offset`/`limit` 定位目标行
-- 受 `BASH_AGENT_BASH_MODE` 的读取权限限制
+- 受 `BASH_AGENT_BASH_MODE` 的读取权限限制；`/tmp` 与 session 内部目录仅信任不含 `..` 的直接路径，穿越路径按系统范围检查
 
 ## `Write`
 

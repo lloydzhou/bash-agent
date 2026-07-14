@@ -212,7 +212,7 @@ export BASH_AGENT_BASH_MODE=0457  # allow network execute
 export BASH_AGENT_BASH_MODE=7777  # fully open, trusted environments only
 ```
 
-Local file tools derive equivalent access probes from their paths: `Read`, `Grep`, and `Glob` require read access, while `Write` and `Edit` require write access. A missing path is checked against the current workspace. A pathless `Glob` with an absolute pattern or `..` segment fails closed as a system read.
+Local file tools derive equivalent access probes from their paths: `Read`, `Grep`, and `Glob` require read access, while `Write` and `Edit` require write access. A missing path is checked against the current workspace. Paths under `/tmp` and `$BASH_AGENT_HOME/.bash-agent/projects` that do not contain `..` are trusted internal paths, but any path containing `..` is checked as a system path to prevent traversal bypasses such as `/tmp/../...`. A pathless `Glob` with an absolute pattern or `..` segment fails closed as a system read.
 
 Invalid values fail closed to `0000`. The model is expressed like Linux-style `rwx` permission bits. Full classification rules, recommended settings, and the shared block message are documented in [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md).
 

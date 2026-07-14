@@ -420,14 +420,20 @@ func toolBashAddPath(mask *int, path string, perms int, cwd string) {
 	}
 	projects := filepath.Join(strings.ToLower(home), ".bash-agent/projects")
 	if path == "/tmp" || strings.HasPrefix(path, "/tmp/") || path == projects || strings.HasPrefix(path, projects+"/") {
-		scope = 0
-	} else if strings.HasPrefix(path, "/dev/tcp") {
+		// Traversal can escape a trusted root, so classify it conservatively as system.
+		if strings.Contains(path, "..") {
+			scope = 8
+		} else {
+			scope = 0
+		}
+	}
+	if scope == 1 && strings.HasPrefix(path, "/dev/tcp") {
 		scope = 2
-	} else if path == "/" || path == "/*" || toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path) {
+	} else if scope == 1 && (path == "/" || path == "/*" || toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path)) {
 		scope = 8
-	} else if cwd != "" && (path == cwd || strings.HasPrefix(path, cwd+"/")) {
+	} else if scope == 1 && cwd != "" && (path == cwd || strings.HasPrefix(path, cwd+"/")) {
 		scope = 1
-	} else if toolBashReExternalPath.MatchString(path) || strings.Contains(path, "..") {
+	} else if scope == 1 && (toolBashReExternalPath.MatchString(path) || strings.Contains(path, "..")) {
 		scope = 4
 	}
 	toolBashAddMode(mask, scope, perms)

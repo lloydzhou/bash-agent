@@ -2795,6 +2795,9 @@ test_bash_mode_scanner() {
     assert_native_mode "tmp Grep allowed" Grep /tmp "" 0004 0 ""
     assert_native_mode "tmp Glob allowed" Glob /tmp "*.txt" 0004 0 ""
     assert_native_mode "tmp adjacent blocked" Read /tmp-other/native-file-mode-test "" 0000 1 0400
+    assert_native_mode "tmp traversal Read blocked" Read /tmp/../etc/hosts "" 0004 1 4000
+    assert_native_mode "tmp traversal Write blocked" Write /tmp/../etc/native-file-mode-test "" 0004 1 2000
+    assert_native_mode "tmp traversal Edit blocked" Edit /tmp/../etc/hosts "" 0004 1 2000
     assert_native_mode "Glob absolute pattern without path fails closed" Glob "" "/etc/*" 0467 1 4000
     assert_native_mode "Glob parent pattern without path fails closed" Glob "" "../*" 0467 1 4000
     assert_native_mode "invalid mode fails closed" Read "$CWD/src/agent.sh" "" bad1 1 0004

@@ -216,7 +216,7 @@ export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
 export BASH_AGENT_BASH_MODE=7777  # 全开，仅建议受信环境
 ```
 
-本地文件工具按路径生成等价访问探针：`Read`、`Grep`、`Glob` 按读取检查，`Write`、`Edit` 按写入检查；未指定路径时按当前工作区检查。无路径的 `Glob` 若模式为绝对路径或包含 `..`，会失败关闭为系统读取检查。
+本地文件工具按路径生成等价访问探针：`Read`、`Grep`、`Glob` 按读取检查，`Write`、`Edit` 按写入检查；未指定路径时按当前工作区检查。`/tmp` 与 `$BASH_AGENT_HOME/.bash-agent/projects` 下不含 `..` 的路径是可信内部目录，但含 `..` 的路径一律按系统路径检查，防止借由 `/tmp/../...` 穿越绕过权限。无路径的 `Glob` 若模式为绝对路径或包含 `..`，会失败关闭为系统读取检查。
 
 如果值非法，会 fail-closed 为 `0000`。这个模型的表达方式类似 Linux 文件权限的 `rwx` 位。更完整的分类规则、推荐配置和错误文案见 [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md)。
 
