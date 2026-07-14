@@ -189,6 +189,13 @@ func SetMultiLine(ml bool) {
 	}
 }
 
+// RestoreTerminal restores the terminal from raw mode. Safe to call from a
+// signal handler or panic recovery — internally only uses async-signal-safe
+// C functions (tcsetattr, write).
+func RestoreTerminal() {
+	C.linenoiseRestoreTerminal()
+}
+
 // EditStart initializes a non-blocking line editing session.
 // Returns a LinenoiseState pointer for subsequent EditFeed/EditStop/Hide/Show calls.
 func EditStart(stdinFd, stdoutFd int, buf []byte, prompt string) (*LinenoiseState, error) {

@@ -6,13 +6,38 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	agent "github.com/lloyd/claude-code/bash-agent/go2"
+	"github.com/lloyd/claude-code/bash-agent/go2/linenoise"
 )
 
 func main() {
+	// Crash recovery: linenoise readline runs the terminal in raw mode.
+	// A panic or fatal signal (e.g. NULL deref in cgo) would leave the
+	// terminal in raw mode — no echo, no newline processing. These handlers
+	// restore the terminal before the process dies.
+	defer func() {
+		if r := recover(); r != nil {
+			linenoise.RestoreTerminal()
+			fmt.Fprintf(os.Stderr, "\ngoagent panic: %v\n", r)
+			os.Exit(1)
+		}
+	}()
+	crashSigCh := make(chan os.Signal, 1)
+	signal.Notify(crashSigCh, syscall.SIGSEGV, syscall.SIGABRT, syscall.SIGBUS, syscall.SIGFPE)
+	go func() {
+		sig := <-crashSigCh
+		linenoise.RestoreTerminal()
+		signal.Reset(sig)
+		p, _ := os.FindProcess(os.Getpid())
+		_ = p.Signal(sig.(syscall.Signal))
+		os.Exit(1)
+	}()
+
 	// 参数定义
 	var (
 		provider     string
