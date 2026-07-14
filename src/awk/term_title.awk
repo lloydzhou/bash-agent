@@ -30,6 +30,8 @@ NR == 1 {
 END {
     prefix = (status == "idle") ? "" : "⏳ "
     progress = (status == "idle") ? 0 : 3
-    printf "\033]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\007\033]9;4;%d\007", \
-        prefix, model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c), progress > "/dev/stderr"
+    esc = sprintf("%c", 27)
+    bel = sprintf("%c", 7)
+    printf "%s]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s%s%s]9;4;%d%s", \
+        esc, prefix, model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c), bel, esc, progress, bel > "/dev/stderr"
 }
