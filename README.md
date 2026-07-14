@@ -175,16 +175,16 @@ tcode goagent -p openai -m gpt-4o
 | `OPENAI_BASE_URL` | OpenAI API base URL |
 | `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
 | `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
-| `BASH_AGENT_BASH_MODE` | Bash 工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0467`） |
+| `BASH_AGENT_BASH_MODE` | Bash 与本地文件工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0467`） |
 | `DESCRIBE_API_KEY` | 图片描述 API key（默认使用 GLM-4V-Flash，免费） |
 | `DESCRIBE_MODEL` | 图片描述模型名（默认 `glm-4v-flash`） |
 | `DESCRIBE_BASE_URL` | 图片描述 API 基础地址（默认 `https://open.bigmodel.cn/api/paas/v4`） |
 | `THINKING` | 覆盖思考模式：`enabled` / `disabled`（CLI `--thinking`） |
 | `EFFORT` | 覆盖思考力度：`low` / `medium` / `high`（CLI `--effort`） |
 
-## Bash 工具权限模式
+## Bash 与本地文件工具权限模式
 
-`BASH_AGENT_BASH_MODE` 控制 `Bash` 工具允许访问的范围。它是一个 4 位八进制字符串：
+`BASH_AGENT_BASH_MODE` 控制 `Bash`、`Read`、`Write`、`Edit`、`Glob` 和 `Grep` 工具允许访问的范围。它是一个 4 位八进制字符串：
 
 ```text
 system external network workspace
@@ -215,6 +215,8 @@ export BASH_AGENT_BASH_MODE=4447  # 允许 system read
 export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
 export BASH_AGENT_BASH_MODE=7777  # 全开，仅建议受信环境
 ```
+
+本地文件工具按路径生成等价访问探针：`Read`、`Grep`、`Glob` 按读取检查，`Write`、`Edit` 按写入检查；未指定路径时按当前工作区检查。`/tmp` 与 `$BASH_AGENT_HOME/.bash-agent/projects` 下不含 `..` 的路径是可信内部目录，但含 `..` 的路径一律按系统路径检查，防止借由 `/tmp/../...` 穿越绕过权限。无路径的 `Glob` 若模式为绝对路径或包含 `..`，会失败关闭为系统读取检查。
 
 如果值非法，会 fail-closed 为 `0000`。这个模型的表达方式类似 Linux 文件权限的 `rwx` 位。更完整的分类规则、推荐配置和错误文案见 [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md)。
 
@@ -304,7 +306,7 @@ $$
 | 文档 | 说明 |
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | 架构设计、分层、协议 |
-| [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash 工具权限模式、分类规则、推荐配置 |
+| [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash 与本地文件工具权限模式、分类规则、推荐配置 |
 | [`docs/tools.md`](docs/tools.md) | 13 个内置工具详细说明 |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | 压缩算法完整推导 |
 | [`docs/sessions.md`](docs/sessions.md) | Session 文件结构与恢复 |

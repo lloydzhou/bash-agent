@@ -625,12 +625,12 @@ llm_summary_call() {
 tool_dispatch() {
     local name="$1"; shift
     case "$name" in
-        Read)      tool_read "$@" ;;
-        Write)     tool_write "$1" "$2" ;;
-        Edit)      tool_edit "$@" ;;
+        Read)      tool_native_file_mode_guard "$name" "$1" || return 1; tool_read "$@" ;;
+        Write)     tool_native_file_mode_guard "$name" "$1" || return 1; tool_write "$1" "$2" ;;
+        Edit)      tool_native_file_mode_guard "$name" "$1" || return 1; tool_edit "$@" ;;
         Bash)      tool_bash "$1" "$2" "$3" ;;
-        Glob)      tool_glob "$1" "$2" ;;
-        Grep)      tool_grep "$1" "$2" "$3" "$4" ;;
+        Glob)      tool_native_file_mode_guard "$name" "$2" "$1" || return 1; tool_glob "$1" "$2" ;;
+        Grep)      tool_native_file_mode_guard "$name" "$2" || return 1; tool_grep "$1" "$2" "$3" "$4" ;;
         TodoWrite) printf '%s' "$1" ;;
         PlanConfirm) tool_plan_confirm ;;
         PlanClear) tool_plan_clear ;;
@@ -774,19 +774,24 @@ tool_bash_add_mode() {
 }
 
 tool_bash_add_path() {
-    local path="$1" perms="$2" scope=1
+    local path="$1" perms="$2" scope=1 projects
     path="${path#\"}"; path="${path%\"}"; path="${path#\'}"; path="${path%\'}"
     path="${path#of=}"; path="${path%;}"; path="${path%,}"; path="${path%)}"
-    [[ -z "$path" || "$path" == /tmp || "$path" == /tmp/* || "$path" == /dev/null || "$path" == '&'* ]] && return 0
-    # 根目录 / 和 /* 归类为 system（防止绕过 system 权限检查）
-    [[ "$path" == "/" || "$path" == "/*" ]] && scope=8
-    if [[ "$path" == /dev/tcp* ]]; then
+    projects="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/projects"
+    projects=$(printf '%s' "$projects" | tr '[:upper:]' '[:lower:]')
+    [[ -z "$path" || "$path" == /dev/null || "$path" == '&'* ]] && return 0
+    if [[ "$path" == /tmp || "$path" == /tmp/* || "$path" == "$projects" || "$path" == "$projects"/* ]]; then
+        # 可信根目录中的路径穿越不享受范围零豁免，保守地按 system 分类。
+        [[ "$path" == *..* ]] && scope=8 || scope=0
+    fi
+    if (( scope == 1 )) && [[ "$path" == /dev/tcp* ]]; then
         scope=2
-    elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
+    # 根目录 / 和 /* 归类为 system（防止绕过 system 权限检查）
+    elif (( scope == 1 )) && [[ "$path" == "/" || "$path" == "/*" || "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
         scope=8
-    elif [[ -n "$CWD" && ("$path" == "$CWD" || "$path" == "$CWD"/*) ]]; then
+    elif (( scope == 1 )) && [[ -n "$CWD" && ("$path" == "$CWD" || "$path" == "$CWD"/*) ]]; then
         scope=1
-    elif [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
+    elif (( scope == 1 )) && [[ "$path" =~ $TOOL_BASH_RE_EXTERNAL_PATH || "$path" == *..* ]]; then
         scope=4
     fi
     tool_bash_add_mode "$scope" "$perms"
@@ -824,7 +829,7 @@ tool_bash_scan_segment() {
             *) [[ "$tok" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]] && { tool_bash_add_path "$tok" "$path_bits"; flags=3; } ;;
         esac
     done
-    (( flags == 1 )) && [[ "$seg" != *'/tmp/'* ]] && tool_bash_add_mode 1 2
+    (( flags == 1 )) && tool_bash_add_mode 1 2
 }
 
 tool_bash_scan_script() {
@@ -859,6 +864,32 @@ tool_bash_mode_allows() {
     allowed=$(tool_bash_mode_normalize "$1")
     required=$(tool_bash_mode_normalize "$2")
     (( (8#$required & (4095 ^ 8#$allowed)) == 0 ))
+}
+
+tool_bash_mode_guard() {
+    local cmd="$1" allowed_mode required_mode
+    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
+    tool_classify_bash_required_mode "$cmd" >/dev/null
+    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
+    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
+        echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
+        return 1
+    fi
+}
+
+tool_native_file_mode_guard() {
+    local name="$1" path="${2:-}" pattern="${3:-}" target="${2:-.}" probe
+    [[ "$name" == Glob && -z "$path" && ( "$pattern" == /* || "$pattern" == *..* ) ]] && target=/
+    case "$target" in
+        /*|~|~/*|./*|../*) ;;
+        *) target="./$target" ;;
+    esac
+    case "$name" in
+        Read|Grep|Glob) probe="cat $target" ;;
+        Write|Edit) probe=": > $target" ;;
+        *) return 0 ;;
+    esac
+    tool_bash_mode_guard "$probe"
 }
 
 tool_read() {
@@ -904,15 +935,9 @@ tool_edit() {
 }
 
 tool_bash() {
-    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" background="${3:-false}" allowed_mode required_mode tool_rc tmpout
+    local cmd="$1" timeout_secs="${2:-$TOOL_TIMEOUT_SECS}" background="${3:-false}" tool_rc tmpout
     [[ -z "$cmd" ]] && { echo "no command provided"; return 1; }
-    allowed_mode=$(tool_bash_mode_normalize "${BASH_AGENT_BASH_MODE:-0467}")
-    tool_classify_bash_required_mode "$cmd" >/dev/null
-    required_mode="${TOOL_BASH_REQUIRED_MODE:-0000}"
-    if ! tool_bash_mode_allows "$allowed_mode" "$required_mode"; then
-        echo "command blocked by bash safety policy (required=$required_mode allowed=$allowed_mode; mode=system/external/network/workspace bits=4:read,2:write,1:execute)"
-        return 1
-    fi
+    tool_bash_mode_guard "$cmd" || return 1
     if [[ "$background" == "true" || "$background" == "1" ]]; then
         local task_id="task_$(util_new_session_id)"
         { local __cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0); printf '%d\n' $(( __cnt + 1 )) > "$ACTIVE_TASK_FILE"; }
@@ -1547,7 +1572,7 @@ Environment:
   *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)
   *_BASE_URL              Override API base URL (ANTHROPIC / OPENAI)
   BASH_AGENT_HOME         Override session storage (default: $HOME)
-  BASH_AGENT_BASH_MODE    Bash tool permissions (default: 0467)
+  BASH_AGENT_BASH_MODE    Bash and local file tool permissions (default: 0467)
 
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"

@@ -60,6 +60,7 @@ use crate::config::Config;
                         limit: Option<usize>,
                     }
                     let args: Args = serde_json::from_value(input.clone())?;
+                    self.native_file_mode_guard("Read", &args.path, "")?;
                     self.read(&args.path, args.offset, args.limit)
                 }
                 "Write" => {
@@ -69,6 +70,7 @@ use crate::config::Config;
                         content: String,
                     }
                     let args: Args = serde_json::from_value(input.clone())?;
+                    self.native_file_mode_guard("Write", &args.path, "")?;
                     self.write(&args.path, &args.content)
                 }
                 "Edit" => {
@@ -79,6 +81,7 @@ use crate::config::Config;
                         new_string: String,
                     }
                     let args: Args = serde_json::from_value(input.clone())?;
+                    self.native_file_mode_guard("Edit", &args.path, "")?;
                     self.edit(&args.path, &args.old_string, &args.new_string)
                 }
                 "Bash" => {
@@ -99,6 +102,7 @@ use crate::config::Config;
                         path: String,
                     }
                     let args: Args = serde_json::from_value(input.clone())?;
+                    self.native_file_mode_guard("Glob", &args.path, &args.pattern)?;
                     self.glob(
                         &args.pattern,
                         if args.path.is_empty() {
@@ -120,6 +124,7 @@ use crate::config::Config;
                         context: Option<usize>,
                     }
                     let args: Args = serde_json::from_value(input.clone())?;
+                    self.native_file_mode_guard("Grep", &args.path, "")?;
                     self.grep(
                         &args.pattern,
                         if args.path.is_empty() {
@@ -256,6 +261,43 @@ use crate::config::Config;
             let (added, removed) = count_diff_lines(&diff);
             let summary = format!("Success: Edit({path}) [+{added} -{removed} lines]");
             Ok(format!("{summary}\n{diff}"))
+        }
+
+        fn native_file_mode_guard(&self, name: &str, path: &str, pattern: &str) -> Result<()> {
+            let mut target = if path.is_empty() {
+                ".".to_string()
+            } else {
+                path.to_string()
+            };
+            if !target.starts_with('/')
+                && target != "~"
+                && !target.starts_with("~/")
+                && !target.starts_with("./")
+                && !target.starts_with("../")
+            {
+                target = format!("./{target}");
+            }
+            let probe = match name {
+                "Read" | "Grep" => format!("cat {target}"),
+                "Write" | "Edit" => format!(": > {target}"),
+                "Glob" if path.is_empty() && (pattern.starts_with('/') || pattern.contains("..")) => {
+                    "cat /".to_string()
+                }
+                "Glob" => format!("cat {target}"),
+                _ => return Ok(()),
+            };
+            let allowed_mode = bash_mode_normalize(
+                &std::env::var("BASH_AGENT_BASH_MODE").unwrap_or_else(|_| "0467".to_string()),
+            );
+            let required_mode = classify_bash_required_mode(&probe);
+            if !bash_mode_allows(&allowed_mode, &required_mode) {
+                bail!(
+                    "Error: command blocked by bash safety policy (required={} allowed={}; mode=system/external/network/workspace bits=4:read,2:write,1:execute)",
+                    required_mode,
+                    allowed_mode
+                );
+            }
+            Ok(())
         }
 
         fn bash(&self, command: &str, timeout_secs: Option<u64>) -> Result<String> {
@@ -735,23 +777,34 @@ use crate::config::Config;
             .trim_end_matches(';')
             .trim_end_matches(',')
             .trim_end_matches(')');
-        if path.is_empty()
-            || path == "/tmp"
-            || path.starts_with("/tmp/")
-            || path == "/dev/null"
-            || path.starts_with('&')
-        {
+        if path.is_empty() || path == "/dev/null" || path.starts_with('&') {
             return;
         }
-        if path.starts_with("/dev/tcp") {
+        let home = std::env::var("BASH_AGENT_HOME")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default()
+            .to_lowercase();
+        let projects = format!("{home}/.bash-agent/projects");
+        if path == "/tmp"
+            || path.starts_with("/tmp/")
+            || path == projects
+            || path.starts_with(&(projects + "/"))
+        {
+            // Traversal can escape a trusted root, so classify it conservatively as system.
+            scope = if path.contains("..") { 8 } else { 0 };
+        }
+        if scope == 1 && path.starts_with("/dev/tcp") {
             scope = 2;
-        } else if path == "/" || path == "/*" {
+        } else if scope == 1
+            && (path == "/"
+                || path == "/*"
+                || RE_BASH_SENSITIVE_PATH.is_match(path)
+                || RE_BASH_SYSTEM_PATH.is_match(path))
+        {
             scope = 8;
-        } else if RE_BASH_SENSITIVE_PATH.is_match(path) || RE_BASH_SYSTEM_PATH.is_match(path) {
-            scope = 8;
-        } else if !cwd.is_empty() && (path == cwd || path.starts_with(&format!("{}/", cwd))) {
+        } else if scope == 1 && !cwd.is_empty() && (path == cwd || path.starts_with(&format!("{}/", cwd))) {
             scope = 1;
-        } else if RE_BASH_EXTERNAL_PATH.is_match(path) || path.contains("..") {
+        } else if scope == 1 && (RE_BASH_EXTERNAL_PATH.is_match(path) || path.contains("..")) {
             scope = 4;
         }
         bash_add_mode(mask, scope, perms);
@@ -905,7 +958,7 @@ use crate::config::Config;
                 flags = 3;
             }
         }
-        if flags == 1 && !seg.contains("/tmp/") {
+        if flags == 1 {
             bash_add_mode(mask, 1, 2);
         }
     }
@@ -1216,7 +1269,7 @@ use crate::config::Config;
         use std::os::fd::AsRawFd;
         use std::os::unix::io::IntoRawFd;
         use std::sync::atomic::AtomicBool;
-        use std::sync::Arc;
+        use std::sync::{Arc, Mutex};
         use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
         #[test]
@@ -1252,6 +1305,73 @@ use crate::config::Config;
         }
 
         #[test]
+        fn native_file_mode_guard_matches_bash() {
+            static ENV_LOCK: Mutex<()> = Mutex::new(());
+            let _lock = ENV_LOCK.lock().unwrap();
+            let prior = std::env::var_os("BASH_AGENT_BASH_MODE");
+            let root = std::env::current_dir().unwrap();
+            let runner = Runner {
+                config: Config::default(),
+                cwd: root.clone(),
+                home: root.join("home"),
+                interrupted: Arc::new(AtomicBool::new(false)),
+                cancel_fd: -1,
+            };
+
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0467") };
+            assert!(
+                runner
+                    .native_file_mode_guard("Read", "src/agent.sh", "")
+                    .is_ok()
+            );
+            assert!(
+                runner
+                    .native_file_mode_guard("Read", "/etc/hosts", "")
+                    .is_err()
+            );
+            assert!(
+                runner
+                    .native_file_mode_guard("Write", "~/note.txt", "")
+                    .is_err()
+            );
+            assert!(runner.native_file_mode_guard("Grep", "", "").is_ok());
+            assert!(runner.native_file_mode_guard("Glob", "", "/etc/*").is_err());
+            assert!(runner.native_file_mode_guard("Glob", "", "../*").is_err());
+
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0004") };
+            assert!(runner.native_file_mode_guard("Read", "/tmp/native-file-mode-test", "").is_ok());
+            assert!(runner.native_file_mode_guard("Write", "/tmp/native-file-mode-test", "").is_ok());
+            assert!(runner.native_file_mode_guard("Edit", "/tmp/native-file-mode-test", "").is_ok());
+            assert!(runner.native_file_mode_guard("Grep", "/tmp", "").is_ok());
+            assert!(runner.native_file_mode_guard("Glob", "/tmp", "*.txt").is_ok());
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0000") };
+            assert!(runner.native_file_mode_guard("Read", "/tmp-other/native-file-mode-test", "").is_err());
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0004") };
+            assert!(runner.native_file_mode_guard("Read", "/tmp/../etc/hosts", "").is_err());
+            assert!(runner.native_file_mode_guard("Write", "/tmp/../etc/native-file-mode-test", "").is_err());
+            assert!(runner.native_file_mode_guard("Edit", "/tmp/../etc/hosts", "").is_err());
+
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0465") };
+            assert!(
+                runner
+                    .native_file_mode_guard("Edit", "src/agent.sh", "")
+                    .is_err()
+            );
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "invalid") };
+            assert!(
+                runner
+                    .native_file_mode_guard("Read", "src/agent.sh", "")
+                    .is_err()
+            );
+
+            if let Some(value) = prior {
+                unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", value) };
+            } else {
+                unsafe { std::env::remove_var("BASH_AGENT_BASH_MODE") };
+            }
+        }
+
+        #[test]
         fn bash_mode_classifier_matches_bash() {
             let cases = [
                 ("sudo echo blocked", "1000"),
@@ -1284,6 +1404,8 @@ use crate::config::Config;
                   .map(|p| p.to_string_lossy().to_lowercase())
                   .unwrap_or_default();
               if cwd.is_empty() { return; }
+              let home = "/bash-agent-test-home";
+              unsafe { std::env::set_var("BASH_AGENT_HOME", &home) };
               let cases: &[(&str, &str)] = &[
                   ("ls SAMPLE_CWD/src/agent.sh", "0004"),
                   ("cat SAMPLE_CWD/src/agent.sh", "0004"),
@@ -1297,10 +1419,17 @@ use crate::config::Config;
                   ("curl https://example.com", "0040"),
                   ("echo hi > ~/note.txt", "0200"),
                   ("cat > /tmp/test.go << EOF", "0004"),
+                  ("cat /tmp-other/file", "0400"),
+                  ("cat /tmp/../etc/hosts", "4000"),
+                  ("echo hi > /tmp/../etc/native-file-mode-test", "2000"),
+                  ("cat SAMPLE_HOME/.bash-agent/projects/session/file", "0004"),
+                  ("cat SAMPLE_HOME/.bash-agent/projects-copy/file", "0400"),
                   ("echo hi >/dev/null", "0004"),
                   ("git add -A && git commit -m fix", "0003"),
               ];
-              let cases: Vec<(String, &str)> = cases.iter().map(|(c, w)| (c.replace("SAMPLE_CWD", &cwd), *w)).collect();
+              let cases: Vec<(String, &str)> = cases.iter()
+                  .map(|(c, w)| (c.replace("SAMPLE_CWD", &cwd).replace("SAMPLE_HOME", &home), *w))
+                  .collect();
               for (cmd, want) in &cases {
                   assert_eq!(classify_bash_required_mode(cmd), *want, "{cmd}");
               }

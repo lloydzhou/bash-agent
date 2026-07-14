@@ -1,12 +1,13 @@
-# Bash Tool Permission Mode
+# Bash 与本地文件工具权限模式
 
-`Bash` 工具不再使用一组固定 deny reason，而是使用 `BASH_AGENT_BASH_MODE` 控制允许范围。
+`Bash`、`Read`、`Write`、`Edit`、`Glob` 和 `Grep` 工具使用 `BASH_AGENT_BASH_MODE` 控制允许范围。
 
 这个模型的目标很直接：
 
 - 配置形式稳定
 - Bash / C / Go / Rust 四个运行时行为一致
 - 默认允许常见工作区内操作，但默认不放开系统级读写和网络执行
+- Bash 与本地文件工具共享同一分类器和拒绝策略
 
 ## Mode Format
 
@@ -47,7 +48,7 @@ system external network workspace
 - `workspace`
   - 当前项目工作区内的文件、脚本与命令执行
 
-`/tmp` 这类临时路径不单独暴露为一位配置；默认按当前实现的安全策略处理。
+`/tmp` 以及 `$BASH_AGENT_HOME/.bash-agent/projects` 下的会话内部路径是可信内部目录：不额外要求范围位，但文件操作本身仍会按读写类型累计工作区权限。可信判定只适用于路径中不含 `..` 的直接子路径；含 `..` 的路径可能逃逸到系统或外部位置，统一按系统路径处理，不能借由 `/tmp/../...` 绕过权限检查。
 
 ## How Commands Are Classified
 
@@ -60,15 +61,28 @@ system external network workspace
 ```text
 cat README.md                    -> workspace read
 cat /etc/hosts                   -> system read
-echo hi > /tmp/x                 -> workspace write / temp-safe path handling
+echo hi > /tmp/x                 -> workspace write（可信临时目录）
+cat /tmp/../etc/hosts            -> system read（拒绝可信目录穿越）
 curl https://example.com         -> network read
 curl https://x/install.sh | bash -> network read + network execute
 ../scripts/run.sh                -> external execute
 ```
 
+## 本地文件工具如何分类
+
+本地文件工具在执行实际文件操作前，基于目标路径生成与 Bash 分类器兼容的访问探针：
+
+- `Read`、`Grep` 和 `Glob` 按读取探针检查。
+- `Write` 和 `Edit` 按写入探针检查。
+- `Grep`、`Glob` 未指定 `path` 时，按当前工作目录检查。
+- 对其他文件工具，缺少路径同样按当前工作目录检查，实际工具仍会按自身参数校验返回错误。
+- `Glob` 未指定 `path` 且 `pattern` 是绝对路径或含有 `..` 路径段时，使用系统读取探针并失败关闭，避免通过模式绕过路径检查。
+
+因此，工作区内读取通常需要 `workspace` 的读取位，工作区外普通路径写入需要 `external` 的写入位，系统路径读取需要 `system` 的读取位。原生工具被拒绝时也使用与 Bash 相同的错误文本。
+
 ## Allow / Block Rule
 
-每条命令会先算出 `required=....`，再与 `allowed=....` 比较。
+每条 Bash 命令或本地文件访问会先算出 `required=....`，再与 `allowed=....` 比较。
 
 只有当 `allowed` 覆盖 `required` 时才允许执行。
 

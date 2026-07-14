@@ -44,6 +44,7 @@ test-go-e2e: build-go
 
 test-rust:
 	cd rust && cargo check
+	cargo test --manifest-path rust/Cargo.toml native_file_mode_guard_matches_bash
 
 test-rust-e2e: build-rust
 	AGENT=./dist/rustagent bash tests/test.sh

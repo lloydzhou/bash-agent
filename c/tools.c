@@ -369,7 +369,8 @@ STATIC int bash_is_sensitive_path(const char *path) {
 }
 
 STATIC void bash_add_path(unsigned short *mask, const char *path, int perms) {
-    char buf[1024];
+    char buf[1024], projects[1024];
+    const char *home;
     size_t len;
     int scope = 1;
     if (!path || !*path) return;
@@ -378,12 +379,22 @@ STATIC void bash_add_path(unsigned short *mask, const char *path, int perms) {
     len = strlen(buf);
     while (len > 0 && (buf[len - 1] == '"' || buf[len - 1] == '\'' || buf[len - 1] == ';' || buf[len - 1] == ',' || buf[len - 1] == ')')) buf[--len] = '\0';
     if (strncmp(buf, "of=", 3) == 0) memmove(buf, buf + 3, strlen(buf + 3) + 1);
-    if (!buf[0] || strcmp(buf, "/tmp") == 0 || strncmp(buf, "/tmp/", 5) == 0 || strcmp(buf, "/dev/null") == 0 || buf[0] == '&') return;
-    if (strncmp(buf, "/dev/tcp", 8) == 0) scope = 2;
-    else if (strcmp(buf, "/") == 0 || strcmp(buf, "/*") == 0) scope = 8;
-    else if (bash_is_sensitive_path(buf) || bash_is_system_path(buf)) scope = 8;
-    else if (g_cwd[0] != '\0' && (strcmp(buf, g_cwd) == 0 || (strncmp(buf, g_cwd, strlen(g_cwd)) == 0 && buf[strlen(g_cwd)] == '/'))) scope = 1;
-    else if ((buf[0] == '/' && buf[1]) || strncmp(buf, "~/", 2) == 0 || strncmp(buf, "$home", 5) == 0 || strstr(buf, "..")) scope = 4;
+    if (!buf[0] || strcmp(buf, "/dev/null") == 0 || buf[0] == '&') return;
+    home = util_env("BASH_AGENT_HOME", NULL);
+    if (!home || !*home) home = util_env("HOME", util_home_dir());
+    snprintf(projects, sizeof(projects), "%s/.bash-agent/projects", home);
+    for (char *p = projects; *p; p++) *p = (char)tolower((unsigned char)*p);
+    if (strcmp(buf, "/tmp") == 0 || strncmp(buf, "/tmp/", 5) == 0 ||
+        strcmp(buf, projects) == 0 ||
+        (strncmp(buf, projects, strlen(projects)) == 0 && buf[strlen(projects)] == '/')) {
+        /* Traversal can escape a trusted root, so classify it conservatively as system. */
+        scope = strstr(buf, "..") ? 8 : 0;
+    }
+    if (scope == 1 && strncmp(buf, "/dev/tcp", 8) == 0) scope = 2;
+    else if (scope == 1 && (strcmp(buf, "/") == 0 || strcmp(buf, "/*") == 0 ||
+             bash_is_sensitive_path(buf) || bash_is_system_path(buf))) scope = 8;
+    else if (scope == 1 && g_cwd[0] != '\0' && (strcmp(buf, g_cwd) == 0 || (strncmp(buf, g_cwd, strlen(g_cwd)) == 0 && buf[strlen(g_cwd)] == '/'))) scope = 1;
+    else if (scope == 1 && ((buf[0] == '/' && buf[1]) || strncmp(buf, "~/", 2) == 0 || strncmp(buf, "$home", 5) == 0 || strstr(buf, ".."))) scope = 4;
     bash_add_mode(mask, scope, perms);
 }
 
@@ -471,7 +482,7 @@ STATIC void bash_scan_segment(unsigned short *mask, const char *seg) {
         }
     }
     free(copy);
-    if (flags == 1 && !bash_contains(seg, "/tmp/")) bash_add_mode(mask, 1, 2);
+    if (flags == 1) bash_add_mode(mask, 1, 2);
 }
 
 STATIC void bash_classify_required_mode(const char *cmd, char out[5]) {
@@ -521,6 +532,53 @@ static int bash_mode_allows(const char *allowed_mode, const char *required_mode)
     allowed_val = strtol(allowed, NULL, 8);
     required_val = strtol(required, NULL, 8);
     return (required_val & (4095 ^ allowed_val)) == 0;
+}
+
+STATIC ToolResult native_file_mode_guard(const char *name, const char *input_json) {
+    ToolResult r = {NULL, 0};
+    JsonParse jp = json_parse_root(input_json);
+    char *path, *pattern;
+    const char *raw_path;
+    char target[2048], probe[2100], allowed_mode[5], required_mode[5];
+    if (jp.error) return r;
+    path = json_get_string(jp.val, "path");
+    pattern = json_get_string(jp.val, "pattern");
+    raw_path = (path && path[0]) ? path : ".";
+    if (raw_path[0] == '/' || strcmp(raw_path, "~") == 0 ||
+        strncmp(raw_path, "~/", 2) == 0 || strncmp(raw_path, "./", 2) == 0 ||
+        strncmp(raw_path, "../", 3) == 0) {
+        snprintf(target, sizeof(target), "%s", raw_path);
+    } else {
+        snprintf(target, sizeof(target), "./%s", raw_path);
+    }
+    if (strcmp(name, "Read") == 0 || strcmp(name, "Grep") == 0) {
+        snprintf(probe, sizeof(probe), "cat %s", target);
+    } else if (strcmp(name, "Write") == 0 || strcmp(name, "Edit") == 0) {
+        snprintf(probe, sizeof(probe), ": > %s", target);
+    } else if (strcmp(name, "Glob") == 0) {
+        if ((!path || !path[0]) && pattern && (pattern[0] == '/' || strstr(pattern, ".."))) {
+            snprintf(probe, sizeof(probe), "cat /");
+        } else {
+            snprintf(probe, sizeof(probe), "cat %s", target);
+        }
+    } else {
+        free(path);
+        free(pattern);
+        return r;
+    }
+    free(path);
+    free(pattern);
+    bash_mode_normalize(util_env("BASH_AGENT_BASH_MODE", "0467"), allowed_mode);
+    bash_classify_required_mode(probe, required_mode);
+    if (!bash_mode_allows(allowed_mode, required_mode)) {
+        StrBuf deny_buf;
+        sb_init(&deny_buf);
+        sb_appendf(&deny_buf, "Error: command blocked by bash safety policy (required=%s allowed=%s; mode=system/external/network/workspace bits=4:read,2:write,1:execute)",
+                   required_mode, allowed_mode);
+        r.output = deny_buf.data;
+        r.exit_code = 1;
+    }
+    return r;
 }
 
 static ToolResult tool_bash(const char *input_json, int timeout_secs) {
@@ -1038,6 +1096,11 @@ ToolResult tool_dispatch(const char *name, const char *input_json,
                          const SessionPaths *paths) {
     (void)home;
 
+    if (strcmp(name, "Read") == 0 || strcmp(name, "Write") == 0 ||
+        strcmp(name, "Edit") == 0 || strcmp(name, "Glob") == 0 || strcmp(name, "Grep") == 0) {
+        ToolResult guard = native_file_mode_guard(name, input_json);
+        if (guard.output) return guard;
+    }
     if (strcmp(name, "Read") == 0) return tool_read(input_json, max_bytes);
     if (strcmp(name, "Write") == 0) return tool_write(input_json);
     if (strcmp(name, "Edit") == 0) return tool_edit(input_json);
