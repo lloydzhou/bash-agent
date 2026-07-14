@@ -2759,6 +2759,7 @@ test_bash_mode_scanner() {
 
     local scan_pass=0 scan_fail=0
     local CWD="${ROOT_DIR}"
+    local BASH_AGENT_HOME="/bash-agent-test-home"
 
     assert_mode() {
         local desc=$1 cmd=$2 expect=$3
@@ -2788,6 +2789,12 @@ test_bash_mode_scanner() {
     assert_native_mode "workspace Write blocked" Write "$CWD/native-file-mode-test.txt" "" 0465 1 0002
     assert_native_mode "Grep default path uses workspace" Grep "" "" 0467 0 ""
     assert_native_mode "Glob default path uses workspace" Glob "" "*.sh" 0467 0 ""
+    assert_native_mode "tmp Read allowed" Read /tmp/native-file-mode-test "" 0004 0 ""
+    assert_native_mode "tmp Write allowed" Write /tmp/native-file-mode-test "" 0004 0 ""
+    assert_native_mode "tmp Edit allowed" Edit /tmp/native-file-mode-test "" 0004 0 ""
+    assert_native_mode "tmp Grep allowed" Grep /tmp "" 0004 0 ""
+    assert_native_mode "tmp Glob allowed" Glob /tmp "*.txt" 0004 0 ""
+    assert_native_mode "tmp adjacent blocked" Read /tmp-other/native-file-mode-test "" 0000 1 0400
     assert_native_mode "Glob absolute pattern without path fails closed" Glob "" "/etc/*" 0467 1 4000
     assert_native_mode "Glob parent pattern without path fails closed" Glob "" "../*" 0467 1 4000
     assert_native_mode "invalid mode fails closed" Read "$CWD/src/agent.sh" "" bad1 1 0004
@@ -2832,11 +2839,17 @@ test_bash_mode_scanner() {
     assert_mode "external read: ~/..." \
         "echo hi > ~/note.txt" "0200"
 
-    # --- /tmp 白名单 ---
+    # --- 可信内部目录 ---
     assert_mode "tmp write: cat > /tmp/file" \
         "cat > /tmp/test.go << EOF" "0004"
     assert_mode "tmp read: cat /tmp/file" \
         "cat /tmp/test.go" "0004"
+    assert_mode "tmp adjacent path remains external" \
+        "cat /tmp-other/test.go" "0400"
+    assert_mode "project storage read" \
+        "cat $BASH_AGENT_HOME/.bash-agent/projects/session/file" "0004"
+    assert_mode "project storage adjacent path remains external" \
+        "cat $BASH_AGENT_HOME/.bash-agent/projects-copy/session/file" "0400"
 
     # --- /dev/null ---
     assert_mode "dev null: echo >/dev/null" \

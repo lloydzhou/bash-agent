@@ -39,13 +39,15 @@ static void t(const char *label, const char *cmd, const char *expect) {
 #define T(cmd, expect) t(cmd, cmd, expect)
 
 int main(void) {
-    char cwd[1024], b1[2048], b2[2048], b3[2048], b4[2048], b5[2048];
+    char cwd[1024], home[1024], b1[2048], b2[2048], b3[2048], b4[2048], b5[2048];
 
     if (getcwd(cwd, sizeof(cwd))) {
         for (char *p = cwd; *p; p++) *p = tolower((unsigned char)*p);
     } else {
         cwd[0] = '\0';
     }
+    snprintf(home, sizeof(home), "/bash-agent-test-home");
+    setenv("BASH_AGENT_HOME", home, 1);
 
     printf("=== workspace absolute path ===\n");
     snprintf(b1, sizeof(b1), "ls %s/src/agent.sh", cwd);
@@ -71,8 +73,13 @@ int main(void) {
     printf("\n=== external ===\n");
     T("echo hi > ~/note.txt",      "0200");
 
-    printf("\n=== /tmp whitelist ===\n");
+    printf("\n=== trusted internal paths ===\n");
     T("cat > /tmp/test.go << EOF", "0004");
+    T("cat /tmp-other/file", "0400");
+    snprintf(b1, sizeof(b1), "cat %s/.bash-agent/projects/session/file", home);
+    t("project storage read", b1, "0004");
+    snprintf(b1, sizeof(b1), "cat %s/.bash-agent/projects-copy/session/file", home);
+    t("project storage adjacent path", b1, "0400");
 
     printf("\n=== /dev/null ===\n");
     T("echo hi >/dev/null",        "0004");
@@ -119,6 +126,31 @@ int main(void) {
     guard = native_file_mode_guard("Write", "{\"path\":\"~/note.txt\"}");
     if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: external Write blocked\n"); g_pass++; }
     else { printf("\033[31m✗ FAIL\033[0m: external Write blocked\n"); g_fail++; }
+    tool_result_free(&guard);
+    setenv("BASH_AGENT_BASH_MODE", "0004", 1);
+    guard = native_file_mode_guard("Read", "{\"path\":\"/tmp/native-file-mode-test\"}");
+    if (!guard.output) { printf("\033[32m✓ PASS\033[0m: tmp Read allowed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp Read allowed: %s\n", guard.output); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Write", "{\"path\":\"/tmp/native-file-mode-test\"}");
+    if (!guard.output) { printf("\033[32m✓ PASS\033[0m: tmp Write allowed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp Write allowed: %s\n", guard.output); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Edit", "{\"path\":\"/tmp/native-file-mode-test\",\"old_string\":\"a\",\"new_string\":\"b\"}");
+    if (!guard.output) { printf("\033[32m✓ PASS\033[0m: tmp Edit allowed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp Edit allowed: %s\n", guard.output); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Grep", "{\"pattern\":\"needle\",\"path\":\"/tmp\"}");
+    if (!guard.output) { printf("\033[32m✓ PASS\033[0m: tmp Grep allowed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp Grep allowed: %s\n", guard.output); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Glob", "{\"pattern\":\"*.txt\",\"path\":\"/tmp\"}");
+    if (!guard.output) { printf("\033[32m✓ PASS\033[0m: tmp Glob allowed\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp Glob allowed: %s\n", guard.output); g_fail++; }
+    tool_result_free(&guard);
+    guard = native_file_mode_guard("Read", "{\"path\":\"/tmp-other/native-file-mode-test\"}");
+    if (guard.output && guard.exit_code == 1) { printf("\033[32m✓ PASS\033[0m: tmp adjacent blocked\n"); g_pass++; }
+    else { printf("\033[31m✗ FAIL\033[0m: tmp adjacent blocked\n"); g_fail++; }
     tool_result_free(&guard);
     setenv("BASH_AGENT_BASH_MODE", "0465", 1);
     guard = native_file_mode_guard("Edit", "{\"path\":\"src/agent.sh\"}");

@@ -411,14 +411,19 @@ func toolBashAddPath(mask *int, path string, perms int, cwd string) {
 	path = strings.Trim(path, `"'`)
 	path = strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(path, ";"), ","), ")")
 	path = strings.TrimPrefix(path, "of=")
-	if path == "" || path == "/tmp" || strings.HasPrefix(path, "/tmp/") || path == "/dev/null" || strings.HasPrefix(path, "&") {
+	if path == "" || path == "/dev/null" || strings.HasPrefix(path, "&") {
 		return
 	}
-	if strings.HasPrefix(path, "/dev/tcp") {
+	home := os.Getenv("BASH_AGENT_HOME")
+	if home == "" {
+		home = os.Getenv("HOME")
+	}
+	projects := filepath.Join(strings.ToLower(home), ".bash-agent/projects")
+	if path == "/tmp" || strings.HasPrefix(path, "/tmp/") || path == projects || strings.HasPrefix(path, projects+"/") {
+		scope = 0
+	} else if strings.HasPrefix(path, "/dev/tcp") {
 		scope = 2
-	} else if path == "/" || path == "/*" {
-		scope = 8
-	} else if toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path) {
+	} else if path == "/" || path == "/*" || toolBashReSensitive.MatchString(path) || toolBashReSystemPath.MatchString(path) {
 		scope = 8
 	} else if cwd != "" && (path == cwd || strings.HasPrefix(path, cwd+"/")) {
 		scope = 1
@@ -484,7 +489,7 @@ func toolBashScanSegment(mask *int, seg string, cwd string) {
 			flags = 3
 		}
 	}
-	if flags == 1 && !strings.Contains(seg, "/tmp/") {
+	if flags == 1 {
 		toolBashAddMode(mask, 1, 2)
 	}
 }

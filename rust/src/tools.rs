@@ -777,19 +777,27 @@ use crate::config::Config;
             .trim_end_matches(';')
             .trim_end_matches(',')
             .trim_end_matches(')');
-        if path.is_empty()
-            || path == "/tmp"
-            || path.starts_with("/tmp/")
-            || path == "/dev/null"
-            || path.starts_with('&')
-        {
+        if path.is_empty() || path == "/dev/null" || path.starts_with('&') {
             return;
         }
-        if path.starts_with("/dev/tcp") {
+        let home = std::env::var("BASH_AGENT_HOME")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default()
+            .to_lowercase();
+        let projects = format!("{home}/.bash-agent/projects");
+        if path == "/tmp"
+            || path.starts_with("/tmp/")
+            || path == projects
+            || path.starts_with(&(projects + "/"))
+        {
+            scope = 0;
+        } else if path.starts_with("/dev/tcp") {
             scope = 2;
-        } else if path == "/" || path == "/*" {
-            scope = 8;
-        } else if RE_BASH_SENSITIVE_PATH.is_match(path) || RE_BASH_SYSTEM_PATH.is_match(path) {
+        } else if path == "/"
+            || path == "/*"
+            || RE_BASH_SENSITIVE_PATH.is_match(path)
+            || RE_BASH_SYSTEM_PATH.is_match(path)
+        {
             scope = 8;
         } else if !cwd.is_empty() && (path == cwd || path.starts_with(&format!("{}/", cwd))) {
             scope = 1;
@@ -947,7 +955,7 @@ use crate::config::Config;
                 flags = 3;
             }
         }
-        if flags == 1 && !seg.contains("/tmp/") {
+        if flags == 1 {
             bash_add_mode(mask, 1, 2);
         }
     }
@@ -1327,6 +1335,15 @@ use crate::config::Config;
             assert!(runner.native_file_mode_guard("Glob", "", "/etc/*").is_err());
             assert!(runner.native_file_mode_guard("Glob", "", "../*").is_err());
 
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0004") };
+            assert!(runner.native_file_mode_guard("Read", "/tmp/native-file-mode-test", "").is_ok());
+            assert!(runner.native_file_mode_guard("Write", "/tmp/native-file-mode-test", "").is_ok());
+            assert!(runner.native_file_mode_guard("Edit", "/tmp/native-file-mode-test", "").is_ok());
+            assert!(runner.native_file_mode_guard("Grep", "/tmp", "").is_ok());
+            assert!(runner.native_file_mode_guard("Glob", "/tmp", "*.txt").is_ok());
+            unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0000") };
+            assert!(runner.native_file_mode_guard("Read", "/tmp-other/native-file-mode-test", "").is_err());
+
             unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0465") };
             assert!(
                 runner
@@ -1380,6 +1397,8 @@ use crate::config::Config;
                   .map(|p| p.to_string_lossy().to_lowercase())
                   .unwrap_or_default();
               if cwd.is_empty() { return; }
+              let home = "/bash-agent-test-home";
+              unsafe { std::env::set_var("BASH_AGENT_HOME", &home) };
               let cases: &[(&str, &str)] = &[
                   ("ls SAMPLE_CWD/src/agent.sh", "0004"),
                   ("cat SAMPLE_CWD/src/agent.sh", "0004"),
@@ -1393,10 +1412,15 @@ use crate::config::Config;
                   ("curl https://example.com", "0040"),
                   ("echo hi > ~/note.txt", "0200"),
                   ("cat > /tmp/test.go << EOF", "0004"),
+                  ("cat /tmp-other/file", "0400"),
+                  ("cat SAMPLE_HOME/.bash-agent/projects/session/file", "0004"),
+                  ("cat SAMPLE_HOME/.bash-agent/projects-copy/file", "0400"),
                   ("echo hi >/dev/null", "0004"),
                   ("git add -A && git commit -m fix", "0003"),
               ];
-              let cases: Vec<(String, &str)> = cases.iter().map(|(c, w)| (c.replace("SAMPLE_CWD", &cwd), *w)).collect();
+              let cases: Vec<(String, &str)> = cases.iter()
+                  .map(|(c, w)| (c.replace("SAMPLE_CWD", &cwd).replace("SAMPLE_HOME", &home), *w))
+                  .collect();
               for (cmd, want) in &cases {
                   assert_eq!(classify_bash_required_mode(cmd), *want, "{cmd}");
               }

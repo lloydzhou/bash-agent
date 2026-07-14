@@ -114,6 +114,8 @@ func TestToolClassifyBashRequiredMode(t *testing.T) {
 
 func TestToolClassifyBashRequiredModeCWD(t *testing.T) {
 	cwd := strings.ToLower(getWd())
+	home := "/bash-agent-test-home"
+	t.Setenv("BASH_AGENT_HOME", home)
 	tests := map[string]string{
 		// workspace absolute paths should be scope=1 (not external)
 		"ls " + cwd + "/src/agent.sh":             "0004",
@@ -130,8 +132,11 @@ func TestToolClassifyBashRequiredModeCWD(t *testing.T) {
 		"curl https://example.com": "0040",
 		// external
 		"echo hi > ~/note.txt": "0200",
-		// /tmp whitelist
-		"cat > /tmp/test.go << EOF": "0004",
+		// 可信内部目录
+		"cat > /tmp/test.go << EOF":                           "0004",
+		"cat /tmp-other/file":                                 "0400",
+		"cat > SAMPLE_HOME/.bash-agent/projects/session/file": "0004",
+		"cat SAMPLE_HOME/.bash-agent/projects-copy/file":      "0400",
 		// /dev/null
 		"echo hi >/dev/null": "0004",
 		// git commit (exec + write)
@@ -150,6 +155,7 @@ func TestToolClassifyBashRequiredModeCWD(t *testing.T) {
 		"git add -A && git commit -m fix && git push":                "0023",
 	}
 	for cmd, want := range tests {
+		cmd = strings.ReplaceAll(cmd, "SAMPLE_HOME", home)
 		if got := ToolClassifyBashRequiredMode(cmd); got != want {
 			t.Errorf("CWD test: ToolClassifyBashRequiredMode(%q) = %s, want %s", cmd, got, want)
 		}
@@ -171,6 +177,13 @@ func TestNativeFileModeGuard(t *testing.T) {
 		{"workspace write", "0465", "Write", "native-file-mode-test", "", "required=0002"},
 		{"default grep path", "0467", "Grep", "", "", ""},
 		{"default glob path", "0467", "Glob", "", "*.go", ""},
+		{"tmp read", "0004", "Read", "/tmp/native-file-mode-test", "", ""},
+		{"tmp write", "0004", "Write", "/tmp/native-file-mode-test", "", ""},
+		{"tmp edit", "0004", "Edit", "/tmp/native-file-mode-test", "", ""},
+		{"tmp grep", "0004", "Grep", "/tmp", "", ""},
+		{"tmp glob", "0004", "Glob", "/tmp", "*.txt", ""},
+		{"tmp mode zero", "0000", "Read", "/tmp/native-file-mode-test", "", "required=0004"},
+		{"tmp adjacent", "0000", "Read", "/tmp-other/native-file-mode-test", "", "required=0400"},
 		{"absolute glob pattern", "0467", "Glob", "", "/etc/*", "required=4000"},
 		{"parent glob pattern", "0467", "Glob", "", "../*", "required=4000"},
 		{"invalid mode", "invalid", "Read", "src/agent.sh", "", "required=0004"},

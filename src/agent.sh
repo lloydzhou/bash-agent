@@ -774,15 +774,18 @@ tool_bash_add_mode() {
 }
 
 tool_bash_add_path() {
-    local path="$1" perms="$2" scope=1
+    local path="$1" perms="$2" scope=1 projects
     path="${path#\"}"; path="${path%\"}"; path="${path#\'}"; path="${path%\'}"
     path="${path#of=}"; path="${path%;}"; path="${path%,}"; path="${path%)}"
-    [[ -z "$path" || "$path" == /tmp || "$path" == /tmp/* || "$path" == /dev/null || "$path" == '&'* ]] && return 0
-    # 根目录 / 和 /* 归类为 system（防止绕过 system 权限检查）
-    [[ "$path" == "/" || "$path" == "/*" ]] && scope=8
-    if [[ "$path" == /dev/tcp* ]]; then
+    projects="${BASH_AGENT_HOME:-${HOME}}/.bash-agent/projects"
+    projects=$(printf '%s' "$projects" | tr '[:upper:]' '[:lower:]')
+    [[ -z "$path" || "$path" == /dev/null || "$path" == '&'* ]] && return 0
+    if [[ "$path" == /tmp || "$path" == /tmp/* || "$path" == "$projects" || "$path" == "$projects"/* ]]; then
+        scope=0
+    elif [[ "$path" == /dev/tcp* ]]; then
         scope=2
-    elif [[ "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
+    # 根目录 / 和 /* 归类为 system（防止绕过 system 权限检查）
+    elif [[ "$path" == "/" || "$path" == "/*" || "$path" =~ $TOOL_BASH_RE_SENSITIVE_PATH || "$path" =~ $TOOL_BASH_RE_SYSTEM_PATH ]]; then
         scope=8
     elif [[ -n "$CWD" && ("$path" == "$CWD" || "$path" == "$CWD"/*) ]]; then
         scope=1
@@ -824,7 +827,7 @@ tool_bash_scan_segment() {
             *) [[ "$tok" =~ $TOOL_BASH_RE_SENSITIVE_PATH ]] && { tool_bash_add_path "$tok" "$path_bits"; flags=3; } ;;
         esac
     done
-    (( flags == 1 )) && [[ "$seg" != *'/tmp/'* ]] && tool_bash_add_mode 1 2
+    (( flags == 1 )) && tool_bash_add_mode 1 2
 }
 
 tool_bash_scan_script() {
