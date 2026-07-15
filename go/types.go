@@ -12,6 +12,7 @@ package agent
 
 import (
 	"context"
+	"os"
 )
 
 // ─── Config ───
@@ -50,9 +51,10 @@ type Config struct {
 	DPQualityPenalty float64 // quality decay penalty coefficient (default 0.2)
 }
 
-// DefaultConfig 返回默认配置
+// DefaultConfig 返回默认配置。
+// THINKING 与 EFFORT 环境变量覆盖对应默认值；命令行参数可在调用方进一步覆盖。
 func DefaultConfig() Config {
-	return Config{
+	cfg := Config{
 		Provider:           "claude",
 		Model:              "",
 		MaxTokens:          16384,
@@ -76,6 +78,13 @@ func DefaultConfig() Config {
 		DPBeta:             0.03,
 		DPQualityPenalty:   0.2,
 	}
+	if value := os.Getenv("THINKING"); value != "" {
+		cfg.Thinking = value
+	}
+	if value := os.Getenv("EFFORT"); value != "" {
+		cfg.Effort = value
+	}
+	return cfg
 }
 
 // ─── 核心消息类型 ───

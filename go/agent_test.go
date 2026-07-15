@@ -11,6 +11,34 @@ import (
 	"testing"
 )
 
+// ─── 配置测试 ───
+
+func TestDefaultConfigThinkingEnvironment(t *testing.T) {
+	t.Setenv("THINKING", "enabled")
+	t.Setenv("EFFORT", "max")
+
+	cfg := DefaultConfig()
+	if cfg.Thinking != "enabled" {
+		t.Errorf("Thinking = %q, want %q", cfg.Thinking, "enabled")
+	}
+	if cfg.Effort != "max" {
+		t.Errorf("Effort = %q, want %q", cfg.Effort, "max")
+	}
+}
+
+func TestDefaultConfigThinkingDefaults(t *testing.T) {
+	t.Setenv("THINKING", "")
+	t.Setenv("EFFORT", "")
+
+	cfg := DefaultConfig()
+	if cfg.Thinking != "adaptive" {
+		t.Errorf("Thinking = %q, want %q", cfg.Thinking, "adaptive")
+	}
+	if cfg.Effort != "high" {
+		t.Errorf("Effort = %q, want %q", cfg.Effort, "high")
+	}
+}
+
 // ─── Util 测试 ───
 
 func TestUtilJSONEscape(t *testing.T) {

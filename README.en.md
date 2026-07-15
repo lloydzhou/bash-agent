@@ -113,8 +113,10 @@ Pre-built binaries (C / Go / Rust) are available on [Releases](https://github.co
 | `--base-url` | override API base URL | - |
 | `--api-key` | override API key | - |
 | `--skill NAME` | load a skill | - |
-| `--max-tokens` | max output tokens | `4096` |
-| `--max-turns` | max agent loop turns | `40` |
+| `--max-tokens` | max output tokens | `16384` |
+| `--max-turns` | max agent loop turns | `1000` |
+| `--thinking` | thinking mode: `adaptive` / `enabled` / `disabled` | `adaptive` |
+| `--effort` | thinking effort: `low` / `medium` / `high` / `xhigh` / `max` | `high` |
 | `--max-context` | context budget (`100k`/`1m`/`1g`) | `200000` |
 | `--tool-timeout N` | tool timeout in seconds | `600` |
 | `--session [NAME]` | create or resume a session | - |
@@ -176,7 +178,8 @@ Without an API key, images can still be pasted (generating `[Image #N]` placehol
 | `DESCRIBE_API_KEY` | Image description API key (defaults to GLM-4V-Flash, free) |
 | `DESCRIBE_MODEL` | Image description model name (default: `glm-4v-flash`) |
 | `DESCRIBE_BASE_URL` | Image description API base URL (default: `https://open.bigmodel.cn/api/paas/v4`) |
-| `THINKING_BUDGET` | Thinking token budget (default: `2048`) |
+| `THINKING` | Override thinking mode: `adaptive` / `enabled` / `disabled`; CLI `--thinking` takes precedence |
+| `EFFORT` | Override thinking effort: `low` / `medium` / `high` / `xhigh` / `max`; CLI `--effort` takes precedence |
 
 ## Bash and Local File Tool Permission Mode
 

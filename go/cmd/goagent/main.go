@@ -74,8 +74,8 @@ func main() {
 	flag.StringVar(&baseURL, "base-url", "", "Override API base URL")
 	flag.StringVar(&outputFormat, "output-format", "human", "Output format: human | stream-json")
 	flag.BoolVar(&printMode, "print", false, "Alias for --output-format stream-json")
-	flag.StringVar(&effort, "effort", "high", "Thinking effort: low|medium|high|xhigh|max")
-	flag.StringVar(&thinking, "thinking", "adaptive", "Thinking mode: adaptive|enabled|disabled")
+	flag.StringVar(&effort, "effort", "", "Thinking effort: low|medium|high|xhigh|max")
+	flag.StringVar(&thinking, "thinking", "", "Thinking mode: adaptive|enabled|disabled")
 	flag.StringVar(&session, "session", "", "Use named session")
 	flag.BoolVar(&cont, "continue", false, "Continue most recent session")
 	flag.BoolVar(&fork, "fork", false, "When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)")
@@ -127,8 +127,7 @@ Examples:
 	cfg.ToolTimeoutSecs = toolTimeout
 	cfg.MaxTurns = maxTurns
 	cfg.SkillNames = []string(skills)
-	cfg.Thinking = thinking
-	cfg.Effort = effort
+	applyThinkingOptions(&cfg, thinking, effort)
 
 	// 解析 size 参数
 	if mt, err := agent.UtilParseSize(maxTokens); err == nil {
@@ -426,6 +425,16 @@ func listAllSessions(store agent.SessionStore) {
 	fmt.Printf("%-40s %-16s %s\n", "NAME", "MODIFIED", "PREVIEW")
 	for _, r := range rows {
 		fmt.Printf("%-40s %-16s %s\n", r.Name, r.Modified, r.Preview)
+	}
+}
+
+// applyThinkingOptions 仅用显式命令行值覆盖由环境变量或默认值产生的配置。
+func applyThinkingOptions(cfg *agent.Config, thinking, effort string) {
+	if thinking != "" {
+		cfg.Thinking = thinking
+	}
+	if effort != "" {
+		cfg.Effort = effort
 	}
 }
 

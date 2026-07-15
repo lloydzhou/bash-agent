@@ -115,8 +115,8 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 | `--skill NAME` | 加载 skill | - |
 | `--max-tokens` | 最大输出 token | `16384` |
 | `--max-turns` | 最大 agent loop turn 数 | `1000` |
-| `--thinking` | 思考模式：`enabled` / `disabled` | `enabled` |
-| `--effort` | 思考力度：`low` / `medium` / `high` | - |
+| `--thinking` | 思考模式：`adaptive` / `enabled` / `disabled` | `adaptive` |
+| `--effort` | 思考力度：`low` / `medium` / `high` / `xhigh` / `max` | `high` |
 | `--print` | 非交互：读取 stdin 提示，输出到 stdout | - |
 | `--max-context` | context 预算（`100k`/`1m`/`1g`） | `200000` |
 | `--tool-timeout N` | tool 超时秒数 | `600` |
@@ -179,8 +179,8 @@ tcode goagent -p openai -m gpt-4o
 | `DESCRIBE_API_KEY` | 图片描述 API key（默认使用 GLM-4V-Flash，免费） |
 | `DESCRIBE_MODEL` | 图片描述模型名（默认 `glm-4v-flash`） |
 | `DESCRIBE_BASE_URL` | 图片描述 API 基础地址（默认 `https://open.bigmodel.cn/api/paas/v4`） |
-| `THINKING` | 覆盖思考模式：`enabled` / `disabled`（CLI `--thinking`） |
-| `EFFORT` | 覆盖思考力度：`low` / `medium` / `high`（CLI `--effort`） |
+| `THINKING` | 覆盖思考模式：`adaptive` / `enabled` / `disabled`；CLI `--thinking` 优先 |
+| `EFFORT` | 覆盖思考力度：`low` / `medium` / `high` / `xhigh` / `max`；CLI `--effort` 优先 |
 
 ## Bash 与本地文件工具权限模式
 
