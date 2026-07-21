@@ -15,3 +15,9 @@ nnoremap <silent> <Plug>(agent-toggle) :<C-U>AgentToggle<CR>
 nnoremap <silent> <Plug>(agent-new) :<C-U>AgentToggle!<CR>
 xnoremap <silent> <Plug>(agent-send) :AgentSend<CR>
 nnoremap <silent> <Plug>(agent-send-buffer) :<C-U>AgentSendBuffer<CR>
+
+" 退出 vim 前清理 agent 终端，避免隐藏的 CLI job 阻塞 :qall（E947）
+augroup agent_vim
+  autocmd!
+  autocmd VimLeavePre * call agent#on_vim_leave()
+augroup END

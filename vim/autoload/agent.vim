@@ -181,6 +181,16 @@ endfunction
 
 " ---------- 公共 API ----------
 
+" vim 退出前杀掉 agent job 并清掉终端 buffer。
+" 不做的话，隐藏的 agent 终端里 job 还在跑，:qall 会被 E947
+" （Job still running in buffer）拦住，得先退出 CLI 才能退出 vim。
+" CLI 会话存在磁盘上（--continue 恢复），杀 REPL 进程不丢聊天历史。
+function! agent#on_vim_leave() abort
+  if s:buf >= 0 && bufexists(s:buf)
+    call s:kill()
+  endif
+endfunction
+
 " mode: 'continue'（默认，续聊）/ 'new'（新会话）
 function! agent#toggle(mode) abort
   if a:mode ==# 'new' && s:alive()
