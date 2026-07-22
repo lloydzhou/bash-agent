@@ -45,12 +45,12 @@ nmap <leader>ab <Plug>(agent-send-buffer) " 发送整个文件
 
 ### F 键方案
 
-下面以 F12 开关侧边栏、F11 创建新会话为例：
+下面以 F12 开关侧边栏、Shift-F12 创建新会话为例。相比另占一个 F 键，Shift-F12 更不容易与 macOS 的系统快捷键冲突：
 
 ```vim
 " 普通编辑窗口
 nmap <silent> <F12> <Plug>(agent-toggle)
-nmap <silent> <F11> <Plug>(agent-new)
+nmap <silent> <S-F12> <Plug>(agent-new)
 
 " 焦点在 agent 终端时，也允许按 F12 隐藏侧边栏
 if has('nvim')

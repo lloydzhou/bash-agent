@@ -45,12 +45,12 @@ nmap <leader>ab <Plug>(agent-send-buffer) " Send the entire buffer
 
 ### Function-key mappings
 
-The following example uses F12 to toggle the sidebar and F11 to start a new session:
+The following example uses F12 to toggle the sidebar and Shift-F12 to start a new session. Shift-F12 is less likely than another bare function key to conflict with macOS system shortcuts:
 
 ```vim
 " Normal editor windows
 nmap <silent> <F12> <Plug>(agent-toggle)
-nmap <silent> <F11> <Plug>(agent-new)
+nmap <silent> <S-F12> <Plug>(agent-new)
 
 " Allow F12 to hide the sidebar while focus is inside the agent terminal
 if has('nvim')
