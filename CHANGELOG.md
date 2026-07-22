@@ -8,6 +8,21 @@
 
 ---
 
+## [4.2.21] - 2026-07-22
+
+> **自动续聊隔离与 Go 思考配置修复**：自动选择最近会话时不再误入 SubAgent 子会话，同时保留显式进入子会话的能力；修复 Go 运行时覆盖 `THINKING` / `EFFORT` 环境变量的问题，并简化 API key 配置文档。
+
+### Fixed
+
+- **自动续聊跳过 SubAgent 会话**：Bash、Go、Rust、C 的 `--continue` 自动选择最近会话时忽略 `sub_*` 子代理会话；未显式指定源会话的 `--fork` 同样复用该过滤规则。显式使用 `--session sub_xxx` 时仍可进入对应子会话。
+- **Go 思考配置环境变量覆盖**：Go 运行时默认配置读取 `THINKING` 与 `EFFORT` 环境变量，命令行仅在显式传值时覆盖，避免参数默认值意外抹除环境配置。
+
+### Changed
+
+- **API key 配置文档**：精简中英文 README 中的 API key 设置说明，使环境变量配置步骤更直接。
+
+---
+
 ## [4.2.20] - 2026-07-14
 
 > **Provider 配置优先级统一与 Bash 稳定性修复**：统一 Bash、C、Go、Rust 四个运行时的 provider 显式配置、环境变量与 DeepSeek 自动回退顺序；同时修复 Bash 在 `set -u` 模式下的未绑定变量崩溃，并使用跨平台方式识别最新会话。
@@ -1427,7 +1442,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.20...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.21...HEAD
+[4.2.21]: https://github.com/lloydzhou/bash-agent/compare/v4.2.20...v4.2.21
 [4.2.20]: https://github.com/lloydzhou/bash-agent/compare/v4.2.19...v4.2.20
 [4.2.19]: https://github.com/lloydzhou/bash-agent/compare/v4.2.18...v4.2.19
 [4.2.18]: https://github.com/lloydzhou/bash-agent/compare/v4.2.17...v4.2.18
