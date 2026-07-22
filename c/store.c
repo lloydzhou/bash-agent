@@ -228,7 +228,7 @@ char *store_session_resolve_continue(const char *home, const char *cwd) {
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
+        if (entry->d_name[0] == '.' || strncmp(entry->d_name, "sub_", 4) == 0) continue;
         /* 尝试解析目录名为时间戳: YYYYMMDD-HHMMSS-XXXX */
         struct stat st;
         sb_truncate(&buf, 0);

@@ -605,6 +605,9 @@ use std::path::{Path, PathBuf};
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("sub_") {
+                continue;
+            }
             let mt = session_activity_mod_time(&entry.path())?;
             match &newest {
                 Some((ts, _)) if *ts >= mt => {}
@@ -625,3 +628,55 @@ use std::path::{Path, PathBuf};
         }
         Ok(fs::metadata(session_dir)?.modified()?)
     }
+
+#[cfg(test)]
+mod continue_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn test_root(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("rustagent-{name}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn continue_skips_newer_sub_session() {
+        let home = test_root("continue-skip-sub");
+        let cwd = home.join("project");
+        fs::create_dir_all(&cwd).unwrap();
+        let project_dir = home.join(".bash-agent/projects").join(project_key(&cwd));
+        let normal = project_dir.join("normal-session");
+        let sub = project_dir.join("sub_latest");
+        fs::create_dir_all(&normal).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        fs::create_dir_all(&sub).unwrap();
+
+        assert_eq!(continue_session(&home, &cwd).unwrap(), "normal-session");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn continue_rejects_projects_with_only_sub_sessions() {
+        let home = test_root("continue-only-sub");
+        let cwd = home.join("project");
+        fs::create_dir_all(&cwd).unwrap();
+        let project_dir = home.join(".bash-agent/projects").join(project_key(&cwd));
+        fs::create_dir_all(project_dir.join("sub_only")).unwrap();
+
+        assert!(continue_session(&home, &cwd).is_err());
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn explicit_sub_session_paths_remain_available() {
+        let home = test_root("explicit-sub");
+        let cwd = home.join("project");
+        let paths = paths_for(&home, &cwd, "sub_manual");
+
+        assert_eq!(paths.session_dir.file_name().unwrap(), "sub_manual");
+        let _ = fs::remove_dir_all(home);
+    }
+}

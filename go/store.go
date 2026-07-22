@@ -231,7 +231,7 @@ func (s *FileStore) GetLatestDir() (string, error) {
 	var latest string
 	var latestTs int64
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), "sub_") {
 			continue
 		}
 		/* 优先用 events.jsonl 的 mtime，fallback 到目录 mtime（对齐 bash/rust） */
