@@ -42,8 +42,18 @@ nmap <leader>ab <Plug>(agent-send-buffer) " 发送整个文件
 ## 配置
 
 ```vim
-" agent 命令（默认值）
+" 兼容的基础命令配置（默认值）
 let g:agent_command = 'ccagent --interactive'
+
+" 也可以通过环境变量分别指定完整的新会话/续聊启动命令：
+" AGENT_NEW_COMMAND       对应 :AgentToggle!
+" AGENT_CONTINUE_COMMAND  对应 :AgentToggle
+" 例如在 shell 配置中：
+" export AGENT_NEW_COMMAND='codex'
+" export AGENT_CONTINUE_COMMAND='claude --continue'
+"
+" 环境变量未配置或为空时保持原有行为：新会话运行
+" g:agent_command，续聊运行 g:agent_command 加 --continue。
 
 " 终端宽度（默认 max([40, &columns*2/5])）
 let g:agent_width = 50

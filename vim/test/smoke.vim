@@ -3,7 +3,9 @@ set nocompatible
 let s:root = expand('<sfile>:p:h:h')
 execute 'set rtp+=' . fnameescape(s:root)
 runtime plugin/agent.vim
-let g:agent_command = 'cat'
+" 用无效的旧配置确保新会话和续聊实际由对应环境变量启动。
+" 环境变量由 smoke.py 注入，模拟 Vim 继承 shell 环境。
+let g:agent_command = 'agent-command-must-not-run'
 let g:agent_width = 40
 
 " 准备一个已知内容的 buffer 用于 AgentSendBuffer
@@ -44,4 +46,20 @@ call writefile([s:echo_ok && s:ref_ok ? 'noleak-ok' : 'noleak-fail'], '/tmp/agen
 call term_sendkeys(bufnr('bash-agent'), "\<CR>\<C-D>")
 sleep 1500m
 call writefile([bufnr('bash-agent') > 0 ? 'alive' : 'closed'], '/tmp/agent_vim_smoke_exit.out')
+
+" 冷启动普通 AgentToggle，验证使用 AGENT_CONTINUE_COMMAND。
+AgentToggle
+sleep 1000m
+call writefile([
+      \ filereadable('/tmp/agent_vim_smoke_new_command') ? readfile('/tmp/agent_vim_smoke_new_command')[0] : 'missing-new',
+      \ filereadable('/tmp/agent_vim_smoke_continue_command') ? readfile('/tmp/agent_vim_smoke_continue_command')[0] : 'missing-continue',
+      \ ], '/tmp/agent_vim_smoke_commands.out')
+
+" 两个环境变量为空时应回退到旧配置，并给续聊自动追加 --continue。
+call agent#on_vim_leave()
+let $AGENT_NEW_COMMAND = ''
+let $AGENT_CONTINUE_COMMAND = ''
+let g:agent_command = '/tmp/agent_vim_smoke_fallback.sh'
+AgentToggle
+sleep 1000m
 qall!

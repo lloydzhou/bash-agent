@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""PTY 冒烟测试：驱动 vim 加载插件，g:agent_command='cat'。
+"""PTY 冒烟测试：驱动 vim 加载插件并用环境变量配置启动命令。
 
 验证：
-1. :AgentToggle! 能在右侧开一个 terminal 跑 cat
-2. :AgentAsk hello 后 cat 回显 hello（输入行回显 + cat 输出，至少 2 次）
-3. :AgentSendBuffer 注入的引用文本不含尖括号、不带回车（cat 不会立刻回显第二行）
+1. :AgentToggle! 使用 AGENT_NEW_COMMAND 在右侧启动 terminal
+2. 冷启动 :AgentToggle 使用 AGENT_CONTINUE_COMMAND
+3. :AgentAsk hello 后 cat 回显 hello（输入行回显 + cat 输出，至少 2 次）
+4. :AgentSendBuffer 注入的引用文本不含尖括号、不带回车（cat 不会立刻回显第二行）
 
 用法: python3 vim/test/smoke.py
 """
@@ -15,14 +16,42 @@ OUT = "/tmp/agent_vim_smoke.out"
 OUT_EXIT = "/tmp/agent_vim_smoke_exit.out"
 OUT_TOGGLE = "/tmp/agent_vim_smoke_toggle.out"
 OUT_NOLEAK = "/tmp/agent_vim_smoke_noleak.out"
+OUT_NEW_COMMAND = "/tmp/agent_vim_smoke_new_command"
+OUT_CONTINUE_COMMAND = "/tmp/agent_vim_smoke_continue_command"
+OUT_COMMANDS = "/tmp/agent_vim_smoke_commands.out"
+OUT_FALLBACK = "/tmp/agent_vim_smoke_fallback.out"
 SMOKE_VIM = os.path.join(ROOT, "test", "smoke.vim")
+NEW_COMMAND = "/tmp/agent_vim_smoke_new.sh"
+CONTINUE_COMMAND = "/tmp/agent_vim_smoke_continue.sh"
+FALLBACK_COMMAND = "/tmp/agent_vim_smoke_fallback.sh"
+
+for path in (OUT_NEW_COMMAND, OUT_CONTINUE_COMMAND, OUT_COMMANDS, OUT_FALLBACK):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+with open(NEW_COMMAND, "w") as f:
+    f.write("#!/bin/sh\nprintf new-command > /tmp/agent_vim_smoke_new_command\nexec cat\n")
+with open(CONTINUE_COMMAND, "w") as f:
+    f.write("#!/bin/sh\nprintf continue-command > /tmp/agent_vim_smoke_continue_command\nexec cat\n")
+with open(FALLBACK_COMMAND, "w") as f:
+    f.write("#!/bin/sh\nprintf '%s' \"$*\" > /tmp/agent_vim_smoke_fallback.out\n")
+os.chmod(NEW_COMMAND, 0o700)
+os.chmod(CONTINUE_COMMAND, 0o700)
+os.chmod(FALLBACK_COMMAND, 0o700)
 
 cmd = ["vim", "-Nu", "NONE", "-n", "-S", SMOKE_VIM]
 
+env = {
+    **os.environ,
+    "TERM": "xterm-256color",
+    "AGENT_NEW_COMMAND": NEW_COMMAND,
+    "AGENT_CONTINUE_COMMAND": CONTINUE_COMMAND,
+}
 master, slave = pty.openpty()
 proc = subprocess.Popen(
     cmd, stdin=slave, stdout=slave, stderr=slave,
-    env={**os.environ, "TERM": "xterm-256color"}, close_fds=True,
+    env=env, close_fds=True,
 )
 os.close(slave)
 
@@ -66,6 +95,20 @@ if not os.path.exists(OUT_TOGGLE):
     fails.append("未生成 toggle 状态文件")
 elif open(OUT_TOGGLE).read().strip() != "toggle-ok":
     fails.append("AgentToggle 关闭/重开窗口失败")
+
+# 新会话与续聊应分别使用对应环境变量中的完整启动命令。
+if not os.path.exists(OUT_COMMANDS):
+    fails.append("未生成环境变量启动命令检查文件")
+else:
+    commands = open(OUT_COMMANDS).read().splitlines()
+    if commands != ["new-command", "continue-command"]:
+        fails.append(f"环境变量启动命令选择不正确: {commands!r}")
+
+# 环境变量为空时应保持旧行为：g:agent_command 后自动追加 --continue。
+if not os.path.exists(OUT_FALLBACK):
+    fails.append("未生成旧配置回退检查文件")
+elif open(OUT_FALLBACK).read().strip() != "--continue":
+    fails.append(f"旧配置回退不正确: {open(OUT_FALLBACK).read()!r}")
 
 # 注入文本首尾不应有多余按键泄漏（feedkeys('i') 竞态会在末尾多一个 i）
 if not os.path.exists(OUT_NOLEAK):

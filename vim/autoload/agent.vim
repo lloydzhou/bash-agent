@@ -17,6 +17,12 @@ function! s:width() abort
 endfunction
 
 function! s:command(mode) abort
+  " 两个环境变量都是完整启动命令；非空时覆盖原有命令构建逻辑。
+  " 未配置时保持兼容：g:agent_command（或默认值），续聊自动追加 --continue。
+  let l:env_cmd = a:mode ==# 'new' ? $AGENT_NEW_COMMAND : $AGENT_CONTINUE_COMMAND
+  if !empty(l:env_cmd)
+    return l:env_cmd
+  endif
   let l:cmd = get(g:, 'agent_command', 'ccagent --interactive')
   if a:mode ==# 'continue'
     let l:cmd .= ' --continue'
