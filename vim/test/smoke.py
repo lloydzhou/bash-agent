@@ -5,7 +5,7 @@
 1. :AgentToggle! 使用 AGENT_NEW_COMMAND 在右侧启动 terminal
 2. 冷启动 :AgentToggle 使用 AGENT_CONTINUE_COMMAND
 3. :AgentAsk hello 后 cat 回显 hello（输入行回显 + cat 输出，至少 2 次）
-4. :AgentSendBuffer 注入的引用文本不含尖括号、不带回车（cat 不会立刻回显第二行）
+4. :AgentSendBuffer 注入 @/abs/path 引用，不含尖括号、不带回车
 
 用法: python3 vim/test/smoke.py
 """
@@ -78,17 +78,9 @@ if data.count("hello-vim-agent") < 2:
 
 # 终端宽度仅 40 列，注入文本会被折行，先去掉空白再匹配
 flat = re.sub(r"\s+", "", data)
-m = re.search(r"看(\S+ctx-\d+-\d+\.md)（agent_vim_smoke_buf\.sh:1-2的代码片段）", flat)
+m = re.search(r"(@/tmp/agent_vim_smoke_buf\.sh)", flat)
 if not m:
-    fails.append("AgentSendBuffer 注入的引用文本未出现在终端")
-else:
-    ctx = m.group(1)
-    if not os.path.exists(ctx):
-        fails.append(f"ctx 文件不存在: {ctx}")
-    else:
-        body = open(ctx).read()
-        if not body.startswith("/tmp/agent_vim_smoke_buf.sh:1-2\n\n```sh\necho one\necho two\n```"):
-            fails.append(f"ctx 文件内容不对: {body!r}")
+    fails.append("AgentSendBuffer 注入的 @ 引用未出现在终端")
 
 # AgentToggle 应能关闭窗口，且重开时复用同一 buffer
 if not os.path.exists(OUT_TOGGLE):

@@ -4,6 +4,10 @@
 
 Run `ccagent` in a persistent right-side split in Vim 8+ or Neovim, using a VS Code-style layout with the editor on the left and chat on the right. The plugin can also inject selected code or the entire current buffer into the agent input line.
 
+> **Send mechanism**
+> - `AgentSend`: pastes the selected code into the agent input box via **bracketed paste** (no temp file).
+> - `AgentSendBuffer`: injects an **`@/abs/path`** reference for saved, unmodified buffers (the agent reads the file via its Read tool); unsaved or modified buffers fall back to pasting the current content.
+
 ## Installation
 
 Vim 8 native packages using a symlink, so local changes take effect immediately:
@@ -26,8 +30,8 @@ ln -s /path/to/bash-agent/vim ~/.local/share/nvim/site/pack/local/start/agent
 |---|---|
 | `:AgentToggle` | Show or hide the agent terminal. When starting a process, use the continue command. |
 | `:AgentToggle!` | Use the new-session command. If a process is running, stop it and restart. |
-| `:[range]AgentSend` | Write the range or visual selection to a temporary file and inject a reference into the agent input line. |
-| `:AgentSendBuffer` | Send a reference to the entire current buffer. |
+| `:[range]AgentSend` | Paste the range or visual selection into the agent input box via bracketed paste. |
+| `:AgentSendBuffer` | Inject `@/abs/path` for saved buffers; paste current content for unsaved/modified ones. |
 | `:AgentAsk <text>` | Inject arbitrary text and submit it directly to the agent. |
 
 Injected code references are not submitted automatically. Review or extend the input in the agent terminal, then press Enter.
@@ -200,9 +204,6 @@ Note: the C implementation of `ccagent` supports only `--interactive`; it does n
 ## Testing
 
 ```bash
-# Headless unit test for context generation
-vim -Nu NONE -n -es -S vim/test/test_build_context.vim </dev/null
-
-# PTY smoke test covering terminal startup, injection, toggling, and shutdown
+# PTY smoke test covering terminal startup, injection, @ reference, toggling, and shutdown
 python3 vim/test/smoke.py
 ```

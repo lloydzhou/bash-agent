@@ -4,6 +4,10 @@
 
 在 Vim 8+ / Neovim 中用右侧常驻分屏运行 `ccagent`（VSCode 式布局：左编辑区、右 chat），并可把选中代码 / 整个缓冲区注入 agent 输入行。
 
+> **发送机制**
+> - `AgentSend`：选中代码用 **bracketed paste** 直接灌进 agent 输入框（不写临时文件）
+> - `AgentSendBuffer`：已落盘且未修改的 buffer 注入 **`@/abs/path`** 引用，由 agent 自行用 Read 工具读取；未落盘或已修改的 buffer 自动退化为粘贴当前内容
+
 ## 安装
 
 Vim 8 原生 package（软链方式，改代码立即生效）：
@@ -26,8 +30,8 @@ ln -s /path/to/bash-agent/vim ~/.local/share/nvim/site/pack/local/start/agent
 |------|------|
 | `:AgentToggle` | 打开/隐藏右侧 agent 终端；冷启动时使用续聊命令 |
 | `:AgentToggle!` | 使用新会话命令；已运行则杀掉当前进程并重启 |
-| `:[range]AgentSend` | 把 `[range]`（或可视选择）的代码写入临时文件，向 agent 注入引用 |
-| `:AgentSendBuffer` | 整个缓冲区同上 |
+| `:[range]AgentSend` | 把 `[range]`（或可视选择）的代码用 bracketed paste 直接注入 agent 输入框 |
+| `:AgentSendBuffer` | 已落盘的 buffer 注入 `@/abs/path` 引用；未落盘/已修改则粘贴当前内容 |
 | `:AgentAsk <text>` | 直接向 agent 注入任意文本 |
 
 注入的文本不会自动回车提交，你在 agent 终端里确认后再发送。
@@ -200,9 +204,6 @@ export AGENT_CONTINUE_COMMAND='zsh -ic open_claude'
 ## 测试
 
 ```bash
-# headless 单测（context 构建）
-vim -Nu NONE -n -es -S vim/test/test_build_context.vim </dev/null
-
-# PTY 冒烟测试（用 cat 冒充 agent，验证终端/注入/退出全流程）
+# PTY 冒烟测试（用 cat 冒充 agent，验证终端/注入/@ 引用/退出全流程）
 python3 vim/test/smoke.py
 ```
