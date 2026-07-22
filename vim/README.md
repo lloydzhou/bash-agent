@@ -1,6 +1,6 @@
 # bash-agent Vim 插件
 
-[English](readme_en.md)
+[English](README_EN.md)
 
 在 Vim 8+ / Neovim 中用右侧常驻分屏运行 `ccagent`（VSCode 式布局：左编辑区、右 chat），并可把选中代码 / 整个缓冲区注入 agent 输入行。
 
