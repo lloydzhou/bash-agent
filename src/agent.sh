@@ -418,7 +418,7 @@ store_session_get_dir() {
 }
 
 store_session_get_latest_dir() {
-    local project_dir latest="" latest_ts=0 dir ts stat_cmd
+    local project_dir latest="" latest_ts=0 dir name ts stat_cmd
     project_dir="$(store_session_get_dir)"
     [[ -d "$project_dir" ]] || return 1
     if stat -c "%Y" "$project_dir" &>/dev/null; then
@@ -428,6 +428,8 @@ store_session_get_latest_dir() {
     fi
     for dir in "$project_dir"/*/; do
         [[ -d "$dir" ]] || continue
+        name="$(basename "${dir%/}")"
+        [[ "$name" == sub_* ]] && continue
         local target="$dir"
         [[ -f "$dir/events.jsonl" ]] && target="$dir/events.jsonl"
         ts=$("${stat_cmd[@]}" "$target" 2>/dev/null || echo 0)

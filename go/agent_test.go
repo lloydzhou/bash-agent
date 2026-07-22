@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ─── 配置测试 ───
@@ -163,8 +164,8 @@ func TestToolClassifyBashRequiredModeCWD(t *testing.T) {
 		// 可信内部目录
 		"cat > /tmp/test.go << EOF":                           "0004",
 		"cat /tmp-other/file":                                 "0400",
-		"cat /tmp/../etc/hosts":                                "4000",
-		"echo hi > /tmp/../etc/native-file-mode-test":          "2000",
+		"cat /tmp/../etc/hosts":                               "4000",
+		"echo hi > /tmp/../etc/native-file-mode-test":         "2000",
 		"cat > SAMPLE_HOME/.bash-agent/projects/session/file": "0004",
 		"cat SAMPLE_HOME/.bash-agent/projects-copy/file":      "0400",
 		// /dev/null
@@ -307,6 +308,72 @@ func TestFileStoreInit(t *testing.T) {
 	// 检查目录存在
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		t.Error("session dir should exist")
+	}
+}
+
+func TestFileStoreResolveContinueSkipsSubSessions(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	store := NewFileStore(home, cwd)
+	projectDir := store.GetDir()
+
+	normalDir := filepath.Join(projectDir, "normal-session")
+	subDir := filepath.Join(projectDir, "sub_latest")
+	if err := os.MkdirAll(normalDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	normalEvents := filepath.Join(normalDir, "events.jsonl")
+	subEvents := filepath.Join(subDir, "events.jsonl")
+	if err := os.WriteFile(normalEvents, []byte("{}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(subEvents, []byte("{}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(normalEvents, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(subEvents, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := store.ResolveContinue()
+	if err != nil {
+		t.Fatalf("ResolveContinue: %v", err)
+	}
+	if id != "normal-session" {
+		t.Fatalf("ResolveContinue = %q, want normal-session", id)
+	}
+}
+
+func TestFileStoreResolveContinueWithOnlySubSessionsCreatesNewID(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	store := NewFileStore(home, cwd)
+	if err := os.MkdirAll(filepath.Join(store.GetDir(), "sub_only"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := store.ResolveContinue()
+	if err != nil {
+		t.Fatalf("ResolveContinue: %v", err)
+	}
+	if id == "" || strings.HasPrefix(id, "sub_") {
+		t.Fatalf("ResolveContinue = %q, want a new regular session ID", id)
+	}
+}
+
+func TestFileStoreExplicitSubSessionRemainsUsable(t *testing.T) {
+	store := NewFileStore(t.TempDir(), t.TempDir())
+	if err := store.Init("sub_manual"); err != nil {
+		t.Fatalf("Init explicit sub session: %v", err)
+	}
+	if store.SessionID() != "sub_manual" {
+		t.Fatalf("SessionID = %q, want sub_manual", store.SessionID())
 	}
 }
 
