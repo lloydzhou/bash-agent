@@ -36,6 +36,7 @@ type Agent struct {
 	toolDefs         string // JSON 格式工具定义
 	ctxTokens        int    // 当前上下文 token 数
 	pendingTasks     int    // 等待中的子 agent 数量
+	subAgentDepth    int    // 主代理为 0，第一层子代理为 1
 	subResultCh      chan SubAgentResult
 	subMu            sync.Mutex
 	runMu            sync.Mutex
@@ -377,6 +378,7 @@ func (a *Agent) BuildPrompt() string {
 
 	// sub-agent guidance
 	subAgentGuidance := "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n" +
+		"- **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.\n" +
 		"- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n" +
 		"- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n" +
 		"- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n" +
@@ -1071,6 +1073,9 @@ func (a *Agent) drainSubAgentResults(ctx context.Context) bool {
 // ─── SubAgent 启动（异步 goroutine）───
 
 func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork string) (string, error) {
+	if a.subAgentDepth >= 1 {
+		return "", fmt.Errorf("sub-agent recursion limit reached; child agents cannot launch SubAgent")
+	}
 	if fork != "true" {
 		fork = "false"
 	}
@@ -1188,6 +1193,7 @@ func (a *Agent) runSubAgent(ctx context.Context, sessionID, prompt, fork string)
 	childLLM := NewHTTPTransport(childCfg)
 	childTools := NewToolDispatcher(childCfg)
 	child := NewAgent(childCfg, childStore, childLLM, childTools, childDisplay)
+	child.subAgentDepth = a.subAgentDepth + 1
 	child.SetToolDefs(a.toolDefs)
 	defer child.CloseDisplay()
 

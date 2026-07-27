@@ -1390,6 +1390,36 @@ test_agent_sub_agent() {
     unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
 }
 
+# Test: SubAgent recursion limit — child cannot launch a grandchild
+test_agent_sub_agent_recursion_limit() {
+    info "Test: SubAgent recursion limit"
+    local tmpdir output parent_dir child_count
+    tmpdir=$(mktemp -d)
+    export BASH_AGENT_HOME="$tmpdir"
+    export INTERACTIVE=false
+    export MAX_TURNS=20
+
+    output=$(timeout 20 "$AGENT" -p claude --base-url "${BASE}/v1" -m test --api-key test --session test-sub-recursion-001 "SUB_RECURSION_MARKER" 2>&1) || true
+    echo "$output" | grep -q "Recursion limit verified" && { green "SubAgent-recursion: parent completed"; ((PASS++)) || true; } || { red "SubAgent-recursion: parent did not complete"; echo "  Output: $output"; ((FAIL++)) || true; }
+
+    child_count=$(find "$tmpdir/.bash-agent/projects" -mindepth 2 -maxdepth 2 -type d -name 'sub_*' 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$child_count" -eq 1 ]]; then
+        green "SubAgent-recursion: no grandchild session created"; ((PASS++)) || true
+    else
+        red "SubAgent-recursion: expected 1 child session, found $child_count"; ((FAIL++)) || true
+    fi
+
+    parent_dir=$(find "$tmpdir/.bash-agent/projects" -type d -name 'test-sub-recursion-001' 2>/dev/null | head -1)
+    if [[ -n "$parent_dir" && $(grep -c '"type":"sub_agent_start"' "$parent_dir/events.jsonl" 2>/dev/null || true) -eq 1 ]]; then
+        green "SubAgent-recursion: only one start event recorded"; ((PASS++)) || true
+    else
+        red "SubAgent-recursion: unexpected start event count"; ((FAIL++)) || true
+    fi
+
+    rm -rf "$tmpdir"
+    unset BASH_AGENT_HOME INTERACTIVE MAX_TURNS
+}
+
 # Test: SubAgent multi — two SubAgents in one response, both results must be processed
 test_agent_sub_agent_multi() {
     info "Test: SubAgent multi (two parallel SubAgents)"
@@ -2713,6 +2743,7 @@ test_compact_dp_awk
 test_compact_turn_keep_awk
 test_agent_compact_context
 test_agent_sub_agent
+test_agent_sub_agent_recursion_limit
 test_agent_sub_agent_multi
 test_agent_sub_agent_failure
 test_agent_sub_agent_child_session

@@ -1932,6 +1932,7 @@ static void *sub_agent_thread_fn(void *arg) {
     sub->max_context_tokens = args->parent->max_context_tokens;
     sub->tool_timeout_secs = args->parent->tool_timeout_secs;
     sub->tool_result_max_bytes = args->parent->tool_result_max_bytes;
+    sub->sub_agent_depth = args->parent->sub_agent_depth + 1;
     sub->dp_cfg = dp_config_init(sub->max_context_tokens);
     free(sub->thinking);
     sub->thinking = util_strdup(args->parent->thinking);
@@ -1940,6 +1941,9 @@ static void *sub_agent_thread_fn(void *arg) {
 
     /* 执行 agent_loop */
     int rc = agent_loop(sub, args->prompt, "user_input");
+
+    /* 销毁子运行时前，等待并消费它启动的全部后台任务。 */
+    if (agent_wait_for_sub_agents(sub) != 0 && rc == 0) rc = -1;
 
     /* 提取结果：取最后一条 assistant 消息 */
     char **lines = NULL;
@@ -2006,6 +2010,9 @@ cleanup:
 char *agent_handle_sub_agent(Agent *agent, const char *prompt,
                              const char *description, int fork) {
     if (!prompt || !prompt[0]) return util_strdup("Error: no prompt provided");
+    if (agent->sub_agent_depth >= 1) {
+        return util_strdup("Error: sub-agent recursion limit reached; child agents cannot launch SubAgent");
+    }
 
     char *raw_id = util_new_session_id();
     char *sub_session_id;
@@ -2482,6 +2489,7 @@ char *agent_build_prompt(Agent *agent) {
     {
         const char *sag =
             "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n"
+            "- **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.\n"
             "- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n"
             "- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n"
             "- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n"
