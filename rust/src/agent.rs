@@ -265,6 +265,7 @@ struct Agent {
     sub_result_rx: mpsc::Receiver<MainLoopMessage>, // SubAgent 结果专用通道（对齐 NOTIFY_FIFO）
     sub_result_tx: Arc<mpsc::Sender<MainLoopMessage>>, // SubAgent 结果发送端
     active_task_count: usize,                 // 活跃子 agent 计数
+    sub_agent_depth: usize,                   // 主代理为 0，第一层子代理为 1
     sub_agent_request_count: usize,          // SubAgent 请求计数
     stdout: RefCell<Box<dyn Write + Send>>,  // 可替换的输出目标（子 agent 时为 sink）
     stderr: RefCell<Box<dyn Write + Send>>,  // 可替换的错误输出目标（子 agent 时为 sink）
@@ -689,6 +690,7 @@ impl Agent {
             sub_result_rx,
             sub_result_tx,
             active_task_count: 0,
+            sub_agent_depth: 0,
             sub_agent_request_count: 0,
             stdout: RefCell::new(Box::new(io::stdout())),
             stderr: RefCell::new(Box::new(io::stderr())),
@@ -706,6 +708,9 @@ impl Agent {
 
     // handle_sub_agent 处理 SubAgent 工具调用
     fn handle_sub_agent(&mut self, fields: &std::collections::BTreeMap<String, String>) -> String {
+        if self.sub_agent_depth >= 1 {
+            return "Error: sub-agent recursion limit reached; child agents cannot launch SubAgent".to_string();
+        }
         let prompt = match fields.get("prompt") {
             Some(p) if !p.is_empty() => p.clone(),
             _ => return "Error: no prompt provided for sub-agent".to_string(),
@@ -733,6 +738,7 @@ impl Agent {
         let cwd = self.cwd.clone();
         let home = self.home.clone();
         let cfg = self.cfg.clone();
+        let child_depth = self.sub_agent_depth + 1;
         let msg_tx_arc = self.sub_result_tx.clone(); // 子 agent 结果发送到专用通道
         let wake_tx = if self.cfg.interactive { Some(self.msg_tx.clone()) } else { None };
         let sub_session_id_clone = sub_session_id.clone();
@@ -812,6 +818,7 @@ impl Agent {
                 sub_result_rx: sub_rrx,
                 sub_result_tx: Arc::new(sub_rtx),
                 active_task_count: 0,
+                sub_agent_depth: child_depth,
                 sub_agent_request_count: 0,
                 stdout: RefCell::new(Box::new(io::sink())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
                 stderr: RefCell::new(Box::new(io::sink())),  // 子 agent 错误输出全部丢弃
