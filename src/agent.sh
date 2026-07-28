@@ -180,34 +180,6 @@ agent_image_insert_placeholder_readline() {
     READLINE_POINT=$((point + ${#p}))
 }
 
-agent_image_describe() {
-    local api_key="${DESCRIBE_API_KEY:-}" model="${DESCRIBE_MODEL:-glm-4v-flash}" \
-          base_url="${DESCRIBE_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}" paths=("$@") tmp desc="" p
-    [[ ${#paths[@]} -eq 0 || -z "$api_key" ]] && return 0
-    tmp=$(mktemp) || return 1
-    trap 'rm -f "$tmp"' RETURN
-    printf '{"model":"%s","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"Output all visible text from each image, separated by a blank line between images. Transcribe every character including special symbols (arrows, prompts, dots, slashes). Preserve exact spacing and line breaks. Pay attention to date formats (month names, numbers). Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."}' "$model" > "$tmp"
-    for p in "${paths[@]}"; do
-        printf ',{"type":"image_url","image_url":{"url":"data:image/png;base64,' >> "$tmp"
-        base64 < "$p" | tr -d '\n\r' >> "$tmp"
-        printf '"}}' >> "$tmp"
-    done
-    printf ']}]}' >> "$tmp"
-    while util_read_msg; do
-        case "${REPLY_MESSAGE[0]}" in
-            TEXT) desc+="${REPLY_MESSAGE[1]}" ;;
-            STOP) break ;;
-        esac
-    done < <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 \
-        --connect-timeout 5 --speed-limit 1 --speed-time 60 \
-        -H "Content-Type: application/json" -H "Authorization: Bearer $api_key" \
-        -d "@$tmp" "${base_url}/chat/completions" 2>&1 | \
-        util_awk_run -f "$AWK_DIR/http_stream.awk" | \
-        util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk" | \
-        sse_parse)
-    printf '%s' "$desc"
-}
-
 util_find_skill_dirs() {
     local cwd home
     cwd="${PWD:-$(pwd)}"
@@ -645,8 +617,6 @@ tool_dispatch() {
         PlanConfirm) tool_plan_confirm ;;
         PlanClear) tool_plan_clear ;;
         Skill)     tool_skill "$1" ;;
-        WebSearch) tool_web_search "$1" ;;
-        WebFetch)  tool_web_fetch "$1" ;;
         SubAgent)  tool_sub_agent "$1" "$2" "$3" ;;
         *)
             echo "unknown tool: $name"
@@ -665,8 +635,6 @@ tool_param_keys() {
         Grep) printf 'pattern path glob context' ;;
         TodoWrite) printf 'checklist' ;;
         Skill) printf 'name' ;;
-        WebSearch) printf 'query' ;;
-        WebFetch) printf 'url' ;;
         SubAgent) printf 'prompt description fork' ;;
         *) printf '' ;;
     esac
@@ -703,8 +671,6 @@ tool_call_summary() {
         Glob|Grep) key="pattern" ;;
         TodoWrite) key="summary" ;;
         Skill) key="name" ;;
-        WebSearch) key="query" ;;
-        WebFetch) key="url" ;;
         SubAgent) key="description" ;;
     esac
     if [[ -n "$key" && $# -gt 0 ]]; then
@@ -1024,10 +990,6 @@ tool_plan_clear() {
     printf 'Plan cleared.'
 }
 
-tool_web_search() { curl -sS --connect-timeout 10 --max-time 30 -G --data-urlencode "q=$1" -H "Authorization: Bearer ${JINA_API_KEY:-}" -H "X-Respond-With: no-content" "https://s.jina.ai/" 2>&1; }
-
-tool_web_fetch() { curl -sS --connect-timeout 10 --max-time 60 -H "Authorization: Bearer ${JINA_API_KEY:-}" "https://r.jina.ai/$1" 2>&1; }
-
 # 启动异步子 agent：后台执行 agent_loop，完成后通过 NOTIFY_FIFO 发回 AGENT_RESULT
 # 消息格式：AGENT_RESULT <session_id> <status:ok|failed> <thinking> <text> <in> <out> <cr> <cc> <reqs>
 tool_sub_agent() {
@@ -1178,9 +1140,6 @@ display_message() {
             display_ensure_newline
             printf '\033[33m[user inject] %s\033[0m\n' "${REPLY_MESSAGE[1]}"
             DISPLAY_LAST_CHAR=$'\n' ;;
-        IMAGE_DESCRIBE)
-            [[ -n "${REPLY_MESSAGE[2]}" ]] && { display_human_text "$(printf '\033[36m📸 %s: %s\033[0m\n' "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}")"; DISPLAY_LAST_CHAR=$'\n'; }
-            ;;
         USER_MESSAGE)
             display_ensure_newline
             _um_text="${REPLY_MESSAGE[1]%%$'\n'*}"
@@ -1505,18 +1464,20 @@ agent_loop() {
     local user_input="$1" turn_kind="${2:-user_input}" _type="" _reason="" had_error=false
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
-    # 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+    # events 保留原始占位符；conversation/LLM 追加占位符到本地图片绝对路径的映射。
     if [[ "$turn_kind" == user_input && "$user_input" == *"[Image #"* ]]; then
-        local _rest="$user_input" _images="" _paths="" desc
+        local _rest="$user_input" _attachments="" _image_path _marker
         while [[ "$_rest" =~ \[Image\ #([0-9]+)\] ]]; do
-            [[ -f "$(store_session_image_dir)/${BASH_REMATCH[1]}.png" ]] && _paths+=" $(store_session_image_dir)/${BASH_REMATCH[1]}.png"
-            _images+="${_images:+ }${BASH_REMATCH[0]}"
-            _rest="${_rest#*"${BASH_REMATCH[0]}"}"
+            _marker="${BASH_REMATCH[0]}"
+            _image_path="$(store_session_image_dir)/${BASH_REMATCH[1]}.png"
+            if [[ -f "$_image_path" ]]; then
+                _attachments+="${_attachments:+$'\n'}${_marker} => ${_image_path}"
+            fi
+            _rest="${_rest#*"$_marker"}"
         done
-        desc=$(agent_image_describe $_paths)
-        store_event_append "{\"type\":\"image_describe\",\"images\":\"$_images\",\"content\":\"$(util_json_escape "$desc")\"}"
-        util_write_msg "IMAGE_DESCRIBE" "$_images" "$desc" >&4 2>/dev/null || true
-        user_input+=$'\n\n<attached-images>\n'"$desc"$'\n</attached-images>'
+        if [[ -n "$_attachments" ]]; then
+            user_input+=$'\n\n<attached-images>\nThese placeholders map to local image files:\n'"$_attachments"$'\nUse an available visual Skill from <skill-index> when image understanding is needed, and pass the corresponding absolute path to that Skill. The runtime does not inspect these images automatically.\n</attached-images>'
+        fi
     fi
     [[ "$turn_kind" != notify ]] && store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1

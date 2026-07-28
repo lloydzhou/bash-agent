@@ -308,12 +308,30 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 	})
 	rl.Start()
 
-	// 主循环：从 readline goroutine 接收输入，交给 agent 处理
-	for input := range rl.Input() {
-		turnKind := "user_input"
-		if input == notifyWakeupInput {
-			input = ""
-			turnKind = "notify"
+	// 主循环：统一调度普通输入和后台结果。单个 RunLoop 仍串行执行，
+	// 但不会在后台任务尚未完成时独占等待。
+	inputCh := rl.Input()
+	for inputCh != nil {
+		input := ""
+		turnKind := ""
+		select {
+		case line, ok := <-inputCh:
+			if !ok {
+				inputCh = nil
+				continue
+			}
+			input = line
+			turnKind = "user_input"
+			if input == notifyWakeupInput {
+				input = ""
+				turnKind = "notify"
+			}
+		case result := <-a.SubResultReady():
+			if err := a.RunResult(ctx, result); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			}
+			a.FlushDisplay()
+			continue
 		}
 		if err := a.RunLoop(ctx, input, turnKind); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -322,6 +340,9 @@ func runInteractive(ctx context.Context, a *agent.Agent, store agent.SessionStor
 		// 不再调用 rl.Done() — readline goroutine 立即开始下一轮 EditStart
 	}
 
+	if err := a.WaitForBackgroundResults(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	}
 	fmt.Printf("\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n", store.SessionID())
 }
 
@@ -401,10 +422,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			thinking, _ := ev["thinking"].(string)
 			text, _ := ev["text"].(string)
 			display.ShowEvent(agent.Event{Type: agent.EventSubAgentResult, Fields: []string{"AGENT_RESULT", sid, status, in, out, thinking, text}})
-		case "image_describe":
-			images, _ := ev["images"].(string)
-			desc, _ := ev["content"].(string)
-			display.ShowEvent(agent.Event{Type: agent.EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
 		case "stop":
 			// Don't emit STOP for replay
 		case "error":

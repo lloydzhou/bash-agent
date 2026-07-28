@@ -384,7 +384,10 @@ int main(int argc, char *argv[]) {
         /* 主循环 */
         agent_main_loop(agent);
 
-        /* 等待线程结束 */
+        /* 用户可能在后台任务运行时退出。销毁队列前必须回收所有后台线程。 */
+        agent_wait_for_sub_agents(agent);
+
+        /* 等待读取线程结束 */
         /* 注意：readline 线程可能已经 close 了 input_queue（Ctrl+D/exit），
          * 也可能没有（agent 出错退出）。安全起见再 close 一次（重复 close 无害）。 */
         mq_close(&input_queue);

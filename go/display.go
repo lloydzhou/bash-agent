@@ -249,20 +249,6 @@ func (d *TermDisplay) ShowEvent(ev Event) {
 		}
 		d.writef("\033[36mContext compacted (%s).\033[0m\n", info)
 
-	case EventImageDescribe:
-		d.EnsureNewline()
-		images := ""
-		if len(ev.Fields) > 1 {
-			images = ev.Fields[1]
-		}
-		desc := ""
-		if len(ev.Fields) > 2 {
-			desc = ev.Fields[2]
-		}
-		if desc != "" {
-			d.writef("\033[36m📸 %s: %s\033[0m\n", images, desc)
-		}
-
 	case EventUserMessage:
 		content := ""
 		if len(ev.Fields) > 1 {

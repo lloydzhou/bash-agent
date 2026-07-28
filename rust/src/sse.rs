@@ -10,7 +10,8 @@ pub mod toolcall {
         } else {
             input.trim()
         };
-        let obj: Value = serde_json::from_str(trimmed).map_err(|e| anyhow!("parse tool input: {e}"))?;
+        let obj: Value =
+            serde_json::from_str(trimmed).map_err(|e| anyhow!("parse tool input: {e}"))?;
         let mut event = ToolCallEvent {
             name: name.to_string(),
             id: id.to_string(),
@@ -242,12 +243,17 @@ pub mod claude {
                         }
                     }
                     if cache_read_input_tokens == 0 {
-                        if let Some(v) = usage.get("cache_read_input_tokens").and_then(Value::as_i64) {
+                        if let Some(v) =
+                            usage.get("cache_read_input_tokens").and_then(Value::as_i64)
+                        {
                             cache_read_input_tokens = v;
                         }
                     }
                     if cache_creation_input_tokens == 0 {
-                        if let Some(v) = usage.get("cache_creation_input_tokens").and_then(Value::as_i64) {
+                        if let Some(v) = usage
+                            .get("cache_creation_input_tokens")
+                            .and_then(Value::as_i64)
+                        {
                             cache_creation_input_tokens = v;
                         }
                     }

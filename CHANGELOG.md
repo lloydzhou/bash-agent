@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **移除内置网络与视觉调用**：Bash、Go、Rust、C 不再暴露 `WebSearch` / `WebFetch`，也不再读取 `JINA_API_KEY` 或自动调用图片描述 API；网络与视觉能力改由外部 Skill 按需提供。
+- **图片占位符改为路径映射**：Ctrl+V 图片粘贴和 `[Image #N]` 占位符保持可用。发送时保留占位符原位置，并在 conversation 末尾追加 `<attached-images>` 本地绝对路径映射，供视觉 Skill 使用。
+
 ---
 
 ## [4.2.21] - 2026-07-22

@@ -71,7 +71,6 @@ typedef enum {
     DISPLAY_ASYNC_TASK_RESULT,   /* 异步 Bash 任务结果 */
     DISPLAY_CONTEXT_UPDATE,      /* 上下文压缩通知 */
     DISPLAY_FLUSH,               /* display 队列同步屏障 */
-    DISPLAY_IMAGE_DESCRIBE,      /* 图片描述结果 */
     DISPLAY_USER_NOTIFY,         /* 用户 Ctrl+O 介入输入 */
 } DisplayMsgType;
 
@@ -113,7 +112,6 @@ DisplayMessage display_msg_sub_agent_result(const char *session_id, const char *
 DisplayMessage display_msg_async_task_result(const char *task_id, int exit_code,
                                              const char *output);
 DisplayMessage display_msg_context_update(const char *trigger);
-DisplayMessage display_msg_image_describe(const char *images, const char *description);
 DisplayMessage display_msg_user_notify(const char *text);
 
 /* 释放 DisplayMessage 内部动态分配的内存 */

@@ -550,8 +550,6 @@ skills 当前按以下优先级读取：
 - `PlanConfirm` — 确认 plan draft：先 force compact（复用旧缓存前缀），再 mv draft → plan.md（触发缓存失效），总共一次冷启动
 - `PlanClear` — 清空 plan：先 force compact（跳过 DP 决策，保留最后 `DP_MIN_KEEP_RATIO` 比例的完整 turn），再清空 plan.md
 - `Skill`
-- `WebSearch`
-- `WebFetch`
 - `SubAgent` — 启动子代理会话，支持独立模式和 fork 模式（`fork=true` 继承父会话上下文），支持并发执行
 
 设计原则：
@@ -576,7 +574,7 @@ skills 当前按以下优先级读取：
 
 `Bash` 支持通过 `timeout` 参数为单条命令设置独立超时，覆盖全局 `--tool-timeout`。
 
-`WebSearch` 和 `WebFetch` 基于 Jina AI API，需要 `JINA_API_KEY` 环境变量。
+网络搜索、网页读取和视觉理解由外部 Skill 按需提供，不属于运行时内置工具。图片粘贴仍保留 `[Image #N]` 占位符，并在 conversation 中追加本地绝对路径映射供视觉 Skill 使用。
 
 #### SubAgent 架构约束
 

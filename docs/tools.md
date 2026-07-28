@@ -174,29 +174,6 @@ export BASH_AGENT_BASH_MODE=0457  # 允许 network execute
 - 再读取对应的 `SKILL.md`
 - 不修改后续轮次的 system prompt
 
-## `WebSearch`
+## 网络与视觉能力
 
-网络搜索。
-
-| 参数 | 类型 | 说明 |
-|---|---|---|
-| `query` | string | 搜索关键词 |
-
-- 基于 Jina AI Search API
-- 依赖 `JINA_API_KEY` 环境变量
-- 默认超时 30s
-- 返回结果包含标题和 URL
-
-## `WebFetch`
-
-获取网页内容。
-
-| 参数 | 类型 | 说明 |
-|---|---|---|
-| `url` | string | 网页 URL |
-
-- 基于 Jina AI Reader API
-- 依赖 `JINA_API_KEY` 环境变量
-- 默认超时 60s
-- 返回 markdown 格式内容
-- 无法访问需要认证的私有 URL
+运行时不再内置网络搜索、网页读取或图片描述工具。需要这些能力时，先从 system prompt 的 `skill-index` 选择匹配的外部 Skill，再按该 Skill 的说明调用。粘贴图片后，conversation 中的 `<attached-images>` 会提供 `[Image #N]` 到本地绝对路径的映射，视觉 Skill 应使用该路径读取图片。

@@ -1,10 +1,10 @@
 pub mod agent;
 pub mod ffi;
 pub mod sse;
-pub mod util;
 pub mod store;
-pub mod transport;
 pub mod tools;
+pub mod transport;
+pub mod util;
 
 pub const TOOLS_JSON: &str = include_str!("tools.json");
 
@@ -246,7 +246,8 @@ pub mod config {
                 "claude" => "claude-sonnet-4-20250514",
                 "openai" => "gpt-4o",
                 _ => unreachable!(),
-            }.to_string();
+            }
+            .to_string();
         }
         Ok(())
     }
@@ -315,19 +316,41 @@ pub mod types {
         #[serde(rename = "thinking")]
         Thinking { thinking: String },
         #[serde(rename = "tool_use")]
-        ToolUse { id: String, name: String, input: Value },
+        ToolUse {
+            id: String,
+            name: String,
+            input: Value,
+        },
         #[serde(rename = "tool_result")]
-        ToolResult { tool_use_id: String, content: String },
+        ToolResult {
+            tool_use_id: String,
+            content: String,
+        },
     }
 
     /// 流式事件
     #[derive(Debug, Clone)]
     pub enum StreamEvent {
-        TextDelta { delta: String },
-        ThinkingDelta { delta: String },
-        ToolUseStart { id: String, name: String, input: Value },
-        ToolResult { tool_use_id: String, content: String, is_error: bool },
-        Usage { input_tokens: i64, output_tokens: i64 },
+        TextDelta {
+            delta: String,
+        },
+        ThinkingDelta {
+            delta: String,
+        },
+        ToolUseStart {
+            id: String,
+            name: String,
+            input: Value,
+        },
+        ToolResult {
+            tool_use_id: String,
+            content: String,
+            is_error: bool,
+        },
+        Usage {
+            input_tokens: i64,
+            output_tokens: i64,
+        },
         Done,
     }
 
@@ -763,8 +786,7 @@ pub mod compact_dp {
             let max_ctx = cfg.max_context as f64;
             let tf = total_tokens as f64;
             let quality_savings = if tf > max_ctx * 0.30 {
-                cfg.quality_penalty * cfg.p_input
-                    * ((vf + tf) * (vf + tf) - (vf + kf) * (vf + kf))
+                cfg.quality_penalty * cfg.p_input * ((vf + tf) * (vf + tf) - (vf + kf) * (vf + kf))
                     / (max_ctx * 1_000_000.0)
             } else {
                 0.0
@@ -896,7 +918,10 @@ pub mod compact_dp {
             };
             let lines = make_conv(60, 50000);
             let result = compact_dp_decision(&lines, &cfg, 0, 1, 5, 20000);
-            assert!(result.is_some(), "quality_penalty=500 should promote compaction");
+            assert!(
+                result.is_some(),
+                "quality_penalty=500 should promote compaction"
+            );
         }
 
         #[test]
@@ -974,7 +999,10 @@ pub mod compact_dp {
             let cut = lines.len() - n;
             if cut > 0 {
                 let content = &lines[cut]["content"];
-                assert!(content.is_string(), "cut must not align to tool_result array: {content:?}");
+                assert!(
+                    content.is_string(),
+                    "cut must not align to tool_result array: {content:?}"
+                );
             }
         }
     }
@@ -1024,7 +1052,8 @@ pub mod conversation {
             content.push(json!({"type":"thinking","thinking":thinking}));
             content.push(json!({"type":"text","text":text}));
             for c in calls {
-                content.push(json!({"type":"tool_use","id":c.id,"name":c.name,"input":c.input_json}));
+                content
+                    .push(json!({"type":"tool_use","id":c.id,"name":c.name,"input":c.input_json}));
             }
             self.append_line(&json!({"role":"assistant","content":content}))
         }
@@ -1044,7 +1073,12 @@ pub mod conversation {
             self.append_line(&json!({"role":"user","content":content}))
         }
 
-        pub fn file_tool_result_summary(kind: &str, path: &str, offset: &str, limit: &str) -> String {
+        pub fn file_tool_result_summary(
+            kind: &str,
+            path: &str,
+            offset: &str,
+            limit: &str,
+        ) -> String {
             if path.is_empty() {
                 return kind.to_string();
             }
@@ -1054,7 +1088,11 @@ pub mod conversation {
                     let mut rng = String::new();
                     if !offset.is_empty() || !limit.is_empty() {
                         let o = if offset.is_empty() { "1" } else { offset };
-                        let l = if limit.is_empty() { &lines.to_string() } else { limit };
+                        let l = if limit.is_empty() {
+                            &lines.to_string()
+                        } else {
+                            limit
+                        };
                         rng = format!(", offset={o}, limit={l}");
                     }
                     format!("{kind}({path}) [{lines} lines, {} bytes{rng}]", data.len())
@@ -1142,8 +1180,7 @@ pub mod conversation {
                             let completed = arr
                                 .iter()
                                 .filter(|item| {
-                                    item.get("status").and_then(Value::as_str)
-                                        == Some("completed")
+                                    item.get("status").and_then(Value::as_str) == Some("completed")
                                 })
                                 .count();
                             label = format!("{completed}/{total}");
@@ -1510,9 +1547,7 @@ pub mod prompt {
 }
 
 pub mod session {
-    pub use crate::store::{
-        continue_session, ensure_dir, paths_for, project_key, Paths,
-    };
+    pub use crate::store::{Paths, continue_session, ensure_dir, paths_for, project_key};
 }
 
 pub mod traits {

@@ -154,14 +154,14 @@ tcode goagent -p openai -m gpt-4o
 
 ## 图片粘贴
 
-终端交互模式下 **Ctrl+V** 从剪贴板粘贴图片，自动插入 `[Image #N]` 占位符并缓存到 session。发送消息时自动收集所有图片，调用 GLM-4V-Flash（免费）转录文字并追加 `<attached-images>` 描述。
+终端交互模式下 **Ctrl+V** 从剪贴板粘贴图片，自动插入 `[Image #N]` 占位符并缓存到 session。发送消息时保留占位符原位置，并追加 `<attached-images>` 本地绝对路径映射；需要理解图片时，由模型从 `skill-index` 选择可用视觉 Skill 并传入对应路径。
 
 支持平台：
 - **macOS**: `osascript`（内置）
 - **Linux Wayland**: `wl-paste`
 - **Linux X11**: `xclip`
 
-无需 API key 时仍可粘贴图片（生成 `[Image #N]`），仅跳过描述步骤。
+运行时不自动读取或描述图片，也不绑定特定视觉服务；视觉能力由外部 Skill 按需提供。
 
 ## 环境变量
 
@@ -173,12 +173,8 @@ tcode goagent -p openai -m gpt-4o
 | `OPENAI_API_KEY` | OpenAI API key |
 | `ANTHROPIC_BASE_URL` | Claude API base URL |
 | `OPENAI_BASE_URL` | OpenAI API base URL |
-| `JINA_API_KEY` | Jina AI API key（WebSearch/WebFetch 工具需要） |
 | `BASH_AGENT_HOME` | 覆盖 session 存储目录（默认 `$HOME`） |
 | `BASH_AGENT_BASH_MODE` | Bash 与本地文件工具权限，4 位八进制 `system/external/network/workspace`；每位 `4=read,2=write,1=execute`（默认 `0467`） |
-| `DESCRIBE_API_KEY` | 图片描述 API key（默认使用 GLM-4V-Flash，免费） |
-| `DESCRIBE_MODEL` | 图片描述模型名（默认 `glm-4v-flash`） |
-| `DESCRIBE_BASE_URL` | 图片描述 API 基础地址（默认 `https://open.bigmodel.cn/api/paas/v4`） |
 | `THINKING` | 覆盖思考模式：`adaptive` / `enabled` / `disabled`；CLI `--thinking` 优先 |
 | `EFFORT` | 覆盖思考力度：`low` / `medium` / `high` / `xhigh` / `max`；CLI `--effort` 优先 |
 
@@ -279,7 +275,7 @@ $$
 
 ## 内置工具
 
-`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `PlanConfirm` · `PlanClear` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
+`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `PlanConfirm` · `PlanClear` · `Skill` · `SubAgent`
 
 > 详细说明见 [`docs/tools.md`](docs/tools.md)。`Bash` 工具的权限模型见 [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md)。
 
@@ -307,7 +303,7 @@ $$
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | 架构设计、分层、协议 |
 | [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash 与本地文件工具权限模式、分类规则、推荐配置 |
-| [`docs/tools.md`](docs/tools.md) | 13 个内置工具详细说明 |
+| [`docs/tools.md`](docs/tools.md) | 11 个内置工具详细说明 |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | 压缩算法完整推导 |
 | [`docs/sessions.md`](docs/sessions.md) | Session 文件结构与恢复 |
 

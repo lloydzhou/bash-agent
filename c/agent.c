@@ -38,9 +38,21 @@ typedef struct {
     char *cmd;
     char *task_id;
     MsgQueue *sub_result_queue;
+    MsgQueue *input_queue;
 } AsyncBashArgs;
 
 static void *async_bash_thread_fn(void *arg);
+
+static void agent_signal_notify(MsgQueue *input_queue) {
+    if (!input_queue) return;
+    InputMessage *wakeup = calloc(1, sizeof(InputMessage));
+    if (!wakeup) return;
+    wakeup->type = MSG_NOTIFY_PENDING;
+    if (mq_push(input_queue, wakeup) != 0) {
+        input_message_free(wakeup);
+        free(wakeup);
+    }
+}
 
 /* ============================================================
  * 图片占位符支持
@@ -58,10 +70,6 @@ static char *agent_tool_display_summary(const char *name, JsonVal input, const c
         field = json_get_string(input, "name");
     } else if (strcmp(name, "SubAgent") == 0) {
         field = json_get_string(input, "description");
-    } else if (strcmp(name, "WebSearch") == 0) {
-        field = json_get_string(input, "query");
-    } else if (strcmp(name, "WebFetch") == 0 || strcmp(name, "WebReader") == 0) {
-        field = json_get_string(input, "url");
     } else if (strcmp(name, "TodoWrite") == 0) {
         JsonVal todos_arr = json_get(input, "todos");
         if (todos_arr.type == JSON_ARRAY) {
@@ -234,6 +242,7 @@ typedef struct {
     int fork_mode;
     char *sub_session_id;
     MsgQueue *sub_result_queue;
+    MsgQueue *input_queue;
 } SubAgentArgs;
 
 /* ============================================================
@@ -454,13 +463,6 @@ static char *display_msg_to_event(DisplayMessage *msg) {
         sb_append_json_string(&buf, msg->content ? msg->content : "");
         sb_append_char(&buf, '}');
         break;
-    case DISPLAY_IMAGE_DESCRIBE:
-        sb_append(&buf, "{\"type\":\"image_describe\",\"images\":\"");
-        sb_append(&buf, msg->tool_name ? msg->tool_name : "");
-        sb_append(&buf, "\",\"content\":");
-        sb_append_json_string(&buf, msg->content ? msg->content : "");
-        sb_append_char(&buf, '}');
-        break;
     default:
         sb_free(&buf);
         return NULL;
@@ -654,15 +656,6 @@ int agent_replay_events(Agent *agent, int max_turns) {
             free(status);
             free(thinking);
             free(text);
-        } else if (strcmp(type, "image_describe") == 0) {
-            char *images = json_get_string(jp.val, "images");
-            char *desc = json_get_string(jp.val, "content");
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_image_describe(images ? images : "", desc ? desc : "");
-            push_display(agent->display_queue, dm);
-            replayed = 1;
-            free(images);
-            free(desc);
         } else if (strcmp(type, "error") == 0) {
             char *message = json_get_string(jp.val, "message");
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -813,83 +806,11 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         sb_free(&evt);
     }
 
-    /* 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本 */
+    /* events 保留原始占位符；conversation/LLM 追加本地图片路径映射。 */
     char *expanded_input = NULL;
     if ((turn_kind == NULL || strcmp(turn_kind, "user_input") == 0) && strstr(user_input, "[Image #") != NULL) {
-        /* 收集所有 [Image #N] 占位符和对应路径 */
-        StrBuf images, expanded;
-        sb_init(&images);
-        sb_init(&expanded);
-        sb_append(&expanded, user_input);
-
-        const char *pattern = "[Image #";
-        const char *rest = user_input;
-        int first_img = 1;
-        char **paths = NULL;
-        int path_count = 0;
-        int path_cap = 16;
-        paths = calloc((size_t)path_cap, sizeof(char*));
-
-        while ((rest = strstr(rest, pattern)) != NULL) {
-            const char *end = strchr(rest, ']');
-            if (!end) break;
-            if (!first_img) sb_append_char(&images, ' ');
-            first_img = 0;
-            sb_appendn(&images, rest, (size_t)(end - rest + 1));
-
-            /* 提取数字并检查文件 */
-            int n = 0;
-            const char *num = rest + strlen(pattern);
-            while (*num >= '0' && *num <= '9') {
-                n = n * 10 + (*num - '0');
-                num++;
-            }
-            char imgpath[1024];
-            snprintf(imgpath, sizeof(imgpath), "%s/%d.png", store_session_image_dir(&agent->paths), n);
-            FILE *f = fopen(imgpath, "r");
-            if (f) {
-                fclose(f);
-                if (path_count >= path_cap) {
-                    path_cap *= 2;
-                    paths = realloc(paths, (size_t)path_cap * sizeof(char*));
-                }
-                paths[path_count++] = util_strdup(imgpath);
-            }
-            rest = end + 1;
-        }
-
-        /* 调用 describe 获取描述 */
-        char *desc = agent_image_describe(paths, path_count);
-
-        /* 记录 image_describe 事件 */
-        if (images.len > 0) {
-            StrBuf evt;
-            sb_init(&evt);
-            sb_append(&evt, "{\"type\":\"image_describe\",\"images\":\"");
-            sb_append(&evt, images.data);
-            sb_append(&evt, "\",\"content\":");
-            sb_append_json_string(&evt, desc ? desc : "");
-            sb_append_char(&evt, '}');
-            store_event_append(&agent->paths, evt.data);
-            sb_free(&evt);
-
-            /* 推送 IMAGE_DESCRIBE 到 display queue */
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_image_describe(images.data, desc);
-            push_display(agent->display_queue, dm);
-        }
-
-        /* 拼接 expanded_input */
-        sb_append(&expanded, "\n\n<attached-images>\n");
-        sb_append(&expanded, desc ? desc : "");
-        sb_append(&expanded, "\n</attached-images>");
-
-        /* 清理 */
-        for (int i = 0; i < path_count; i++) free(paths[i]);
-        free(paths);
-        free(desc);
-        sb_free(&images);
-        expanded_input = expanded.data;
+        expanded_input = util_strdup(user_input);
+        agent_image_expand_placeholders(agent, &expanded_input);
         user_input = expanded_input;
     }
 
@@ -1156,6 +1077,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                         args->cmd = util_strdup(cmd);
                         args->task_id = util_strdup(task_id);
                         args->sub_result_queue = agent->sub_result_queue;
+                        args->input_queue = agent->interactive ? agent->input_queue : NULL;
                         pthread_t thread;
                         int prc = pthread_create(&thread, NULL, async_bash_thread_fn, args);
                         if (prc != 0) {
@@ -1402,243 +1324,50 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
  * 图像处理 — placeholder 展开 + GLM 描述 + Ctrl+V 粘贴
  * ============================================================ */
 
-/* HTTP POST 辅助类型 — 用于图像描述请求 */
-typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} ImageWebBuf;
-
-static size_t image_web_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
-    ImageWebBuf *buf = (ImageWebBuf *)userdata;
-    size_t total = size * nmemb;
-    if (buf->len + total + 1 > buf->cap) {
-        size_t newcap = buf->cap ? buf->cap * 2 : 4096;
-        while (newcap < buf->len + total + 1) newcap *= 2;
-        buf->data = realloc(buf->data, newcap);
-        buf->cap = newcap;
-    }
-    memcpy(buf->data + buf->len, ptr, total);
-    buf->len += total;
-    buf->data[buf->len] = '\0';
-    return total;
-}
-
-/* base64 编码文件内容，返回 malloc'd 字符串 */
-static char *file_to_base64(const char *path) {
-    /* 使用 OpenSSL BIO 或 popen base64 */
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "base64 < '%s' 2>/dev/null", path);
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return NULL;
-
-    StrBuf out;
-    sb_init(&out);
-    char buf[4096];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf) - 1, fp)) > 0) {
-        buf[n] = '\0';
-        sb_append(&out, buf);
-    }
-    int rc = pclose(fp);
-    if (rc != 0 || out.len == 0) {
-        sb_free(&out);
-        return NULL;
-    }
-    /* 去掉尾部换行 */
-    while (out.len > 0 && (out.data[out.len - 1] == '\n' || out.data[out.len - 1] == '\r'))
-        out.len--;
-    out.data[out.len] = '\0';
-    return out.data;
-}
-
-char *agent_image_describe(char **paths, int count) {
-    if (!paths || count <= 0) return NULL;
-
-    const char *api_key = getenv("DESCRIBE_API_KEY");
-    if (!api_key || !api_key[0]) return NULL;
-
-    const char *model = getenv("DESCRIBE_MODEL");
-    if (!model || !model[0]) model = "glm-4v-flash";
-
-    const char *base_url = getenv("DESCRIBE_BASE_URL");
-    if (!base_url || !base_url[0]) base_url = "https://open.bigmodel.cn/api/paas/v4";
-
-    /* 构建 URL */
-    char url[1024];
-    snprintf(url, sizeof(url), "%s/chat/completions", base_url);
-
-    /* 构建请求体 */
-    StrBuf body;
-    sb_init(&body);
-
-    sb_appendf(&body, "{\"model\":");
-    sb_append_json_string(&body, model);
-    sb_append(&body, ",\"messages\":[{\"role\":\"user\",\"content\":[");
-    sb_append(&body, "{\"type\":\"text\",\"text\":");
-    sb_append_json_string(&body,
-        "Output all visible text from each image, separated by a blank line between images. "
-        "Transcribe every character including special symbols (arrows, prompts, dots, slashes). "
-        "Preserve exact spacing and line breaks. "
-        "Pay attention to date formats (month names, numbers). "
-        "Do not summarize or describe - just output the raw text exactly as shown. "
-        "If an image has no text, briefly describe what you see.");
-    sb_append(&body, "}");
-
-    for (int i = 0; i < count; i++) {
-        char *b64 = file_to_base64(paths[i]);
-        if (!b64) continue;
-        sb_append(&body, ",{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,");
-        sb_append(&body, b64);
-        sb_append(&body, "\"}}");
-        free(b64);
-    }
-
-    sb_append(&body, "]}]}");
-
-    /* 构建 headers */
-    char auth_header[512];
-    snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
-    const char *headers[] = {
-        "Content-Type: application/json",
-        auth_header
-    };
-    int hdr_count = 2;
-
-    /* 发送 POST 请求 */
-    CURL *curl = curl_easy_init();
-    if (!curl) {
-        sb_free(&body);
-        return NULL;
-    }
-
-    ImageWebBuf wb = {NULL, 0, 0};
-    curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.data);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body.len);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, image_web_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &wb);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-
-    struct curl_slist *slist = NULL;
-    for (int i = 0; i < hdr_count; i++) {
-        slist = curl_slist_append(slist, headers[i]);
-    }
-    if (slist) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, slist);
-
-    CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(slist);
-    curl_easy_cleanup(curl);
-    sb_free(&body);
-
-    if (res != CURLE_OK) {
-        free(wb.data);
-        return NULL;
-    }
-
-    if (!wb.data || wb.len == 0) {
-        free(wb.data);
-        return NULL;
-    }
-
-    /* 解析 JSON 响应: choices[0].message.content */
-    JsonParse jp = json_parse_root(wb.data);
-    if (jp.error) {
-        free(wb.data);
-        return NULL;
-    }
-
-    JsonVal choices = json_get(jp.val, "choices");
-    if (choices.type != JSON_ARRAY || json_array_len(choices) <= 0) {
-        free(wb.data);
-        return NULL;
-    }
-
-    JsonVal first = json_array_get(choices, 0);
-    JsonVal msg = json_get(first, "message");
-    char *content = json_get_string(msg, "content");
-
-    free(wb.data);
-    return content; /* caller must free */
-}
-
 void agent_image_expand_placeholders(Agent *agent, char **input) {
     if (!input || !*input || !(*input)[0]) return;
 
-    /* 扫描 [Image #N] 模式 */
     const char *pattern = "[Image #";
-    int max_images = 256;
-    char **image_paths = calloc((size_t)max_images, sizeof(char*));
-    int img_count = 0;
-
     const char *p = *input;
-    while ((p = strstr(p, pattern)) != NULL && img_count < max_images) {
-        p += strlen(pattern);
-        /* 提取数字 */
-        int n = 0;
-        while (*p >= '0' && *p <= '9') {
-            n = n * 10 + (*p - '0');
-            p++;
-        }
-        /* 必须后跟 ] */
-        if (*p != ']') continue;
-        p++; /* 跳过 ] */
+    StrBuf attachments;
+    sb_init(&attachments);
 
-        /* 检查文件是否存在 */
-        const char *imgdir = store_session_image_dir(&agent->paths);
+    while ((p = strstr(p, pattern)) != NULL) {
+        const char *number = p + strlen(pattern);
+        const char *end = number;
+        int n = 0;
+        while (*end >= '0' && *end <= '9') {
+            n = n * 10 + (*end - '0');
+            end++;
+        }
+        if (end == number || *end != ']') {
+            p = number;
+            continue;
+        }
+
         char imgpath[1024];
-        snprintf(imgpath, sizeof(imgpath), "%s/%d.png", imgdir, n);
+        snprintf(imgpath, sizeof(imgpath), "%s/%d.png", store_session_image_dir(&agent->paths), n);
         FILE *f = fopen(imgpath, "r");
         if (f) {
             fclose(f);
-            image_paths[img_count] = util_strdup(imgpath);
-            img_count++;
+            if (attachments.len > 0) sb_append_char(&attachments, '\n');
+            sb_appendf(&attachments, "[Image #%d] => %s", n, imgpath);
         }
+        p = end + 1;
     }
 
-    if (img_count == 0) {
-        free(image_paths);
-        /* 无图片也追加空标签，与其他版本一致 */
-        StrBuf result;
-        sb_init(&result);
-        sb_append(&result, *input);
-        sb_append(&result, "\n\n<attached-images>\n\n</attached-images>");
-        free(*input);
-        *input = result.data;
+    if (attachments.len == 0) {
+        sb_free(&attachments);
         return;
     }
 
-    /* 调用 GLM API 描述图像 */
-    char *desc = agent_image_describe(image_paths, img_count);
-
-    /* 清理路径 */
-    for (int i = 0; i < img_count; i++) free(image_paths[i]);
-    free(image_paths);
-
-    if (!desc) {
-        /* describe 返回空（无 API key 或调用失败），仍追加空标签 */
-        StrBuf result;
-        sb_init(&result);
-        sb_append(&result, *input);
-        sb_append(&result, "\n\n<attached-images>\n\n</attached-images>");
-        free(*input);
-        *input = result.data;
-        return;
-    }
-
-    /* 构建结果: input + \n\n<attached-images>\n...\n</attached-images> */
     StrBuf result;
     sb_init(&result);
     sb_append(&result, *input);
-    sb_append(&result, "\n\n<attached-images>\n");
-    sb_append(&result, desc);
-    sb_append(&result, "\n</attached-images>");
-    free(desc);
-
-    /* 替换 input 指针指向新分配的字符串 */
+    sb_append(&result, "\n\n<attached-images>\nThese placeholders map to local image files:\n");
+    sb_append(&result, attachments.data);
+    sb_append(&result, "\nUse an available visual Skill from <skill-index> when image understanding is needed, and pass the corresponding absolute path to that Skill. The runtime does not inspect these images automatically.\n</attached-images>");
+    sb_free(&attachments);
     free(*input);
     *input = result.data;
 }
@@ -1751,8 +1480,11 @@ int agent_main_loop(Agent *agent) {
 
                   agent->running = 0;
 
-                /* 等待所有异步任务完成，避免销毁仍被工作线程使用的队列。 */
-                agent_wait_for_sub_agents(agent);
+                /* 交互模式不等待后台任务，允许下一条普通输入立即触发新回合。
+                 * 非交互模式仍等待，确保销毁前回收使用队列的后台线程。 */
+                if (!agent->interactive) {
+                    agent_wait_for_sub_agents(agent);
+                }
 
                 /* 所有轮次完成：等待 display 队列写完 */
                 if (agent->interactive) {
@@ -1802,6 +1534,7 @@ static void *async_bash_thread_fn(void *arg) {
         msg->data.async_task_result.exit_code = 1;
         msg->data.async_task_result.output = util_strdup("Failed to create temp file");
         mq_push(args->sub_result_queue, msg);
+        agent_signal_notify(args->input_queue);
         free(args->cmd); free(args->task_id); free(args);
         return NULL;
     }
@@ -1874,6 +1607,7 @@ static void *async_bash_thread_fn(void *arg) {
     msg->data.async_task_result.output = output ? output : util_strdup("");
 
     mq_push(args->sub_result_queue, msg);
+    agent_signal_notify(args->input_queue);
 
     /* 清理 */
     free(args->cmd);
@@ -1906,6 +1640,7 @@ static void *sub_agent_thread_fn(void *arg) {
         msg->data.agent_result.status = util_strdup("failed");
         msg->data.agent_result.text = util_strdup("Failed to create sub-agent");
         mq_push(args->sub_result_queue, msg);
+        agent_signal_notify(args->input_queue);
         goto cleanup;
     }
 
@@ -1992,6 +1727,7 @@ static void *sub_agent_thread_fn(void *arg) {
     msg->data.agent_result.cache_creation_tokens = sub->last_cache_creation_tokens;
     msg->data.agent_result.request_count = store_stats_get_file_int(sub->paths.stats, "agent_request_count");
     mq_push(args->sub_result_queue, msg);
+    agent_signal_notify(args->input_queue);
 
     agent_destroy(sub);
 
@@ -2060,6 +1796,7 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     args->fork_mode = 0;  /* fork 已在主线程完成 */
     args->sub_session_id = util_strdup(sub_session_id);
     args->sub_result_queue = agent->sub_result_queue;
+    args->input_queue = agent->interactive ? agent->input_queue : NULL;
 
     pthread_t thread;
     int prc = pthread_create(&thread, NULL, sub_agent_thread_fn, args);

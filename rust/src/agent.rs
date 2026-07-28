@@ -1,6 +1,7 @@
 use crate::TOOLS_JSON;
 use crate::config::{Config, OutputFormat, api_url};
 use crate::conversation::{Store, ToolResult, build_tool_call_summary, first_line};
+use crate::ffi;
 use crate::prompt;
 use crate::protocol::{
     ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, ToolCallEvent, UsageEvent,
@@ -9,17 +10,10 @@ use crate::session::{self, Paths};
 use crate::store;
 use crate::tools;
 use crate::util::{
-    build_claude_request,
-    chrono_like_now,
-    chrono_now_rfc3339,
-    parse_input_fields,
-    stats_get_f64,
-    touch,
-    truncate_for_replay,
-    truncate_str,
+    build_claude_request, chrono_like_now, chrono_now_rfc3339, parse_input_fields, stats_get_f64,
+    touch, truncate_for_replay, truncate_str,
 };
 use anyhow::{Result, anyhow, bail};
-use crate::ffi;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fs;
@@ -65,7 +59,10 @@ mod httpclient {
     impl HTTPError {
         pub fn format_detailed(&self) -> String {
             if self.status_code > 0 {
-                format!("ERROR:{}\tHTTP {}: {}", self.status_code, self.status_code, self.body)
+                format!(
+                    "ERROR:{}\tHTTP {}: {}",
+                    self.status_code, self.status_code, self.body
+                )
             } else {
                 format!("ERROR:0\t{}", self.body)
             }
@@ -92,15 +89,28 @@ mod httpclient {
         }
 
         /// 同步封装：内部使用 tokio runtime 执行 async HTTP 请求。
-        pub fn post(&self, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<reqwest::Response> {
+        pub fn post(
+            &self,
+            url: &str,
+            headers: &[(String, String)],
+            body: &[u8],
+        ) -> Result<reqwest::Response> {
             let client = self.client.clone();
             let url = url.to_string();
-            let hdrs: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let hdrs: Vec<(String, String)> = headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             let body = body.to_vec();
             super::tokio_runtime().block_on(Self::async_post(client, &url, &hdrs, &body))
         }
 
-        async fn async_post(client: Client, url: &str, headers: &[(String, String)], body: &[u8]) -> Result<reqwest::Response> {
+        async fn async_post(
+            client: Client,
+            url: &str,
+            headers: &[(String, String)],
+            body: &[u8],
+        ) -> Result<reqwest::Response> {
             let mut h = HeaderMap::new();
             for (k, v) in headers {
                 h.insert(
@@ -112,26 +122,43 @@ mod httpclient {
             let mut attempt = 0u32;
             loop {
                 attempt += 1;
-                let resp = client.post(url).headers(h.clone()).body(body.to_vec()).send().await;
+                let resp = client
+                    .post(url)
+                    .headers(h.clone())
+                    .body(body.to_vec())
+                    .send()
+                    .await;
                 match resp {
                     Ok(resp) => {
                         let code = resp.status().as_u16();
                         if code >= 400 {
                             let text = resp.text().await.unwrap_or_default();
-                            if code >= 500 && attempt < DEFAULT_RETRY_COUNT && start.elapsed() < DEFAULT_RETRY_MAX_TIME {
+                            if code >= 500
+                                && attempt < DEFAULT_RETRY_COUNT
+                                && start.elapsed() < DEFAULT_RETRY_MAX_TIME
+                            {
                                 tokio::time::sleep(DEFAULT_RETRY_DELAY).await;
                                 continue;
                             }
-                            return Err(HTTPError { status_code: code, body: text.trim().to_string() }.into());
+                            return Err(HTTPError {
+                                status_code: code,
+                                body: text.trim().to_string(),
+                            }
+                            .into());
                         }
                         return Ok(resp);
                     }
                     Err(e) => {
-                        if attempt < DEFAULT_RETRY_COUNT && start.elapsed() < DEFAULT_RETRY_MAX_TIME {
+                        if attempt < DEFAULT_RETRY_COUNT && start.elapsed() < DEFAULT_RETRY_MAX_TIME
+                        {
                             tokio::time::sleep(DEFAULT_RETRY_DELAY).await;
                             continue;
                         }
-                        return Err(HTTPError { status_code: 0, body: e.to_string() }.into());
+                        return Err(HTTPError {
+                            status_code: 0,
+                            body: e.to_string(),
+                        }
+                        .into());
                     }
                 }
             }
@@ -193,7 +220,8 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
         if fd >= 0 {
             let _ = unsafe { libc::write(fd, b"x" as *const u8 as *const libc::c_void, 1) };
         }
-    }).ok();
+    })
+    .ok();
 
     let mut rt = Agent::new(cfg, cwd, home)?;
     rt.cancel_read_fd = cancel_read_fd;
@@ -211,26 +239,8 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
         io::stdin().read_line(&mut input)?;
         rt.agent_loop(input)?;
     }
-    // 等待所有子 agent 完成（bash 版没有超时，Ctrl+C 可杀）
-    while rt.active_task_count > 0 {
-        match rt.sub_result_rx.recv() {
-            Ok(MainLoopMessage::AgentResult {
-                session_id,
-                status,
-                thinking,
-                text,
-                in_tokens,
-                out_tokens,
-                cache_read_tokens,
-                cache_creation_tokens,
-                request_count,
-            }) => {
-                rt.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
-            }
-            _ => break,
-        }
-    }
-    Ok(())
+    // 等待所有后台任务完成（bash 版没有超时，Ctrl+C 可杀）
+    rt.wait_for_background_results()
 }
 
 // MainLoopMessage 主循环消息类型
@@ -272,23 +282,23 @@ struct Agent {
     http: StreamClient,
     transport: TransportRef,
     interrupted: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,              // 1 = agent_loop 执行中，readline 据此判断 Ctrl+C 是否应中断
+    running: Arc<AtomicBool>, // 1 = agent_loop 执行中，readline 据此判断 Ctrl+C 是否应中断
     last_context_tokens: usize,
     last_input_tokens: usize,
     last_output_tokens: usize,
     last_cache_read_tokens: usize,
     last_cache_creation_tokens: usize,
     msg_tx: Arc<Mutex<Option<mpsc::Sender<MainLoopMessage>>>>, // 主循环消息队列发送端（Arc<Mutex<Option>> 以便 readline 线程退出时主动 drop）
-    msg_rx: mpsc::Receiver<MainLoopMessage>, // 主循环消息队列接收端
+    msg_rx: mpsc::Receiver<MainLoopMessage>,                   // 主循环消息队列接收端
     sub_result_rx: mpsc::Receiver<MainLoopMessage>, // SubAgent 结果专用通道（对齐 NOTIFY_FIFO）
     sub_result_tx: Arc<mpsc::Sender<MainLoopMessage>>, // SubAgent 结果发送端
-    active_task_count: usize,                 // 活跃子 agent 计数
-    sub_agent_request_count: usize,          // SubAgent 请求计数
-    stdout: RefCell<Box<dyn Write + Send>>,  // 可替换的输出目标（子 agent 时为 sink）
-    stderr: RefCell<Box<dyn Write + Send>>,  // 可替换的错误输出目标（子 agent 时为 sink）
+    active_task_count: usize,                       // 活跃子 agent 计数
+    sub_agent_request_count: usize,                 // SubAgent 请求计数
+    stdout: RefCell<Box<dyn Write + Send>>,         // 可替换的输出目标（子 agent 时为 sink）
+    stderr: RefCell<Box<dyn Write + Send>>,         // 可替换的错误输出目标（子 agent 时为 sink）
     display_tx: Option<mpsc::Sender<DisplayCommand>>,
     display_handle: Option<thread::JoinHandle<()>>,
-    cancel_read_fd: i32,                      // cancel pipe 读端 FD，传给 Runner 做 kqueue wait
+    cancel_read_fd: i32, // cancel pipe 读端 FD，传给 Runner 做 kqueue wait
 }
 
 struct DisplayState {
@@ -307,9 +317,6 @@ struct LlmStream {
     cancel: Arc<AtomicBool>,
     interrupted: Arc<AtomicBool>,
 }
-
-
-
 
 impl LlmStream {
     fn next_event(&mut self) -> Result<Option<Event>> {
@@ -364,10 +371,6 @@ enum DisplayEvent {
         exit_code: i32,
         output: String,
     },
-    ImageDescribe {
-        images: String,
-        description: String,
-    },
     UserNotify {
         text: String,
     },
@@ -385,12 +388,10 @@ fn display_write_human(_out: &mut dyn Write, _interactive: bool, _s: &str) -> Re
     Ok(())
 }
 
-fn render_display_event(
-    ds: &mut DisplayState,
-    interactive: bool,
-    evt: DisplayEvent,
-) -> Result<()> {
-    let lw = |s: &str| { ffi::linenoise_write(s); };
+fn render_display_event(ds: &mut DisplayState, interactive: bool, evt: DisplayEvent) -> Result<()> {
+    let lw = |s: &str| {
+        ffi::linenoise_write(s);
+    };
 
     match evt {
         DisplayEvent::Thinking(content) => {
@@ -447,13 +448,19 @@ fn render_display_event(
         }
         DisplayEvent::UserMessage(content) => {
             ensure_newline(ds, &lw);
-            lw(&format!("\x1b[32m> {}\x1b[0m\n", truncate_for_replay(&content, 77)));
+            lw(&format!(
+                "\x1b[32m> {}\x1b[0m\n",
+                truncate_for_replay(&content, 77)
+            ));
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
         DisplayEvent::ContextUpdate(trigger) => {
             ensure_newline(ds, &lw);
-            lw(&format!("\x1b[36mContext compacted ({}).\x1b[0m\n", trigger));
+            lw(&format!(
+                "\x1b[36mContext compacted ({}).\x1b[0m\n",
+                trigger
+            ));
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
         }
@@ -463,7 +470,9 @@ fn render_display_event(
             }
             let tr_text = if result.tool_name == "Edit" {
                 let mut s = result.content.replace("\r\n", "\n").replace('\r', "\n");
-                if !s.ends_with('\n') { s.push('\n'); }
+                if !s.ends_with('\n') {
+                    s.push('\n');
+                }
                 s
             } else if result.tool_name == "Read" || result.tool_name == "Write" {
                 first_line(&result.content).to_string() + "\n"
@@ -495,21 +504,19 @@ fn render_display_event(
                     session_id, in_tokens, out_tokens
                 ));
             } else {
-                lw(&format!("\x1b[31m[sub-agent {}] failed\x1b[0m\n", session_id));
+                lw(&format!(
+                    "\x1b[31m[sub-agent {}] failed\x1b[0m\n",
+                    session_id
+                ));
             }
             if !thinking.is_empty() {
-                lw(&format!("\x1b[90m{}\x1b[0m\n", truncate_str(&thinking, 120)));
+                lw(&format!(
+                    "\x1b[90m{}\x1b[0m\n",
+                    truncate_str(&thinking, 120)
+                ));
             }
             if !text.is_empty() {
                 lw(&format!("{}\n", truncate_str(&text, 120)));
-            }
-            ds.last_char = "\n".to_string();
-            ds.prev_was_thinking = false;
-        }
-        DisplayEvent::ImageDescribe { images, description } => {
-            ensure_newline(ds, &lw);
-            if !description.is_empty() {
-                lw(&format!("\x1b[36m📸 {}: {}\x1b[0m\n", images, description));
             }
             ds.last_char = "\n".to_string();
             ds.prev_was_thinking = false;
@@ -525,13 +532,20 @@ fn render_display_event(
             let _ = write!(io::stderr(), "{}", title);
             let _ = io::stderr().flush();
         }
-        DisplayEvent::AsyncTaskResult { task_id, exit_code, output } => {
+        DisplayEvent::AsyncTaskResult {
+            task_id,
+            exit_code,
+            output,
+        } => {
             if interactive && ds.last_char == "\n" {
                 lw("\r\x1b[K");
             }
             ensure_newline(ds, &lw);
             let color = if exit_code == 0 { "36" } else { "31" };
-            lw(&format!("\x1b[{}m[bg-bash {}] exit_code={}\x1b[0m\n", color, task_id, exit_code));
+            lw(&format!(
+                "\x1b[{}m[bg-bash {}] exit_code={}\x1b[0m\n",
+                color, task_id, exit_code
+            ));
             if !output.is_empty() {
                 lw(&format!("{}\n", truncate_str(&output, 120)));
             }
@@ -550,15 +564,22 @@ fn ensure_newline(ds: &mut DisplayState, lw: &dyn Fn(&str)) {
 }
 
 fn update_last_char(ds: &mut DisplayState, s: &str) {
-    if s.is_empty() { return; }
+    if s.is_empty() {
+        return;
+    }
     let mut esc = false;
     let mut last_visible: Option<char> = None;
     for c in s.chars() {
         if esc {
-            if ('\u{40}'..='\u{7e}').contains(&c) { esc = false; }
+            if ('\u{40}'..='\u{7e}').contains(&c) {
+                esc = false;
+            }
             continue;
         }
-        if c == '\u{1b}' { esc = true; continue; }
+        if c == '\u{1b}' {
+            esc = true;
+            continue;
+        }
         last_visible = Some(c);
     }
     if let Some(c) = last_visible {
@@ -567,7 +588,9 @@ fn update_last_char(ds: &mut DisplayState, s: &str) {
 }
 
 impl Agent {
-    fn start_display_worker(interactive: bool) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
+    fn start_display_worker(
+        interactive: bool,
+    ) -> (mpsc::Sender<DisplayCommand>, thread::JoinHandle<()>) {
         let (tx, rx) = mpsc::channel::<DisplayCommand>();
         let handle = thread::spawn(move || {
             let mut ds = DisplayState {
@@ -734,7 +757,10 @@ impl Agent {
         let sub_session_id = format!("sub_{}", chrono_like_now());
 
         // 记录 sub_agent_start 事件
-        let fork = fields.get("fork").map(|s| s == "true" || s == "1").unwrap_or(false);
+        let fork = fields
+            .get("fork")
+            .map(|s| s == "true" || s == "1")
+            .unwrap_or(false);
         let _ = self.append_event(json!({
             "type": "sub_agent_start",
             "session_id": sub_session_id,
@@ -752,9 +778,13 @@ impl Agent {
         let home = self.home.clone();
         let cfg = self.cfg.clone();
         let msg_tx_arc = self.sub_result_tx.clone(); // 子 agent 结果发送到专用通道
+        let parent_msg_tx = self.msg_tx.clone();
         let sub_session_id_clone = sub_session_id.clone();
         let parent_paths = self.paths.clone();
-        let fork = fields.get("fork").map(|s| s == "true" || s == "1").unwrap_or(false);
+        let fork = fields
+            .get("fork")
+            .map(|s| s == "true" || s == "1")
+            .unwrap_or(false);
 
         // 在主线程中完成 fork 复制（与 Bash 版本一致：在子进程启动前复制，避免竞态）
         let sub_paths = session::paths_for(&home, &cwd, &sub_session_id_clone);
@@ -768,7 +798,9 @@ impl Agent {
 
         std::thread::spawn(move || {
             // 1. 创建子 agent 的 conversation store
-            let sub_conv = Store { path: sub_paths.conversation.clone() };
+            let sub_conv = Store {
+                path: sub_paths.conversation.clone(),
+            };
             if let Err(e) = sub_conv.ensure() {
                 // 早期失败时发送失败结果，让主进程减少 active_task_count
                 let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
@@ -782,6 +814,10 @@ impl Agent {
                     cache_creation_tokens: 0,
                     request_count: 0,
                 });
+                let tx_guard = parent_msg_tx.lock().unwrap();
+                if let Some(tx) = tx_guard.as_ref() {
+                    let _ = tx.send(MainLoopMessage::NotifyPending);
+                }
                 return;
             }
 
@@ -818,8 +854,8 @@ impl Agent {
                 sub_result_tx: Arc::new(sub_rtx),
                 active_task_count: 0,
                 sub_agent_request_count: 0,
-                stdout: RefCell::new(Box::new(io::sink())),  // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
-                stderr: RefCell::new(Box::new(io::sink())),  // 子 agent 错误输出全部丢弃
+                stdout: RefCell::new(Box::new(io::sink())), // 子 agent 输出全部丢弃（与 Go 的 io.Discard、Bash 的 >/dev/null 对应）
+                stderr: RefCell::new(Box::new(io::sink())), // 子 agent 错误输出全部丢弃
                 display_tx: None,
                 display_handle: None,
                 cancel_read_fd: -1,
@@ -848,6 +884,10 @@ impl Agent {
                         cache_creation_tokens: 0,
                         request_count: 0,
                     });
+                    let tx_guard = parent_msg_tx.lock().unwrap();
+                    if let Some(tx) = tx_guard.as_ref() {
+                        let _ = tx.send(MainLoopMessage::NotifyPending);
+                    }
                     return;
                 }
             };
@@ -862,16 +902,25 @@ impl Agent {
                             let mut found_thinking = false;
                             let mut found_text = false;
                             for b in content.iter() {
-                                let block_type = b.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                                let block_type =
+                                    b.get("type").and_then(|t| t.as_str()).unwrap_or("");
                                 match block_type {
                                     "thinking" => {
-                                        if let Some(t) = b.get("thinking").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+                                        if let Some(t) = b
+                                            .get("thinking")
+                                            .and_then(|v| v.as_str())
+                                            .filter(|t| !t.is_empty())
+                                        {
                                             result_thinking = t.to_string();
                                             found_thinking = true;
                                         }
                                     }
                                     "text" => {
-                                        if let Some(t) = b.get("text").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+                                        if let Some(t) = b
+                                            .get("text")
+                                            .and_then(|v| v.as_str())
+                                            .filter(|t| !t.is_empty())
+                                        {
                                             result_text = t.to_string();
                                             found_text = true;
                                         }
@@ -892,10 +941,11 @@ impl Agent {
             let in_tokens = stats_get_f64(&stats, "total_input_tokens") as usize;
             let out_tokens = stats_get_f64(&stats, "total_output_tokens") as usize;
             let cache_read_tokens = stats_get_f64(&stats, "total_cache_read_tokens") as usize;
-            let cache_creation_tokens = stats_get_f64(&stats, "total_cache_creation_tokens") as usize;
+            let cache_creation_tokens =
+                stats_get_f64(&stats, "total_cache_creation_tokens") as usize;
             let request_count = stats_get_f64(&stats, "agent_request_count") as usize;
 
-            // 6. 通过消息队列发送结果
+            // 6. 通过结果队列发送，并唤醒交互主循环消费
             let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
                 session_id: sub_session_id_clone,
                 status: status.to_string(),
@@ -907,6 +957,10 @@ impl Agent {
                 cache_creation_tokens,
                 request_count,
             });
+            let tx_guard = parent_msg_tx.lock().unwrap();
+            if let Some(tx) = tx_guard.as_ref() {
+                let _ = tx.send(MainLoopMessage::NotifyPending);
+            }
         });
 
         format!("Sub-agent started: session_id={}", sub_session_id)
@@ -954,12 +1008,17 @@ impl Agent {
                 loop {
                     // 重置 errno
                     #[cfg(target_os = "macos")]
-                    unsafe { *libc::__error() = 0 };
+                    unsafe {
+                        *libc::__error() = 0
+                    };
                     #[cfg(target_os = "linux")]
-                    unsafe { *libc::__errno_location() = 0 };
+                    unsafe {
+                        *libc::__errno_location() = 0
+                    };
 
                     // EditStart: 初始化非阻塞编辑会话
-                    let mut ls: std::mem::MaybeUninit<ffi::LinenoiseState> = std::mem::MaybeUninit::uninit();
+                    let mut ls: std::mem::MaybeUninit<ffi::LinenoiseState> =
+                        std::mem::MaybeUninit::uninit();
                     let rc = unsafe {
                         ffi::edit_start_raw(
                             ls.as_mut_ptr(),
@@ -976,7 +1035,9 @@ impl Agent {
                     let ls_ptr = ls.as_mut_ptr();
 
                     // 注册到 linenoise 全局状态（linenoiseWrite 用它做 Hide/Show）
-                    unsafe { ffi::register_state(ls_ptr); }
+                    unsafe {
+                        ffi::register_state(ls_ptr);
+                    }
                     ffi::set_active(true);
 
                     // Feed 循环
@@ -987,7 +1048,8 @@ impl Agent {
                             // Check inject channel (Ctrl+O while editing)
                             if let Ok(text) = inject_rx.try_recv() {
                                 if !text.is_empty() {
-                                    let _ = sub_result_tx.send(MainLoopMessage::UserNotify { text });
+                                    let _ =
+                                        sub_result_tx.send(MainLoopMessage::UserNotify { text });
                                     let tx_guard = msg_tx_arc.lock().unwrap();
                                     if let Some(tx) = tx_guard.as_ref() {
                                         let _ = tx.send(MainLoopMessage::NotifyPending);
@@ -1008,7 +1070,9 @@ impl Agent {
                         }
                         // Got a line
                         let s = unsafe {
-                            let rust_str = std::ffi::CStr::from_ptr(result).to_string_lossy().into_owned();
+                            let rust_str = std::ffi::CStr::from_ptr(result)
+                                .to_string_lossy()
+                                .into_owned();
                             ffi::free_line(result);
                             rust_str
                         };
@@ -1017,10 +1081,14 @@ impl Agent {
 
                     // 清除共享状态
                     ffi::set_active(false);
-                    unsafe { ffi::register_state(std::ptr::null_mut()); }
+                    unsafe {
+                        ffi::register_state(std::ptr::null_mut());
+                    }
 
                     // EditStop
-                    unsafe { ffi::edit_stop_ptr(ls_ptr); }
+                    unsafe {
+                        ffi::edit_stop_ptr(ls_ptr);
+                    }
 
                     match line {
                         Ok(s) => {
@@ -1036,7 +1104,10 @@ impl Agent {
                             // 发送到消息队列 — 不再等 done
                             let tx_guard = msg_tx_arc.lock().unwrap();
                             if let Some(tx) = tx_guard.as_ref() {
-                                if tx.send(MainLoopMessage::UserInput { input: trimmed }).is_err() {
+                                if tx
+                                    .send(MainLoopMessage::UserInput { input: trimmed })
+                                    .is_err()
+                                {
                                     return;
                                 }
                             } else {
@@ -1065,7 +1136,10 @@ impl Agent {
         // 在主线程中运行 main_loop
         self.main_loop()?;
 
-        // 等待 readline 线程结束
+        // 用户可能在后台任务运行时退出；销毁运行时前必须消费剩余结果。
+        self.wait_for_background_results()?;
+
+        // 等待读取线程结束
         let _ = readline_handle.join();
 
         self.info("Goodbye!");
@@ -1118,55 +1192,9 @@ impl Agent {
                     self.running.store(false, Ordering::SeqCst);
                     self.flush_display();
 
-                    // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
-                    // main_loop 在内部循环等待所有 AgentResult 并处理，
-                    // 直到全部完成后再返回主循环（readline 已在下一轮 EditStart）。
-                    // display worker 的 hide/show 保证输出不会与 linenoise 冲突。
-                    while self.active_task_count > 0 {
-                        match self.sub_result_rx.recv() {
-                            Ok(MainLoopMessage::AgentResult {
-                                session_id,
-                                status,
-                                thinking,
-                                text,
-                                in_tokens,
-                                out_tokens,
-                                cache_read_tokens,
-                                cache_creation_tokens,
-                                request_count,
-                            }) => {
-                                self.handle_sub_agent_result(
-                                    &session_id, &status, &thinking, &text,
-                                    in_tokens, out_tokens, cache_read_tokens,
-                                    cache_creation_tokens, request_count,
-                                )?;
-                                self.flush_display();
-                            }
-                            Ok(MainLoopMessage::UserInput { .. }) => {
-                                // readline 已不再等 done，可能发来新的 UserInput。
-                                // 将其放回队列末尾，等当前子 agent 完成后再处理。
-                                // TODO: 暂时忽略，后续可改为队列缓存。
-                            }
-                            Ok(MainLoopMessage::NotifyPending) => {}
-                            Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
-                                let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
-                                if self.active_task_count > 0 { self.active_task_count -= 1; }
-                                let ctx = format!("[bg-bash {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
-                                let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
-                                let _ = self.agent_loop_with_kind(ctx, "async_task_result");
-                                self.flush_display();
-                            }
-                            Ok(MainLoopMessage::UserNotify { text }) => {
-                                let _ = self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
-                                let _ = self.agent_loop_with_kind(text, "user_notify");
-                                self.flush_display();
-                            }
-                            Err(std::sync::mpsc::RecvError) => {
-                                // 所有发送端关闭
-                                return Ok(());
-                            }
-                        }
-                    }
+                    // 交互模式不等待后台任务完成。readline 已在下一轮 EditStart，
+                    // 普通输入由主消息队列立即调度；后台结果完成时会发送
+                    // NotifyPending 唤醒主循环并通过 notify turn 注入。
 
                     // 不再通知 readline 线程 — 它已经在下一轮 EditStart
                 }
@@ -1234,11 +1262,7 @@ impl Agent {
             Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
             Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
             Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
-            Self::add_stat_usize(
-                stats,
-                "total_cache_creation_tokens",
-                cache_creation_tokens,
-            );
+            Self::add_stat_usize(stats, "total_cache_creation_tokens", cache_creation_tokens);
         })?;
         self.update_term_title();
 
@@ -1259,12 +1283,7 @@ impl Agent {
         // 7. 注入结果到 conversation 并触发 agent loop（忽略错误，与 bash/Go 对齐）
         let context = format!(
             "[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}",
-            session_id,
-            status,
-            in_tokens,
-            out_tokens,
-            thinking,
-            text
+            session_id, status, in_tokens, out_tokens, thinking, text
         );
         let _ = self.agent_loop_with_kind(context, "sub_agent_result");
 
@@ -1277,41 +1296,142 @@ impl Agent {
         let mut drained = false;
         while let Ok(msg) = self.sub_result_rx.try_recv() {
             match msg {
-            MainLoopMessage::AgentResult { session_id, status, thinking, text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count } => {
-                let _ = self.append_event(json!({"type":"usage","input_tokens":in_tokens,"output_tokens":out_tokens,"cache_read_input_tokens":cache_read_tokens,"cache_creation_input_tokens":cache_creation_tokens,"kind":"sub_agent","sub_session_id":&session_id}));
-                let _ = self.emit_and_append_event(json!({"type":"sub_agent_result","session_id":&session_id,"status":&status,"input_tokens":in_tokens,"output_tokens":out_tokens,"thinking":&thinking,"text":&text}));
-                let _ = self.append_event(json!({"type":"sub_agent_end","session_id":&session_id,"timestamp":chrono_like_now(),"status":&status}));
-                let _ = store::store_stats_update(&self.paths.stats, |stats| {
-                    Self::add_stat_usize(stats, "sub_agent_request_count", 1);
-                    Self::add_stat_usize(stats, "agent_request_count", request_count);
-                    Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
-                    Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
-                    Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
-                    Self::add_stat_usize(stats, "total_cache_creation_tokens", cache_creation_tokens);
-                });
-                if self.active_task_count > 0 { self.active_task_count -= 1; }
-                let ctx = format!("[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}", session_id, status, in_tokens, out_tokens, thinking, text);
-                let _ = self.queue_display_event(DisplayEvent::SubAgentResult { session_id, status, thinking, text, in_tokens, out_tokens });
-                let _ = self.conv.add_user(&ctx);
-                drained = true;
-            }
-            MainLoopMessage::AsyncResult { task_id, exit_code, output } => {
-                let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
-                if self.active_task_count > 0 { self.active_task_count -= 1; }
-                let ctx = format!("[bg-bash {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
-                let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
-                let _ = self.conv.add_user(&ctx);
-                drained = true;
-            }
-            MainLoopMessage::UserNotify { text } => {
-                let _ = self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
-                let _ = self.conv.add_user(&text);
-                drained = true;
-            }
-            _ => {}
+                MainLoopMessage::AgentResult {
+                    session_id,
+                    status,
+                    thinking,
+                    text,
+                    in_tokens,
+                    out_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    request_count,
+                } => {
+                    let _ = self.append_event(json!({"type":"usage","input_tokens":in_tokens,"output_tokens":out_tokens,"cache_read_input_tokens":cache_read_tokens,"cache_creation_input_tokens":cache_creation_tokens,"kind":"sub_agent","sub_session_id":&session_id}));
+                    let _ = self.emit_and_append_event(json!({"type":"sub_agent_result","session_id":&session_id,"status":&status,"input_tokens":in_tokens,"output_tokens":out_tokens,"thinking":&thinking,"text":&text}));
+                    let _ = self.append_event(json!({"type":"sub_agent_end","session_id":&session_id,"timestamp":chrono_like_now(),"status":&status}));
+                    let _ = store::store_stats_update(&self.paths.stats, |stats| {
+                        Self::add_stat_usize(stats, "sub_agent_request_count", 1);
+                        Self::add_stat_usize(stats, "agent_request_count", request_count);
+                        Self::add_stat_usize(stats, "total_input_tokens", in_tokens);
+                        Self::add_stat_usize(stats, "total_output_tokens", out_tokens);
+                        Self::add_stat_usize(stats, "total_cache_read_tokens", cache_read_tokens);
+                        Self::add_stat_usize(
+                            stats,
+                            "total_cache_creation_tokens",
+                            cache_creation_tokens,
+                        );
+                    });
+                    if self.active_task_count > 0 {
+                        self.active_task_count -= 1;
+                    }
+                    let ctx = format!(
+                        "[sub-agent {}] {} (in={}, out={})\nThinking: {}\nText: {}",
+                        session_id, status, in_tokens, out_tokens, thinking, text
+                    );
+                    let _ = self.queue_display_event(DisplayEvent::SubAgentResult {
+                        session_id,
+                        status,
+                        thinking,
+                        text,
+                        in_tokens,
+                        out_tokens,
+                    });
+                    let _ = self.conv.add_user(&ctx);
+                    drained = true;
+                }
+                MainLoopMessage::AsyncResult {
+                    task_id,
+                    exit_code,
+                    output,
+                } => {
+                    let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
+                    if self.active_task_count > 0 {
+                        self.active_task_count -= 1;
+                    }
+                    let ctx = format!(
+                        "[bg-bash {}] exit_code={}\nOutput: {}",
+                        task_id, exit_code, output
+                    );
+                    let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult {
+                        task_id,
+                        exit_code,
+                        output,
+                    });
+                    let _ = self.conv.add_user(&ctx);
+                    drained = true;
+                }
+                MainLoopMessage::UserNotify { text } => {
+                    let _ =
+                        self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
+                    let _ = self.conv.add_user(&text);
+                    drained = true;
+                }
+                _ => {}
             }
         }
         drained
+    }
+
+    /// 阻塞消费剩余后台结果，供非交互模式和交互退出阶段保证生命周期安全。
+    fn wait_for_background_results(&mut self) -> Result<()> {
+        while self.active_task_count > 0 {
+            match self.sub_result_rx.recv() {
+                Ok(MainLoopMessage::AgentResult {
+                    session_id,
+                    status,
+                    thinking,
+                    text,
+                    in_tokens,
+                    out_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    request_count,
+                }) => {
+                    self.handle_sub_agent_result(
+                        &session_id,
+                        &status,
+                        &thinking,
+                        &text,
+                        in_tokens,
+                        out_tokens,
+                        cache_read_tokens,
+                        cache_creation_tokens,
+                        request_count,
+                    )?;
+                }
+                Ok(MainLoopMessage::AsyncResult {
+                    task_id,
+                    exit_code,
+                    output,
+                }) => {
+                    let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
+                    if self.active_task_count > 0 {
+                        self.active_task_count -= 1;
+                    }
+                    let context = format!(
+                        "[bg-bash {}] exit_code={}\nOutput: {}",
+                        task_id, exit_code, output
+                    );
+                    let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult {
+                        task_id,
+                        exit_code,
+                        output,
+                    });
+                    let _ = self.agent_loop_with_kind(context, "async_task_result");
+                    self.flush_display();
+                }
+                Ok(MainLoopMessage::UserNotify { text }) => {
+                    let _ =
+                        self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
+                    let _ = self.agent_loop_with_kind(text, "user_notify");
+                    self.flush_display();
+                }
+                Ok(MainLoopMessage::NotifyPending) | Ok(MainLoopMessage::UserInput { .. }) => {}
+                Err(_) => return Err(anyhow!("background result channel disconnected")),
+            }
+        }
+        Ok(())
     }
 
     /// 检查是否被中断（per-agent 标志 + 全局 SIGINT 标志）
@@ -1323,7 +1443,11 @@ impl Agent {
         self.agent_loop_with_kind(user_input, "user_input")
     }
 
-    pub(crate) fn agent_loop_with_kind(&mut self, user_input: String, turn_kind: &str) -> Result<()> {
+    pub(crate) fn agent_loop_with_kind(
+        &mut self,
+        user_input: String,
+        turn_kind: &str,
+    ) -> Result<()> {
         let result = self.agent_loop_stream(user_input, turn_kind);
         self.update_term_title_with_status("idle");
         result
@@ -1341,49 +1465,17 @@ impl Agent {
         let result = (|| -> Result<()> {
             // notify turn 只消费 pending sub_result；stale wakeup 直接返回
             if turn_kind == "notify" {
-                if !self.drain_sub_results() { return Ok(()); }
+                if !self.drain_sub_results() {
+                    return Ok(());
+                }
             } else if turn_kind == "user_input" {
                 // 记录 user_input 事件（使用原始文本，包含 [Image #N] 占位符）
                 self.append_event(json!({"type":"user_input","content":user_input}))?;
             }
 
-            // 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+            // events 保留原始占位符；conversation/LLM 追加本地图片路径映射。
             let user_input = if turn_kind == "user_input" && user_input.contains("[Image #") {
-                let expanded = expand_image_placeholders(&user_input, &self.paths);
-
-                // 提取 <attached-images> 中的描述内容
-                let desc = if let Some(start) = expanded.find("<attached-images>") {
-                    let start = start + "<attached-images>".len();
-                    if let Some(end) = expanded.find("</attached-images>") {
-                        expanded[start..end].to_string()
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
-
-                // 收集所有 [Image #N] 占位符
-                let re = regex::Regex::new(r"\[Image #\d+\]").unwrap();
-                let matches: Vec<&str> = re.find_iter(&user_input).map(|m| m.as_str()).collect();
-                if !matches.is_empty() {
-                    let images = matches.join(" ");
-
-                    // 记录 image_describe 事件
-                    self.append_event(json!({
-                        "type": "image_describe",
-                        "images": images,
-                        "content": desc
-                    }))?;
-
-                    // 推送 IMAGE_DESCRIBE 到 display
-                    self.queue_display_event(DisplayEvent::ImageDescribe {
-                        images,
-                        description: desc,
-                    })?;
-                }
-
-                expanded
+                expand_image_placeholders(&user_input, &self.paths)
             } else {
                 user_input
             };
@@ -1477,11 +1569,19 @@ impl Agent {
                                 break;
                             }
                             // Async bash 拦截：在 dispatch 之前检查
-                            let mut output = if call.name == "Bash" && call.fields.get("background").map(|s| s == "true" || s == "1").unwrap_or(false) {
-                                let command = call.fields.get("command").cloned().unwrap_or_default();
+                            let mut output = if call.name == "Bash"
+                                && call
+                                    .fields
+                                    .get("background")
+                                    .map(|s| s == "true" || s == "1")
+                                    .unwrap_or(false)
+                            {
+                                let command =
+                                    call.fields.get("command").cloned().unwrap_or_default();
                                 let task_id = format!("task_{}", chrono_like_now());
                                 self.active_task_count += 1;
                                 let tx = self.sub_result_tx.clone();
+                                let parent_msg_tx = self.msg_tx.clone();
                                 let tid = task_id.clone();
                                 thread::spawn(move || {
                                     let output = Command::new("bash")
@@ -1493,10 +1593,22 @@ impl Agent {
                                         .process_group(0)
                                         .output();
                                     let (exit_code, stdout) = match output {
-                                        Ok(o) => (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)),
+                                        Ok(o) => (
+                                            o.status.code().unwrap_or(-1),
+                                            String::from_utf8_lossy(&o.stdout).to_string()
+                                                + &String::from_utf8_lossy(&o.stderr),
+                                        ),
                                         Err(e) => (127, e.to_string()),
                                     };
-                                    let _ = tx.send(MainLoopMessage::AsyncResult { task_id: tid, exit_code, output: stdout });
+                                    let _ = tx.send(MainLoopMessage::AsyncResult {
+                                        task_id: tid,
+                                        exit_code,
+                                        output: stdout,
+                                    });
+                                    let tx_guard = parent_msg_tx.lock().unwrap();
+                                    if let Some(tx) = tx_guard.as_ref() {
+                                        let _ = tx.send(MainLoopMessage::NotifyPending);
+                                    }
                                 });
                                 format!("Async task started: task_id={}", task_id)
                             } else {
@@ -1510,7 +1622,8 @@ impl Agent {
                                     Err(e) => format!("Error: {e}"),
                                 }
                             };
-                            output = tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
+                            output =
+                                tools::format_tool_result(&output, self.cfg.tool_result_max_bytes);
 
                             let mut conv_content = String::new();
                             if call.name == "PlanClear" {
@@ -1529,7 +1642,8 @@ impl Agent {
                                         output = "Plan confirmed and locked in.".to_string();
                                     }
                                     _ => {
-                                        output = "Error: no plan draft found to confirm.".to_string();
+                                        output =
+                                            "Error: no plan draft found to confirm.".to_string();
                                     }
                                 }
                             }
@@ -1566,7 +1680,9 @@ impl Agent {
                                 content: output.clone(),
                                 conv_content,
                             };
-                            self.queue_display_event(DisplayEvent::ToolResult(tool_result.clone()))?;
+                            self.queue_display_event(DisplayEvent::ToolResult(
+                                tool_result.clone(),
+                            ))?;
                             tool_results.push(tool_result);
                         }
                         Event::Usage(usage) => {
@@ -1625,7 +1741,9 @@ impl Agent {
                     // tool_use/tool_calls → loop continues; anything else → break
                     if stop.as_str() != "tool_use" && stop.as_str() != "tool_calls" {
                         // end_turn 后尝试 drain（对齐 bash agent_drain_notify_buf && continue）
-                        if self.drain_sub_results() { continue; }
+                        if self.drain_sub_results() {
+                            continue;
+                        }
                         CTRLC_FLAG.store(false, Ordering::SeqCst);
                         return Ok(());
                     }
@@ -1719,7 +1837,6 @@ impl Agent {
             DisplayEvent::ContextUpdate(_) => {}
             DisplayEvent::SubAgentResult { .. } => {}
             DisplayEvent::AsyncTaskResult { .. } => {}
-            DisplayEvent::ImageDescribe { .. } => {}
             DisplayEvent::UserNotify { .. } => {}
             DisplayEvent::Title(_) => {}
         }
@@ -1826,9 +1943,9 @@ impl Agent {
             || keep_lines.map_or(false, |k| k >= total_lines && total_lines > 0);
         if needs_fallback {
             // DP 认为不值得或全保留 → trigger 或 safety valve 触发时 fallback
-            let should_compact = trigger == "plan_clear" || trigger == "plan_confirm"
-                || (context_tokens > 0
-                    && context_tokens > self.cfg.max_context_tokens * 90 / 100);
+            let should_compact = trigger == "plan_clear"
+                || trigger == "plan_confirm"
+                || (context_tokens > 0 && context_tokens > self.cfg.max_context_tokens * 90 / 100);
             if should_compact {
                 keep_lines = crate::compact_dp::compact_turn_keep(&all, dp_cfg.min_keep_ratio);
             } else {
@@ -1916,25 +2033,54 @@ impl Agent {
                     let _ = self.append_event(compact_evt);
                     store::store_stats_update(&self.paths.stats, |stats| {
                         Self::add_stat_usize(stats, "compact_request_count", 1);
-                        Self::add_stat_usize(stats, "total_input_tokens", usage.input_tokens as usize);
-                        Self::add_stat_usize(stats, "total_output_tokens", usage.output_tokens as usize);
-                        Self::add_stat_usize(stats, "total_cache_read_tokens", usage.cache_read_input_tokens as usize);
-                        Self::add_stat_usize(stats, "total_cache_creation_tokens", usage.cache_creation_input_tokens as usize);
+                        Self::add_stat_usize(
+                            stats,
+                            "total_input_tokens",
+                            usage.input_tokens as usize,
+                        );
+                        Self::add_stat_usize(
+                            stats,
+                            "total_output_tokens",
+                            usage.output_tokens as usize,
+                        );
+                        Self::add_stat_usize(
+                            stats,
+                            "total_cache_read_tokens",
+                            usage.cache_read_input_tokens as usize,
+                        );
+                        Self::add_stat_usize(
+                            stats,
+                            "total_cache_creation_tokens",
+                            usage.cache_creation_input_tokens as usize,
+                        );
                     })?;
                     self.update_term_title();
                 }
-                Event::Error(ErrorEvent { message }) => { last_error = message.clone(); },
-                Event::Stop(StopEvent { reason }) => { stop_reason = reason.clone(); },
+                Event::Error(ErrorEvent { message }) => {
+                    last_error = message.clone();
+                }
+                Event::Stop(StopEvent { reason }) => {
+                    stop_reason = reason.clone();
+                }
                 _ => {}
             }
             Ok(())
         };
-        self.transport.parse_sse(Box::new(channel_reader), &mut parse_emit)?;
+        self.transport
+            .parse_sse(Box::new(channel_reader), &mut parse_emit)?;
         if out.is_empty() {
             bail!(
                 "failed to generate context summary: empty text response (stop_reason={}, error={})",
-                if stop_reason.is_empty() { "none" } else { &stop_reason },
-                if last_error.is_empty() { "none" } else { &last_error }
+                if stop_reason.is_empty() {
+                    "none"
+                } else {
+                    &stop_reason
+                },
+                if last_error.is_empty() {
+                    "none"
+                } else {
+                    &last_error
+                }
             );
         }
         Ok(out)
@@ -1966,7 +2112,14 @@ impl Agent {
                 }
             }
         });
-        (ChannelReader { rx: chunk_rx, buf: Vec::new(), pos: 0 }, cancel)
+        (
+            ChannelReader {
+                rx: chunk_rx,
+                buf: Vec::new(),
+                pos: 0,
+            },
+            cancel,
+        )
     }
 
     fn headers(&self) -> Vec<(String, String)> {
@@ -2138,7 +2291,11 @@ impl Agent {
     }
 
     fn emit_stream(&self, value: Value) -> Result<()> {
-        writeln!(self.stdout.borrow_mut(), "{}", serde_json::to_string(&value)?)?;
+        writeln!(
+            self.stdout.borrow_mut(),
+            "{}",
+            serde_json::to_string(&value)?
+        )?;
         Ok(())
     }
 
@@ -2161,7 +2318,9 @@ impl Agent {
     ) {
         let evt = match evt_type {
             "TEXT" => DisplayEvent::Text(fields.get("content").copied().unwrap_or("").to_string()),
-            "THINKING" => DisplayEvent::Thinking(fields.get("content").copied().unwrap_or("").to_string()),
+            "THINKING" => {
+                DisplayEvent::Thinking(fields.get("content").copied().unwrap_or("").to_string())
+            }
             "TOOL_CALL" => {
                 let name = fields.get("name").copied().unwrap_or("").to_string();
                 let mut summary_fields = std::collections::BTreeMap::new();
@@ -2185,21 +2344,27 @@ impl Agent {
                 content: fields.get("content").copied().unwrap_or("").to_string(),
                 conv_content: String::new(),
             }),
-            "USER_MESSAGE" => DisplayEvent::UserMessage(fields.get("content").copied().unwrap_or("").to_string()),
+            "USER_MESSAGE" => {
+                DisplayEvent::UserMessage(fields.get("content").copied().unwrap_or("").to_string())
+            }
             "SUB_AGENT_RESULT" => DisplayEvent::SubAgentResult {
                 session_id: fields.get("session_id").copied().unwrap_or("").to_string(),
                 status: fields.get("status").copied().unwrap_or("").to_string(),
                 thinking: fields.get("thinking").copied().unwrap_or("").to_string(),
                 text: fields.get("text").copied().unwrap_or("").to_string(),
-                in_tokens: fields.get("input_tokens").and_then(|s| s.parse().ok()).unwrap_or(0),
-                out_tokens: fields.get("output_tokens").and_then(|s| s.parse().ok()).unwrap_or(0),
+                in_tokens: fields
+                    .get("input_tokens")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
+                out_tokens: fields
+                    .get("output_tokens")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
             },
             "STOP" => DisplayEvent::Stop(fields.get("reason").copied().unwrap_or("").to_string()),
-            "ERROR" => DisplayEvent::Error(fields.get("message").copied().unwrap_or("").to_string()),
-            "IMAGE_DESCRIBE" => DisplayEvent::ImageDescribe {
-                images: fields.get("images").copied().unwrap_or("").to_string(),
-                description: fields.get("content").copied().unwrap_or("").to_string(),
-            },
+            "ERROR" => {
+                DisplayEvent::Error(fields.get("message").copied().unwrap_or("").to_string())
+            }
             _ => return,
         };
         self.queue_display_only(evt);
@@ -2226,7 +2391,9 @@ impl Agent {
             if n == 0 {
                 break;
             }
-            if line.contains("\"type\":\"user_input\"") || line.contains("\"type\":\"user_message\"") {
+            if line.contains("\"type\":\"user_input\"")
+                || line.contains("\"type\":\"user_message\"")
+            {
                 offsets[seen % max_turns] = pos;
                 seen += 1;
             }
@@ -2278,8 +2445,14 @@ impl Agent {
                 "sub_agent_result" => {
                     let session_id = evt.get("session_id").and_then(Value::as_str).unwrap_or("");
                     let status = evt.get("status").and_then(Value::as_str).unwrap_or("");
-                    let input_tokens = evt.get("input_tokens").map(|v| v.to_string()).unwrap_or_default();
-                    let output_tokens = evt.get("output_tokens").map(|v| v.to_string()).unwrap_or_default();
+                    let input_tokens = evt
+                        .get("input_tokens")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
+                    let output_tokens = evt
+                        .get("output_tokens")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
                     let thinking = evt.get("thinking").and_then(Value::as_str).unwrap_or("");
                     let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
                     self.display_replay_event(
@@ -2292,18 +2465,6 @@ impl Agent {
                             ("output_tokens", output_tokens.as_str()),
                             ("thinking", thinking),
                             ("text", text),
-                        ]),
-                    );
-                }
-                "image_describe" => {
-                    let images = evt.get("images").and_then(Value::as_str).unwrap_or("");
-                    let desc = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    self.display_replay_event(
-                        &mut ds,
-                        "IMAGE_DESCRIBE",
-                        &std::collections::HashMap::from([
-                            ("images", images),
-                            ("content", desc),
                         ]),
                     );
                 }
@@ -2412,72 +2573,27 @@ impl Agent {
     }
 }
 
-/// Describe images using GLM API.
-fn image_describe(paths: &[std::path::PathBuf]) -> String {
-    let api_key = std::env::var("DESCRIBE_API_KEY").unwrap_or_default();
-    if api_key.is_empty() || paths.is_empty() {
-        return String::new();
-    }
-    let model = std::env::var("DESCRIBE_MODEL").unwrap_or_else(|_| "glm-4v-flash".into());
-    let base_url = std::env::var("DESCRIBE_BASE_URL")
-        .unwrap_or_else(|_| "https://open.bigmodel.cn/api/paas/v4".into());
-
-    use base64::Engine as _;
-    let mut content: Vec<serde_json::Value> = vec![
-        serde_json::json!({"type": "text", "text": "Output all visible text from each image, separated by a blank line between images. Transcribe every character including special symbols (arrows, prompts, dots, slashes). Preserve exact spacing and line breaks. Pay attention to date formats (month names, numbers). Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see."})
-    ];
-    for p in paths {
-        if let Ok(data) = std::fs::read(p) {
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-            content.push(serde_json::json!({
-                "type": "image_url",
-                "image_url": {"url": format!("data:image/png;base64,{}", b64)}
-            }));
-        }
-    }
-
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [{"role": "user", "content": content}]
-    });
-
-    let rt = crate::agent::tokio_runtime();
-    rt.block_on(async move {
-        let client = reqwest::Client::new();
-        match client
-            .post(format!("{}/chat/completions", base_url))
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                match resp.json::<serde_json::Value>().await {
-                    Ok(val) => val["choices"][0]["message"]["content"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string(),
-                    Err(_) => String::new(),
-                }
-            }
-            Err(_) => String::new(),
-        }
-    })
-}
-
-/// Expand [Image #N] placeholders with described image content.
+/// Append local path metadata for [Image #N] placeholders.
 fn expand_image_placeholders(input: &str, paths: &store::Paths) -> String {
     let re = regex::Regex::new(r"\[Image #(\d+)\]").unwrap();
-    let mut img_paths = Vec::new();
+    let mut attachments = Vec::new();
     for cap in re.captures_iter(input) {
-        let p = paths.session_dir.join("images").join(format!("{}.png", &cap[1]));
+        let p = paths
+            .session_dir
+            .join("images")
+            .join(format!("{}.png", &cap[1]));
         if p.exists() {
-            img_paths.push(p);
+            attachments.push(format!("[Image #{}] => {}", &cap[1], p.display()));
         }
     }
-    let desc = image_describe(&img_paths);
-    format!("{}\n\n<attached-images>\n{}\n</attached-images>", input, desc)
+    if attachments.is_empty() {
+        return input.to_string();
+    }
+    format!(
+        "{}\n\n<attached-images>\nThese placeholders map to local image files:\n{}\nUse an available visual Skill from <skill-index> when image understanding is needed, and pass the corresponding absolute path to that Skill. The runtime does not inspect these images automatically.\n</attached-images>",
+        input,
+        attachments.join("\n")
+    )
 }
 
 #[cfg(test)]

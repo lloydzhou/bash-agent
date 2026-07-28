@@ -34,7 +34,6 @@ type Config struct {
 	Thinking           string   // thinking 模式: adaptive|enabled|disabled
 	Effort             string   // thinking effort: low|medium|high|xhigh|max
 	SkillNames         []string // 加载的 skill 列表
-	JinaAPIKey         string   // Jina API key（WebSearch/WebFetch）
 
 	// DP Compact 配置
 	DPBaselineE      int     // baseline for E calculation
@@ -114,7 +113,6 @@ const (
 	EventAgentResult                     // AGENT_RESULT (子 agent 返回)
 	EventSubAgentResult                  // SUB_AGENT_RESULT (replay 用)
 	EventDisplayFlush                    // display queue 同步屏障
-	EventImageDescribe                   // IMAGE_DESCRIBE
 	EventUserNotify                      // USER_NOTIFY (Ctrl+O 中间介入)
 )
 

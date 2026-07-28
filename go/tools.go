@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,10 +116,6 @@ func (td *ToolDispatcher) Dispatch(ctx context.Context, name string, params map[
 		return td.toolPlanClear()
 	case "Skill":
 		return td.toolSkill(params["name"])
-	case "WebSearch":
-		return td.toolWebSearch(ctx, params["query"])
-	case "WebFetch":
-		return td.toolWebFetch(ctx, params["url"])
 	case "SubAgent":
 		return td.toolSubAgent(ctx, params["prompt"], params["description"], params["fork"])
 	default:
@@ -149,10 +143,6 @@ func (td *ToolDispatcher) ParamKeys(name string) []string {
 		return []string{"todos", "checklist"}
 	case "Skill":
 		return []string{"name"}
-	case "WebSearch":
-		return []string{"query"}
-	case "WebFetch":
-		return []string{"url"}
 	case "SubAgent":
 		return []string{"prompt", "description", "fork"}
 	default:
@@ -189,10 +179,6 @@ func (td *ToolDispatcher) CallSummary(name string, params map[string]string) str
 		key = "summary"
 	case "Skill":
 		key = "name"
-	case "WebSearch":
-		key = "query"
-	case "WebFetch":
-		key = "url"
 	case "SubAgent":
 		key = "description"
 	}
@@ -760,58 +746,6 @@ func (td *ToolDispatcher) toolPlanClear() (string, error) {
 		return td.planClearFn()
 	}
 	return "Error: plan clear not configured", nil
-}
-
-// ─── WebSearch ───
-
-func (td *ToolDispatcher) toolWebSearch(ctx context.Context, query string) (string, error) {
-	if query == "" {
-		return "", fmt.Errorf("no query provided")
-	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://s.jina.ai/", nil)
-	if err != nil {
-		return "", err
-	}
-	q := req.URL.Query()
-	q.Set("q", query)
-	req.URL.RawQuery = q.Encode()
-	if td.cfg.JinaAPIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+td.cfg.JinaAPIKey)
-	}
-	req.Header.Set("X-Respond-With", "no-content")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return string(body), nil
-}
-
-// ─── WebFetch ───
-
-func (td *ToolDispatcher) toolWebFetch(ctx context.Context, url string) (string, error) {
-	if url == "" {
-		return "", fmt.Errorf("no url provided")
-	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://r.jina.ai/"+url, nil)
-	if err != nil {
-		return "", fmt.Errorf("fetch failed: %v", err)
-	}
-	if td.cfg.JinaAPIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+td.cfg.JinaAPIKey)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return string(body), nil
 }
 
 // ─── SubAgent ───

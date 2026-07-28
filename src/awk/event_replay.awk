@@ -100,17 +100,6 @@ BEGIN {
         next
     }
 
-    # image_describe
-    if (_type == "image_describe") {
-        _id_images = extract_str($0, "images")
-        _id_desc = extract_str($0, "content")
-        emit1("IMAGE_DESCRIBE")
-        emit(_id_images)
-        emit(_id_desc)
-        emit_flush()
-        next
-    }
-
     # stop
     if (_type == "stop") {
         # Don't emit STOP for replay — display_event just ensures newline

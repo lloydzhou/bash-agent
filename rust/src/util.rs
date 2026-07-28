@@ -5,9 +5,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 pub fn path_to_project_id(path: &str) -> String {
-    path.replace('/', "-")
-        .trim_start_matches('-')
-        .to_string()
+    path.replace('/', "-").trim_start_matches('-').to_string()
 }
 
 pub fn normalize_display_text(s: &str, interactive: bool) -> String {
@@ -37,9 +35,9 @@ pub fn touch(path: &Path) -> Result<()> {
 }
 
 pub fn chrono_like_now() -> String {
+    use std::time::UNIX_EPOCH;
     use time::format_description::FormatItem;
     use time::macros::format_description;
-    use std::time::UNIX_EPOCH;
     static FMT: &[FormatItem<'_>] =
         format_description!("[year][month][day]-[hour][minute][second]");
     let base = time::OffsetDateTime::now_utc()
