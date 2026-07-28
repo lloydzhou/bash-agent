@@ -1533,8 +1533,12 @@ static void *async_bash_thread_fn(void *arg) {
         msg->data.async_task_result.task_id = util_strdup(args->task_id);
         msg->data.async_task_result.exit_code = 1;
         msg->data.async_task_result.output = util_strdup("Failed to create temp file");
-        mq_push(args->sub_result_queue, msg);
-        agent_signal_notify(args->input_queue);
+        if (mq_push(args->sub_result_queue, msg) == 0) {
+            agent_signal_notify(args->input_queue);
+        } else {
+            input_message_free(msg);
+            free(msg);
+        }
         free(args->cmd); free(args->task_id); free(args);
         return NULL;
     }
@@ -1606,8 +1610,12 @@ static void *async_bash_thread_fn(void *arg) {
     msg->data.async_task_result.exit_code = exit_code;
     msg->data.async_task_result.output = output ? output : util_strdup("");
 
-    mq_push(args->sub_result_queue, msg);
-    agent_signal_notify(args->input_queue);
+    if (mq_push(args->sub_result_queue, msg) == 0) {
+        agent_signal_notify(args->input_queue);
+    } else {
+        input_message_free(msg);
+        free(msg);
+    }
 
     /* 清理 */
     free(args->cmd);
@@ -1639,8 +1647,12 @@ static void *sub_agent_thread_fn(void *arg) {
         msg->data.agent_result.session_id = util_strdup(args->sub_session_id);
         msg->data.agent_result.status = util_strdup("failed");
         msg->data.agent_result.text = util_strdup("Failed to create sub-agent");
-        mq_push(args->sub_result_queue, msg);
-        agent_signal_notify(args->input_queue);
+        if (mq_push(args->sub_result_queue, msg) == 0) {
+            agent_signal_notify(args->input_queue);
+        } else {
+            input_message_free(msg);
+            free(msg);
+        }
         goto cleanup;
     }
 
@@ -1726,8 +1738,12 @@ static void *sub_agent_thread_fn(void *arg) {
     msg->data.agent_result.cache_read_tokens = sub->last_cache_read_tokens;
     msg->data.agent_result.cache_creation_tokens = sub->last_cache_creation_tokens;
     msg->data.agent_result.request_count = store_stats_get_file_int(sub->paths.stats, "agent_request_count");
-    mq_push(args->sub_result_queue, msg);
-    agent_signal_notify(args->input_queue);
+    if (mq_push(args->sub_result_queue, msg) == 0) {
+        agent_signal_notify(args->input_queue);
+    } else {
+        input_message_free(msg);
+        free(msg);
+    }
 
     agent_destroy(sub);
 

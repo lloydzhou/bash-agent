@@ -751,6 +751,47 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
+        # --- Interactive pending input: ordinary input must run before delayed background result ---
+        if b'INTERACTIVE_PENDING_MARKER' in body:
+            if path.startswith('/v1/messages'):
+                if b'[bg-bash ' in body and b'Output: pending-bg-ok' in body:
+                    chunks = [
+                        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_interactive_bg_done","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Background result handled."}}\n\n',
+                        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+                        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                    ]
+                elif b'INTERACTIVE_SECOND_INPUT' in body:
+                    chunks = [
+                        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_interactive_second","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Second input handled."}}\n\n',
+                        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+                        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                    ]
+                elif b'"tool_result"' in body or b'"role":"tool"' in body:
+                    chunks = [
+                        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_interactive_started","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Background started."}}\n\n',
+                        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+                        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                    ]
+                else:
+                    chunks = [
+                        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_interactive_start","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_interactive_bg","name":"Bash","input":{}}}\n\n',
+                        'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'sleep 12; echo pending-bg-ok','background':True})}}) + '\n\n',
+                        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}\n\n',
+                        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                    ]
+                for c in chunks: w.write(c.encode()); w.flush()
+            return
         # --- Async Bash: model calls Bash(background=true), then end_turn, then async result arrives ---
         if b'ASYNC_BASH_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body:
             if path.startswith('/v1/messages'):

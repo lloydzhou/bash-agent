@@ -275,6 +275,7 @@ Examples:
 			// 无 prompt 且 stdin 是终端 → 自动进入交互模式（与 bash 版一致）
 			interactive = true
 			cfg.Interactive = true
+			a.SetInteractive(true)
 			runInteractive(ctx, a, store, display, home, cfg.Model, userInput)
 		}
 	}

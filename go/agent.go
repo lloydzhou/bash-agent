@@ -1230,6 +1230,11 @@ func (a *Agent) EnqueueUserNotify(text string) {
 	a.subResultCh <- SubAgentResult{Kind: "user_notify", Text: text}
 }
 
+// SetInteractive 更新运行模式；自动进入交互模式时必须在首个回合前调用。
+func (a *Agent) SetInteractive(interactive bool) {
+	a.cfg.Interactive = interactive
+}
+
 // SubResultReady 返回后台结果通知通道，供交互主循环统一调度。
 func (a *Agent) SubResultReady() <-chan SubAgentResult {
 	return a.subResultCh
