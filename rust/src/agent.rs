@@ -1425,67 +1425,6 @@ impl Agent {
         drained
     }
 
-    /// 阻塞消费剩余后台结果，供非交互模式和交互退出阶段保证生命周期安全。
-    fn wait_for_background_results(&mut self) -> Result<()> {
-        while self.active_task_count > 0 {
-            match self.sub_result_rx.recv() {
-                Ok(MainLoopMessage::AgentResult {
-                    session_id,
-                    status,
-                    thinking,
-                    text,
-                    in_tokens,
-                    out_tokens,
-                    cache_read_tokens,
-                    cache_creation_tokens,
-                    request_count,
-                }) => {
-                    self.handle_sub_agent_result(
-                        &session_id,
-                        &status,
-                        &thinking,
-                        &text,
-                        in_tokens,
-                        out_tokens,
-                        cache_read_tokens,
-                        cache_creation_tokens,
-                        request_count,
-                    )?;
-                }
-                Ok(MainLoopMessage::AsyncResult {
-                    task_id,
-                    exit_code,
-                    output,
-                }) => {
-                    let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
-                    if self.active_task_count > 0 {
-                        self.active_task_count -= 1;
-                    }
-                    let context = format!(
-                        "[bg-bash {}] exit_code={}\nOutput: {}",
-                        task_id, exit_code, output
-                    );
-                    let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult {
-                        task_id,
-                        exit_code,
-                        output,
-                    });
-                    let _ = self.agent_loop_with_kind(context, "async_task_result");
-                    self.flush_display();
-                }
-                Ok(MainLoopMessage::UserNotify { text }) => {
-                    let _ =
-                        self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
-                    let _ = self.agent_loop_with_kind(text, "user_notify");
-                    self.flush_display();
-                }
-                Ok(MainLoopMessage::NotifyPending) | Ok(MainLoopMessage::UserInput { .. }) => {}
-                Err(_) => return Err(anyhow!("background result channel disconnected")),
-            }
-        }
-        Ok(())
-    }
-
     /// 检查是否被中断（per-agent 标志 + 全局 SIGINT 标志）
     fn is_interrupted(&self) -> bool {
         self.interrupted.load(Ordering::SeqCst) || CTRLC_FLAG.load(Ordering::SeqCst)

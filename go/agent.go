@@ -38,6 +38,8 @@ type Agent struct {
 	runMu            sync.Mutex
 	currentCancel    context.CancelFunc
 	currentInterrupt *atomic.Bool
+	backgroundCtx    context.Context
+	backgroundCancel context.CancelFunc
 	running          atomic.Bool // 1 = agent 正在处理（RunLoop 执行中），0 = 空闲等待输入
 }
 
@@ -130,13 +132,16 @@ func (a *Agent) expandImagePlaceholders(input string) string {
 }
 
 func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatcher, display *TermDisplay) *Agent {
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	a := &Agent{
-		cfg:         cfg,
-		store:       store,
-		llm:         llm,
-		tools:       tools,
-		display:     display,
-		subResultCh: make(chan SubAgentResult, 8),
+		cfg:              cfg,
+		store:            store,
+		llm:              llm,
+		tools:            tools,
+		display:          display,
+		subResultCh:      make(chan SubAgentResult, 8),
+		backgroundCtx:    backgroundCtx,
+		backgroundCancel: backgroundCancel,
 	}
 	if cfg.OutputFormat != "stream-json" {
 		a.displayCh = make(chan Event, 128)
@@ -189,6 +194,10 @@ func (a *Agent) EmitDisplay(ev Event) {
 }
 
 func (a *Agent) CloseDisplay() {
+	if a.backgroundCancel != nil {
+		a.backgroundCancel()
+		a.backgroundCancel = nil
+	}
 	if a.displayCh == nil {
 		return
 	}
@@ -985,9 +994,10 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 		_ = a.store.Fork(parentDir, childDir)
 	}
 
-	// 启动子 agent goroutine
+	// 后台子智能体脱离当前回合的取消信号，但仍受 Agent 生命周期统一管理。
+	backgroundCtx := a.backgroundCtx
 	go func() {
-		result := a.runSubAgent(ctx, sessionID, prompt, fork)
+		result := a.runSubAgent(backgroundCtx, sessionID, prompt, fork)
 		a.subResultCh <- result
 	}()
 

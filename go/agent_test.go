@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -294,6 +296,111 @@ func newTestStore(t *testing.T) *FileStore {
 		t.Fatalf("init store: %v", err)
 	}
 	return store
+}
+
+func TestInteractiveSubAgentSurvivesTurnCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		select {
+		case <-releaseResponse:
+		case <-r.Context().Done():
+			close(requestCanceled)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sub\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"sub-agent completed\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.Interactive = true
+	cfg.BaseURL = server.URL
+	cfg.APIKey = "test"
+	cfg.Model = "test"
+	cfg.MaxTurns = 1
+	store := newTestStore(t)
+	display := NewTermDisplay()
+	display.SetSilent(true)
+	agent := NewAgent(cfg, store, NewHTTPTransport(cfg), NewToolDispatcher(cfg), display)
+	defer agent.CloseDisplay()
+
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	if _, err := agent.LaunchSubAgent(turnCtx, "background work", "test", "false"); err != nil {
+		t.Fatalf("LaunchSubAgent: %v", err)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sub-agent request did not start")
+	}
+	cancelTurn()
+
+	select {
+	case <-requestCanceled:
+		t.Fatal("sub-agent request was canceled with the completed interactive turn")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseResponse)
+
+	select {
+	case result := <-agent.SubResultReady():
+		if result.Status != "ok" || result.Text != "sub-agent completed" {
+			t.Fatalf("unexpected sub-agent result: status=%q text=%q", result.Status, result.Text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sub-agent did not complete after the interactive turn ended")
+	}
+}
+
+func TestAgentCloseCancelsBackgroundSubAgent(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		select {
+		case <-releaseResponse:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(releaseResponse)
+
+	cfg := DefaultConfig()
+	cfg.BaseURL = server.URL
+	cfg.APIKey = "test"
+	cfg.Model = "test"
+	store := newTestStore(t)
+	display := NewTermDisplay()
+	display.SetSilent(true)
+	agent := NewAgent(cfg, store, NewHTTPTransport(cfg), NewToolDispatcher(cfg), display)
+
+	if _, err := agent.LaunchSubAgent(context.Background(), "background work", "test", "false"); err != nil {
+		t.Fatalf("LaunchSubAgent: %v", err)
+	}
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		agent.CloseDisplay()
+		t.Fatal("sub-agent request did not start")
+	}
+
+	agent.CloseDisplay()
+	select {
+	case result := <-agent.SubResultReady():
+		if result.Status != "failed" || !strings.Contains(result.Text, "context canceled") {
+			t.Fatalf("unexpected cancellation result: status=%q text=%q", result.Status, result.Text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the agent did not stop the background sub-agent")
+	}
 }
 
 func TestFileStoreInit(t *testing.T) {
@@ -741,7 +848,7 @@ func TestSSEParserInterruptedStreamClosesAfterFallbackEvents(t *testing.T) {
 	}
 	ch := make(chan Event, 2)
 
-	tr.parseSSEStream(resp, ch)
+	tr.parseSSEStream(context.Background(), resp, ch)
 
 	var events []Event
 	for ev := range ch {
