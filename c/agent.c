@@ -2233,7 +2233,6 @@ char *agent_build_prompt(Agent *agent) {
             "- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n"
             "- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n"
             "- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n"
-            "- For web search, webpage reading, or image understanding, use a matching external Skill from skill-index; these capabilities are not built into the runtime.\n"
             "- Bash supports background=true for long-running commands. Returns task_id immediately; output delivered asynchronously like SubAgent.\n"
             "- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.";
         prompt_append_section(&buf, "using-your-tools", tool_guidance, NULL);
