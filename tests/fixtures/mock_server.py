@@ -1205,6 +1205,62 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing sanitized UTF-8 content in tool_result')
             return
+        # --- SubAgent recursion-limit mock ---
+        if b'SUB_RECURSION_MARKER' in body and b'SUB_RECURSION_CHILD' not in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_rec1","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_rec_parent","name":"SubAgent","input":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_RECURSION_CHILD','description':'recursion child'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":10}}\n\n',
+                    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'SUB_RECURSION_CHILD' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_rec2","role":"assistant","content":[],"model":"test","usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+                    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_rec_child","name":"SubAgent","input":{}}}\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'SUB_RECURSION_GRANDCHILD','description':'must be rejected'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}}\n\n',
+                    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'SUB_RECURSION_CHILD' in body and b'sub-agent recursion limit reached' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_rec3","role":"assistant","content":[],"model":"test","usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+                    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Nested launch rejected."}}\n\n',
+                    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
+                    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'SUB_RECURSION_MARKER' in body and b'"tool_result"' in body and b'[sub-agent sub_' not in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_rec4","role":"assistant","content":[],"model":"test","usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+                    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Waiting for recursion child."}}\n\n',
+                    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n\n',
+                    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
+        if b'SUB_RECURSION_MARKER' in body and b'[sub-agent sub_' in body:
+            if path.startswith('/v1/messages'):
+                for c in [
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_rec5","role":"assistant","content":[],"model":"test","usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+                    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Recursion limit verified."}}\n\n',
+                    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}\n\n',
+                    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ]: w.write(c.encode()); w.flush()
+            return
         # --- SubAgent 4-stage mock ---
         # Stage 1: main agent first request -> SubAgent tool_call
         if b'SUB_AGENT_MARKER' in body and b'"tool_result"' not in body:

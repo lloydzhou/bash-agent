@@ -22,11 +22,13 @@ shell: __SHELL__
 - Prefer dedicated tools over Bash when a dedicated tool fits the task.
 - For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.
 - For skills, first check the skill-index section, then use Skill(name) for the matching skill.
+- For web search, webpage reading, or image understanding, use a matching external Skill from skill-index; these capabilities are not built into the runtime.
 - Bash supports background=true for long-running commands. Returns task_id immediately; output delivered asynchronously like SubAgent.
 - SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.
 </using-your-tools>
 <sub-agent-guidance>
 - **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.
+- **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.
 - **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.
 - **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.
 - **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.

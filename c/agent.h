@@ -78,6 +78,7 @@ typedef struct {
     int last_cache_read_tokens;
     int last_cache_creation_tokens;
     int active_task_count;
+    int sub_agent_depth;      /* 主代理为 0，第一层子代理为 1 */
 
     /* 消息队列 */
     MsgQueue *input_queue;      /* 外部传入，agent_loop 从中读取 */
