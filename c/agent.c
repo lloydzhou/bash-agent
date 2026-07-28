@@ -38,9 +38,21 @@ typedef struct {
     char *cmd;
     char *task_id;
     MsgQueue *sub_result_queue;
+    MsgQueue *input_queue;
 } AsyncBashArgs;
 
 static void *async_bash_thread_fn(void *arg);
+
+static void agent_signal_notify(MsgQueue *input_queue) {
+    if (!input_queue) return;
+    InputMessage *wakeup = calloc(1, sizeof(InputMessage));
+    if (!wakeup) return;
+    wakeup->type = MSG_NOTIFY_PENDING;
+    if (mq_push(input_queue, wakeup) != 0) {
+        input_message_free(wakeup);
+        free(wakeup);
+    }
+}
 
 /* ============================================================
  * 图片占位符支持
@@ -234,6 +246,7 @@ typedef struct {
     int fork_mode;
     char *sub_session_id;
     MsgQueue *sub_result_queue;
+    MsgQueue *input_queue;
 } SubAgentArgs;
 
 /* ============================================================
@@ -1156,6 +1169,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                         args->cmd = util_strdup(cmd);
                         args->task_id = util_strdup(task_id);
                         args->sub_result_queue = agent->sub_result_queue;
+                        args->input_queue = agent->interactive ? agent->input_queue : NULL;
                         pthread_t thread;
                         int prc = pthread_create(&thread, NULL, async_bash_thread_fn, args);
                         if (prc != 0) {
@@ -1751,8 +1765,11 @@ int agent_main_loop(Agent *agent) {
 
                   agent->running = 0;
 
-                /* 等待所有异步任务完成，避免销毁仍被工作线程使用的队列。 */
-                agent_wait_for_sub_agents(agent);
+                /* 交互模式不等待后台任务，允许下一条普通输入立即触发新回合。
+                 * 非交互模式仍等待，确保销毁前回收使用队列的后台线程。 */
+                if (!agent->interactive) {
+                    agent_wait_for_sub_agents(agent);
+                }
 
                 /* 所有轮次完成：等待 display 队列写完 */
                 if (agent->interactive) {
@@ -1801,7 +1818,12 @@ static void *async_bash_thread_fn(void *arg) {
         msg->data.async_task_result.task_id = util_strdup(args->task_id);
         msg->data.async_task_result.exit_code = 1;
         msg->data.async_task_result.output = util_strdup("Failed to create temp file");
-        mq_push(args->sub_result_queue, msg);
+        if (mq_push(args->sub_result_queue, msg) == 0) {
+            agent_signal_notify(args->input_queue);
+        } else {
+            input_message_free(msg);
+            free(msg);
+        }
         free(args->cmd); free(args->task_id); free(args);
         return NULL;
     }
@@ -1873,7 +1895,12 @@ static void *async_bash_thread_fn(void *arg) {
     msg->data.async_task_result.exit_code = exit_code;
     msg->data.async_task_result.output = output ? output : util_strdup("");
 
-    mq_push(args->sub_result_queue, msg);
+    if (mq_push(args->sub_result_queue, msg) == 0) {
+        agent_signal_notify(args->input_queue);
+    } else {
+        input_message_free(msg);
+        free(msg);
+    }
 
     /* 清理 */
     free(args->cmd);
@@ -1905,7 +1932,12 @@ static void *sub_agent_thread_fn(void *arg) {
         msg->data.agent_result.session_id = util_strdup(args->sub_session_id);
         msg->data.agent_result.status = util_strdup("failed");
         msg->data.agent_result.text = util_strdup("Failed to create sub-agent");
-        mq_push(args->sub_result_queue, msg);
+        if (mq_push(args->sub_result_queue, msg) == 0) {
+            agent_signal_notify(args->input_queue);
+        } else {
+            input_message_free(msg);
+            free(msg);
+        }
         goto cleanup;
     }
 
@@ -1991,7 +2023,12 @@ static void *sub_agent_thread_fn(void *arg) {
     msg->data.agent_result.cache_read_tokens = sub->last_cache_read_tokens;
     msg->data.agent_result.cache_creation_tokens = sub->last_cache_creation_tokens;
     msg->data.agent_result.request_count = store_stats_get_file_int(sub->paths.stats, "agent_request_count");
-    mq_push(args->sub_result_queue, msg);
+    if (mq_push(args->sub_result_queue, msg) == 0) {
+        agent_signal_notify(args->input_queue);
+    } else {
+        input_message_free(msg);
+        free(msg);
+    }
 
     agent_destroy(sub);
 
@@ -2060,6 +2097,7 @@ char *agent_handle_sub_agent(Agent *agent, const char *prompt,
     args->fork_mode = 0;  /* fork 已在主线程完成 */
     args->sub_session_id = util_strdup(sub_session_id);
     args->sub_result_queue = agent->sub_result_queue;
+    args->input_queue = agent->interactive ? agent->input_queue : NULL;
 
     pthread_t thread;
     int prc = pthread_create(&thread, NULL, sub_agent_thread_fn, args);

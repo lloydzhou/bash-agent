@@ -211,26 +211,8 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
         io::stdin().read_line(&mut input)?;
         rt.agent_loop(input)?;
     }
-    // 等待所有子 agent 完成（bash 版没有超时，Ctrl+C 可杀）
-    while rt.active_task_count > 0 {
-        match rt.sub_result_rx.recv() {
-            Ok(MainLoopMessage::AgentResult {
-                session_id,
-                status,
-                thinking,
-                text,
-                in_tokens,
-                out_tokens,
-                cache_read_tokens,
-                cache_creation_tokens,
-                request_count,
-            }) => {
-                rt.handle_sub_agent_result(&session_id, &status, &thinking, &text, in_tokens, out_tokens, cache_read_tokens, cache_creation_tokens, request_count)?;
-            }
-            _ => break,
-        }
-    }
-    Ok(())
+    // 等待所有后台任务完成（bash 版没有超时，Ctrl+C 可杀）
+    rt.wait_for_background_results()
 }
 
 // MainLoopMessage 主循环消息类型
@@ -752,6 +734,7 @@ impl Agent {
         let home = self.home.clone();
         let cfg = self.cfg.clone();
         let msg_tx_arc = self.sub_result_tx.clone(); // 子 agent 结果发送到专用通道
+        let wake_tx = if self.cfg.interactive { Some(self.msg_tx.clone()) } else { None };
         let sub_session_id_clone = sub_session_id.clone();
         let parent_paths = self.paths.clone();
         let fork = fields.get("fork").map(|s| s == "true" || s == "1").unwrap_or(false);
@@ -767,11 +750,23 @@ impl Agent {
         }
 
         std::thread::spawn(move || {
+            let send_result = |result| {
+                if msg_tx_arc.send(result).is_ok() {
+                    if let Some(tx) = &wake_tx {
+                        if let Ok(guard) = tx.lock() {
+                            if let Some(tx) = guard.as_ref() {
+                                let _ = tx.send(MainLoopMessage::NotifyPending);
+                            }
+                        }
+                    }
+                }
+            };
+
             // 1. 创建子 agent 的 conversation store
             let sub_conv = Store { path: sub_paths.conversation.clone() };
             if let Err(e) = sub_conv.ensure() {
                 // 早期失败时发送失败结果，让主进程减少 active_task_count
-                let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
+                send_result(MainLoopMessage::AgentResult {
                     session_id: sub_session_id_clone.clone(),
                     status: "failed".to_string(),
                     thinking: String::new(),
@@ -837,7 +832,7 @@ impl Agent {
                 Ok(l) => l,
                 Err(e) => {
                     // 通过消息队列发送失败结果，让主进程减少计数
-                    let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
+                    send_result(MainLoopMessage::AgentResult {
                         session_id: sub_session_id_clone,
                         status: "failed".to_string(),
                         thinking: String::new(),
@@ -896,7 +891,7 @@ impl Agent {
             let request_count = stats_get_f64(&stats, "agent_request_count") as usize;
 
             // 6. 通过消息队列发送结果
-            let _ = msg_tx_arc.send(MainLoopMessage::AgentResult {
+            send_result(MainLoopMessage::AgentResult {
                 session_id: sub_session_id_clone,
                 status: status.to_string(),
                 thinking: result_thinking,
@@ -1065,7 +1060,10 @@ impl Agent {
         // 在主线程中运行 main_loop
         self.main_loop()?;
 
-        // 等待 readline 线程结束
+        // 用户可能在后台任务运行时退出；销毁运行时前必须消费剩余结果。
+        self.wait_for_background_results()?;
+
+        // 等待读取线程结束
         let _ = readline_handle.join();
 
         self.info("Goodbye!");
@@ -1118,56 +1116,6 @@ impl Agent {
                     self.running.store(false, Ordering::SeqCst);
                     self.flush_display();
 
-                    // Go 版架构：agent_loop 结束后，如果有活跃子 agent，
-                    // main_loop 在内部循环等待所有 AgentResult 并处理，
-                    // 直到全部完成后再返回主循环（readline 已在下一轮 EditStart）。
-                    // display worker 的 hide/show 保证输出不会与 linenoise 冲突。
-                    while self.active_task_count > 0 {
-                        match self.sub_result_rx.recv() {
-                            Ok(MainLoopMessage::AgentResult {
-                                session_id,
-                                status,
-                                thinking,
-                                text,
-                                in_tokens,
-                                out_tokens,
-                                cache_read_tokens,
-                                cache_creation_tokens,
-                                request_count,
-                            }) => {
-                                self.handle_sub_agent_result(
-                                    &session_id, &status, &thinking, &text,
-                                    in_tokens, out_tokens, cache_read_tokens,
-                                    cache_creation_tokens, request_count,
-                                )?;
-                                self.flush_display();
-                            }
-                            Ok(MainLoopMessage::UserInput { .. }) => {
-                                // readline 已不再等 done，可能发来新的 UserInput。
-                                // 将其放回队列末尾，等当前子 agent 完成后再处理。
-                                // TODO: 暂时忽略，后续可改为队列缓存。
-                            }
-                            Ok(MainLoopMessage::NotifyPending) => {}
-                            Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
-                                let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
-                                if self.active_task_count > 0 { self.active_task_count -= 1; }
-                                let ctx = format!("[bg-bash {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
-                                let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
-                                let _ = self.agent_loop_with_kind(ctx, "async_task_result");
-                                self.flush_display();
-                            }
-                            Ok(MainLoopMessage::UserNotify { text }) => {
-                                let _ = self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
-                                let _ = self.agent_loop_with_kind(text, "user_notify");
-                                self.flush_display();
-                            }
-                            Err(std::sync::mpsc::RecvError) => {
-                                // 所有发送端关闭
-                                return Ok(());
-                            }
-                        }
-                    }
-
                     // 不再通知 readline 线程 — 它已经在下一轮 EditStart
                 }
                 _ => {}
@@ -1176,6 +1124,54 @@ impl Agent {
             // 非交互模式且无活跃子 agent 时退出
             if !self.cfg.interactive && self.active_task_count == 0 {
                 break;
+            }
+        }
+        Ok(())
+    }
+
+    // 等待并处理所有后台结果；仅用于非交互退出和交互资源销毁前。
+    fn wait_for_background_results(&mut self) -> Result<()> {
+        while self.active_task_count > 0 {
+            match self.sub_result_rx.recv() {
+                Ok(MainLoopMessage::AgentResult {
+                    session_id,
+                    status,
+                    thinking,
+                    text,
+                    in_tokens,
+                    out_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    request_count,
+                }) => {
+                    self.handle_sub_agent_result(
+                        &session_id,
+                        &status,
+                        &thinking,
+                        &text,
+                        in_tokens,
+                        out_tokens,
+                        cache_read_tokens,
+                        cache_creation_tokens,
+                        request_count,
+                    )?;
+                    self.flush_display();
+                }
+                Ok(MainLoopMessage::AsyncResult { task_id, exit_code, output }) => {
+                    let _ = self.emit_and_append_event(json!({"type":"async_task_result","task_id":&task_id,"exit_code":exit_code,"output":&output}));
+                    if self.active_task_count > 0 { self.active_task_count -= 1; }
+                    let ctx = format!("[bg-bash {}] exit_code={}\nOutput: {}", task_id, exit_code, output);
+                    let _ = self.queue_display_event(DisplayEvent::AsyncTaskResult { task_id, exit_code, output });
+                    self.agent_loop_with_kind(ctx, "async_task_result")?;
+                    self.flush_display();
+                }
+                Ok(MainLoopMessage::UserNotify { text }) => {
+                    let _ = self.queue_display_event(DisplayEvent::UserNotify { text: text.clone() });
+                    self.agent_loop_with_kind(text, "user_notify")?;
+                    self.flush_display();
+                }
+                Ok(MainLoopMessage::NotifyPending) | Ok(MainLoopMessage::UserInput { .. }) => {}
+                Err(_) => return Err(anyhow!("后台结果通道已断开")),
             }
         }
         Ok(())
@@ -1482,6 +1478,7 @@ impl Agent {
                                 let task_id = format!("task_{}", chrono_like_now());
                                 self.active_task_count += 1;
                                 let tx = self.sub_result_tx.clone();
+                                let wake_tx = if self.cfg.interactive { Some(self.msg_tx.clone()) } else { None };
                                 let tid = task_id.clone();
                                 thread::spawn(move || {
                                     let output = Command::new("bash")
@@ -1496,7 +1493,15 @@ impl Agent {
                                         Ok(o) => (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)),
                                         Err(e) => (127, e.to_string()),
                                     };
-                                    let _ = tx.send(MainLoopMessage::AsyncResult { task_id: tid, exit_code, output: stdout });
+                                    if tx.send(MainLoopMessage::AsyncResult { task_id: tid, exit_code, output: stdout }).is_ok() {
+                                        if let Some(wake_tx) = wake_tx {
+                                            if let Ok(guard) = wake_tx.lock() {
+                                                if let Some(tx) = guard.as_ref() {
+                                                    let _ = tx.send(MainLoopMessage::NotifyPending);
+                                                }
+                                            }
+                                        }
+                                    }
                                 });
                                 format!("Async task started: task_id={}", task_id)
                             } else {

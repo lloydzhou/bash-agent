@@ -1020,7 +1020,7 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 		hasPending := a.pendingTasks > 0
 		a.subMu.Unlock()
 
-		if hasPending {
+		if hasPending && !a.cfg.Interactive {
 			select {
 			case r := <-a.subResultCh:
 				// 处理结果（events + stats + display），获取 context 和 turnKind
@@ -1035,6 +1035,7 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 			}
 		}
 
+		// 交互模式不等待后台任务；结果完成时由主循环唤醒并以 notify turn 注入。
 		// 无 pending 子 agent → 退出
 		if phaseFatalErr != nil {
 			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
@@ -1342,4 +1343,40 @@ func (a *Agent) handleUserNotify(text string) string {
 // EnqueueUserNotify 将用户 Ctrl+O 输入写入 notify/sub_result 通道。
 func (a *Agent) EnqueueUserNotify(text string) {
 	a.subResultCh <- SubAgentResult{Kind: "user_notify", Text: text}
+}
+
+// SetInteractive 更新运行模式；自动进入交互模式时必须在首个回合前调用。
+func (a *Agent) SetInteractive(interactive bool) {
+	a.cfg.Interactive = interactive
+}
+
+// SubResultReady 返回后台结果通知通道，供交互主循环统一调度。
+func (a *Agent) SubResultReady() <-chan SubAgentResult {
+	return a.subResultCh
+}
+
+// RunResult 处理一条已由交互主循环取出的后台结果，并触发对应回合。
+func (a *Agent) RunResult(ctx context.Context, result SubAgentResult) error {
+	context, turnKind := a.handleSubAgentResult(result)
+	return a.RunLoop(ctx, context, turnKind)
+}
+
+// WaitForBackgroundResults 在退出前同步回收所有后台任务。
+func (a *Agent) WaitForBackgroundResults(ctx context.Context) error {
+	for {
+		a.subMu.Lock()
+		pending := a.pendingTasks
+		a.subMu.Unlock()
+		if pending <= 0 {
+			return nil
+		}
+		select {
+		case result := <-a.subResultCh:
+			if err := a.RunResult(ctx, result); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }

@@ -956,7 +956,7 @@ tool_bash() {
             bash -lc "$cmd" > "$tmpout" 2>&1
             _rc=$?; _out=$(util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$tmpout"); rm -f "$tmpout"
             util_write_msg "ASYNC_TASK_RESULT" "$task_id" "$_rc" "$_out" >> "$NOTIFY_FIFO" 2>/dev/null || true
-        ) &
+        ) </dev/null >/dev/null 2>&1 &
         printf 'Async task started: task_id=%s, pid=%s' "$task_id" "$!"
         return 0
     fi

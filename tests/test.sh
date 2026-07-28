@@ -552,6 +552,108 @@ test_agent_async_bash() {
     fi
 }
 
+test_agent_interactive_pending_input() {
+    info "Test 11f: Interactive input runs before delayed background result"
+    local output_file plain_file rc second_line bg_line done_line
+    output_file=$(mktemp)
+    plain_file=$(mktemp)
+
+    AGENT_PATH="$AGENT" BASE_URL="$BASE/v1" OUTPUT_FILE="$output_file" python3 <<'PY'
+import fcntl, os, pty, select, subprocess, sys, termios, time
+
+agent = os.environ["AGENT_PATH"]
+base = os.environ["BASE_URL"]
+out_path = os.environ["OUTPUT_FILE"]
+master, slave = pty.openpty()
+env = os.environ.copy()
+env["LINENOISE_COLS"] = "80"
+
+def child_setup():
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+proc = subprocess.Popen(
+    [agent, "-i", "-p", "claude", "--base-url", base, "-m", "test", "--api-key", "test"],
+    stdin=slave, stdout=slave, stderr=slave, close_fds=True, env=env,
+    preexec_fn=child_setup,
+)
+os.close(slave)
+data = bytearray()
+
+def drain(timeout):
+    end = time.time() + timeout
+    while time.time() < end:
+        ready, _, _ = select.select([master], [], [], min(0.1, end - time.time()))
+        if not ready:
+            continue
+        try:
+            chunk = os.read(master, 65536)
+        except OSError:
+            return
+        if not chunk:
+            return
+        data.extend(chunk)
+
+def wait_for(needle, timeout):
+    end = time.time() + timeout
+    target = needle.encode()
+    while time.time() < end:
+        if target in data:
+            return True
+        drain(0.2)
+    return target in data
+
+rc = 0
+try:
+    if not wait_for("bash-agent interactive mode", 5):
+        raise RuntimeError("interactive mode did not start")
+    drain(0.2)
+    os.write(master, b"INTERACTIVE_PENDING_MARKER\r")
+    if not wait_for("Background started.", 8):
+        raise RuntimeError("background task start turn did not finish")
+    os.write(master, b"INTERACTIVE_SECOND_INPUT\r")
+    if not wait_for("T:2 R:3", 4):
+        raise RuntimeError("ordinary input was delayed while background task was pending")
+    if not wait_for("[bg-bash ", 15):
+        raise RuntimeError("background result was not injected")
+    if not wait_for("R:4", 5):
+        raise RuntimeError("background result turn did not finish")
+    os.write(master, b"exit\r")
+    if not wait_for("Goodbye!", 10):
+        raise RuntimeError("interactive process did not exit cleanly")
+except Exception as exc:
+    data.extend(("\nTEST_ERROR: " + str(exc) + "\n").encode())
+    rc = 1
+finally:
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    drain(0.2)
+    os.close(master)
+    with open(out_path, "wb") as f:
+        f.write(data)
+sys.exit(rc)
+PY
+    rc=$?
+    LC_ALL=C sed 's/\x1B\[[0-9;?]*[ -\/]*[@-~]//g; s/\r//g' "$output_file" > "$plain_file"
+    second_line=$(grep -n -m1 'T:2 R:3' "$plain_file" | cut -d: -f1)
+    bg_line=$(grep -n -m1 '\[bg-bash ' "$plain_file" | cut -d: -f1)
+    done_line=$(grep -n -m1 'R:4' "$plain_file" | cut -d: -f1)
+    if [[ $rc -eq 0 && -n "$second_line" && -n "$bg_line" && -n "$done_line" && \
+          $second_line -lt $bg_line && $bg_line -le $done_line ]]; then
+        green "Agent interactive pending input"; ((PASS++)) || true
+    else
+        red "Agent interactive pending input"; cat "$plain_file"; ((FAIL++)) || true
+    fi
+    rm -f "$output_file" "$plain_file"
+}
+
 test_agent_tool_result_persist_order() {
     info "Test 11c: assistant tool_use persisted before following tool_result"
     local output session_id conv_file
@@ -2658,6 +2760,7 @@ test_agent_openai_request_body
 test_agent_openai_tool_write
 test_agent_openai_sensenova_style
 test_agent_async_bash
+test_agent_interactive_pending_input
 test_agent_tool_result_persist_order
 test_agent_skill_injection
 test_agent_skill_injection_from_repo_skills_dir
