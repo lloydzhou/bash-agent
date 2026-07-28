@@ -2746,18 +2746,25 @@ test_agent_image_placeholders() {
     events_file="$img_dir/../events.jsonl"
     BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test --session "$session_id" '[Image #1] what is this?' >/dev/null 2>&1 || true
 
-    # Without DESCRIBE_API_KEY, describe returns empty, but expand still appends <attached-images>
-    if [[ -f "$conv_file" ]] && grep -q '<attached-images>' "$conv_file" 2>/dev/null; then
-        green "Agent image placeholder appends attached-images in conversation"; ((PASS++)) || true
+    # Conversation keeps the placeholder in place and appends its absolute local path mapping.
+    if [[ -f "$conv_file" ]] \
+        && grep -q '\[Image #1\] what is this?' "$conv_file" 2>/dev/null \
+        && grep -q '<attached-images>' "$conv_file" 2>/dev/null \
+        && grep -Fq "[Image #1] => $img_dir/1.png" "$conv_file" 2>/dev/null \
+        && grep -q 'Use an available visual Skill' "$conv_file" 2>/dev/null; then
+        green "Agent image placeholder appends local path mapping in conversation"; ((PASS++)) || true
     else
-        red "Agent image placeholder appends attached-images in conversation"; echo "  conv=$(cat "$conv_file" 2>/dev/null)"; ((FAIL++)) || true
+        red "Agent image placeholder appends local path mapping in conversation"; echo "  conv=$(cat "$conv_file" 2>/dev/null)"; ((FAIL++)) || true
     fi
 
-    # Check events.jsonl has user_input with [Image #N] and image_describe
-    if [[ -f "$events_file" ]] && grep -q '"type":"user_input"' "$events_file" && grep -q '\[Image #1\]' "$events_file" && grep -q '"type":"image_describe"' "$events_file"; then
-        green "Agent image placeholder events recorded"; ((PASS++)) || true
+    # Events retain the original user input and no longer emit runtime image descriptions.
+    if [[ -f "$events_file" ]] \
+        && grep -q '"type":"user_input"' "$events_file" \
+        && grep -q '\[Image #1\]' "$events_file" \
+        && ! grep -q '"type":"image_describe"' "$events_file"; then
+        green "Agent image placeholder events keep original input without image description"; ((PASS++)) || true
     else
-        red "Agent image placeholder events recorded"; echo "  events=$(cat "$events_file" 2>/dev/null)"; ((FAIL++)) || true
+        red "Agent image placeholder events keep original input without image description"; echo "  events=$(cat "$events_file" 2>/dev/null)"; ((FAIL++)) || true
     fi
 
     rm -rf "$home_dir"

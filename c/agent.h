@@ -150,9 +150,7 @@ void agent_update_title_status(Agent *agent, const char *status);
  * 图片占位符支持
  * ============================================================ */
 
-/* 展开输入中的 [Image #N] 占位符，调用描述 API 后替换输入指针 */
-/* 图像处理 */
-char *agent_image_describe(char **paths, int count);
+/* 图像处理：追加 [Image #N] 到本地绝对路径的映射。 */
 void agent_image_expand_placeholders(Agent *agent, char **input);
 void agent_image_clipboard_paste(const char *session_dir, char **out, size_t *outlen);
 

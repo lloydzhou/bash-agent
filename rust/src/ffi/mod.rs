@@ -3,8 +3,8 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 use std::sync::mpsc;
+use std::sync::{Mutex, OnceLock};
 
 /// Global image directory path, set once during agent initialization.
 /// Used by the image paste callback to know where to save clipboard images.
@@ -51,8 +51,12 @@ unsafe extern "C" {
     fn linenoiseHistorySave(filename: *const c_char) -> libc::c_int;
     fn linenoiseHistoryLoad(filename: *const c_char) -> libc::c_int;
     fn linenoiseSetMultiLine(ml: libc::c_int);
-    fn linenoiseSetImagePasteCallback(cb: Option<unsafe extern "C" fn(*mut *mut libc::c_char, *mut libc::size_t)>);
-    fn linenoiseSetInjectCallback(cb: Option<unsafe extern "C" fn(*mut libc::c_char, libc::size_t) -> libc::c_int>);
+    fn linenoiseSetImagePasteCallback(
+        cb: Option<unsafe extern "C" fn(*mut *mut libc::c_char, *mut libc::size_t)>,
+    );
+    fn linenoiseSetInjectCallback(
+        cb: Option<unsafe extern "C" fn(*mut libc::c_char, libc::size_t) -> libc::c_int>,
+    );
     fn linenoiseWrite(s: *const c_char, len: libc::size_t);
     fn linenoiseRegisterState(ls: *mut LinenoiseState);
     fn linenoiseSetActive(active: libc::c_int);
@@ -124,21 +128,27 @@ pub fn edit_more_ptr() -> *mut c_char {
 /// # Safety
 /// ls must be valid.
 pub unsafe fn edit_stop_ptr(ls: *mut LinenoiseState) {
-    unsafe { linenoiseEditStop(ls); }
+    unsafe {
+        linenoiseEditStop(ls);
+    }
 }
 
 /// Hide the current prompt line.
 /// # Safety
 /// ls must be a valid, active linenoiseState pointer.
 pub unsafe fn hide(ls: *mut LinenoiseState) {
-    unsafe { linenoiseHide(ls); }
+    unsafe {
+        linenoiseHide(ls);
+    }
 }
 
 /// Show (restore) the current prompt line.
 /// # Safety
 /// ls must be a valid, active linenoiseState pointer.
 pub unsafe fn show(ls: *mut LinenoiseState) {
-    unsafe { linenoiseShow(ls); }
+    unsafe {
+        linenoiseShow(ls);
+    }
 }
 
 /// Atomic display write: Lock → Hide → restore cursor → OPOST on → write →
@@ -157,17 +167,23 @@ pub fn linenoise_write(s: &str) {
 /// # Safety
 /// ls must be a valid pointer or null.
 pub unsafe fn register_state(ls: *mut LinenoiseState) {
-    unsafe { linenoiseRegisterState(ls); }
+    unsafe {
+        linenoiseRegisterState(ls);
+    }
 }
 
 /// Set whether a linenoise edit session is currently active.
 pub fn set_active(active: bool) {
-    unsafe { linenoiseSetActive(if active { 1 } else { 0 }); }
+    unsafe {
+        linenoiseSetActive(if active { 1 } else { 0 });
+    }
 }
 
 /// Free a line returned by linenoise or edit_feed_raw.
 pub fn free_line(ptr: *mut c_char) {
-    unsafe { linenoiseFree(ptr); }
+    unsafe {
+        linenoiseFree(ptr);
+    }
 }
 
 /// Read a line from stdin with the given prompt.
@@ -178,15 +194,18 @@ pub fn free_line(ptr: *mut c_char) {
 /// - `Err(LineError::Eof)` on Ctrl+D.
 /// - `Err(LineError::Io(...))` on other errors.
 pub fn line(prompt: &str) -> Result<String, LineError> {
-    let c_prompt = CString::new(prompt).map_err(|e| {
-        LineError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e))
-    })?;
+    let c_prompt = CString::new(prompt)
+        .map_err(|e| LineError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)))?;
 
     // Clear errno before calling linenoise
     #[cfg(target_os = "macos")]
-    unsafe { *libc::__error() = 0 };
+    unsafe {
+        *libc::__error() = 0
+    };
     #[cfg(target_os = "linux")]
-    unsafe { *libc::__errno_location() = 0 };
+    unsafe {
+        *libc::__errno_location() = 0
+    };
 
     let ptr = unsafe { linenoise(c_prompt.as_ptr()) };
 

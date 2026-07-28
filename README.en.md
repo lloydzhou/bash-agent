@@ -153,14 +153,14 @@ Supports readline input, resume info on exit, Ctrl+C to interrupt, Ctrl+D to cle
 
 ## Image Paste
 
-Press **Ctrl+V** in interactive mode to paste an image from the clipboard. A `[Image #N]` placeholder is inserted and the image is cached in the session directory. When you send the message, all images are collected and sent to GLM-4V-Flash (free) for text transcription, appended as `<attached-images>`.
+Press **Ctrl+V** in interactive mode to paste an image from the clipboard. A `[Image #N]` placeholder is inserted and the image is cached in the session directory. When the message is sent, placeholder positions are preserved and an `<attached-images>` mapping to local absolute paths is appended. If image understanding is needed, the model selects an available visual Skill from `skill-index` and passes it the corresponding path.
 
 Supported platforms:
 - **macOS**: `osascript` (built-in)
 - **Linux Wayland**: `wl-paste`
 - **Linux X11**: `xclip`
 
-Without an API key, images can still be pasted (generating `[Image #N]` placeholders) but the description step is skipped.
+The runtime does not inspect or describe images automatically and is not tied to a specific visual service; visual capabilities are provided by external Skills on demand.
 
 ## Environment Variables
 
@@ -172,12 +172,8 @@ Without an API key, images can still be pasted (generating `[Image #N]` placehol
 | `OPENAI_API_KEY` | API key for OpenAI |
 | `ANTHROPIC_BASE_URL` | Claude API base URL |
 | `OPENAI_BASE_URL` | OpenAI API base URL |
-| `JINA_API_KEY` | Jina AI API key (required for WebSearch/WebFetch tools) |
 | `BASH_AGENT_HOME` | Override session storage directory (default: `$HOME`) |
 | `BASH_AGENT_BASH_MODE` | Bash and local file tool permissions as 4 octal rwx digits: `system/external/network/workspace`; each digit uses `4=read,2=write,1=execute` (default: `0467`) |
-| `DESCRIBE_API_KEY` | Image description API key (defaults to GLM-4V-Flash, free) |
-| `DESCRIBE_MODEL` | Image description model name (default: `glm-4v-flash`) |
-| `DESCRIBE_BASE_URL` | Image description API base URL (default: `https://open.bigmodel.cn/api/paas/v4`) |
 | `THINKING` | Override thinking mode: `adaptive` / `enabled` / `disabled`; CLI `--thinking` takes precedence |
 | `EFFORT` | Override thinking effort: `low` / `medium` / `high` / `xhigh` / `max`; CLI `--effort` takes precedence |
 
@@ -278,7 +274,7 @@ With Claude Sonnet 4 (compacting 45K tokens of history):
 
 ## Built-in Tools
 
-`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `PlanConfirm` · `PlanClear` · `Skill` · `SubAgent` · `WebSearch` · `WebFetch`
+`Read` · `Write` · `Edit` · `Bash` · `Glob` · `Grep` · `TodoWrite` · `PlanConfirm` · `PlanClear` · `Skill` · `SubAgent`
 
 > See [`docs/tools.md`](docs/tools.md) for details. The `Bash` tool permission model is documented in [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md).
 
@@ -306,7 +302,7 @@ Scopes: global (`~/.bash-agent/`) and project (current directory).
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Architecture, layering, protocols |
 | [`docs/bash-tool-policy.md`](docs/bash-tool-policy.md) | Bash and local file tool permission mode, classification rules, recommended settings |
-| [`docs/tools.md`](docs/tools.md) | 13 built-in tool references |
+| [`docs/tools.md`](docs/tools.md) | 11 built-in tool references |
 | [`docs/compact-analysis.md`](docs/compact-analysis.md) | Compaction algorithm derivation |
 | [`docs/sessions.md`](docs/sessions.md) | Session files and recovery |
 

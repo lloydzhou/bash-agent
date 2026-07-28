@@ -131,7 +131,6 @@ $len1\r\ndata1\r\n   — 字段1
 | NOTIFY_PENDING | (无) | notify reader → INPUT_FIFO；idle 时触发 notify turn |
 | USER_INPUT | seq, content | 用户输入 |
 | SESSION_END | code | 退出 |
-| IMAGE_DESCRIBE | images, description | 图片描述 |
 | USER_MESSAGE | content | 用户消息回显 |
 
 > 注意：SubAgent 写入 `NOTIFY_FIFO` 的原始 `AGENT_RESULT` 字段顺序是 `session_id, status, thinking, text, in, out, cr, cc, reqs`；notify reader 写入 `NOTIFY_BUF` 并转发给 display/conversation 时规范化为 `session_id, status, in, out, thinking, text`。
@@ -465,9 +464,9 @@ agent_loop() {
     [[ "$turn_kind" == user_input ]] && store_event_append '{"type":"user_input",...}'
     
     # 2. 图片占位符展开（仅 user_input 且包含 [Image #N]）
-    #    - 提取图片路径，调用 agent_image_describe
-    #    - 记录 image_describe 事件
-    #    - 将描述追加到 user_input 后面
+    #    - 保留占位符原位置
+    #    - 将占位符到本地绝对路径的映射追加到 <attached-images>
+    #    - 提示模型按需选择外部视觉 Skill；运行时不自动读取图片
     
     # 3. 写入 conversation（notify turn 不写空 user_input）
     [[ "$turn_kind" != notify ]] && store_conv_add_user "$user_input"
@@ -752,8 +751,6 @@ tool_dispatch() {
         PlanConfirm) tool_plan_confirm ;;
         PlanClear) tool_plan_clear ;;
         Skill)     tool_skill "$1" ;;
-        WebSearch) tool_web_search "$1" ;;
-        WebFetch)  tool_web_fetch "$1" ;;
         SubAgent)  tool_sub_agent "$1" "$2" "$3" ;;
         *) echo "unknown tool: $name"; return 1 ;;
     esac
@@ -772,8 +769,6 @@ tool_dispatch() {
 | Grep | pattern path glob context |
 | TodoWrite | checklist |
 | Skill | name |
-| WebSearch | query |
-| WebFetch | url |
 | SubAgent | prompt description fork |
 
 `tool_args_from_msg` 使用此映射从 REPLY_MESSAGE 的 kv pairs 中提取参数到 `_TOOL_ARGS[]`。
@@ -1139,7 +1134,6 @@ util_build_assistant_json() {
 |------|----------|
 | session_start | 新会话初始化 |
 | user_input | 用户输入（agent_loop 入口） |
-| image_describe | 图片描述完成 |
 | sub_agent_start | SubAgent 启动 |
 | sub_agent_result | SubAgent 完成（含 thinking/text） |
 | sub_agent_end | SubAgent 结束 |
@@ -1259,7 +1253,6 @@ display_stream() { while util_read_msg; do display_message; done }
 | TOOL_RESULT | Edit→全量输出+换行；Read/Write→第一行+换行；其他→全量+换行 |
 | AGENT_RESULT | 紫色/红色状态行；thinking 截断 120 字符；text 截断 120 字符 |
 | ASYNC_TASK_RESULT | 青色/红色 `[bg-bash task_id] exit_code=N`；output 截断 120 字符 |
-| IMAGE_DESCRIBE | 青色 `📸 images: description` |
 | USER_NOTIFY | 黄色 `[user inject] text` |
 | USER_MESSAGE | 绿色 `> text`（截断 80 字符） |
 | STOP | interrupted → 青色 "Interrupted."；其他 → 确保换行 |
@@ -1812,22 +1805,15 @@ agent_image_insert_placeholder_readline() {
 }
 ```
 
-### 17.2 描述
-
-```bash
-agent_image_describe() {
-    # 调用外部 VLM API（默认 glm-4v-flash）
-    # 返回图片文字描述
-}
-```
-
-### 17.3 展开
+### 17.2 路径映射
 
 在 `agent_loop` 中，如果 user_input 包含 `[Image #N]`：
-1. 提取所有图片路径
-2. 调用 `agent_image_describe`
-3. 记录 `image_describe` 事件
-4. 将描述以 `<attached-images>` 标签追加到 user_input
+1. 保留正文中占位符的原有位置
+2. 查找 session `images/N.png` 文件并解析绝对路径
+3. 在写入 conversation 前追加 `<attached-images>` 映射
+4. 提示模型按需从 `skill-index` 选择视觉 Skill，并将绝对路径传给该 Skill
+
+运行时不自动调用视觉模型，不记录图片描述事件，也不硬编码特定视觉 Skill。
 
 ---
 

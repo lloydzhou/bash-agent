@@ -423,10 +423,6 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			thinking, _ := ev["thinking"].(string)
 			text, _ := ev["text"].(string)
 			display.ShowEvent(agent.Event{Type: agent.EventSubAgentResult, Fields: []string{"AGENT_RESULT", sid, status, in, out, thinking, text}})
-		case "image_describe":
-			images, _ := ev["images"].(string)
-			desc, _ := ev["content"].(string)
-			display.ShowEvent(agent.Event{Type: agent.EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
 		case "stop":
 			// Don't emit STOP for replay
 		case "error":

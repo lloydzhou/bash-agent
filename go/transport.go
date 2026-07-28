@@ -68,13 +68,20 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 			break // 成功（2xx）或客户端错误（4xx）
 		}
 
-		// 传输错误或 5xx → 可重试
+		// 传输错误或 5xx → 可重试；上下文取消必须立即退出。
 		if resp != nil {
 			resp.Body.Close()
 		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if attempt < maxRetries && time.Since(start) < retryMaxTime {
-			time.Sleep(retryDelay)
-			continue
+			select {
+			case <-time.After(retryDelay):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 
 		// 重试耗尽
@@ -102,7 +109,7 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 
 	// 成功 → 启动 SSE 解析 goroutine
 	ch := make(chan Event, 64)
-	go t.parseSSEStream(resp, ch)
+	go t.parseSSEStream(ctx, resp, ch)
 	return ch, nil
 }
 
@@ -162,10 +169,19 @@ func NewHTTPTransport(cfg Config) *HTTPTransport {
 // ─── SSE 流解析 ───
 
 // parseSSEStream 从 HTTP response body 读取 SSE 流，解析为 Event
-func (t *HTTPTransport) parseSSEStream(resp *http.Response, ch chan<- Event) {
+func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response, ch chan<- Event) {
 	var stopEmitted bool
+	streamDone := make(chan struct{})
+	defer close(streamDone)
 	defer resp.Body.Close()
 	defer close(ch)
+	go func() {
+		select {
+		case <-ctx.Done():
+			resp.Body.Close()
+		case <-streamDone:
+		}
+	}()
 	defer func() {
 		if !stopEmitted {
 			// No message_stop received — stream was interrupted (connection reset,

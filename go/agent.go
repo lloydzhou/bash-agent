@@ -1,13 +1,10 @@
 package agent
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -42,6 +39,8 @@ type Agent struct {
 	runMu            sync.Mutex
 	currentCancel    context.CancelFunc
 	currentInterrupt *atomic.Bool
+	backgroundCtx    context.Context
+	backgroundCancel context.CancelFunc
 	running          atomic.Bool // 1 = agent 正在处理（RunLoop 执行中），0 = 空闲等待输入
 }
 
@@ -117,114 +116,33 @@ func (a *Agent) ImagePasteCallback() string {
 	return fmt.Sprintf("[Image #%s]", name[:len(name)-4])
 }
 
-// imageDescribe calls GLM-4V-Flash to describe the given image files.
-func (a *Agent) imageDescribe(paths []string) string {
-	apiKey := os.Getenv("DESCRIBE_API_KEY")
-	model := os.Getenv("DESCRIBE_MODEL")
-	baseURL := os.Getenv("DESCRIBE_BASE_URL")
-	if apiKey == "" || len(paths) == 0 {
-		return ""
-	}
-	if model == "" {
-		model = "glm-4v-flash"
-	}
-	if baseURL == "" {
-		baseURL = "https://open.bigmodel.cn/api/paas/v4"
-	}
-
-	// Build content parts: text + image_url for each path
-	var contentParts []map[string]interface{}
-	contentParts = append(contentParts, map[string]interface{}{
-		"type": "text",
-		"text": "Output all visible text from each image, separated by a blank line between images. Transcribe every character including special symbols (arrows, prompts, dots, slashes). Preserve exact spacing and line breaks. Pay attention to date formats (month names, numbers). Do not summarize or describe - just output the raw text exactly as shown. If an image has no text, briefly describe what you see.",
-	})
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		b64 := base64.StdEncoding.EncodeToString(data)
-		contentParts = append(contentParts, map[string]interface{}{
-			"type": "image_url",
-			"image_url": map[string]string{
-				"url": "data:image/png;base64," + b64,
-			},
-		})
-	}
-
-	body := map[string]interface{}{
-		"model":    model,
-		"stream":   true,
-		"messages": []interface{}{map[string]interface{}{"role": "user", "content": contentParts}},
-	}
-	bodyJSON, _ := json.Marshal(body)
-
-	req, err := http.NewRequest("POST", baseURL+"/chat/completions", bytes.NewReader(bodyJSON))
-	if err != nil {
-		return ""
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	// Parse SSE response, collect TEXT from choices[0].delta.content
-	var desc strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
-		}
-		for _, c := range chunk.Choices {
-			desc.WriteString(c.Delta.Content)
-		}
-	}
-	return desc.String()
-}
-
-// expandImagePlaceholders scans [Image #N] in input, collects files,
-// calls describe, and appends <attached-images> to the input.
+// expandImagePlaceholders appends [Image #N] to absolute local path mappings.
 func (a *Agent) expandImagePlaceholders(input string) string {
 	re := regexp.MustCompile(`\[Image #(\d+)\]`)
-	var paths []string
+	var attachments []string
 	for _, m := range re.FindAllStringSubmatch(input, -1) {
 		p := filepath.Join(a.store.ImageDir(), m[1]+".png")
 		if _, err := os.Stat(p); err == nil {
-			paths = append(paths, p)
+			attachments = append(attachments, fmt.Sprintf("%s => %s", m[0], p))
 		}
 	}
-	desc := a.imageDescribe(paths)
-	return fmt.Sprintf("%s\n\n<attached-images>\n%s\n</attached-images>", input, desc)
+	if len(attachments) == 0 {
+		return input
+	}
+	return fmt.Sprintf("%s\n\n<attached-images>\nThese placeholders map to local image files:\n%s\nUse an available visual Skill from <skill-index> when image understanding is needed, and pass the corresponding absolute path to that Skill. The runtime does not inspect these images automatically.\n</attached-images>", input, strings.Join(attachments, "\n"))
 }
 
 func NewAgent(cfg Config, store SessionStore, llm Transport, tools *ToolDispatcher, display *TermDisplay) *Agent {
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
 	a := &Agent{
-		cfg:         cfg,
-		store:       store,
-		llm:         llm,
-		tools:       tools,
-		display:     display,
-		subResultCh: make(chan SubAgentResult, 8),
+		cfg:              cfg,
+		store:            store,
+		llm:              llm,
+		tools:            tools,
+		display:          display,
+		subResultCh:      make(chan SubAgentResult, 8),
+		backgroundCtx:    backgroundCtx,
+		backgroundCancel: backgroundCancel,
 	}
 	if cfg.OutputFormat != "stream-json" {
 		a.displayCh = make(chan Event, 128)
@@ -277,6 +195,10 @@ func (a *Agent) EmitDisplay(ev Event) {
 }
 
 func (a *Agent) CloseDisplay() {
+	if a.backgroundCancel != nil {
+		a.backgroundCancel()
+		a.backgroundCancel = nil
+	}
 	if a.displayCh == nil {
 		return
 	}
@@ -777,37 +699,9 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 			a.emitJSON(map[string]interface{}{"type": "user_input", "content": userInput})
 		}
 
-		// 展开图片占位符：events 记录原始文本，conversation/LLM 使用展开后的长文本
+		// events 保留原始占位符；conversation/LLM 追加本地图片路径映射。
 		if turnKind == "user_input" && strings.Contains(userInput, "[Image #") {
-			expandedInput := a.expandImagePlaceholders(userInput)
-
-			// 提取 <attached-images> 中的描述内容
-			desc := ""
-			if start := strings.Index(expandedInput, "<attached-images>"); start >= 0 {
-				start += len("<attached-images>")
-				if end := strings.Index(expandedInput[start:], "</attached-images>"); end >= 0 {
-					desc = expandedInput[start : start+end]
-				}
-			}
-
-			// 收集所有 [Image #N] 占位符
-			re := regexp.MustCompile(`\[Image #\d+\]`)
-			matches := re.FindAllString(userInput, -1)
-			if len(matches) > 0 {
-				images := strings.Join(matches, " ")
-
-				// 记录 image_describe 事件
-				a.emitJSON(map[string]interface{}{
-					"type":    "image_describe",
-					"images":  images,
-					"content": desc,
-				})
-
-				// 推送 IMAGE_DESCRIBE 到 display
-				a.EmitDisplay(Event{Type: EventImageDescribe, Fields: []string{"IMAGE_DESCRIBE", images, desc}})
-			}
-
-			userInput = expandedInput
+			userInput = a.expandImagePlaceholders(userInput)
 		}
 
 		// 添加用户消息；notify turn 的消息已由 drainSubAgentResults 注入
@@ -1105,9 +999,10 @@ func (a *Agent) LaunchSubAgent(ctx context.Context, prompt, description, fork st
 		_ = a.store.Fork(parentDir, childDir)
 	}
 
-	// 启动子 agent goroutine
+	// 后台子智能体脱离当前回合的取消信号，但仍受 Agent 生命周期统一管理。
+	backgroundCtx := a.backgroundCtx
 	go func() {
-		result := a.runSubAgent(ctx, sessionID, prompt, fork)
+		result := a.runSubAgent(backgroundCtx, sessionID, prompt, fork)
 		a.subResultCh <- result
 	}()
 
