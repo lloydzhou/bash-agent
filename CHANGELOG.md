@@ -6,10 +6,27 @@
 
 ## [Unreleased]
 
+---
+
+## [4.3.0] - 2026-07-28
+
+> **网络与视觉能力解耦及异步交互稳定性升级**：四运行时移除内置网络搜索、网页读取和图片自动描述，统一改由外部 Skill 按需提供；同时修复后台任务跨回合生命周期、交互输入调度与子智能体递归限制。
+
+### Removed
+
+- **内置网络与视觉调用**：Bash、Go、Rust、C 不再暴露 `WebSearch` / `WebFetch`，不再读取 `JINA_API_KEY` 或图片描述 API 配置，也不再自动调用视觉模型。需要网络搜索、网页读取或视觉理解时，由模型从 `skill-index` 选择外部 Skill。
+
 ### Changed
 
-- **移除内置网络与视觉调用**：Bash、Go、Rust、C 不再暴露 `WebSearch` / `WebFetch`，也不再读取 `JINA_API_KEY` 或自动调用图片描述 API；网络与视觉能力改由外部 Skill 按需提供。
-- **图片占位符改为路径映射**：Ctrl+V 图片粘贴和 `[Image #N]` 占位符保持可用。发送时保留占位符原位置，并在 conversation 末尾追加 `<attached-images>` 本地绝对路径映射，供视觉 Skill 使用。
+- **图片占位符改为本地路径映射**：保留 Ctrl+V 图片粘贴和 `[Image #N]` 占位符；发送时维持占位符原位置，并在 conversation 末尾追加 `<attached-images>` 本地绝对路径映射，供视觉 Skill 使用。
+- **工具指引按实际能力生成**：四运行时 system prompt 仅描述当前存在的工具，避免移除内置网络与视觉工具后仍引导模型调用不存在的能力。
+- **异步任务交互调度**：交互模式不再因后台 SubAgent 或 Bash 任务未完成而阻塞普通用户输入；后台结果到达后独立唤醒并注入后续回合。
+
+### Fixed
+
+- **Go 后台 SubAgent 跨回合生命周期**：后台上下文与任务计数保持到结果完成，避免 agent 回合结束后提前取消子智能体或丢失结果。
+- **禁止嵌套 SubAgent**：Bash、Go、Rust、C 统一限制子智能体再次启动 SubAgent，防止递归会话扩散和后台资源失控。
+- **异步结果回收与失败传播**：补充交互输入、并行子智能体、失败结果、fork 上下文、图片路径映射及中英文 system prompt 字节一致性测试。
 
 ---
 
@@ -1447,7 +1464,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.2.21...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/lloydzhou/bash-agent/compare/v4.2.21...v4.3.0
 [4.2.21]: https://github.com/lloydzhou/bash-agent/compare/v4.2.20...v4.2.21
 [4.2.20]: https://github.com/lloydzhou/bash-agent/compare/v4.2.19...v4.2.20
 [4.2.19]: https://github.com/lloydzhou/bash-agent/compare/v4.2.18...v4.2.19

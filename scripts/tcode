@@ -62,7 +62,7 @@ tmux new-session -d -s "$SESSION" -x - -y -
 set_session_env() {
     local var val
     for var in DEEPSEEK_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY \
-               ANTHROPIC_BASE_URL OPENAI_BASE_URL JINA_API_KEY \
+               ANTHROPIC_BASE_URL OPENAI_BASE_URL \
                BASH_AGENT_HOME MODEL; do
         val="${!var-}"
         [[ -n "$val" ]] && tmux set-environment -t "$SESSION" "$var" "$val"
@@ -78,7 +78,7 @@ tmux split-window -v -l 4 -t "$SESSION:0.1"           # 右上(agent), 右下(�
 # ─── 构建 exec env 需要的环境变量字符串 ───
 ENV_VARS=""
 for var in DEEPSEEK_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY \
-           ANTHROPIC_BASE_URL OPENAI_BASE_URL JINA_API_KEY \
+           ANTHROPIC_BASE_URL OPENAI_BASE_URL \
            BASH_AGENT_HOME MODEL; do
     val="${!var-}"
     [[ -n "$val" ]] && ENV_VARS="$ENV_VARS $var='$val'"
