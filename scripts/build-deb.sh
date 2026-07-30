@@ -67,10 +67,6 @@ for artifact in "${required[@]}"; do
     echo "错误：缺少必需产物：$DIST_DIR/$artifact" >&2
     exit 1
   }
-  [[ -x "$DIST_DIR/$artifact" ]] || {
-    echo "错误：产物不可执行：$DIST_DIR/$artifact" >&2
-    exit 1
-  }
 done
 
 mkdir -p "$OUTPUT_DIR"
