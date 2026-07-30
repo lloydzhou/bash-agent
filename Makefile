@@ -1,6 +1,10 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode build-c test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify update-system-prompt-golden clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c build-deb test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify update-system-prompt-golden clean
+
+VERSION ?=
+DEB_DIST_DIR ?= dist
+DEB_OUTPUT_DIR ?= dist
 
 build: build-bash build-go build-rust build-tcode build-c
 
@@ -28,6 +32,10 @@ build-tcode:
 
 build-c:
 	$(MAKE) -C c
+
+build-deb:
+	@test -n "$(VERSION)" || { echo "用法：make build-deb VERSION=4.3.0 [DEB_DIST_DIR=dist] [DEB_OUTPUT_DIR=dist]" >&2; exit 2; }
+	bash scripts/build-deb.sh "$(VERSION)" "$(DEB_DIST_DIR)" "$(DEB_OUTPUT_DIR)"
 
 test: test-bash test-go test-rust test-c-e2e
 

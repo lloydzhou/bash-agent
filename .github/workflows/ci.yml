@@ -236,9 +236,61 @@ jobs:
           name: tcode
           path: dist/tcode
 
+  deb-package:
+    needs: [bash-agent, goagent, rustagent, cagent, tcode]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Install Debian packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils binutils-aarch64-linux-gnu
+
+      - name: Build Debian packages
+        id: build-deb
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0+git${GITHUB_SHA:0:7}"
+          fi
+          make build-deb VERSION="$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Debian packages
+        env:
+          DEB_VERSION: ${{ steps.build-deb.outputs.version }}
+        run: |
+          all_deb="dist/bash-agent_${DEB_VERSION}_all.deb"
+          amd64_deb="dist/bash-agent_${DEB_VERSION}_amd64.deb"
+          arm64_deb="dist/bash-agent_${DEB_VERSION}_arm64.deb"
+          test "$(dpkg-deb -f "$all_deb" Architecture)" = all
+          test "$(dpkg-deb -f "$amd64_deb" Architecture)" = amd64
+          test "$(dpkg-deb -f "$arm64_deb" Architecture)" = arm64
+          dpkg-deb --contents "$all_deb" | grep -q './usr/bin/bash-agent$'
+          ! dpkg-deb --contents "$all_deb" | grep -q './usr/bin/goagent$'
+          sudo apt-get install -y "./$amd64_deb"
+          for command_name in bash-agent goagent rustagent cagent tcode; do
+            test -x "/usr/bin/$command_name"
+          done
+
+      - name: Upload Debian packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-packages
+          path: dist/bash-agent_*.deb
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [bash-agent, goagent, rustagent, cagent, tcode]
+    needs: [bash-agent, goagent, rustagent, cagent, tcode, deb-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -259,7 +311,7 @@ jobs:
           curl -fsSL "$ARCHIVE_URL" -o "dist/${{ github.ref_name }}.tar.gz"
           (
             cd dist
-            shasum -a 256 \
+            sha256sum \
               "${{ github.ref_name }}.tar.gz" \
               agent.sh \
               goagent-linux-amd64 \
@@ -274,7 +326,10 @@ jobs:
               cagent-linux-arm64 \
               cagent-darwin-amd64 \
               cagent-darwin-arm64 \
-              tcode > checksums.txt
+              tcode \
+              bash-agent_*_all.deb \
+              bash-agent_*_amd64.deb \
+              bash-agent_*_arm64.deb > checksums.txt
           )
 
       - name: Publish release assets
@@ -296,3 +351,6 @@ jobs:
             dist/cagent-darwin-amd64
             dist/cagent-darwin-arm64
             dist/tcode
+            dist/bash-agent_*_all.deb
+            dist/bash-agent_*_amd64.deb
+            dist/bash-agent_*_arm64.deb
