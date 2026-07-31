@@ -28,9 +28,8 @@ jobs:
         run: |
           docker run --rm -v "$PWD/apt-repo/debian:/repo:ro" ubuntu:22.04 \
             bash -euxo pipefail -c '
-              rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list
               echo "deb [trusted=yes] file:/repo stable main" > /etc/apt/sources.list.d/bash-agent.list
-              apt-get update 2>&1 || true
+              apt-get update 2>&1 | tail -2 || true
               apt-cache policy bash-agent > /tmp/pol.txt || true
               cat /tmp/pol.txt
               DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash-agent
@@ -42,9 +41,8 @@ jobs:
         run: |
           docker run --rm -v "$PWD/apt-repo/debian:/repo:ro" ubuntu:24.04 \
             bash -euxo pipefail -c '
-              rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list
               echo "deb [trusted=yes] file:/repo stable main" > /etc/apt/sources.list.d/bash-agent.list
-              apt-get update 2>&1 || true
+              apt-get update 2>&1 | tail -2 || true
               apt-cache policy bash-agent > /tmp/pol.txt || true
               cat /tmp/pol.txt
               DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash-agent
