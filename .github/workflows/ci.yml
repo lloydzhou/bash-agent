@@ -97,14 +97,16 @@ jobs:
         run: |
           docker run --rm -v /opt/hostedtoolcache:/opt/hostedtoolcache -v "$PWD":/github/workspace -w /github/workspace debian:11 \
             bash -euxo pipefail -c '
-              export PATH="/opt/hostedtoolcache/go/*/x64/bin:$PATH"
+              GO_BIN="$(ls /opt/hostedtoolcache/go/*/x64/bin/go)"
+              export PATH="$(dirname "$GO_BIN"):$PATH"
               export GOCACHE="$PWD/go/.gocache" GOMODCACHE="$PWD/go/.gomodcache"
               go version
               sed -i "s|deb.debian.org|deb.debian.org|g; s|security.debian.org/debian-security|security.debian.org/debian-security|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
               apt-get install -y --no-install-recommends gcc make
+              mkdir -p dist
               if [ "${{ matrix.goarch }}" = "arm64" ]; then
-                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
                 export CC=aarch64-linux-gnu-gcc
                 export CGO_ENABLED=1 GOOS=linux GOARCH=arm64
               else
@@ -174,7 +176,7 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
               if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
               fi
               export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
               export PATH="$CARGO_HOME/bin:$PATH"
@@ -182,6 +184,7 @@ jobs:
               if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
                 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
               fi
+              mkdir -p dist
               cd rust && cargo build --release --target ${{ matrix.target }}
               cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
             '
@@ -227,14 +230,9 @@ jobs:
             bash -euxo pipefail -c '
               sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
-              apt-get install -y --no-install-recommends gcc make libcurl4-openssl-dev pkg-config
+              apt-get install -y --no-install-recommends gcc make xxd libcurl4-openssl-dev pkg-config
               mkdir -p dist
-              if [ "${{ matrix.suffix }}" = "linux-arm64" ]; then
-                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
-                make -C c CC=aarch64-linux-gnu-gcc
-              else
-                make -C c CC=gcc
-              fi
+              make -C c CC=gcc
               mv dist/cagent dist/cagent-${{ matrix.suffix }}
             '
 
