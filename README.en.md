@@ -93,6 +93,18 @@ curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agen
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
+### Debian / Ubuntu (`.deb` package)
+Download the `.deb` for your architecture from [Releases](https://github.com/lloydzhou/bash-agent/releases) and install with `apt` (resolves dependencies automatically):
+
+```bash
+sudo apt install ./bash-agent_<version>_amd64.deb
+# or ./bash-agent_<version>_all.deb (bash-only, no native runtimes)
+```
+
+This installs `bash-agent`, `goagent`, `rustagent`, `cagent`, and `tcode`.
+
+**System requirement**: the native Linux runtimes (`goagent`/`rustagent`/`cagent`) require glibc 2.31+, covering Debian 11/12/13, Ubuntu 20.04/22.04/24.04 and newer. The `_all.deb` (pure bash) has no such requirement.
+
 ### Build from source
 ```bash
 # Go

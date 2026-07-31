@@ -93,6 +93,18 @@ curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agen
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
+### Debian / Ubuntu（安装包）
+从 [Releases](https://github.com/lloydzhou/bash-agent/releases) 下载对应架构的 `.deb` 安装包，用 `apt` 安装（会自动处理依赖）：
+
+```bash
+sudo apt install ./bash-agent_<version>_amd64.deb
+# 或 ./bash-agent_<version>_all.deb（仅 Bash 版，无原生运行时）
+```
+
+安装后包含 `bash-agent`、`goagent`、`rustagent`、`cagent`、`tcode` 命令。
+
+**系统要求**：Linux 原生运行时（`goagent`/`rustagent`/`cagent`）需要 GLIBC 2.31 及以上，支持 Debian 11/12/13、Ubuntu 20.04/22.04/24.04 及更新版本。`bash-agent_<version>_all.deb`（纯 Bash 版）无此限制。
+
 ### 从源码构建
 ```bash
 # Go
