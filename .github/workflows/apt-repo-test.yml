@@ -1,0 +1,51 @@
+name: apt-repo-test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download 4.3.1 debs from Release
+        run: |
+          mkdir -p dist
+          gh release download v4.3.1 -R "${{ github.repository }}" \
+            -p "bash-agent_4.3.1_*.deb" -D dist --clobber
+          ls -la dist/
+
+      - name: Build apt repo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils gnupg
+          bash scripts/build-apt-repo.sh v4.3.1 dist apt-repo
+          find apt-repo -type f | sort
+
+      - name: Verify in Ubuntu 22.04 container (apt install)
+        run: |
+          docker run --rm -v "$PWD/apt-repo/debian:/repo:ro" ubuntu:22.04 \
+            bash -euxo pipefail -c '
+              rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list
+              echo "deb [trusted=yes] file:/repo stable main" > /etc/apt/sources.list.d/bash-agent.list
+              apt-get update 2>&1 | grep -iE "hash|error|warning" | head -5 || true
+              apt-cache policy bash-agent | head -4
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash-agent
+              echo "=== 安装验证 ==="
+              ls /usr/bin/ | grep -E "bash-agent|cagent|goagent|rustagent" | sort
+            '
+
+      - name: Verify in Ubuntu 24.04 container (apt install)
+        run: |
+          docker run --rm -v "$PWD/apt-repo/debian:/repo:ro" ubuntu:24.04 \
+            bash -euxo pipefail -c '
+              rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list
+              echo "deb [trusted=yes] file:/repo stable main" > /etc/apt/sources.list.d/bash-agent.list
+              apt-get update 2>&1 | grep -iE "hash|error|warning" | head -5 || true
+              apt-cache policy bash-agent | head -4
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash-agent
+              echo "=== 安装验证 ==="
+              ls /usr/bin/ | grep -E "bash-agent|cagent|goagent|rustagent" | sort
+            '
