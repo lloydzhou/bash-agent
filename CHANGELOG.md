@@ -8,6 +8,17 @@
 
 ---
 
+## [4.3.1] - 2026-07-31
+
+> **Debian 安装包发布支持**：新增 Debian 安装包构建流水线，发布时自动生成架构无关、AMD64 和 ARM64 三类安装包，并随 GitHub Release 提供校验和。
+
+### Added
+
+- **三类 Debian 安装包**：新增 `bash-agent_<version>_all.deb`、`bash-agent_<version>_amd64.deb` 和 `bash-agent_<version>_arm64.deb` 构建支持，分别提供 Bash 版及对应架构的 Go、Rust、C 运行时与 `tcode`。
+- **发布流水线**：标签构建自动验证三个 `.deb` 文件，生成 `checksums.txt`，并将安装包与校验和上传到 GitHub Release。
+
+---
+
 ## [4.3.0] - 2026-07-28
 
 > **网络与视觉能力解耦及异步交互稳定性升级**：四运行时移除内置网络搜索、网页读取和图片自动描述，统一改由外部 Skill 按需提供；同时修复后台任务跨回合生命周期、交互输入调度与子智能体递归限制。
@@ -1464,7 +1475,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.1...HEAD
+[4.3.1]: https://github.com/lloydzhou/bash-agent/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/lloydzhou/bash-agent/compare/v4.2.21...v4.3.0
 [4.2.21]: https://github.com/lloydzhou/bash-agent/compare/v4.2.20...v4.2.21
 [4.2.20]: https://github.com/lloydzhou/bash-agent/compare/v4.2.19...v4.2.20
