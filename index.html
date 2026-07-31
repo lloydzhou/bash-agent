@@ -1077,8 +1077,8 @@ body[data-theme="light"] .pipe-step span {
 
   <section class="metric-strip" aria-label="项目指标">
     <div class="metric">
-      <strong>13</strong>
-      <span data-zh="内置工具覆盖文件、搜索、执行、Web 和子 Agent" data-en="Built-in tools for files, search, execution, web, and sub-agents">内置工具覆盖文件、搜索、执行、Web 和子 Agent</span>
+      <strong>11</strong>
+      <span data-zh="内置工具覆盖文件、搜索、执行、技能和子 Agent" data-en="Built-in tools for files, search, execution, skills, and sub-agents">内置工具覆盖文件、搜索、执行、技能和子 Agent</span>
     </div>
     <div class="metric">
       <strong>99%+</strong>
@@ -1377,7 +1377,7 @@ bash-agent --output-format stream-json "run tests"</pre>
       <div class="section-head">
         <div class="section-kicker" data-zh="内置工具" data-en="Built-in tools">内置工具</div>
         <h2 data-zh="编码工作流需要的工具内置好了。" data-en="The tools a coding workflow needs are built in.">编码工作流需要的工具内置好了。</h2>
-        <p class="section-desc" data-zh="文件读写、搜索、Shell、Web、计划和子 Agent 都通过统一 tool schema 暴露。" data-en="File operations, search, shell execution, web access, planning, and sub-agents are exposed through one tool schema.">文件读写、搜索、Shell、Web、计划和子 Agent 都通过统一 tool schema 暴露。</p>
+        <p class="section-desc" data-zh="文件读写、搜索、Shell、计划、技能和子 Agent 都通过统一 tool schema 暴露。" data-en="File operations, search, shell execution, planning, skills, and sub-agents are exposed through one tool schema.">文件读写、搜索、Shell、计划、技能和子 Agent 都通过统一 tool schema 暴露。</p>
       </div>
       <div class="tool-list" aria-label="内置工具分组">
         <article class="tool-group">
@@ -1412,24 +1412,22 @@ bash-agent --output-format stream-json "run tests"</pre>
         </article>
         <article class="tool-group">
           <div>
-            <h3 data-zh="计划、待办与技能" data-en="Plans, todos, and skills">计划、待办与技能</h3>
-            <p data-zh="把复杂任务拆成可跟踪步骤，锁定计划，并按需加载项目或用户定义的技能说明。" data-en="Break complex tasks into trackable steps, lock plans, and load project or user-defined skill instructions on demand.">把复杂任务拆成可跟踪步骤，锁定计划，并按需加载项目或用户定义的技能说明。</p>
+            <h3 data-zh="计划与待办" data-en="Plans and todos">计划与待办</h3>
+            <p data-zh="把复杂任务拆成可跟踪步骤并锁定计划，让执行有据可依。" data-en="Break complex tasks into trackable steps and lock the plan to keep execution on track.">把复杂任务拆成可跟踪步骤并锁定计划，让执行有据可依。</p>
           </div>
           <div class="tool-tags">
             <span class="tool-tag">TodoWrite</span>
             <span class="tool-tag">PlanConfirm</span>
             <span class="tool-tag">PlanClear</span>
-            <span class="tool-tag">Skill</span>
           </div>
         </article>
         <article class="tool-group">
           <div>
-            <h3 data-zh="Web 查询与内容抓取" data-en="Web search and fetch">Web 查询与内容抓取</h3>
-            <p data-zh="需要当前信息时搜索网页，或直接抓取 URL 内容并以结构化结果交给模型处理。" data-en="Search the web for current information or fetch URL content as structured input for the model.">需要当前信息时搜索网页，或直接抓取 URL 内容并以结构化结果交给模型处理。</p>
+            <h3 data-zh="技能加载" data-en="Skill loading">技能加载</h3>
+            <p data-zh="按需加载项目或用户定义的技能说明，为特定工作流注入上下文与操作步骤。" data-en="Load project or user-defined skill instructions on demand to inject context and procedures for specific workflows.">按需加载项目或用户定义的技能说明，为特定工作流注入上下文与操作步骤。</p>
           </div>
           <div class="tool-tags">
-            <span class="tool-tag">WebSearch</span>
-            <span class="tool-tag">WebFetch</span>
+            <span class="tool-tag">Skill</span>
           </div>
         </article>
         <article class="tool-group">
