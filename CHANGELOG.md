@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+---
+
+## [4.3.1] - 2026-07-31
+
+> **Debian 安装包发布支持与 GLIBC 兼容性修复**：新增 Debian 安装包构建流水线，发布时自动生成架构无关、AMD64 和 ARM64 三类安装包，并随 GitHub Release 提供校验和；同时修复安装包内 Linux 原生运行时在较旧发行版上因 GLIBC 版本过高而无法运行的问题。
+
+### Added
+
+- **三类 Debian 安装包**：新增 `bash-agent_<version>_all.deb`、`bash-agent_<version>_amd64.deb` 和 `bash-agent_<version>_arm64.deb` 构建支持，分别提供 Bash 版及对应架构的 Go、Rust、C 运行时与 `tcode`。
+- **发布流水线**：标签构建自动验证三个 `.deb` 文件，生成 `checksums.txt`，并将安装包与校验和上传到 GitHub Release。
+
 ### Changed
 
 - **Linux 原生运行时最低系统基线固定为 GLIBC 2.31（Debian 11）**：`goagent`、`rustagent`、`cagent` 的 Linux amd64/arm64 发布产物统一在 Debian 11 容器中构建，可在 Debian 11/12/13、Ubuntu 20.04/22.04/24.04 及更新发行版上运行。持续集成新增 GLIBC 符号版本门禁，防止构建环境升级后静默回归。
@@ -13,18 +24,7 @@
 
 ### Fixed
 
-- **4.3.1 Debian 安装包在 GLIBC 低于构建机版本的发行版上运行报 `GLIBC_2.38/2.39 not found`**：根因是发布产物在滚动更新的 `ubuntu-latest` 构建机上编译，固化了过高的 GLIBC 符号版本。自本版本起改用 Debian 11 基线构建并受符号版本门禁保护。
-
----
-
-## [4.3.1] - 2026-07-31
-
-> **Debian 安装包发布支持**：新增 Debian 安装包构建流水线，发布时自动生成架构无关、AMD64 和 ARM64 三类安装包，并随 GitHub Release 提供校验和。
-
-### Added
-
-- **三类 Debian 安装包**：新增 `bash-agent_<version>_all.deb`、`bash-agent_<version>_amd64.deb` 和 `bash-agent_<version>_arm64.deb` 构建支持，分别提供 Bash 版及对应架构的 Go、Rust、C 运行时与 `tcode`。
-- **发布流水线**：标签构建自动验证三个 `.deb` 文件，生成 `checksums.txt`，并将安装包与校验和上传到 GitHub Release。
+- **早期 4.3.1 安装包在 GLIBC 低于构建机版本的发行版上运行报 `GLIBC_2.38/2.39 not found`**：根因是发布产物在滚动更新的 `ubuntu-latest` 构建机上编译，固化了过高的 GLIBC 符号版本。本版本改用 Debian 11 基线构建并受符号版本门禁保护；已下载早期 4.3.1 安装包的用户请重新下载本版本安装包。
 
 ---
 
