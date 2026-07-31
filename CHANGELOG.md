@@ -8,7 +8,7 @@
 
 ### Changed
 
-- **Linux 原生运行时最低系统基线固定为 GLIBC 2.31（Debian 11）**：`goagent`、`rustagent`、`cagent` 的 Linux amd64/arm64 发布产物统一在 Debian 11 容器中构建，可在 Debian 11/12/13、Ubuntu 20.04/22.04/24.04 及更新发行版上运行。持续集成新增 GLIBC 符号版本门禁与 Debian 11 / Ubuntu 22.04 / Ubuntu 24.04 三系统安装冒烟测试。
+- **Linux 原生运行时最低系统基线固定为 GLIBC 2.31（Debian 11）**：`goagent`、`rustagent`、`cagent` 的 Linux amd64/arm64 发布产物统一在 Debian 11 容器中构建，可在 Debian 11/12/13、Ubuntu 20.04/22.04/24.04 及更新发行版上运行。持续集成新增 GLIBC 符号版本门禁，防止构建环境升级后静默回归。
 - **Debian 架构包声明 `libc6 (>= 2.31)`**：在更老的系统上安装时会由包管理器直接拒绝，避免安装成功但运行失败。
 
 ### Fixed

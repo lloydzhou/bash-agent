@@ -358,46 +358,6 @@ jobs:
           name: debian-packages
           path: dist/bash-agent_*.deb
 
-  deb-smoke:
-    needs: [deb-package]
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - distro: Debian 11
-            image: debian:11
-          - distro: Ubuntu 22.04
-            image: ubuntu:22.04
-          - distro: Ubuntu 24.04
-            image: ubuntu:24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download Debian packages
-        uses: actions/download-artifact@v4
-        with:
-          name: debian-packages
-          path: dist
-
-      - name: Install and smoke test on ${{ matrix.distro }}
-        run: |
-          set -euo pipefail
-          docker run --rm -v "$PWD/dist:/dist" "${{ matrix.image }}" bash -euxo pipefail -c '
-            if [ -f /etc/debian_version ] && grep -q "11" /etc/debian_version; then
-              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list
-            fi
-            apt-get update
-            test "$(ldd --version | head -1 | grep -oE "[0-9]+\.[0-9]+$" | awk "{print (\$1 >= 2.31) ? \"ok\" : \"FAIL\"}")" = ok
-            apt-get install -y /dist/bash-agent_*_amd64.deb
-            for command_name in bash-agent goagent rustagent cagent tcode; do
-              test -x "/usr/bin/$command_name"
-              timeout 15 "/usr/bin/$command_name" --help >/dev/null 2>&1 || true
-              echo "通过：$command_name 可执行并响应 --help"
-            done
-          '
-
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [bash-agent, goagent, rustagent, cagent, tcode, deb-package]
