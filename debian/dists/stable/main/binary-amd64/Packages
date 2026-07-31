@@ -6,11 +6,11 @@ Section: utils
 Maintainer: Lloyd Zhou <lloydzhou@qq.com>
 Depends: bash (>= 4.0), gawk, curl, ca-certificates, ripgrep
 Filename: pool/main/b/bash-agent/bash-agent_4.3.1_all.deb
-Size: 79172
-MD5sum: ca426c69e651b83f21fb62fc87726e8a
-SHA1: 3307398bab8e636a54dd783513702799f7257cac
-SHA256: b3d1dbbf020dd9e2d6df66eef47a959b0667ad5bc8fe7d718c42156c216136a2
-SHA512: efc95e82dec6254e3ea1d76b875726ad9acbddb1245a2093178cf79650229980a88d9dac50d291895de6a765d2984cfc361640f0824ea06b6e4cc3f2eef741a6
+Size: 79176
+MD5sum: fc8108e5a7cf8377259bf7fc7572da98
+SHA1: 603d727c0b34a66d4e8760a4e08c599ab2fac4a4
+SHA256: fe50a293de93755e82dd35aac3ccd9070cd52c3bafe35910c5e5e99d105b13bf
+SHA512: 64038fe1f85e92903b5c729c20b11995562528f6ce5071a768a17f4142f181f3deee93cf110ae97b678ff27bc6905b831c2d2f255e5e159b5914c6de125972bd
 Homepage: https://github.com/lloydzhou/bash-agent
 Description: minimal AI coding agent runtime
  This architecture-independent package contains the Bash implementation.
@@ -25,11 +25,11 @@ Section: utils
 Maintainer: Lloyd Zhou <lloydzhou@qq.com>
 Depends: bash (>= 4.0), gawk, curl, ca-certificates, ripgrep, tmux, procps, libc6 (>= 2.31), libgcc-s1, libcurl4t64 | libcurl4
 Filename: pool/main/b/bash-agent/bash-agent_4.3.1_amd64.deb
-Size: 3799144
-MD5sum: e009f5b0e81b84974523374b432b2986
-SHA1: 32717e37d97cbd52fcd0b4ad7fff9de04399da27
-SHA256: eb7a3967b0395cb93a87be999721584d9ecaff36d390d382890014f49c2c5a6d
-SHA512: eaa880accc1023b551d5b5e8ea78096194781ea7eee0702da74fc81cd437797d6f760a7386a7ca1a05a66a19b1362093b5eadcf9cd0caa45e89a8bf572828961
+Size: 3800684
+MD5sum: 31e8b422317ce06b45bdd87e32834f55
+SHA1: 47fc3aa13bbe8e01221577d5e2bbaa2b4aceb0c1
+SHA256: 590e52d0c99495d9513ffd154fd51ee6177c036b36f8df3ba020cfbb6c8d4c12
+SHA512: 9fcfbdc19eb856a1d9894dadae375d96683c7032b433f6e424789d24ae5f53f6ef8feba24297415437040bde5f19a5afa522ef311c187119d128ef3fe464ef84
 Homepage: https://github.com/lloydzhou/bash-agent
 Description: minimal AI coding agent runtime
  This package contains the Bash, Go, Rust and C implementations plus tcode.
