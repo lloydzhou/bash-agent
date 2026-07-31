@@ -1141,21 +1141,21 @@ body[data-theme="light"] .pipe-step span {
       <div class="section-head">
         <div class="section-kicker" data-zh="缓存性能实测" data-en="Observed cache performance">缓存性能实测</div>
         <h2 data-zh="稳定前缀带来的缓存收益是可以量化的。" data-en="The value of a stable prompt prefix is measurable.">稳定前缀带来的缓存收益是可以量化的。</h2>
-        <p class="section-desc" data-zh="下面是 2026 年 5 月基于 DeepSeek API 长会话使用数据的缓存命中趋势。它不是对所有模型的承诺，而是展示 cache-aware session、prompt 和 compact 设计在真实使用中的效果。" data-en="Below is the cache-hit trend from DeepSeek API long-session usage in May 2026. It is not a promise for every provider; it shows what the cache-aware session, prompt, and compaction design achieved in real use.">下面是 2026 年 5 月基于 DeepSeek API 长会话使用数据的缓存命中趋势。它不是对所有模型的承诺，而是展示 cache-aware session、prompt 和 compact 设计在真实使用中的效果。</p>
+        <p class="section-desc" data-zh="下面是 2026 年 5 月及 7 月末基于 DeepSeek API 长会话使用数据的缓存命中趋势。它不是对所有模型的承诺，而是展示 cache-aware session、prompt 和 compact 设计在真实使用中的效果。" data-en="Below is the cache-hit trend from DeepSeek API long-session usage in May and late July 2026. It is not a promise for every provider; it shows what the cache-aware session, prompt, and compaction design achieved in real use.">下面是 2026 年 5 月及 7 月末基于 DeepSeek API 长会话使用数据的缓存命中趋势。它不是对所有模型的承诺，而是展示 cache-aware session、prompt 和 compact 设计在真实使用中的效果。</p>
       </div>
       <div class="performance-panel">
         <div class="performance-summary" aria-label="缓存性能汇总">
           <div class="performance-stat">
             <span data-zh="总输入 Tokens" data-en="Input tokens">总输入 Tokens</span>
-            <strong>723,933,000</strong>
+            <strong>754,702,708</strong>
           </div>
           <div class="performance-stat">
             <span data-zh="总输出 Tokens" data-en="Output tokens">总输出 Tokens</span>
-            <strong>2,504,956</strong>
+            <strong>2,528,051</strong>
           </div>
           <div class="performance-stat">
             <span data-zh="平均缓存命中率" data-en="Avg cache hit">平均缓存命中率</span>
-            <strong>99.15%</strong>
+            <strong>99.27%</strong>
           </div>
           <div class="performance-stat">
             <span data-zh="观测天数" data-en="Observed days">观测天数</span>
@@ -1168,12 +1168,6 @@ body[data-theme="light"] .pipe-step span {
             <span data-zh="命中率" data-en="Hit rate">命中率</span>
             <span data-zh="趋势" data-en="Trend">趋势</span>
             <span data-zh="输出" data-en="Output">输出</span>
-          </div>
-          <div class="cache-row">
-            <span class="cache-date">2026-05-06</span>
-            <span class="cache-rate">96.70%</span>
-            <div class="cache-bar"><span style="width:96.7%"></span></div>
-            <span class="cache-output">122K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-07</span>
@@ -1234,6 +1228,12 @@ body[data-theme="light"] .pipe-step span {
             <span class="cache-rate">98.77%</span>
             <div class="cache-bar"><span style="width:98.77%"></span></div>
             <span class="cache-output">375K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-07-31</span>
+            <span class="cache-rate">99.56%</span>
+            <div class="cache-bar"><span style="width:99.56%"></span></div>
+            <span class="cache-output">145K</span>
           </div>
         </div>
       </div>
