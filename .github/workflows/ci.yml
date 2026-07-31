@@ -116,6 +116,13 @@ jobs:
               go -C go build -ldflags="-s -w" -trimpath -o ../dist/goagent-${{ matrix.suffix }} ./cmd/goagent
             '
 
+      - name: Build goagent (macOS)
+        if: matrix.goos == 'darwin'
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CC=${{ matrix.cc }} \
+            go -C go build -ldflags="-s -w" -o ../dist/goagent-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/goagent
+
       - name: Upload goagent
         uses: actions/upload-artifact@v4
         with:
@@ -166,6 +173,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build rustagent (macOS)
+        if: matrix.runner == 'macos-14'
+        run: |
+          mkdir -p dist
+          cd rust && cargo build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
       - name: Build rustagent (linux, Debian 11 container)
         if: matrix.runner == 'ubuntu-latest'
