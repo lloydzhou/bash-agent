@@ -451,3 +451,25 @@ jobs:
             dist/bash-agent_*_all.deb
             dist/bash-agent_*_amd64.deb
             dist/bash-agent_*_arm64.deb
+
+      - name: Build and deploy APT repository (gh-pages)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils gnupg 2>&1 | tail -1
+          bash scripts/build-apt-repo.sh "${{ github.ref_name }}" dist apt-repo
+          mkdir -p apt-repo
+          cp scripts/install-apt.sh apt-repo/install.sh
+          rm -rf /tmp/apt-publish && mkdir -p /tmp/apt-publish
+          cp -r apt-repo/. /tmp/apt-publish/
+          cd /tmp/apt-publish
+          git init -q -b main
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            add -A
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "apt: publish repository for ${{ github.ref_name }}"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" HEAD:gh-pages
+          echo "APT 仓库已发布到 gh-pages"
