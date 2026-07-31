@@ -28,12 +28,12 @@ POOL_DIR="$REPO_DIR/pool/main/b/bash-agent"
 rm -rf "$OUT_DIR"
 mkdir -p "$POOL_DIR"
 
-# 1. 收集 .deb 到 pool
+# 1. 收集 .deb 到 pool（排除 *_all.deb，避免 apt 选择只含 bash 版的 all 包）
 shopt -s nullglob
-debs=( "$DEB_DIR"/bash-agent_*.deb )
+debs=( "$DEB_DIR"/bash-agent_*_amd64.deb "$DEB_DIR"/bash-agent_*_arm64.deb )
 shopt -u nullglob
 if (( ${#debs[@]} == 0 ));then
-  echo "错误：$DEB_DIR 中没有 .deb 文件" >&2
+  echo "错误：$DEB_DIR 中没有架构 .deb 文件（*_amd64.deb / *_arm64.deb）" >&2
   exit 1
 fi
 for deb in "${debs[@]}"; do
@@ -51,7 +51,15 @@ if command -v apt-ftparchive >/dev/null 2>&1; then
     gzip -9n -c "$bindir/Packages" > "$bindir/Packages.gz"
     echo "生成：dists/stable/main/binary-$arch/Packages.gz ($(grep -c '^Package:' "$bindir/Packages") 条)"
   done
-  ( cd "$REPO_DIR" && apt-ftparchive release dists/stable ) > "$REPO_DIR/dists/stable/Release"
+  ( cd "$REPO_DIR" && apt-ftparchive release \
+      -o APT::FTPArchive::Release::Origin=bash-agent \
+      -o APT::FTPArchive::Release::Label=bash-agent \
+      -o APT::FTPArchive::Release::Suite=stable \
+      -o APT::FTPArchive::Release::Codename=stable \
+      -o APT::FTPArchive::Release::Architectures="amd64 arm64" \
+      -o APT::FTPArchive::Release::Components=main \
+      -o APT::FTPArchive::Release::Description="bash-agent APT repository" \
+      dists/stable ) > "$REPO_DIR/dists/stable/Release"
   echo "生成：dists/stable/Release（apt-ftparchive）"
 else
   echo "警告：无 apt-ftparchive，使用 Python 生成索引" >&2
