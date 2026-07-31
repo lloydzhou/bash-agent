@@ -92,11 +92,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build goagent
-        run: |
-          mkdir -p dist
-          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CC=${{ matrix.cc }} \
-            go -C go build -ldflags="-s -w" -o ../dist/goagent-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/goagent
+      - name: Build goagent (linux, Debian 11 container)
+        if: matrix.goos == 'linux'
+        uses: docker://debian:11
+        with:
+          volumes:
+            - /opt/hostedtoolcache:/opt/hostedtoolcache
+          args: |
+            bash -euxo pipefail -c '
+              export PATH="/opt/hostedtoolcache/go/*/x64/bin:$PATH"
+              export GOCACHE="$PWD/go/.gocache" GOMODCACHE="$PWD/go/.gomodcache"
+              go version
+              sed -i "s|deb.debian.org|deb.debian.org|g; s|security.debian.org/debian-security|security.debian.org/debian-security|g" /etc/apt/sources.list 2>/dev/null || true
+              apt-get update
+              apt-get install -y --no-install-recommends gcc make
+              if [ "${{ matrix.goarch }}" = "arm64" ]; then
+                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+                export CC=aarch64-linux-gnu-gcc
+                export CGO_ENABLED=1 GOOS=linux GOARCH=arm64
+              else
+                export CC=gcc
+                export CGO_ENABLED=1 GOOS=linux GOARCH=amd64
+              fi
+              go -C go build -ldflags="-s -w" -trimpath -o ../dist/goagent-${{ matrix.suffix }} ./cmd/goagent
+            '
 
       - name: Upload goagent
         uses: actions/upload-artifact@v4
@@ -149,14 +168,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build rustagent
-        run: |
-          mkdir -p dist
-          if [ "${{ matrix.runner }}" = "ubuntu-latest" ] && [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          fi
-          cd rust && cargo build --release --target ${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
+      - name: Build rustagent (linux, Debian 11 container)
+        if: matrix.runner == 'ubuntu-latest'
+        uses: docker://debian:11
+        with:
+          args: |
+            bash -euxo pipefail -c '
+              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
+              apt-get update
+              apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
+              if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+              fi
+              export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+              export PATH="$CARGO_HOME/bin:$PATH"
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --target ${{ matrix.target }}
+              if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+              fi
+              cd rust && cargo build --release --target ${{ matrix.target }}
+              cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
+            '
 
       - name: Upload rustagent
         uses: actions/upload-artifact@v4
@@ -190,13 +222,33 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev ripgrep
+          sudo apt-get install -y ripgrep gcc-aarch64-linux-gnu
+
+      - name: Build cagent (linux, Debian 11 container)
+        if: runner.os == 'Linux'
+        uses: docker://debian:11
+        with:
+          args: |
+            bash -euxo pipefail -c '
+              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
+              apt-get update
+              apt-get install -y --no-install-recommends gcc make libcurl4-openssl-dev pkg-config
+              mkdir -p dist
+              if [ "${{ matrix.suffix }}" = "linux-arm64" ]; then
+                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+                make -C c CC=aarch64-linux-gnu-gcc
+              else
+                make -C c CC=gcc
+              fi
+              mv dist/cagent dist/cagent-${{ matrix.suffix }}
+            '
 
       - name: Install build dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install curl
 
-      - name: Build cagent
+      - name: Build cagent (macOS)
+        if: runner.os == 'macOS'
         run: |
           mkdir -p dist
           if [ "${{ matrix.suffix }}" = "darwin-amd64" ]; then
@@ -282,11 +334,76 @@ jobs:
             test -x "/usr/bin/$command_name"
           done
 
+      - name: Verify GLIBC_2.31 baseline (release gate)
+        run: |
+          set -euo pipefail
+          GLIBC_MIN=2.31
+          check() {
+            local file="$1" objdump="$2"
+            local max_ver
+            max_ver="$($objdump -T "$file" | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sed 's/^GLIBC_//' | sort -V | tail -1)"
+            if [[ -z "$max_ver" ]]; then
+              echo "错误：$file 未找到任何 GLIBC 符号引用" >&2
+              exit 1
+            fi
+            if [[ "$(printf '%s\n%s\n' "$max_ver" "$GLIBC_MIN" | sort -V | tail -1)" != "$GLIBC_MIN" ]]; then
+              echo "错误：$file 引用了高于 $GLIBC_MIN 的 GLIBC 符号（最高 GLIBC_$max_ver）" >&2
+              exit 1
+            fi
+            echo "通过：$file 最高 GLIBC_$max_ver"
+          }
+          for f in dist/goagent-linux-amd64 dist/rustagent-linux-amd64 dist/cagent-linux-amd64; do
+            check "$f" objdump
+          done
+          for f in dist/goagent-linux-arm64 dist/rustagent-linux-arm64 dist/cagent-linux-arm64; do
+            check "$f" aarch64-linux-gnu-objdump
+          done
+
       - name: Upload Debian packages
         uses: actions/upload-artifact@v4
         with:
           name: debian-packages
           path: dist/bash-agent_*.deb
+
+  deb-smoke:
+    needs: [deb-package]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: Debian 11
+            image: debian:11
+          - distro: Ubuntu 22.04
+            image: ubuntu:22.04
+          - distro: Ubuntu 24.04
+            image: ubuntu:24.04
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Debian packages
+        uses: actions/download-artifact@v4
+        with:
+          name: debian-packages
+          path: dist
+
+      - name: Install and smoke test on ${{ matrix.distro }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.distro }}" == "Debian 11" ]]; then
+            sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list
+          fi
+          apt-get update
+          test "$(ldd --version | head -1 | grep -oE '[0-9]+\.[0-9]+$' | awk '{print ($1 >= 2.31) ? "ok" : "FAIL"}')" = ok
+          apt-get install -y ./dist/bash-agent_*_amd64.deb
+          for command_name in bash-agent goagent rustagent cagent tcode; do
+            test -x "/usr/bin/$command_name"
+            timeout 15 "/usr/bin/$command_name" --help >/dev/null 2>&1 || true
+            echo "通过：$command_name 可执行并响应 --help"
+          done
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

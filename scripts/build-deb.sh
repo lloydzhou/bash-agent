@@ -96,7 +96,7 @@ write_control() {
   local dependencies="bash (>= 4.0), gawk, curl, ca-certificates, ripgrep"
 
   if [[ "$arch" != "all" ]]; then
-    dependencies+=", tmux, procps, libc6, libgcc-s1, libcurl4t64 | libcurl4"
+    dependencies+=", tmux, procps, libc6 (>= 2.31), libgcc-s1, libcurl4t64 | libcurl4"
   fi
 
   cat > "$pkg_dir/DEBIAN/control" <<EOF
