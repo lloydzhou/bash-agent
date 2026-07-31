@@ -458,6 +458,7 @@ jobs:
 
       - name: Build and deploy APT repository (gh-pages)
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
