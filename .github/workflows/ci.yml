@@ -97,13 +97,13 @@ jobs:
         run: |
           docker run --rm -v /opt/hostedtoolcache:/opt/hostedtoolcache -v "$PWD":/github/workspace -w /github/workspace debian:11 \
             bash -euxo pipefail -c '
-              GO_BIN="$(ls /opt/hostedtoolcache/go/*/x64/bin/go)"
+              GO_BIN="$(ls -d /opt/hostedtoolcache/go/*/x64/bin | sort -V | tail -1)/go"
               export PATH="$(dirname "$GO_BIN"):$PATH"
               export GOCACHE="$PWD/go/.gocache" GOMODCACHE="$PWD/go/.gomodcache"
               go version
               sed -i "s|deb.debian.org|deb.debian.org|g; s|security.debian.org/debian-security|security.debian.org/debian-security|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
-              apt-get install -y --no-install-recommends gcc make
+              apt-get install -y --no-install-recommends gcc make libc6-dev
               mkdir -p dist
               if [ "${{ matrix.goarch }}" = "arm64" ]; then
                 apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
@@ -230,7 +230,7 @@ jobs:
             bash -euxo pipefail -c '
               sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
-              apt-get install -y --no-install-recommends gcc make xxd libcurl4-openssl-dev pkg-config
+              apt-get install -y --no-install-recommends gcc make xxd libc6-dev libcurl4-openssl-dev pkg-config
               mkdir -p dist
               make -C c CC=gcc
               mv dist/cagent dist/cagent-${{ matrix.suffix }}
