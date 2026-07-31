@@ -530,8 +530,8 @@ body[data-theme="light"] .section.dark .section-desc {
 
 .cache-row {
   display: grid;
-  grid-template-columns: 100px 110px minmax(160px, 1fr) 120px;
-  gap: 16px;
+  grid-template-columns: 96px 88px 88px 92px minmax(150px, 1fr) 84px;
+  gap: 14px;
   align-items: center;
   padding: 13px 18px;
   border-bottom: 1px solid var(--line);
@@ -550,9 +550,27 @@ body[data-theme="light"] .section.dark .section-desc {
 }
 
 .cache-date,
+.cache-input,
+.cache-hit,
 .cache-rate,
 .cache-output {
   font-family: var(--mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cache-date {
+  text-align: left;
+  color: var(--ink);
+}
+
+.cache-input {
+  color: var(--muted);
+}
+
+.cache-hit {
+  color: var(--accent);
+  font-weight: 800;
 }
 
 .cache-rate {
@@ -962,10 +980,10 @@ body[data-theme="light"] .pipe-step span {
   }
 
   .cache-row {
-    grid-template-columns: 82px 76px minmax(64px, 1fr) 54px;
-    gap: 10px;
+    grid-template-columns: 76px 58px 58px 66px 1fr 48px;
+    gap: 8px;
     padding: 12px;
-    font-size: 12px;
+    font-size: 11.5px;
   }
 
   .metric,
@@ -1165,79 +1183,103 @@ body[data-theme="light"] .pipe-step span {
         <div class="cache-table" aria-label="DeepSeek 缓存命中率趋势">
           <div class="cache-row header">
             <span data-zh="日期" data-en="Date">日期</span>
+            <span data-zh="输入" data-en="Input">输入</span>
+            <span data-zh="缓存" data-en="Cache">缓存</span>
             <span data-zh="命中率" data-en="Hit rate">命中率</span>
             <span data-zh="趋势" data-en="Trend">趋势</span>
             <span data-zh="输出" data-en="Output">输出</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-07</span>
+            <span class="cache-input">73.7M</span>
+            <span class="cache-hit">73.0M</span>
             <span class="cache-rate">99.05%</span>
             <div class="cache-bar"><span style="width:99.05%"></span></div>
             <span class="cache-output">216K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-08</span>
+            <span class="cache-input">8.1M</span>
+            <span class="cache-hit">8.1M</span>
             <span class="cache-rate">99.88%</span>
             <div class="cache-bar"><span style="width:99.88%"></span></div>
             <span class="cache-output">13K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-09</span>
+            <span class="cache-input">5.0M</span>
+            <span class="cache-hit">5.0M</span>
             <span class="cache-rate">98.77%</span>
             <div class="cache-bar"><span style="width:98.77%"></span></div>
             <span class="cache-output">36K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-15</span>
+            <span class="cache-input">32.8M</span>
+            <span class="cache-hit">32.6M</span>
             <span class="cache-rate">99.37%</span>
             <div class="cache-bar"><span style="width:99.37%"></span></div>
             <span class="cache-output">197K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-16</span>
+            <span class="cache-input">90.2M</span>
+            <span class="cache-hit">88.7M</span>
             <span class="cache-rate">98.31%</span>
             <div class="cache-bar"><span style="width:98.31%"></span></div>
             <span class="cache-output">362K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-17</span>
+            <span class="cache-input">108.4M</span>
+            <span class="cache-hit">107.8M</span>
             <span class="cache-rate">99.45%</span>
             <div class="cache-bar"><span style="width:99.45%"></span></div>
             <span class="cache-output">412K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-18</span>
+            <span class="cache-input">100.1M</span>
+            <span class="cache-hit">99.9M</span>
             <span class="cache-rate">99.74%</span>
             <div class="cache-bar"><span style="width:99.74%"></span></div>
             <span class="cache-output">240K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-19</span>
+            <span class="cache-input">93.3M</span>
+            <span class="cache-hit">93.1M</span>
             <span class="cache-rate">99.78%</span>
             <div class="cache-bar"><span style="width:99.78%"></span></div>
             <span class="cache-output">173K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-21</span>
+            <span class="cache-input">80.3M</span>
+            <span class="cache-hit">79.9M</span>
             <span class="cache-rate">99.49%</span>
             <div class="cache-bar"><span style="width:99.49%"></span></div>
             <span class="cache-output">359K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-05-22</span>
+            <span class="cache-input">105.3M</span>
+            <span class="cache-hit">104.0M</span>
             <span class="cache-rate">98.77%</span>
             <div class="cache-bar"><span style="width:98.77%"></span></div>
             <span class="cache-output">375K</span>
           </div>
           <div class="cache-row">
             <span class="cache-date">2026-07-31</span>
+            <span class="cache-input">57.4M</span>
+            <span class="cache-hit">57.1M</span>
             <span class="cache-rate">99.56%</span>
             <div class="cache-bar"><span style="width:99.56%"></span></div>
             <span class="cache-output">145K</span>
           </div>
         </div>
       </div>
-      <p class="performance-note" data-zh="注：数据来自 DeepSeek API 长会话使用记录；不同 provider、模型、任务形态和缓存策略会产生不同结果。" data-en="Note: data comes from DeepSeek API long-session usage; provider, model, task shape, and cache policy can change the result.">注：数据来自 DeepSeek API 长会话使用记录；不同 provider、模型、任务形态和缓存策略会产生不同结果。</p>
+      <p class="performance-note" data-zh="注：命中率 = 缓存 ÷ 输入；数据来自 DeepSeek API 长会话使用记录；不同 provider、模型、任务形态和缓存策略会产生不同结果。" data-en="Note: hit rate = cache ÷ input; data comes from DeepSeek API long-session usage; provider, model, task shape, and cache policy can change the result.">注：命中率 = 缓存 ÷ 输入；数据来自 DeepSeek API 长会话使用记录；不同 provider、模型、任务形态和缓存策略会产生不同结果。</p>
     </div>
   </section>
 
