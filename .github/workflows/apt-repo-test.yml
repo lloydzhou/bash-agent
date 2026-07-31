@@ -30,8 +30,9 @@ jobs:
             bash -euxo pipefail -c '
               rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list
               echo "deb [trusted=yes] file:/repo stable main" > /etc/apt/sources.list.d/bash-agent.list
-              apt-get update 2>&1 | grep -iE "hash|error|warning" | head -5 || true
-              apt-cache policy bash-agent | head -4
+              apt-get update 2>&1 || true
+              apt-cache policy bash-agent > /tmp/pol.txt || true
+              cat /tmp/pol.txt
               DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash-agent
               echo "=== 安装验证 ==="
               ls /usr/bin/ | grep -E "bash-agent|cagent|goagent|rustagent" | sort
@@ -43,8 +44,9 @@ jobs:
             bash -euxo pipefail -c '
               rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*.list
               echo "deb [trusted=yes] file:/repo stable main" > /etc/apt/sources.list.d/bash-agent.list
-              apt-get update 2>&1 | grep -iE "hash|error|warning" | head -5 || true
-              apt-cache policy bash-agent | head -4
+              apt-get update 2>&1 || true
+              apt-cache policy bash-agent > /tmp/pol.txt || true
+              cat /tmp/pol.txt
               DEBIAN_FRONTEND=noninteractive apt-get install -y -qq bash-agent
               echo "=== 安装验证 ==="
               ls /usr/bin/ | grep -E "bash-agent|cagent|goagent|rustagent" | sort
