@@ -254,7 +254,7 @@ jobs:
       - name: Test cagent (linux amd64 only)
         if: matrix.suffix == 'linux-amd64'
         run: |
-          cp dist/cagent-linux-amd64 dist/cagent
+          sudo cp dist/cagent-linux-amd64 dist/cagent
           AGENT=./dist/cagent bash tests/test.sh
 
       - name: Upload cagent
