@@ -468,13 +468,17 @@ jobs:
           bash scripts/build-apt-repo.sh "${{ github.ref_name }}" dist apt-repo
           mkdir -p apt-repo
           cp scripts/install-apt.sh apt-repo/install.sh
-          rm -rf /tmp/apt-publish && mkdir -p /tmp/apt-publish
-          cp -r apt-repo/. /tmp/apt-publish/
-          cd /tmp/apt-publish
-          git init -q -b main
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            add -A
+          # 增量更新 gh-pages：保留现有内容（官网等），仅更新 debian/ 与 install.sh
+          rm -rf /tmp/apt-publish && mkdir -p /tmp/apt-publish && cd /tmp/apt-publish
+          git init -q
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git fetch -q origin gh-pages || true
+          git checkout -q -b gh-pages FETCH_HEAD 2>/dev/null || git checkout -q --orphan gh-pages
+          rm -rf debian install.sh
+          cp -r "$GITHUB_WORKSPACE/apt-repo/debian" .
+          cp "$GITHUB_WORKSPACE/apt-repo/install.sh" .
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" add -A
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "apt: publish repository for ${{ github.ref_name }}"
-          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" HEAD:gh-pages
-          echo "APT 仓库已发布到 gh-pages"
+          git push origin gh-pages:gh-pages
+          echo "APT 仓库已发布到 gh-pages（保留既有内容）"
