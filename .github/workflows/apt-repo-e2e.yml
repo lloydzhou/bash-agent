@@ -1,0 +1,20 @@
+name: apt-repo-e2e
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: One-command install (user flow)
+        run: |
+          curl -fsSL https://lloydzhou.github.io/bash-agent/install.sh | sudo bash
+      - name: Verify binaries
+        run: |
+          ls /usr/bin/ | grep -E "bash-agent|cagent|goagent|rustagent" | sort
+          echo "deb [trusted=yes] https://lloydzhou.github.io/bash-agent/debian stable main" > /tmp/aptsrc.txt
+          cat /tmp/aptsrc.txt
