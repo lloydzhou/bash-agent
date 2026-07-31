@@ -418,6 +418,7 @@ jobs:
 
       - name: Generate release notes from CHANGELOG
         run: |
+          curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/CHANGELOG.md" -o CHANGELOG.md
           awk -v ver="${{ github.ref_name }}" '
             sub(/^v/, "", ver)
             $0 ~ "^## \\[" ver "\\]" { found=1; next }
