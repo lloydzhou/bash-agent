@@ -93,17 +93,38 @@ curl -fsSL https://github.com/lloydzhou/bash-agent/releases/latest/download/agen
   -o ~/.local/bin/bash-agent && chmod +x ~/.local/bin/bash-agent
 ```
 
-### Debian / Ubuntu (`.deb` package)
+### Debian / Ubuntu (APT repository, recommended)
+Add the official APT source and install with one command; dependencies (ripgrep, tmux, etc.) are resolved automatically, and upgrades are a single command:
+
+```bash
+# One-command install (adds the source and installs)
+curl -fsSL https://lloydzhou.github.io/bash-agent/install.sh | sudo bash
+
+# Or add the source manually, then install
+echo "deb [trusted=yes] https://lloydzhou.github.io/bash-agent/debian stable main" \
+  | sudo tee /etc/apt/sources.list.d/bash-agent.list
+sudo apt update && sudo apt install bash-agent
+```
+
+This installs `bash-agent`, `goagent`, `rustagent`, `cagent`, and `tcode`. To upgrade later:
+
+```bash
+sudo apt update && sudo apt upgrade bash-agent
+```
+
+The APT repository only ships architecture packages (amd64/arm64, with all runtimes), so there is no arch/all selection conflict.
+
+### Debian / Ubuntu (install a `.deb` manually)
 Download the `.deb` for your architecture from [Releases](https://github.com/lloydzhou/bash-agent/releases) and install with `apt` (resolves dependencies automatically):
 
 ```bash
 sudo apt install ./bash-agent_<version>_amd64.deb
-# or ./bash-agent_<version>_all.deb (bash-only, no native runtimes)
+# or ./bash-agent_<version>_arm64.deb
 ```
 
-This installs `bash-agent`, `goagent`, `rustagent`, `cagent`, and `tcode`.
+> Prefer the **architecture package** (`_amd64.deb` / `_arm64.deb`, includes all five commands); `_all.deb` contains only the Bash edition (`bash-agent`) with no native runtimes.
 
-**System requirement**: the native Linux runtimes (`goagent`/`rustagent`/`cagent`) require glibc 2.31+, covering Debian 11/12/13, Ubuntu 20.04/22.04/24.04 and newer. The `_all.deb` (pure bash) has no such requirement.
+**System requirement**: the native Linux runtimes (`goagent`/`rustagent`/`cagent`) require glibc 2.31+, covering Debian 11/12/13, Ubuntu 20.04/22.04/24.04 and newer. Official `.deb` packages are built in a Debian 11 container (glibc 2.31 baseline), and CI enforces a glibc symbol gate on every release to prevent regressions. The `_all.deb` (pure bash) has no such requirement.
 
 ### Build from source
 ```bash
