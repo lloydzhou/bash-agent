@@ -6,11 +6,11 @@ Section: utils
 Maintainer: Lloyd Zhou <lloydzhou@qq.com>
 Depends: bash (>= 4.0), gawk, curl, ca-certificates, ripgrep, tmux, procps, libc6 (>= 2.31), libgcc-s1, libcurl4t64 | libcurl4
 Filename: pool/main/b/bash-agent/bash-agent_4.3.1_arm64.deb
-Size: 3299300
-MD5sum: 562ed6ee5f8c035be5394763a89f81fe
-SHA1: 67a52aa1c3fb0369c23c6803b1a703a4159e4fe9
-SHA256: cd4e96d2ba39074f87255264cf02185fbbabebe5bac77733f6e21b3987f528f5
-SHA512: 2a899a9a85a552abd1125598b2e2fc8f5e39dfd1caae8df561ec891005a9ccf2ee37fdc6a99d4ffaa8d0699419a07dad7d81e768f059d062c4a3d6446cc73b1b
+Size: 3299404
+MD5sum: bfc7ab3225e948df63ad90f39ee942bb
+SHA1: 5aab414c56a9f49c1e38cbdf06dd5d60f41c7e3f
+SHA256: 92e21ddc1434e371814ae2769da35dd64f725baecdfe37a5a96640812872db77
+SHA512: 04528bca0d680fb3f4d5ea50ed6f342e5b7086291b4f617019a7affe3e63bb21fdcf1a15951912860420cb8665dfef60c0df4ea5b4db24a400c693a03164c284
 Homepage: https://github.com/lloydzhou/bash-agent
 Description: minimal AI coding agent runtime
  This package contains the Bash, Go, Rust and C implementations plus tcode.
