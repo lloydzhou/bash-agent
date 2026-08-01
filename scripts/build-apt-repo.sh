@@ -28,7 +28,7 @@ POOL_DIR="$REPO_DIR/pool/main/b/bash-agent"
 rm -rf "$OUT_DIR"
 mkdir -p "$POOL_DIR"
 
-# 1. 收集 .deb 到 pool（排除 *_all.deb，避免 apt 选择只含 bash 版的 all 包）
+# 1. 收集 .deb 到 pool（只收架构包；防御性排除 *_all.deb，避免 apt 选择纯 Bash 包）
 shopt -s nullglob
 debs=( "$DEB_DIR"/bash-agent_*_amd64.deb "$DEB_DIR"/bash-agent_*_arm64.deb )
 shopt -u nullglob

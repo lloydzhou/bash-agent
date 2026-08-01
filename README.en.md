@@ -122,9 +122,9 @@ sudo apt install ./bash-agent_<version>_amd64.deb
 # or ./bash-agent_<version>_arm64.deb
 ```
 
-> Prefer the **architecture package** (`_amd64.deb` / `_arm64.deb`, includes all five commands); `_all.deb` contains only the Bash edition (`bash-agent`) with no native runtimes.
+This installs `bash-agent`, `goagent`, `rustagent`, `cagent`, and `tcode`.
 
-**System requirement**: the native Linux runtimes (`goagent`/`rustagent`/`cagent`) require glibc 2.31+, covering Debian 11/12/13, Ubuntu 20.04/22.04/24.04 and newer. Official `.deb` packages are built in a Debian 11 container (glibc 2.31 baseline), and CI enforces a glibc symbol gate on every release to prevent regressions. The `_all.deb` (pure bash) has no such requirement.
+**System requirement**: the native Linux runtimes (`goagent`/`rustagent`/`cagent`) require glibc 2.31+, covering Debian 11/12/13, Ubuntu 20.04/22.04/24.04 and newer. Official `.deb` packages are built in a Debian 11 container (glibc 2.31 baseline), and CI enforces a glibc symbol gate on every release to prevent regressions. On older systems (glibc < 2.31), install the [agent.sh](https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh) single file for the Bash edition.
 
 ### Build from source
 ```bash

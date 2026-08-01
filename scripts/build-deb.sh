@@ -93,11 +93,7 @@ write_control() {
   local pkg_dir="$1"
   local arch="$2"
   local description="$3"
-  local dependencies="bash (>= 4.0), gawk, curl, ca-certificates, ripgrep"
-
-  if [[ "$arch" != "all" ]]; then
-    dependencies+=", tmux, procps, libc6 (>= 2.31), libgcc-s1, libcurl4t64 | libcurl4"
-  fi
+  local dependencies="bash (>= 4.0), gawk, curl, ca-certificates, ripgrep, tmux, procps, libc6 (>= 2.31), libgcc-s1, libcurl4t64 | libcurl4"
 
   cat > "$pkg_dir/DEBIAN/control" <<EOF
 Package: $PACKAGE
@@ -162,22 +158,17 @@ build_package() {
   chmod 0755 "$pkg_dir/DEBIAN"
   install -m 0755 "$DIST_DIR/agent.sh" "$bin_dir/bash-agent"
 
-  if [[ "$arch" == "all" ]]; then
-    write_control "$pkg_dir" "$arch" \
-      "This architecture-independent package contains the Bash implementation."
+  install -m 0755 "$DIST_DIR/goagent-linux-$arch" "$bin_dir/goagent"
+  install -m 0755 "$DIST_DIR/rustagent-linux-$arch" "$bin_dir/rustagent"
+  install -m 0755 "$DIST_DIR/cagent-linux-$arch" "$bin_dir/cagent"
+  if [[ "$arch" == "arm64" ]]; then
+    aarch64-linux-gnu-strip --strip-unneeded "$bin_dir/cagent"
   else
-    install -m 0755 "$DIST_DIR/goagent-linux-$arch" "$bin_dir/goagent"
-    install -m 0755 "$DIST_DIR/rustagent-linux-$arch" "$bin_dir/rustagent"
-    install -m 0755 "$DIST_DIR/cagent-linux-$arch" "$bin_dir/cagent"
-    if [[ "$arch" == "arm64" ]]; then
-      aarch64-linux-gnu-strip --strip-unneeded "$bin_dir/cagent"
-    else
-      strip --strip-unneeded "$bin_dir/cagent"
-    fi
-    install -m 0755 "$DIST_DIR/tcode" "$bin_dir/tcode"
-    write_control "$pkg_dir" "$arch" \
-      "This package contains the Bash, Go, Rust and C implementations plus tcode."
+    strip --strip-unneeded "$bin_dir/cagent"
   fi
+  install -m 0755 "$DIST_DIR/tcode" "$bin_dir/tcode"
+  write_control "$pkg_dir" "$arch" \
+    "This package contains the Bash, Go, Rust and C implementations plus tcode."
 
   install_docs "$pkg_dir"
   chmod 0644 "$pkg_dir/DEBIAN/control"
@@ -188,6 +179,5 @@ build_package() {
   echo "已生成：$output"
 }
 
-build_package all
 build_package amd64
 build_package arm64

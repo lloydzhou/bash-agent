@@ -328,14 +328,10 @@ jobs:
         env:
           DEB_VERSION: ${{ steps.build-deb.outputs.version }}
         run: |
-          all_deb="dist/bash-agent_${DEB_VERSION}_all.deb"
           amd64_deb="dist/bash-agent_${DEB_VERSION}_amd64.deb"
           arm64_deb="dist/bash-agent_${DEB_VERSION}_arm64.deb"
-          test "$(dpkg-deb -f "$all_deb" Architecture)" = all
           test "$(dpkg-deb -f "$amd64_deb" Architecture)" = amd64
           test "$(dpkg-deb -f "$arm64_deb" Architecture)" = arm64
-          dpkg-deb --contents "$all_deb" | grep -q './usr/bin/bash-agent$'
-          ! dpkg-deb --contents "$all_deb" | grep -q './usr/bin/goagent$'
           sudo apt-get install -y "./$amd64_deb"
           for command_name in bash-agent goagent rustagent cagent tcode; do
             test -x "/usr/bin/$command_name"
@@ -414,7 +410,6 @@ jobs:
               cagent-darwin-amd64 \
               cagent-darwin-arm64 \
               tcode \
-              bash-agent_*_all.deb \
               bash-agent_*_amd64.deb \
               bash-agent_*_arm64.deb > checksums.txt
           )
@@ -452,7 +447,6 @@ jobs:
             dist/cagent-darwin-amd64
             dist/cagent-darwin-arm64
             dist/tcode
-            dist/bash-agent_*_all.deb
             dist/bash-agent_*_amd64.deb
             dist/bash-agent_*_arm64.deb
 
