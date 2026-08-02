@@ -107,9 +107,61 @@ static void test_explicit_sub_session_paths_remain_available(void) {
     free(home);
 }
 
+static void test_conv_long_line_survives_trim(void) {
+    char *dir = make_temp_dir("conv-long-line");
+    char *path = util_path_join(dir, "conversation.jsonl");
+    StrBuf long_line;
+    sb_init(&long_line);
+    sb_append(&long_line, "{\"role\":\"user\",\"content\":\"");
+    for (int i = 0; i < 70000; i++) sb_append_char(&long_line, 'x');
+    sb_append(&long_line, "-long-record\"}");
+
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        check(0, "create long conversation fixture");
+        sb_free(&long_line);
+        free(path);
+        rmdir(dir);
+        free(dir);
+        return;
+    }
+    fprintf(f, "{\"role\":\"user\",\"content\":\"first\"}\n");
+    fprintf(f, "%s\n", long_line.data);
+    fprintf(f, "{\"role\":\"assistant\",\"content\":\"last\"}\n");
+    fclose(f);
+
+    char **lines = NULL;
+    int count = 0;
+    int read_ok = store_conv_line_count(path, &lines, &count) == 0 && count == 3
+        && strlen(lines[1]) == long_line.len
+        && json_parse_root(lines[1]).error == NULL;
+    check(read_ok, "read a JSONL record larger than 64 KiB as one line");
+    for (int i = 0; i < count; i++) free(lines[i]);
+    free(lines);
+
+    int trim_ok = store_conv_trim_tail(path, 2) == 0;
+    lines = NULL;
+    count = 0;
+    trim_ok = trim_ok && store_conv_line_count(path, &lines, &count) == 0 && count == 2
+        && strlen(lines[0]) == long_line.len
+        && strstr(lines[0], "-long-record\"}") != NULL
+        && json_parse_root(lines[0]).error == NULL
+        && json_parse_root(lines[1]).error == NULL;
+    check(trim_ok, "trim rewrites a JSONL record larger than 64 KiB without splitting it");
+    for (int i = 0; i < count; i++) free(lines[i]);
+    free(lines);
+
+    sb_free(&long_line);
+    unlink(path);
+    free(path);
+    rmdir(dir);
+    free(dir);
+}
+
 int main(void) {
     test_continue_skips_sub_sessions();
     test_continue_rejects_only_sub_sessions();
     test_explicit_sub_session_paths_remain_available();
+    test_conv_long_line_survives_trim();
     return failures == 0 ? 0 : 1;
 }
