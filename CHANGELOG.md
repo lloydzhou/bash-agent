@@ -8,6 +8,16 @@
 
 ---
 
+## [4.3.2] - 2026-08-03
+
+> **C 版超长会话记录压缩修复**：修复压缩 `conversation.jsonl` 时将超过 64 KiB 的单条 JSONL 记录误拆为多行、导致会话内容损坏的问题。
+
+### Fixed
+
+- **C 版超长 JSONL 会话记录被拆分**：会话记录计数改为按真实换行符读取完整记录，不再受固定 64 KiB 缓冲限制；压缩并保留尾部记录时不会再向单条 JSON 中插入换行，避免上下文丢失或后续会话解析失败。
+
+---
+
 ## [4.3.1] - 2026-07-31
 
 > **Debian 安装包发布支持与 GLIBC 兼容性修复**：新增 Debian 安装包构建流水线，发布时自动生成架构无关、AMD64 和 ARM64 三类安装包，并随 GitHub Release 提供校验和；同时修复安装包内 Linux 原生运行时在较旧发行版上因 GLIBC 版本过高而无法运行的问题。
@@ -1484,7 +1494,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.1...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.2...HEAD
+[4.3.2]: https://github.com/lloydzhou/bash-agent/compare/v4.3.1...v4.3.2
 [4.3.1]: https://github.com/lloydzhou/bash-agent/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/lloydzhou/bash-agent/compare/v4.2.21...v4.3.0
 [4.2.21]: https://github.com/lloydzhou/bash-agent/compare/v4.2.20...v4.2.21
