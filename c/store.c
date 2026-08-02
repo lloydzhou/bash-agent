@@ -419,31 +419,52 @@ int store_conv_add_tool_results(const char *path, int count, const char **tool_u
 }
 
 int store_conv_line_count(const char *path, char ***out, int *out_count) {
+    *out = NULL;
+    *out_count = 0;
+
     FILE *f = fopen(path, "r");
-    if (!f) { *out = NULL; *out_count = 0; return -1; }
+    if (!f) return -1;
 
     int cap = 64;
     int count = 0;
-    char **lines = malloc(cap * sizeof(char*));
-    char linebuf[65536];
+    char **lines = malloc(cap * sizeof(char *));
+    char *line = NULL;
+    size_t line_cap = 0;
+    ssize_t read_len;
+    if (!lines) goto fail;
 
-    while (fgets(linebuf, sizeof(linebuf), f)) {
+    /* getline 会按真实换行符扩容，不能将超长 JSONL 记录误当成多行。 */
+    while ((read_len = getline(&line, &line_cap, f)) != -1) {
         /* 去除尾部换行 */
-        size_t len = strlen(linebuf);
-        while (len > 0 && (linebuf[len-1] == '\n' || linebuf[len-1] == '\r'))
-            linebuf[--len] = '\0';
+        size_t len = (size_t)read_len;
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
         if (len == 0) continue;
 
         if (count >= cap) {
-            cap *= 2;
-            lines = realloc(lines, cap * sizeof(char*));
+            int new_cap = cap * 2;
+            char **new_lines = realloc(lines, new_cap * sizeof(char *));
+            if (!new_lines) goto fail;
+            lines = new_lines;
+            cap = new_cap;
         }
-        lines[count++] = util_strdup(linebuf);
+        lines[count] = util_strdup(line);
+        if (!lines[count]) goto fail;
+        count++;
     }
+
+    free(line);
     fclose(f);
     *out = lines;
     *out_count = count;
     return 0;
+
+fail:
+    free(line);
+    fclose(f);
+    for (int i = 0; i < count; i++) free(lines[i]);
+    free(lines);
+    return -1;
 }
 
 int store_conv_trim_tail(const char *path, int keep_lines) {
