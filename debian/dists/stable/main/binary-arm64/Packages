@@ -1,16 +1,16 @@
 Package: bash-agent
 Architecture: arm64
-Version: 4.3.1
+Version: 4.3.2
 Priority: optional
 Section: utils
 Maintainer: Lloyd Zhou <lloydzhou@qq.com>
 Depends: bash (>= 4.0), gawk, curl, ca-certificates, ripgrep, tmux, procps, libc6 (>= 2.31), libgcc-s1, libcurl4t64 | libcurl4
-Filename: pool/main/b/bash-agent/bash-agent_4.3.1_arm64.deb
-Size: 3299404
-MD5sum: bfc7ab3225e948df63ad90f39ee942bb
-SHA1: 5aab414c56a9f49c1e38cbdf06dd5d60f41c7e3f
-SHA256: 92e21ddc1434e371814ae2769da35dd64f725baecdfe37a5a96640812872db77
-SHA512: 04528bca0d680fb3f4d5ea50ed6f342e5b7086291b4f617019a7affe3e63bb21fdcf1a15951912860420cb8665dfef60c0df4ea5b4db24a400c693a03164c284
+Filename: pool/main/b/bash-agent/bash-agent_4.3.2_arm64.deb
+Size: 3300648
+MD5sum: ba18893b010417297e74346dc091f2d5
+SHA1: 725dc9b3285c9d32f8496b17a0337a7e023237e9
+SHA256: beffd87f8b34cfd5072b4927a98957e2ff1b26e4081340c067ac01a867ae0c7d
+SHA512: 74ce5034b4e81c0b00a8da588309bcae6b6b2f8fc75db12b78f859ed7018d82c4389df50372e7f9809c547010d4941696558d051351b9ae1a1daa5236e38855c
 Homepage: https://github.com/lloydzhou/bash-agent
 Description: minimal AI coding agent runtime
  This package contains the Bash, Go, Rust and C implementations plus tcode.
