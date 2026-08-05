@@ -1632,11 +1632,7 @@ validate_config() {
             : "${API_KEY:=${ANTHROPIC_API_KEY:-}}"
             : "${BASE_URL:=${ANTHROPIC_BASE_URL:-}}"
             ;;
-        openai)
-            : "${API_KEY:=${OPENAI_API_KEY:-}}"
-            : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
-            ;;
-        responses)
+        openai|responses)
             : "${API_KEY:=${OPENAI_API_KEY:-}}"
             : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
             ;;
@@ -1657,8 +1653,7 @@ validate_config() {
     if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
         case "$PROVIDER" in
             claude) util_die "No API key. Set ANTHROPIC_API_KEY or use --api-key" ;;
-            openai) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
-            responses) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
+            openai|responses) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
         esac
     fi
 
