@@ -425,6 +425,97 @@ SSE
     fi
 }
 
+test_responses_transport_body() {
+    info "Test 7c: Responses 请求体转换"
+    local input output check_output
+    input='{"model":"deepseek-v4-flash","max_tokens":1024,"stream":true,"system":"System instructions","thinking":{"type":"enabled"},"output_config":{"effort":"medium"},"messages":[{"role":"user","content":"first"},{"role":"assistant","content":[{"type":"text","text":"Calling tools"},{"type":"tool_use","id":"call_1","name":"Read","input":{"path":"/tmp/a"}},{"type":"tool_use","id":"call_2","name":"Glob","input":{"pattern":"*.txt"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"file data"},{"type":"tool_result","tool_use_id":"call_2","content":"a.txt"}]}],"tools":[{"name":"Read","description":"Read a file","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]}'
+    output=$(printf '%s' "$input" | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk")
+    check_output=$(printf '%s' "$output" | /usr/bin/python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+assert obj["model"] == "deepseek-v4-flash"
+assert obj["max_output_tokens"] == 1024
+assert obj["stream"] is True
+assert obj["instructions"] == "System instructions"
+assert obj["reasoning"] == {"effort": "medium"}
+assert obj["tools"] == [{"type":"function","name":"Read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]
+items = obj["input"]
+assert any(x == {"role":"user","content":"first"} for x in items)
+assert any(x == {"role":"assistant","content":"Calling tools"} for x in items)
+calls = [x for x in items if x.get("type") == "function_call"]
+assert [(x["call_id"], x["name"], json.loads(x["arguments"])) for x in calls] == [("call_1", "Read", {"path":"/tmp/a"}), ("call_2", "Glob", {"pattern":"*.txt"})]
+results = [x for x in items if x.get("type") == "function_call_output"]
+assert [(x["call_id"], x["output"]) for x in results] == [("call_1", "file data"), ("call_2", "a.txt")]
+print("ok")
+' 2>&1)
+    if [[ "$check_output" == "ok" ]]; then
+        green "Responses 请求体转换"; ((PASS++)) || true
+    else
+        red "Responses 请求体转换"; echo "  请求体: $output"; echo "  检查: $check_output"; ((FAIL++)) || true
+    fi
+}
+
+test_responses_sse() {
+    info "Test 7d: Responses SSE 解析"
+    local output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
+event: response.reasoning_text.delta
+data: {"delta":"先分析"}
+
+event: response.output_text.delta
+data: {"delta":"\n\n处理完成"}
+
+event: response.output_item.added
+data: {"output_index":1,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"Read","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"output_index":1,"item_id":"fc_1","delta":"{\"path\":\"/tmp/a"}
+
+event: response.function_call_arguments.delta
+data: {"output_index":1,"item_id":"fc_1","delta":"\"}"}
+
+event: response.output_item.added
+data: {"output_index":2,"item":{"id":"fc_2","type":"function_call","call_id":"call_2","name":"Glob","arguments":"{\"pattern\":\"*.txt\"}"}}
+
+event: response.completed
+data: {"response":{"usage":{"input_tokens":15,"output_tokens":8,"cached_tokens":4}}}
+SSE
+)
+    if echo "$output" | grep -q '^THINKING:先分析$' && \
+       echo "$output" | grep -q '^TEXT:处理完成$' && \
+       echo "$output" | grep -Fq $'TOOL_CALL:Read\tcall_1\t{"path":"/tmp/a"}\tpath\t/tmp/a' && \
+       echo "$output" | grep -Fq $'TOOL_CALL:Glob\tcall_2\t{"pattern":"*.txt"}\tpattern\t*.txt' && \
+       echo "$output" | grep -Fq $'USAGE:11\t8\t4\t0' && \
+       echo "$output" | grep -q '^STOP:tool_use$'; then
+        green "Responses SSE 解析"; ((PASS++)) || true
+    else
+        red "Responses SSE 解析"; echo "  输出: $output"; ((FAIL++)) || true
+    fi
+}
+
+test_responses_sse_failure_and_retry() {
+    info "Test 7e: Responses SSE 失败与重试"
+    local output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
+event: response.output_text.delta
+data: {"delta":"stale"}
+
+RETRY: 1
+
+event: response.failed
+data: {"response":{"error":{"message":"上游失败"},"usage":{"input_tokens":9,"output_tokens":2}}}
+SSE
+)
+    if echo "$output" | grep -q '^TEXT:stale$' && \
+       echo "$output" | grep -q '^RETRY:$' && \
+       echo "$output" | grep -q '^ERROR:上游失败$' && \
+       echo "$output" | grep -Fq $'USAGE:9\t2\t0\t0'; then
+        green "Responses SSE 失败与重试"; ((PASS++)) || true
+    else
+        red "Responses SSE 失败与重试"; echo "  输出: $output"; ((FAIL++)) || true
+    fi
+}
+
 # Test 8: HTTP stream preserves error body
 test_http_stream_error_body() {
     info "Test 8: HTTP stream preserves error body"
@@ -470,6 +561,11 @@ test_agent_e2e_openai() {
     check "Agent e2e OpenAI" "$("$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' 2>&1 || true)" "Hello from" "mock"
 }
 
+test_agent_e2e_responses() {
+    info "Test 11a: Agent.sh e2e (Responses mock)"
+    check "Agent e2e Responses" "$("$AGENT" -p responses --base-url "$BASE" -m deepseek-v4-flash --api-key test 'Hello' 2>&1 || true)" "Hello from" "mock"
+}
+
 test_agent_openai_request_body() {
     info "Test 11a: Agent OpenAI request body carries converted tools"
     "$AGENT" -p openai --base-url "$BASE/v1" -m test --api-key test 'Hello' >/dev/null 2>&1 || true
@@ -497,8 +593,51 @@ print("ok")
     fi
 }
 
+test_agent_responses_request_body() {
+    info "Test 11b: Agent Responses 请求体"
+    "$AGENT" -p responses --base-url "$BASE" -m deepseek-v4-flash --api-key test 'Hello' >/dev/null 2>&1 || true
+    local req check_output
+    req=$(curl -fsS "$BASE/last-request")
+    check_output=$(printf '%s' "$req" | /usr/bin/python3 -c '
+import json, sys
+req = json.load(sys.stdin)
+obj = json.loads(req["body"])
+assert obj["model"] == "deepseek-v4-flash"
+assert obj["stream"] is True
+assert isinstance(obj["instructions"], str) and obj["instructions"]
+tools = obj.get("tools", [])
+assert tools and tools[0]["type"] == "function"
+assert "parameters" in tools[0]
+assert all("input_schema" not in x for x in tools)
+print("ok")
+' 2>&1)
+    if [[ "$check_output" == "ok" ]]; then
+        green "Agent Responses 请求体"; ((PASS++)) || true
+    else
+        red "Agent Responses 请求体"; echo "  检查: $check_output"; ((FAIL++)) || true
+    fi
+}
+
+test_agent_responses_tool_write() {
+    info "Test 11c: Agent e2e Responses 工具调用"
+    local output target_file plain_output
+    target_file="/tmp/bash-agent-write-test.txt"
+    rm -f "$target_file"
+    output=$("$AGENT" -p responses --base-url "$BASE" -m deepseek-v4-flash --api-key test -v 'WRITE_FILE_MARKER' 2>&1) || true
+    plain_output=$(printf '%s' "$output" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if [[ -f "$target_file" ]] && \
+       grep -q $'line1\nline2\nline3' "$target_file" && \
+       echo "$plain_output" | grep -Fq 'Write(/tmp/bash-agent-write-test.txt) [' && \
+       echo "$plain_output" | grep -Fq 'Done.'; then
+        green "Agent e2e Responses 工具调用"; ((PASS++)) || true
+    else
+        red "Agent e2e Responses 工具调用"; echo "  输出: $output"; echo "  文件: $(cat "$target_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+    rm -f "$target_file"
+}
+
 test_agent_openai_tool_write() {
-    info "Test 11b: Agent e2e OpenAI tool call"
+    info "Test 11d: Agent e2e OpenAI tool call"
     local output target_file plain_output
     target_file="/tmp/bash-agent-write-test.txt"
     rm -f "$target_file"
@@ -2257,6 +2396,8 @@ EOF
 # Test 39: agent_compact_context integration (plan_clear trigger)
 test_agent_compact_context() {
     info "Test 39: agent_compact_context integration via plan_clear"
+    local provider="${1:-claude}" base_url="$BASE/v1" model="test"
+    [[ "$provider" == "responses" ]] && { base_url="$BASE"; model="deepseek-v4-flash"; }
     local home_dir output project_dir session_dir plan_file summary_file conv_file stats_file
     home_dir=$(mktemp -d)
     project_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)"
@@ -2286,7 +2427,7 @@ test_agent_compact_context() {
 
     # Run agent — mock will match summary request via "The conversation context above needs to be compacted"
     # Use --print to capture output, PlanClear trigger forces agent_compact_context plan_clear
-    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session compact-test --max-context 160000 'plan done COMPACT_TEST_MARKER' 2>&1) || true
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p "$provider" --base-url "$base_url" -m "$model" --api-key test --session compact-test --max-context 160000 'plan done COMPACT_TEST_MARKER' 2>&1) || true
 
     local post_lines
     post_lines=$(wc -l < "$conv_file" 2>/dev/null || echo 0)
@@ -2788,12 +2929,18 @@ test_openai_sse
 test_openai_usage_cache_tokens
 test_openai_sse_leading_newline
 test_openai_sse_tool_calls
+test_responses_transport_body
+test_responses_sse
+test_responses_sse_failure_and_retry
 test_http_stream_error_body
 test_transport_body
 test_transport_body_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
+test_agent_e2e_responses
 test_agent_openai_request_body
+test_agent_responses_request_body
+test_agent_responses_tool_write
 test_agent_openai_tool_write
 test_agent_openai_sensenova_style
 test_agent_async_bash
@@ -2852,6 +2999,7 @@ test_agent_stats_cache_tokens
 test_compact_dp_awk
 test_compact_turn_keep_awk
 test_agent_compact_context
+test_agent_compact_context responses
 test_agent_sub_agent
 test_agent_sub_agent_recursion_limit
 test_agent_sub_agent_multi
