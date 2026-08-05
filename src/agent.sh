@@ -1672,27 +1672,26 @@ validate_config() {
             util_body_convert() { cat; }
             sse_convert()  { cat; }
             ;;
-        openai)
-            : "${MODEL:=gpt-4o}"
-            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
+        openai|responses)
             HEADER_ARGS=(
                 -H "Content-Type: application/json"
                 -H "Authorization: Bearer ${API_KEY}"
                 -H "User-Agent: bash-agent/4.3.2"
             )
-            util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
-            sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
-            ;;
-        responses)
-            : "${MODEL:=deepseek-v4-flash}"
-            API_URL="${BASE_URL:-https://api.deepseek.com}/responses"
-            HEADER_ARGS=(
-                -H "Content-Type: application/json"
-                -H "Authorization: Bearer ${API_KEY}"
-                -H "User-Agent: bash-agent/4.3.2"
-            )
-            util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"; }
-            sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"; }
+            case "$PROVIDER" in
+                openai)
+                    : "${MODEL:=gpt-4o}"
+                    API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
+                    sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
+                    ;;
+                responses)
+                    : "${MODEL:=deepseek-v4-flash}"
+                    API_URL="${BASE_URL:-https://api.deepseek.com}/responses"
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"; }
+                    sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"; }
+                    ;;
+            esac
             ;;
     esac
 
