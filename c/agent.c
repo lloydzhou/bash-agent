@@ -899,7 +899,7 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         char auth_header[512];
         int hdr_count = 0;
         headers[hdr_count++] = "Content-Type: application/json";
-        headers[hdr_count++] = "User-Agent: claude-cli/1.0.33 (max, cli)";
+        headers[hdr_count++] = "User-Agent: bash-agent/4.3.2";
 
         if (strcmp(agent->provider, "claude") == 0) {
             headers[hdr_count++] = "x-app: cli";
@@ -2845,7 +2845,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     char auth_header[512];
     int hdr_count = 0;
     headers[hdr_count++] = "Content-Type: application/json";
-    headers[hdr_count++] = "User-Agent: claude-cli/1.0.33 (max, cli)";
+    headers[hdr_count++] = "User-Agent: bash-agent/4.3.2";
     if (strcmp(agent->provider, "claude") == 0) {
         headers[hdr_count++] = "x-app: cli";
         snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", agent->api_key);

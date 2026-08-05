@@ -1671,7 +1671,7 @@ validate_config() {
                 -H "Content-Type: application/json"
                 -H "x-api-key: ${API_KEY}"
                 -H "anthropic-version: 2023-06-01"
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+                -H "User-Agent: bash-agent/4.3.2"
                 -H "x-app: cli"
             )
             util_body_convert() { cat; }
@@ -1683,19 +1683,18 @@ validate_config() {
             HEADER_ARGS=(
                 -H "Content-Type: application/json"
                 -H "Authorization: Bearer ${API_KEY}"
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+                -H "User-Agent: bash-agent/4.3.2"
             )
             util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
             sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
             ;;
         responses)
             : "${MODEL:=deepseek-v4-flash}"
-            [[ "$MODEL" == "deepseek-v4-flash" ]] || util_die "responses only supports model deepseek-v4-flash (got: $MODEL)"
             API_URL="${BASE_URL:-https://api.deepseek.com}/responses"
             HEADER_ARGS=(
                 -H "Content-Type: application/json"
                 -H "Authorization: Bearer ${API_KEY}"
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+                -H "User-Agent: bash-agent/4.3.2"
             )
             util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"; }
             sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"; }

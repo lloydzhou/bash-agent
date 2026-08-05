@@ -578,7 +578,7 @@ func (t *HTTPTransport) extractUsageFromStart(data string, inputTokens, cacheRea
 func (t *HTTPTransport) buildHeaders() http.Header {
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
-	h.Set("User-Agent", "bash-agent/1.0")
+	h.Set("User-Agent", "bash-agent/4.3.2")
 	switch t.cfg.Provider {
 	case "claude":
 		h.Set("x-api-key", t.cfg.APIKey)

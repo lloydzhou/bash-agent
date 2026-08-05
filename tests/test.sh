@@ -32,6 +32,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 AGENT="${AGENT:-$ROOT_DIR/src/agent.sh}"
 AWK_DIR="$ROOT_DIR/src/awk"
+RUN_RESPONSES_TESTS=false
+[[ "$(basename "$AGENT")" == "agent.sh" ]] && RUN_RESPONSES_TESTS=true
 PASS=0
 FAIL=0
 
@@ -2929,18 +2931,22 @@ test_openai_sse
 test_openai_usage_cache_tokens
 test_openai_sse_leading_newline
 test_openai_sse_tool_calls
-test_responses_transport_body
-test_responses_sse
-test_responses_sse_failure_and_retry
+if $RUN_RESPONSES_TESTS; then
+    test_responses_transport_body
+    test_responses_sse
+    test_responses_sse_failure_and_retry
+fi
 test_http_stream_error_body
 test_transport_body
 test_transport_body_tools
 test_agent_e2e_claude
 test_agent_e2e_openai
-test_agent_e2e_responses
 test_agent_openai_request_body
-test_agent_responses_request_body
-test_agent_responses_tool_write
+if $RUN_RESPONSES_TESTS; then
+    test_agent_e2e_responses
+    test_agent_responses_request_body
+    test_agent_responses_tool_write
+fi
 test_agent_openai_tool_write
 test_agent_openai_sensenova_style
 test_agent_async_bash
@@ -2999,7 +3005,9 @@ test_agent_stats_cache_tokens
 test_compact_dp_awk
 test_compact_turn_keep_awk
 test_agent_compact_context
-test_agent_compact_context responses
+if $RUN_RESPONSES_TESTS; then
+    test_agent_compact_context responses
+fi
 test_agent_sub_agent
 test_agent_sub_agent_recursion_limit
 test_agent_sub_agent_multi

@@ -2151,7 +2151,7 @@ impl Agent {
             ("Content-Type".to_string(), "application/json".to_string()),
             (
                 "User-Agent".to_string(),
-                "claude-cli/1.0.33 (max, cli)".to_string(),
+                "bash-agent/4.3.2".to_string(),
             ),
         ];
         match self.cfg.provider.as_str() {

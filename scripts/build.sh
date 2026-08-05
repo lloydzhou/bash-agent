@@ -67,6 +67,8 @@ awk_files = {
     "skill_summary": ("skill_summary.awk", "_AWK_SKILL_SUMMARY"),
     "transport_openai_body": ("transport_openai_body.awk", "_AWK_TRANSPORT_OPENAI_BODY"),
     "transport_openai_sse": ("transport_openai_sse.awk", "_AWK_TRANSPORT_OPENAI_SSE"),
+    "transport_responses_body": ("transport_responses_body.awk", "_AWK_TRANSPORT_RESPONSES_BODY"),
+    "transport_responses_sse": ("transport_responses_sse.awk", "_AWK_TRANSPORT_RESPONSES_SSE"),
     "event_replay": ("event_replay.awk", "_AWK_EVENT_REPLAY"),
     "stats": ("stats.awk", "_AWK_STATS"),
     "compact_dp": ("compact_dp.awk", "_AWK_COMPACT_DP"),
@@ -167,6 +169,8 @@ content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit
 # --- Inline transport awk references in validate_config ---
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_BODY}"')
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_SSE}"')
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_RESPONSES_BODY}"')
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_RESPONSES_SSE}"')
 content = content.replace('util_awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"', 'util_awk_run -v verbose="${VERBOSE:-false}" "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_TODO_PROTOCOL}\n${_AWK_CLAUDE_SSE}"')
 # --- Inline event_replay.awk reference in interactive_mode ---
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_EVENT_REPLAY}"')
