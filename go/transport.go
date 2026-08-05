@@ -31,6 +31,8 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 	switch t.cfg.Provider {
 	case "openai":
 		body, err = t.buildOpenAIBody(messages, systemPrompt, toolDefs, maxTokens, thinking)
+	case "responses":
+		body, err = t.buildResponsesBody(messages, systemPrompt, toolDefs, maxTokens, thinking)
 	default:
 		body, err = t.buildClaudeBody(messages, systemPrompt, toolDefs, maxTokens, thinking)
 	}
@@ -201,6 +203,10 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 	// OpenAI 流状态
 	var openaiTextStarted bool // 是否已收到过非空前导换行的文本
 	openaiPendingCalls := map[int]*openAIPendingCall{}
+	// Responses 流状态
+	var responsesTextStarted bool
+	responsesPendingCalls := map[int]*responsesPendingCall{}
+	responsesItemIndexes := map[string]int{}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -215,6 +221,14 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 		}
 		if strings.HasPrefix(line, "data: ") {
 			data := line[6:]
+
+			if t.cfg.Provider == "responses" && strings.HasPrefix(eventType, "response.") {
+				if t.handleResponsesEvent(eventType, data, ch, responsesPendingCalls, responsesItemIndexes,
+					&responsesTextStarted, &inputTokens, &outputTokens, &cacheRead) {
+					stopEmitted = true
+				}
+				continue
+			}
 
 			// ─── OpenAI 格式检测：如果有 choices 字段，按 OpenAI 格式处理 ───
 			if strings.Contains(data, `"choices"`) || data == "[DONE]" {
@@ -294,6 +308,11 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 				outputTokens = 0
 				cacheRead = 0
 				cacheCreate = 0
+				openaiTextStarted = false
+				responsesTextStarted = false
+				openaiPendingCalls = map[int]*openAIPendingCall{}
+				responsesPendingCalls = map[int]*responsesPendingCall{}
+				responsesItemIndexes = map[string]int{}
 				ch <- Event{Type: EventRetry}
 			}
 		}
@@ -304,6 +323,204 @@ type openAIPendingCall struct {
 	ID        string
 	Name      string
 	Arguments string
+}
+
+type responsesPendingCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+func emitResponsesPendingCalls(ch chan<- Event, pending map[int]*responsesPendingCall) {
+	keys := make([]int, 0, len(pending))
+	for idx := range pending {
+		keys = append(keys, idx)
+	}
+	sort.Ints(keys)
+	for _, idx := range keys {
+		call := pending[idx]
+		if call == nil || call.Name == "" || call.ID == "" {
+			continue
+		}
+		args := call.Arguments
+		if args == "" {
+			args = "{}"
+		}
+		ch <- Event{Type: EventToolCall, Fields: []string{"TOOL_CALL", call.Name, call.ID, args}}
+	}
+	for idx := range pending {
+		delete(pending, idx)
+	}
+}
+
+// handleResponsesEvent 将 Responses SSE 直接转换为内部 Claude 语义事件。
+// 返回 true 表示该事件已经终止当前响应。
+func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- Event,
+	pending map[int]*responsesPendingCall, itemIndexes map[string]int, textStarted *bool,
+	inputTokens, outputTokens, cacheRead *int) bool {
+	var payload struct {
+		Delta       string `json:"delta"`
+		OutputIndex int    `json:"output_index"`
+		ItemID      string `json:"item_id"`
+		Item        struct {
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"item"`
+		Response struct {
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+				InputDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"input_tokens_details"`
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"usage"`
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+			Message string `json:"message"`
+			Reason  string `json:"reason"`
+		} `json:"response"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(data), &payload); err != nil {
+		return false
+	}
+
+	usage := payload.Response.Usage
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
+		// 部分实现直接把 response 放在事件根级；保留解析失败时的零值语义。
+		var root struct {
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+				CachedTokens int `json:"cached_tokens"`
+				InputDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"input_tokens_details"`
+			} `json:"usage"`
+		}
+		_ = json.Unmarshal([]byte(data), &root)
+		usage.InputTokens = root.Usage.InputTokens
+		usage.OutputTokens = root.Usage.OutputTokens
+		usage.CachedTokens = root.Usage.CachedTokens
+		usage.InputDetails.CachedTokens = root.Usage.InputDetails.CachedTokens
+	}
+	recordUsage := func() {
+		cached := usage.CachedTokens
+		if usage.InputDetails.CachedTokens != 0 {
+			cached = usage.InputDetails.CachedTokens
+		}
+		*cacheRead = cached
+		*inputTokens = usage.InputTokens - cached
+		if *inputTokens < 0 {
+			*inputTokens = 0
+		}
+		*outputTokens = usage.OutputTokens
+	}
+
+	switch eventType {
+	case "response.reasoning_text.delta":
+		if payload.Delta != "" {
+			ch <- Event{Type: EventThinking, Fields: []string{"THINKING", payload.Delta}}
+		}
+	case "response.output_text.delta":
+		text := payload.Delta
+		if !*textStarted {
+			text = strings.TrimLeft(text, "\n\r")
+		}
+		if text != "" {
+			*textStarted = true
+			ch <- Event{Type: EventText, Fields: []string{"TEXT", text}}
+		}
+	case "response.output_item.added", "response.output_item.done":
+		if payload.Item.Type != "function_call" {
+			return false
+		}
+		idx := payload.OutputIndex
+		itemID := payload.ItemID
+		if itemID == "" {
+			itemID = payload.Item.ID
+		}
+		if itemID != "" {
+			itemIndexes[itemID] = idx
+		}
+		call := pending[idx]
+		if call == nil {
+			call = &responsesPendingCall{}
+			pending[idx] = call
+		}
+		if payload.Item.CallID != "" {
+			call.ID = payload.Item.CallID
+		}
+		if payload.Item.Name != "" {
+			call.Name = payload.Item.Name
+		}
+		if payload.Item.Arguments != "" {
+			call.Arguments = payload.Item.Arguments
+		}
+	case "response.function_call_arguments.delta":
+		idx := payload.OutputIndex
+		if payload.ItemID != "" {
+			if mapped, ok := itemIndexes[payload.ItemID]; ok {
+				idx = mapped
+			}
+		}
+		call := pending[idx]
+		if call == nil {
+			call = &responsesPendingCall{}
+			pending[idx] = call
+		}
+		call.Arguments += payload.Delta
+	case "response.completed":
+		recordUsage()
+		hasTools := len(pending) > 0
+		emitResponsesPendingCalls(ch, pending)
+		ch <- Event{Type: EventUsage, Payload: Usage{InputTokens: *inputTokens, OutputTokens: *outputTokens, CacheRead: *cacheRead}}
+		stopReason := "end_turn"
+		if hasTools {
+			stopReason = "tool_use"
+		}
+		ch <- Event{Type: EventStop, Fields: []string{"STOP", stopReason}}
+		return true
+	case "response.failed", "response.incomplete":
+		recordUsage()
+		message := payload.Response.Error.Message
+		if message == "" {
+			message = payload.Error.Message
+		}
+		if message == "" {
+			message = payload.Response.Message
+		}
+		if message == "" {
+			message = payload.Message
+		}
+		if message == "" {
+			message = payload.Response.Reason
+		}
+		if message == "" {
+			message = payload.Reason
+		}
+		if message == "" {
+			if eventType == "response.incomplete" {
+				message = "Response incomplete"
+			} else {
+				message = "Response failed"
+			}
+		}
+		ch <- Event{Type: EventError, Fields: []string{"ERROR", message}}
+		ch <- Event{Type: EventUsage, Payload: Usage{InputTokens: *inputTokens, OutputTokens: *outputTokens, CacheRead: *cacheRead}}
+		ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
+		return true
+	}
+	return false
 }
 
 func emitOpenAIPendingCalls(ch chan<- Event, pending map[int]*openAIPendingCall) {
@@ -584,7 +801,7 @@ func (t *HTTPTransport) buildHeaders() http.Header {
 		h.Set("x-api-key", t.cfg.APIKey)
 		h.Set("anthropic-version", "2023-06-01")
 		h.Set("x-app", "cli")
-	case "openai":
+	case "openai", "responses":
 		h.Set("Authorization", "Bearer "+t.cfg.APIKey)
 	}
 	return h
@@ -652,6 +869,128 @@ func (t *HTTPTransport) buildOpenAIBody(messages, systemPrompt, toolDefs string,
 		body["tools"] = json.RawMessage(t.convertTools(toolDefs))
 	}
 	return json.Marshal(body)
+}
+
+// buildResponsesBody 将 Claude Messages 请求转换为 Responses API 格式。
+func (t *HTTPTransport) buildResponsesBody(messages, systemPrompt, toolDefs string, maxTokens int, thinking string) ([]byte, error) {
+	var msgs []json.RawMessage
+	if err := json.Unmarshal([]byte(messages), &msgs); err != nil {
+		return nil, err
+	}
+
+	input := make([]json.RawMessage, 0, len(msgs))
+	for _, raw := range msgs {
+		input = append(input, t.convertResponsesMessage(raw)...)
+	}
+
+	body := map[string]interface{}{
+		"model":             t.cfg.Model,
+		"input":             input,
+		"max_output_tokens": maxTokens,
+		"stream":            true,
+	}
+	if systemPrompt != "" {
+		body["instructions"] = systemPrompt
+	}
+	if thinking == "adaptive" || thinking == "enabled" {
+		body["reasoning"] = map[string]interface{}{"effort": t.cfg.Effort}
+	}
+	if toolDefs != "" {
+		body["tools"] = json.RawMessage(t.convertResponsesTools(toolDefs))
+	}
+	return json.Marshal(body)
+}
+
+// convertResponsesMessage 将一条 Claude 消息展开为 Responses input 项。
+func (t *HTTPTransport) convertResponsesMessage(raw json.RawMessage) []json.RawMessage {
+	var msg map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return []json.RawMessage{raw}
+	}
+	role, _ := extractJSONString(msg, "role")
+	content := msg["content"]
+	if role == "assistant" {
+		return t.convertResponsesAssistant(content)
+	}
+	if role == "user" {
+		var blocks []map[string]json.RawMessage
+		if json.Unmarshal(content, &blocks) != nil {
+			return []json.RawMessage{raw}
+		}
+		out := make([]json.RawMessage, 0, len(blocks))
+		for _, block := range blocks {
+			typ, _ := extractJSONString(block, "type")
+			switch typ {
+			case "tool_result":
+				callID, _ := extractJSONString(block, "tool_use_id")
+				value, _ := extractJSONString(block, "content")
+				item, _ := json.Marshal(map[string]interface{}{"type": "function_call_output", "call_id": callID, "output": value})
+				out = append(out, item)
+			case "text":
+				value, _ := extractJSONString(block, "text")
+				item, _ := json.Marshal(map[string]interface{}{"role": "user", "content": value})
+				out = append(out, item)
+			}
+		}
+		return out
+	}
+	return []json.RawMessage{raw}
+}
+
+func (t *HTTPTransport) convertResponsesAssistant(content json.RawMessage) []json.RawMessage {
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(content, &blocks) != nil {
+		return []json.RawMessage{json.RawMessage(`{"role":"assistant","content":` + string(content) + `}`)}
+	}
+	var text strings.Builder
+	out := make([]json.RawMessage, 0, len(blocks)+1)
+	for _, block := range blocks {
+		typ, _ := extractJSONString(block, "type")
+		switch typ {
+		case "text":
+			value, _ := extractJSONString(block, "text")
+			text.WriteString(value)
+		case "tool_use":
+			callID, _ := extractJSONString(block, "id")
+			name, _ := extractJSONString(block, "name")
+			args := block["input"]
+			if len(args) == 0 {
+				args = json.RawMessage("{}")
+			}
+			item, _ := json.Marshal(map[string]interface{}{"type": "function_call", "call_id": callID, "name": name, "arguments": string(args)})
+			out = append(out, item)
+		}
+	}
+	if text.Len() > 0 {
+		item, _ := json.Marshal(map[string]interface{}{"role": "assistant", "content": text.String()})
+		out = append([]json.RawMessage{item}, out...)
+	}
+	return out
+}
+
+func (t *HTTPTransport) convertResponsesTools(toolDefs string) string {
+	var tools []map[string]json.RawMessage
+	if json.Unmarshal([]byte(toolDefs), &tools) != nil {
+		return toolDefs
+	}
+	out := make([]map[string]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		name, _ := extractJSONString(tool, "name")
+		if name == "" {
+			continue
+		}
+		description, _ := extractJSONString(tool, "description")
+		parameters := tool["input_schema"]
+		if len(parameters) == 0 {
+			parameters = tool["parameters"]
+		}
+		if len(parameters) == 0 {
+			parameters = json.RawMessage("{}")
+		}
+		out = append(out, map[string]interface{}{"type": "function", "name": name, "description": description, "parameters": parameters})
+	}
+	encoded, _ := json.Marshal(out)
+	return string(encoded)
 }
 
 // convertMessage 将单条 Claude 消息转为 OpenAI 格式
@@ -812,7 +1151,13 @@ func (t *HTTPTransport) buildURL() string {
 		if base == "" {
 			base = "https://api.openai.com/v1"
 		}
-		return base + "/chat/completions"
+		return strings.TrimRight(base, "/") + "/chat/completions"
+	case "responses":
+		base := t.cfg.BaseURL
+		if base == "" {
+			base = "https://api.deepseek.com"
+		}
+		return strings.TrimRight(base, "/") + "/responses"
 	default:
 		return t.cfg.BaseURL
 	}

@@ -61,7 +61,7 @@ func main() {
 		thinking     string
 	)
 
-	flag.StringVar(&provider, "provider", "claude", "LLM provider: claude | openai")
+	flag.StringVar(&provider, "provider", "claude", "LLM provider: claude | openai | responses")
 	flag.StringVar(&provider, "p", "claude", "LLM provider (shorthand)")
 	flag.StringVar(&model, "model", "", "Model name")
 	flag.StringVar(&model, "m", "", "Model name (shorthand)")
@@ -160,7 +160,7 @@ Examples:
 		if cfg.BaseURL == "" {
 			cfg.BaseURL = os.Getenv("ANTHROPIC_BASE_URL")
 		}
-	case "openai":
+	case "openai", "responses":
 		if cfg.APIKey == "" {
 			cfg.APIKey = os.Getenv("OPENAI_API_KEY")
 		}
@@ -168,7 +168,7 @@ Examples:
 			cfg.BaseURL = os.Getenv("OPENAI_BASE_URL")
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown provider: %s (use claude|openai)\n", cfg.Provider)
+		fmt.Fprintf(os.Stderr, "Unknown provider: %s (use claude|openai|responses)\n", cfg.Provider)
 		os.Exit(1)
 	}
 
@@ -183,9 +183,12 @@ Examples:
 	}
 
 	if cfg.Model == "" {
-		if cfg.Provider == "openai" {
+		switch cfg.Provider {
+		case "openai":
 			cfg.Model = "gpt-4o"
-		} else {
+		case "responses":
+			cfg.Model = "deepseek-v4-flash"
+		default:
 			cfg.Model = "claude-sonnet-4-20250514"
 		}
 	}
@@ -206,7 +209,11 @@ Examples:
 
 	// API key 校验
 	if cfg.APIKey == "" && cfg.BaseURL == "" {
-		fmt.Fprintf(os.Stderr, "No API key. Set %s_API_KEY or use --api-key\n", strings.ToUpper(provider))
+		keyProvider := provider
+		if keyProvider == "responses" {
+			keyProvider = "openai"
+		}
+		fmt.Fprintf(os.Stderr, "No API key. Set %s_API_KEY or use --api-key\n", strings.ToUpper(keyProvider))
 		os.Exit(1)
 	}
 

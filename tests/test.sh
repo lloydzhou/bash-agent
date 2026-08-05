@@ -32,8 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 AGENT="${AGENT:-$ROOT_DIR/src/agent.sh}"
 AWK_DIR="$ROOT_DIR/src/awk"
-RUN_RESPONSES_TESTS=false
-[[ "$(basename "$AGENT")" == "agent.sh" ]] && RUN_RESPONSES_TESTS=true
+RUN_RESPONSES_TESTS=true
 PASS=0
 FAIL=0
 

@@ -306,9 +306,13 @@ Agent *agent_create(const char *provider, const char *model,
     if (strcmp(provider, "claude") == 0) {
         const char *base = (base_url && base_url[0]) ? base_url : "https://api.anthropic.com/v1";
         sb_appendf(&url_buf, "%s/messages", base);
-    } else {
+    } else if (strcmp(provider, "openai") == 0) {
         const char *base = (base_url && base_url[0]) ? base_url : "https://api.openai.com/v1";
         sb_appendf(&url_buf, "%s/chat/completions", base);
+    } else {
+        const char *base = (base_url && base_url[0]) ? base_url : "https://api.deepseek.com";
+        size_t len = strlen(base);
+        sb_appendf(&url_buf, "%.*s/responses", (int)(len && base[len - 1] == '/' ? len - 1 : len), base);
     }
     a->api_url = url_buf.data;
 
@@ -884,6 +888,9 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         char *body = claude_body;
         if (strcmp(agent->provider, "openai") == 0) {
             body = convert_to_openai(claude_body);
+            free(claude_body);
+        } else if (strcmp(agent->provider, "responses") == 0) {
+            body = convert_to_responses(claude_body);
             free(claude_body);
         }
         if (agent->verbose && body) {
@@ -2839,6 +2846,10 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         char *openai_body = convert_to_openai(summary_body);
         free(summary_body);
         summary_body = openai_body;
+    } else if (strcmp(agent->provider, "responses") == 0) {
+        char *responses_body = convert_to_responses(summary_body);
+        free(summary_body);
+        summary_body = responses_body;
     }
     /* 发送 summary 请求 */
     const char *headers[8];

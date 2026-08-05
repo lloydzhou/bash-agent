@@ -19,7 +19,7 @@ import (
 
 // Config 包含所有用户可配置选项（对应 bash 全局变量）
 type Config struct {
-	Provider           string   // claude | openai
+	Provider           string   // claude | openai | responses
 	Model              string   // 模型名
 	APIKey             string   // API 密钥
 	BaseURL            string   // API 基础 URL

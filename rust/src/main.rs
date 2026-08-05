@@ -165,7 +165,9 @@ fn print_usage() {
     println!("Usage: rustagent [options] [prompt]");
     println!();
     println!("Options:");
-    println!("  -p, --provider PROV     LLM provider: claude | openai (default: claude)");
+    println!(
+        "  -p, --provider PROV     LLM provider: claude | openai | responses (default: claude)"
+    );
     println!("  -m, --model MODEL       Model name");
     println!("  --max-tokens N          Max output tokens (default: 16384)");
     println!("  --tool-timeout N        Tool execution timeout in seconds (default: 600)");

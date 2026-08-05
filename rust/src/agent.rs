@@ -2149,10 +2149,7 @@ impl Agent {
     fn headers(&self) -> Vec<(String, String)> {
         let mut h = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
-            (
-                "User-Agent".to_string(),
-                "bash-agent/4.3.2".to_string(),
-            ),
+            ("User-Agent".to_string(), "bash-agent/4.3.2".to_string()),
         ];
         match self.cfg.provider.as_str() {
             "claude" => {
@@ -2160,7 +2157,7 @@ impl Agent {
                 h.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
                 h.push(("x-app".to_string(), "cli".to_string()));
             }
-            "openai" => {
+            "openai" | "responses" => {
                 h.push((
                     "Authorization".to_string(),
                     format!("Bearer {}", self.cfg.api_key),

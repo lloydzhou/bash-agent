@@ -121,4 +121,7 @@ char *build_claude_request(const char *model, const char *system_prompt,
 /* 将 Claude 请求体转换为 OpenAI 格式 */
 char *convert_to_openai(const char *claude_body);
 
+/* 将 Claude 请求体转换为 Responses API 格式 */
+char *convert_to_responses(const char *claude_body);
+
 #endif /* TRANSPORT_H */

@@ -22,6 +22,7 @@ pub trait Transport: Send + Sync {
 pub fn new_transport(cfg: &Config) -> Box<dyn Transport> {
     match cfg.provider.as_str() {
         "openai" => Box::new(OpenAITransport),
+        "responses" => Box::new(ResponsesTransport),
         _ => Box::new(ClaudeTransport),
     }
 }
@@ -167,6 +168,121 @@ impl crate::traits::Transport for OpenAITransport {
     ) -> Result<()> {
         <Self as Transport>::parse_sse(self, reader, emit)
     }
+}
+
+struct ResponsesTransport;
+
+impl Transport for ResponsesTransport {
+    fn convert_body(&self, claude_body: &[u8]) -> Result<Vec<u8>> {
+        let raw: Value = serde_json::from_slice(claude_body)
+            .map_err(|e| anyhow!("transport_responses_body: {e}"))?;
+        let messages = raw
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut body = json!({
+            "model": raw.get("model").and_then(Value::as_str).unwrap_or(""),
+            "input": convert_messages_to_responses(&messages),
+            "max_output_tokens": raw.get("max_tokens").and_then(Value::as_i64).unwrap_or(0),
+            "stream": true,
+        });
+        if let Some(system) = raw.get("system") {
+            if let Some(s) = system.as_str() {
+                if !s.is_empty() {
+                    body["instructions"] = Value::String(s.to_string());
+                }
+            } else if !system.is_null() {
+                body["instructions"] = system.clone();
+            }
+        }
+        let thinking = raw
+            .get("thinking")
+            .and_then(|v| v.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if thinking == "adaptive" || thinking == "enabled" {
+            let effort = raw
+                .get("output_config")
+                .and_then(|v| v.get("effort"))
+                .and_then(Value::as_str)
+                .unwrap_or("high");
+            body["reasoning"] = json!({"effort": effort});
+        }
+        if let Some(tools) = raw.get("tools").and_then(Value::as_array) {
+            if !tools.is_empty() {
+                body["tools"] = Value::Array(convert_tools_to_responses(tools));
+            }
+        }
+        Ok(serde_json::to_vec(&body)?)
+    }
+
+    fn parse_sse(
+        &self,
+        reader: Box<dyn Read + Send>,
+        emit: &mut dyn FnMut(Event) -> Result<()>,
+    ) -> Result<()> {
+        sse::responses::parse(reader, emit)
+    }
+}
+
+impl crate::traits::Transport for ResponsesTransport {
+    fn convert_body(&self, claude_body: &[u8]) -> Result<Vec<u8>> {
+        <Self as Transport>::convert_body(self, claude_body)
+    }
+
+    fn parse_sse(
+        &self,
+        reader: Box<dyn Read + Send>,
+        emit: &mut dyn FnMut(Event) -> Result<()>,
+    ) -> Result<()> {
+        <Self as Transport>::parse_sse(self, reader, emit)
+    }
+}
+
+fn convert_messages_to_responses(messages: &[Value]) -> Vec<Value> {
+    let mut result = Vec::new();
+    for msg in messages {
+        let role = msg.get("role").and_then(Value::as_str).unwrap_or("");
+        let content = msg.get("content").cloned().unwrap_or(Value::Null);
+        if role == "assistant" && content.is_array() {
+            let mut text = String::new();
+            for block in content.as_array().into_iter().flatten() {
+                match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "text" => text.push_str(block.get("text").and_then(Value::as_str).unwrap_or("")),
+                    "tool_use" => result.push(json!({
+                        "type":"function_call", "call_id":block.get("id").and_then(Value::as_str).unwrap_or(""),
+                        "name":block.get("name").and_then(Value::as_str).unwrap_or(""),
+                        "arguments":block.get("input").cloned().unwrap_or_else(|| json!({})).to_string()
+                    })),
+                    _ => {}
+                }
+            }
+            if !text.is_empty() {
+                result.push(json!({"role":"assistant", "content":text}));
+            }
+        } else if role == "user" && content.is_array() {
+            for block in content.as_array().into_iter().flatten() {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_result") => result.push(json!({"type":"function_call_output", "call_id":block.get("tool_use_id").and_then(Value::as_str).unwrap_or(""), "output":block.get("content").and_then(Value::as_str).unwrap_or("")})),
+                    Some("text") => result.push(json!({"role":"user", "content":block.get("text").and_then(Value::as_str).unwrap_or("")})),
+                    _ => {}
+                }
+            }
+        } else {
+            result.push(msg.clone());
+        }
+    }
+    result
+}
+
+fn convert_tools_to_responses(tools: &[Value]) -> Vec<Value> {
+    tools.iter().map(|tool| json!({
+        "type":"function",
+        "name":tool.get("name").and_then(Value::as_str).unwrap_or(""),
+        "description":tool.get("description").and_then(Value::as_str).unwrap_or(""),
+        "parameters":tool.get("input_schema").cloned().or_else(|| tool.get("parameters").cloned()).unwrap_or_else(|| json!({}))
+    })).collect()
 }
 
 fn convert_messages_to_openai(messages: &[Value]) -> Result<Vec<Value>> {
