@@ -51,6 +51,7 @@ typedef struct {
     int openai_tool_count;
     int openai_tool_cap;
     int responses_saw_text;
+    int responses_terminal;
     int responses_input_tokens;
     int responses_output_tokens;
     int responses_cache_read_tokens;
@@ -244,7 +245,11 @@ static void responses_record_usage(StreamCtx *sctx, JsonVal response) {
     JsonVal usage = json_get(response, "usage");
     if (usage.type == JSON_NULL) usage = response;
     sctx->responses_output_tokens = json_get_int(usage, "output_tokens");
-    sctx->responses_cache_read_tokens = json_get_int(usage, "cached_tokens");
+    JsonVal input_details = json_get(usage, "input_tokens_details");
+    int nested_cached = input_details.type == JSON_NULL ? 0 : json_get_int(input_details, "cached_tokens");
+    sctx->responses_cache_read_tokens = nested_cached > 0
+        ? nested_cached
+        : json_get_int(usage, "cached_tokens");
     sctx->responses_input_tokens = json_get_int(usage, "input_tokens") - sctx->responses_cache_read_tokens;
     if (sctx->responses_input_tokens < 0) sctx->responses_input_tokens = 0;
 }
@@ -307,18 +312,21 @@ static void parse_responses_sse_event(StreamCtx *sctx, const char *event, const 
         streamctx_emit_openai_tool_calls(sctx);
         responses_emit_usage(sctx);
         emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, has_tools ? "tool_use" : "end_turn");
-    } else if (strcmp(event, "response.failed") == 0 || strcmp(event, "response.incomplete") == 0) {
+        sctx->responses_terminal = 1;
+    } else if (strcmp(event, "response.failed") == 0 || strcmp(event, "response.incomplete") == 0 || strcmp(event, "error") == 0) {
         JsonVal response = json_get(root, "response");
         if (response.type == JSON_NULL) response = root;
         responses_record_usage(sctx, response);
         JsonVal error = json_get(response, "error");
         char *message = json_get_string(error, "message");
         if (!message) message = json_get_string(response, "message");
+        if (!message) message = json_get_string(response, "reason");
         if (!message) message = util_strdup(strcmp(event, "response.incomplete") == 0 ? "Response incomplete" : "Response failed");
         emit_simple_event(sctx->callback, sctx->ctx, SSE_ERROR, message);
         FREE_PTR(message);
         responses_emit_usage(sctx);
         emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "error");
+        sctx->responses_terminal = 1;
     }
 }
 
@@ -637,6 +645,10 @@ int http_post_sse(const char *url, const char **headers, int header_count,
             }
             if (rc != CURLE_OK) return -1;
             if (http_code >= 400) return (int)http_code;
+            if (strcmp(provider, "responses") == 0 && !sctx.responses_terminal) {
+                emit_simple_event(callback, ctx, SSE_ERROR, "Stream interrupted (no response.completed received)");
+                emit_simple_event(callback, ctx, SSE_STOP, "error");
+            }
             return 0;
         }
 

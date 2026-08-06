@@ -638,7 +638,7 @@ pub mod responses {
                     }))?;
                     completed = true;
                 }
-                "response.failed" | "response.incomplete" => {
+                "response.failed" | "response.incomplete" | "error" => {
                     let response = body.get("response").unwrap_or(&body);
                     record_usage(
                         response,
@@ -732,8 +732,11 @@ pub mod responses {
             .and_then(Value::as_i64)
             .unwrap_or(0);
         *cached = usage
-            .get("cached_tokens")
+            .get("input_tokens_details")
+            .and_then(|v| v.get("cached_tokens"))
             .and_then(Value::as_i64)
+            .filter(|v| *v != 0)
+            .or_else(|| usage.get("cached_tokens").and_then(Value::as_i64))
             .unwrap_or(0);
         *input = (usage
             .get("input_tokens")
@@ -759,5 +762,69 @@ pub mod responses {
         }
         calls.clear();
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::io::Cursor;
+
+        #[test]
+        fn responses_parses_nested_cache_and_error_event() {
+            let stream = concat!(
+                "event: response.output_item.added\n",
+                "data: {\"output_index\":2,\"item\":{\"id\":\"item_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"Read\"}}\n\n",
+                "event: response.function_call_arguments.delta\n",
+                "data: {\"item_id\":\"item_1\",\"delta\":\"{\\\"path\\\":\\\"/tmp/a\\\"}\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"response\":{\"usage\":{\"input_tokens\":15,\"output_tokens\":8,\"cached_tokens\":4,\"input_tokens_details\":{\"cached_tokens\":6}}}}\n"
+            );
+            let mut events = Vec::new();
+            parse(Cursor::new(stream), |event| {
+                events.push(event);
+                Ok(())
+            })
+            .unwrap();
+            assert!(
+                matches!(&events[0], Event::ToolCall(call) if call.name == "Read" && call.id == "call_1" && call.input_json == serde_json::json!({"path":"/tmp/a"}))
+            );
+            assert!(
+                matches!(&events[1], Event::Usage(usage) if usage.input_tokens == 9 && usage.output_tokens == 8 && usage.cache_read_input_tokens == 6)
+            );
+            assert!(matches!(&events[2], Event::Stop(stop) if stop.reason == "tool_use"));
+
+            let mut errors = Vec::new();
+            parse(
+                Cursor::new("event: error\ndata: {\"reason\":\"upstream failed\"}\n"),
+                |event| {
+                    errors.push(event);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(
+                matches!(&errors[0], Event::Error(error) if error.message == "upstream failed")
+            );
+            assert!(matches!(&errors[1], Event::Usage(_)));
+            assert!(matches!(&errors[2], Event::Stop(stop) if stop.reason == "error"));
+        }
+
+        #[test]
+        fn responses_reports_interrupted_stream() {
+            let mut events = Vec::new();
+            parse(
+                Cursor::new("event: response.output_text.delta\ndata: {\"delta\":\"partial\"}\n"),
+                |event| {
+                    events.push(event);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(matches!(&events[0], Event::Text(text) if text.content == "partial"));
+            assert!(
+                matches!(&events[1], Event::Error(error) if error.message == "Stream interrupted (no response.completed received)")
+            );
+            assert!(matches!(&events[2], Event::Stop(stop) if stop.reason == "error"));
+        }
     }
 }

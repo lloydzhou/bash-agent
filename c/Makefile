@@ -9,7 +9,7 @@ VENDOR_SRCS = vendor/linenoise/linenoise.c
 OBJS = $(patsubst %.c,$(BUILDDIR)/%.o,$(SRCS)) $(patsubst %.c,$(BUILDDIR)/%.o,$(VENDOR_SRCS))
 TARGET = ../dist/cagent
 
-.PHONY: all clean test-continue
+.PHONY: all clean test-continue test-transport
 
 all: $(TARGET)
 
@@ -32,7 +32,7 @@ $(BUILDDIR)/%.o: %.c tools_embed.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -rf $(BUILDDIR) $(TARGET) tools_embed.h test_classify test_continue
+	rm -rf $(BUILDDIR) $(TARGET) tools_embed.h test_classify test_continue test_transport
 
 test-classify: test_classify.c
 	$(MAKE) $(BUILDDIR)/tools_test.o CFLAGS="$(CFLAGS) -DTEST_CLASSIFY" OBJS="$(filter-out $(BUILDDIR)/cagent.o $(BUILDDIR)/tools.o,$(OBJS)) $(BUILDDIR)/tools_test.o"
@@ -42,6 +42,10 @@ test-classify: test_classify.c
 test-continue: test_continue.c store.c util.c json.c
 	$(CC) $(CFLAGS) -o test_continue test_continue.c store.c util.c json.c
 	@./test_continue
+
+test-transport: test_transport.c transport.c util.c json.c
+	$(CC) $(CFLAGS) -o test_transport test_transport.c util.c json.c $(LDFLAGS)
+	@./test_transport
 
 $(BUILDDIR)/tools_test.o: tools.c tools.h agent.h msgqueue.h protocol.h json.h util.h
 	$(CC) $(CFLAGS) -DTEST_CLASSIFY -c -o $@ tools.c

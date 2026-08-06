@@ -68,7 +68,7 @@ BEGIN {
         _emit_terminal("end_turn")
         completed = 1
     }
-    else if (event == "response.incomplete" || event == "response.failed") {
+    else if (event == "response.incomplete" || event == "response.failed" || event == "error") {
         response = extract_value(json, "response")
         if (response == "") response = json
         _record_usage(response)
@@ -83,6 +83,14 @@ BEGIN {
         completed = 1
     }
     next
+}
+
+END {
+    if (!completed) {
+        _close_block()
+        printf "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"Stream interrupted (no response.completed received)\"}}\n\n"
+        _emit_terminal("error")
+    }
 }
 
 function _reset() {
@@ -145,12 +153,17 @@ function _record_tool_arguments(json,    idx, delta, item_id) {
     if (delta != "" && delta != "null") tool_args[idx] = tool_args[idx] delta
 }
 
-function _record_usage(response,    usage, total_input, cached) {
+function _record_usage(response,    usage, total_input, cached, input_details, nested_cached) {
     usage = extract_value(response, "usage")
     if (usage == "") usage = response
     total_input = extract_num(usage, "input_tokens")
     output_tokens = extract_num(usage, "output_tokens")
     cached = extract_num(usage, "cached_tokens")
+    input_details = extract_value(usage, "input_tokens_details")
+    if (input_details != "") {
+        nested_cached = extract_num(input_details, "cached_tokens")
+        if (nested_cached != "" && nested_cached != 0) cached = nested_cached
+    }
     if (cached == "") cached = 0
     cache_read_input_tokens = cached
     if (total_input != "") input_tokens = total_input - cached

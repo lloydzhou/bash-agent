@@ -479,14 +479,14 @@ event: response.output_item.added
 data: {"output_index":2,"item":{"id":"fc_2","type":"function_call","call_id":"call_2","name":"Glob","arguments":"{\"pattern\":\"*.txt\"}"}}
 
 event: response.completed
-data: {"response":{"usage":{"input_tokens":15,"output_tokens":8,"cached_tokens":4}}}
+data: {"response":{"usage":{"input_tokens":15,"output_tokens":8,"cached_tokens":4,"input_tokens_details":{"cached_tokens":6}}}}
 SSE
 )
     if echo "$output" | grep -q '^THINKING:先分析$' && \
        echo "$output" | grep -q '^TEXT:处理完成$' && \
        echo "$output" | grep -Fq $'TOOL_CALL:Read\tcall_1\t{"path":"/tmp/a"}\tpath\t/tmp/a' && \
        echo "$output" | grep -Fq $'TOOL_CALL:Glob\tcall_2\t{"pattern":"*.txt"}\tpattern\t*.txt' && \
-       echo "$output" | grep -Fq $'USAGE:11\t8\t4\t0' && \
+       echo "$output" | grep -Fq $'USAGE:9\t8\t6\t0' && \
        echo "$output" | grep -q '^STOP:tool_use$'; then
         green "Responses SSE 解析"; ((PASS++)) || true
     else
@@ -503,8 +503,8 @@ data: {"delta":"stale"}
 
 RETRY: 1
 
-event: response.failed
-data: {"response":{"error":{"message":"上游失败"},"usage":{"input_tokens":9,"output_tokens":2}}}
+event: error
+data: {"reason":"上游失败","usage":{"input_tokens":9,"output_tokens":2}}
 SSE
 )
     if echo "$output" | grep -q '^TEXT:stale$' && \
@@ -514,6 +514,23 @@ SSE
         green "Responses SSE 失败与重试"; ((PASS++)) || true
     else
         red "Responses SSE 失败与重试"; echo "  输出: $output"; ((FAIL++)) || true
+    fi
+}
+
+test_responses_sse_interrupted() {
+    info "Test 7f: Responses SSE 中断兜底"
+    local output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
+event: response.output_text.delta
+data: {"delta":"partial"}
+SSE
+)
+    if echo "$output" | grep -q '^TEXT:partial$' && \
+       echo "$output" | grep -q '^ERROR:Stream interrupted (no response.completed received)$' && \
+       echo "$output" | grep -q '^STOP:error$'; then
+        green "Responses SSE 中断兜底"; ((PASS++)) || true
+    else
+        red "Responses SSE 中断兜底"; echo "  输出: $output"; ((FAIL++)) || true
     fi
 }
 
@@ -2934,6 +2951,7 @@ if $RUN_RESPONSES_TESTS; then
     test_responses_transport_body
     test_responses_sse
     test_responses_sse_failure_and_retry
+    test_responses_sse_interrupted
 fi
 test_http_stream_error_body
 test_transport_body

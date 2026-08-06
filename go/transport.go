@@ -186,9 +186,12 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 	}()
 	defer func() {
 		if !stopEmitted {
-			// No message_stop received — stream was interrupted (connection reset,
-			// timeout, early EOF). 对标 awk 的 END 块兜底逻辑。
-			ch <- Event{Type: EventError, Fields: []string{"ERROR", "Stream interrupted (no message_stop received)"}}
+			// 未收到终态，可能是连接重置、超时或提前 EOF。
+			message := "Stream interrupted (no message_stop received)"
+			if t.cfg.Provider == "responses" {
+				message = "Stream interrupted (no response.completed received)"
+			}
+			ch <- Event{Type: EventError, Fields: []string{"ERROR", message}}
 			ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
 		}
 	}()
@@ -222,7 +225,7 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 		if strings.HasPrefix(line, "data: ") {
 			data := line[6:]
 
-			if t.cfg.Provider == "responses" && strings.HasPrefix(eventType, "response.") {
+			if t.cfg.Provider == "responses" && (strings.HasPrefix(eventType, "response.") || eventType == "error") {
 				if t.handleResponsesEvent(eventType, data, ch, responsesPendingCalls, responsesItemIndexes,
 					&responsesTextStarted, &inputTokens, &outputTokens, &cacheRead) {
 					stopEmitted = true
@@ -490,7 +493,7 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 		}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", stopReason}}
 		return true
-	case "response.failed", "response.incomplete":
+	case "response.failed", "response.incomplete", "error":
 		recordUsage()
 		message := payload.Response.Error.Message
 		if message == "" {
