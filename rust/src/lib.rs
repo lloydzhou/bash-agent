@@ -208,7 +208,7 @@ pub mod config {
                     cfg.base_url = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_default();
                 }
             }
-            "openai" => {
+            "openai" | "responses" => {
                 if cfg.api_key.is_empty() {
                     cfg.api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
                 }
@@ -216,7 +216,10 @@ pub mod config {
                     cfg.base_url = std::env::var("OPENAI_BASE_URL").unwrap_or_default();
                 }
             }
-            _ => bail!("unknown provider: {} (use claude|openai)", cfg.provider),
+            _ => bail!(
+                "unknown provider: {} (use claude|openai|responses)",
+                cfg.provider
+            ),
         }
 
         // 仅当前 provider 没有显式配置时，自动回退至 DeepSeek。
@@ -236,7 +239,7 @@ pub mod config {
         if cfg.api_key.is_empty() && cfg.base_url.is_empty() {
             match cfg.provider.as_str() {
                 "claude" => bail!("no API key. Set ANTHROPIC_API_KEY or use --api-key"),
-                "openai" => bail!("no API key. Set OPENAI_API_KEY or use --api-key"),
+                "openai" | "responses" => bail!("no API key. Set OPENAI_API_KEY or use --api-key"),
                 _ => unreachable!(),
             }
         }
@@ -245,6 +248,7 @@ pub mod config {
             cfg.model = match cfg.provider.as_str() {
                 "claude" => "claude-sonnet-4-20250514",
                 "openai" => "gpt-4o",
+                "responses" => "deepseek-v4-flash",
                 _ => unreachable!(),
             }
             .to_string();
@@ -268,7 +272,15 @@ pub mod config {
                 } else {
                     cfg.base_url.as_str()
                 };
-                format!("{}/chat/completions", base)
+                format!("{}/chat/completions", base.trim_end_matches('/'))
+            }
+            "responses" => {
+                let base = if cfg.base_url.is_empty() {
+                    "https://api.deepseek.com"
+                } else {
+                    cfg.base_url.as_str()
+                };
+                format!("{}/responses", base.trim_end_matches('/'))
             }
             _ => String::new(),
         }

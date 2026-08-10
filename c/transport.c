@@ -44,11 +44,21 @@ typedef struct {
     sse_callback_fn callback;
     void *ctx;
     StrBuf line_buf;        /* 累积 SSE 行 */
-    char *provider;         /* "claude" 或 "openai" */
+    char *event;            /* Responses SSE 事件名 */
+    char *provider;         /* "claude"、"openai" 或 "responses" */
     volatile int *cancelled;
     OpenAIToolAccum *openai_tools;
     int openai_tool_count;
     int openai_tool_cap;
+    int responses_saw_text;
+    int responses_terminal;
+    int responses_input_tokens;
+    int responses_output_tokens;
+    int responses_cache_read_tokens;
+    char **responses_item_ids;
+    int *responses_item_indexes;
+    int responses_item_count;
+    int responses_item_cap;
 } StreamCtx;
 
 static void emit_simple_event(sse_callback_fn callback, void *ctx,
@@ -56,6 +66,11 @@ static void emit_simple_event(sse_callback_fn callback, void *ctx,
 static void fill_openai_usage_event(SseEvent *evt, JsonVal usage);
 
 static void streamctx_free_openai_tools(StreamCtx *sctx) {
+    for (int i = 0; i < sctx->responses_item_count; i++) FREE_PTR(sctx->responses_item_ids[i]);
+    FREE_PTR(sctx->responses_item_ids);
+    FREE_PTR(sctx->responses_item_indexes);
+    sctx->responses_item_count = 0;
+    sctx->responses_item_cap = 0;
     for (int i = 0; i < sctx->openai_tool_count; i++) {
         FREE_PTR(sctx->openai_tools[i].id);
         FREE_PTR(sctx->openai_tools[i].name);
@@ -196,6 +211,125 @@ static void parse_openai_sse_event(StreamCtx *sctx, const char *data, size_t dat
     }
 }
 
+
+
+static int responses_tool_index(StreamCtx *sctx, JsonVal root, JsonVal item) {
+    char *item_id = json_get_string(root, "item_id");
+    if (!item_id && item.type != JSON_NULL) item_id = json_get_string(item, "id");
+    JsonVal output_index = json_get(root, "output_index");
+    int idx = output_index.type == JSON_NUMBER ? json_get_int(root, "output_index") : -1;
+    if (idx < 0 && item_id) {
+        for (int i = 0; i < sctx->responses_item_count; i++) {
+            if (strcmp(sctx->responses_item_ids[i], item_id) == 0) { idx = sctx->responses_item_indexes[i]; break; }
+        }
+    }
+    if (idx >= 0 && item_id) {
+        int found = 0;
+        for (int i = 0; i < sctx->responses_item_count; i++) if (strcmp(sctx->responses_item_ids[i], item_id) == 0) { found = 1; break; }
+        if (!found) {
+            if (sctx->responses_item_count >= sctx->responses_item_cap) {
+                sctx->responses_item_cap = sctx->responses_item_cap ? sctx->responses_item_cap * 2 : 4;
+                sctx->responses_item_ids = realloc(sctx->responses_item_ids, (size_t)sctx->responses_item_cap * sizeof(char *));
+                sctx->responses_item_indexes = realloc(sctx->responses_item_indexes, (size_t)sctx->responses_item_cap * sizeof(int));
+            }
+            int pos = sctx->responses_item_count++;
+            sctx->responses_item_ids[pos] = util_strdup(item_id);
+            sctx->responses_item_indexes[pos] = idx;
+        }
+    }
+    FREE_PTR(item_id);
+    return idx;
+}
+
+static void responses_record_usage(StreamCtx *sctx, JsonVal response) {
+    JsonVal usage = json_get(response, "usage");
+    if (usage.type == JSON_NULL) usage = response;
+    sctx->responses_output_tokens = json_get_int(usage, "output_tokens");
+    JsonVal input_details = json_get(usage, "input_tokens_details");
+    int nested_cached = input_details.type == JSON_NULL ? 0 : json_get_int(input_details, "cached_tokens");
+    sctx->responses_cache_read_tokens = nested_cached > 0
+        ? nested_cached
+        : json_get_int(usage, "cached_tokens");
+    sctx->responses_input_tokens = json_get_int(usage, "input_tokens") - sctx->responses_cache_read_tokens;
+    if (sctx->responses_input_tokens < 0) sctx->responses_input_tokens = 0;
+}
+
+static void responses_emit_usage(StreamCtx *sctx) {
+    SseEvent evt;
+    memset(&evt, 0, sizeof(evt));
+    evt.type = SSE_USAGE;
+    evt.in_tokens = sctx->responses_input_tokens;
+    evt.out_tokens = sctx->responses_output_tokens;
+    evt.cache_read_tokens = sctx->responses_cache_read_tokens;
+    sctx->callback(sctx->ctx, &evt);
+}
+
+static void parse_responses_sse_event(StreamCtx *sctx, const char *event, const char *data, size_t data_len) {
+    if (data_len == 0) return;
+    size_t pos = 0;
+    JsonParse jp = json_parse(data, &pos);
+    if (jp.error) return;
+    JsonVal root = jp.val;
+    if (strcmp(event, "response.reasoning_text.delta") == 0) {
+        char *delta = json_get_string(root, "delta");
+        if (delta && delta[0]) emit_simple_event(sctx->callback, sctx->ctx, SSE_THINKING, delta);
+        FREE_PTR(delta);
+    } else if (strcmp(event, "response.output_text.delta") == 0) {
+        char *delta = json_get_string(root, "delta");
+        if (delta) {
+            char *text = delta;
+            if (!sctx->responses_saw_text) while (*text == '\n' || *text == '\r') text++;
+            if (*text) { sctx->responses_saw_text = 1; emit_simple_event(sctx->callback, sctx->ctx, SSE_TEXT, text); }
+        }
+        FREE_PTR(delta);
+    } else if (strcmp(event, "response.output_item.added") == 0 || strcmp(event, "response.output_item.done") == 0) {
+        JsonVal item = json_get(root, "item");
+        char *type = json_get_string(item, "type");
+        if (type && strcmp(type, "function_call") == 0) {
+            int idx = responses_tool_index(sctx, root, item);
+            if (idx < 0) { FREE_PTR(type); return; }
+            OpenAIToolAccum *tool = streamctx_ensure_openai_tool(sctx, idx);
+            char *id = json_get_string(item, "call_id");
+            char *name = json_get_string(item, "name");
+            char *args = json_get_string(item, "arguments");
+            if (id && id[0]) { FREE_PTR(tool->id); tool->id = id; } else FREE_PTR(id);
+            if (name && name[0]) { FREE_PTR(tool->name); tool->name = name; } else FREE_PTR(name);
+            if (args && args[0]) { sb_truncate(&tool->arguments, 0); sb_append(&tool->arguments, args); }
+            FREE_PTR(args);
+        }
+        FREE_PTR(type);
+    } else if (strcmp(event, "response.function_call_arguments.delta") == 0) {
+        int idx = responses_tool_index(sctx, root, json_get(root, "item"));
+        if (idx < 0) return;
+        OpenAIToolAccum *tool = streamctx_ensure_openai_tool(sctx, idx);
+        char *delta = json_get_string(root, "delta");
+        if (delta) { sb_append(&tool->arguments, delta); FREE_PTR(delta); }
+    } else if (strcmp(event, "response.completed") == 0) {
+        JsonVal response = json_get(root, "response");
+        if (response.type == JSON_NULL) response = root;
+        responses_record_usage(sctx, response);
+        int has_tools = sctx->openai_tool_count > 0;
+        streamctx_emit_openai_tool_calls(sctx);
+        responses_emit_usage(sctx);
+        emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, has_tools ? "tool_use" : "end_turn");
+        sctx->responses_terminal = 1;
+    } else if (strcmp(event, "response.failed") == 0 || strcmp(event, "response.incomplete") == 0 || strcmp(event, "error") == 0) {
+        JsonVal response = json_get(root, "response");
+        if (response.type == JSON_NULL) response = root;
+        responses_record_usage(sctx, response);
+        JsonVal error = json_get(response, "error");
+        char *message = json_get_string(error, "message");
+        if (!message) message = json_get_string(response, "message");
+        if (!message) message = json_get_string(response, "reason");
+        if (!message) message = util_strdup(strcmp(event, "response.incomplete") == 0 ? "Response incomplete" : (strcmp(event, "error") == 0 ? "Stream error" : "Response failed"));
+        emit_simple_event(sctx->callback, sctx->ctx, SSE_ERROR, message);
+        FREE_PTR(message);
+        responses_emit_usage(sctx);
+        emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "error");
+        sctx->responses_terminal = 1;
+    }
+}
+
 static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     StreamCtx *sctx = (StreamCtx *)userdata;
 
@@ -220,14 +354,19 @@ static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
             size_t llen = strlen(line);
             if (llen > 0 && line[llen-1] == '\r') line[--llen] = '\0';
 
-            if (strncmp(line, "data: ", 6) == 0) {
+            if (strncmp(line, "event: ", 7) == 0 && strcmp(sctx->provider, "responses") == 0) {
+                FREE_PTR(sctx->event);
+                sctx->event = util_strdup(line + 7);
+            } else if (strncmp(line, "data: ", 6) == 0) {
                 const char *data = line + 6;
                 if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
+                else if (strcmp(sctx->provider, "responses") == 0) parse_responses_sse_event(sctx, sctx->event ? sctx->event : "", data, strlen(data));
                 else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx);
             } else if (strncmp(line, "data:", 5) == 0) {
                 const char *data = line + 5;
                 while (*data == ' ') data++;
                 if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
+                else if (strcmp(sctx->provider, "responses") == 0) parse_responses_sse_event(sctx, sctx->event ? sctx->event : "", data, strlen(data));
                 else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx);
             }
             /* 重置行缓冲 */
@@ -455,14 +594,12 @@ int http_post_sse(const char *url, const char **headers, int header_count,
         if (!curl) { curl_slist_free_all(hdrs); return -1; }
 
         StreamCtx sctx;
+        memset(&sctx, 0, sizeof(sctx));
         sctx.callback = callback;
         sctx.ctx = ctx;
         sb_init(&sctx.line_buf);
         sctx.cancelled = cancelled;
         sctx.provider = (char *)provider;
-        sctx.openai_tools = NULL;
-        sctx.openai_tool_count = 0;
-        sctx.openai_tool_cap = 0;
 
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -497,6 +634,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
                 process_residual_json(&sctx, provider, callback, ctx);
             }
             sb_free(&sctx.line_buf);
+            FREE_PTR(sctx.event);
             streamctx_free_openai_tools(&sctx);
             curl_easy_cleanup(curl);
             curl_slist_free_all(hdrs);
@@ -507,11 +645,16 @@ int http_post_sse(const char *url, const char **headers, int header_count,
             }
             if (rc != CURLE_OK) return -1;
             if (http_code >= 400) return (int)http_code;
+            if (strcmp(provider, "responses") == 0 && !sctx.responses_terminal) {
+                emit_simple_event(callback, ctx, SSE_ERROR, "Stream interrupted (no response.completed received)");
+                emit_simple_event(callback, ctx, SSE_STOP, "error");
+            }
             return 0;
         }
 
         /* 需要重试 → 清理本次尝试的状态 */
         sb_free(&sctx.line_buf);
+        FREE_PTR(sctx.event);
         streamctx_free_openai_tools(&sctx);
         curl_easy_cleanup(curl);
 
@@ -1182,5 +1325,109 @@ char *convert_to_openai(const char *claude_body) {
     FREE_PTR(model);
     sb_free(&messages);
     sb_free(&tools);
+    return result.data;
+}
+
+
+static void responses_convert_tools(StrBuf *out, JsonVal tools_val) {
+    sb_append_char(out, '[');
+    int wrote = 0;
+    int n = json_array_len(tools_val);
+    for (int i = 0; i < n; i++) {
+        JsonVal tool = json_array_get(tools_val, i);
+        char *name = json_get_string(tool, "name");
+        if (!name || !name[0]) { FREE_PTR(name); continue; }
+        char *desc = json_get_string(tool, "description");
+        JsonVal parameters = json_get(tool, "input_schema");
+        if (parameters.type == JSON_NULL) parameters = json_get(tool, "parameters");
+        if (wrote++) sb_append_char(out, ',');
+        sb_append(out, "{\"type\":\"function\",\"name\":");
+        sb_append_json_string(out, name);
+        sb_append(out, ",\"description\":");
+        sb_append_json_string(out, desc ? desc : "");
+        sb_append(out, ",\"parameters\":");
+        if (parameters.type == JSON_NULL) sb_append(out, "{}"); else sb_append_json_val(out, parameters);
+        sb_append_char(out, '}');
+        FREE_PTR(name); FREE_PTR(desc);
+    }
+    sb_append_char(out, ']');
+}
+
+static void responses_convert_messages(StrBuf *out, JsonVal messages_val) {
+    sb_append_char(out, '[');
+    int wrote = 0;
+    int n = json_array_len(messages_val);
+    for (int i = 0; i < n; i++) {
+        JsonVal msg = json_array_get(messages_val, i);
+        char *role = json_get_string(msg, "role");
+        JsonVal content = json_get(msg, "content");
+        if (role && strcmp(role, "assistant") == 0 && content.type == JSON_ARRAY) {
+            StrBuf text; sb_init(&text);
+            int blocks = json_array_len(content);
+            for (int j = 0; j < blocks; j++) {
+                JsonVal block = json_array_get(content, j);
+                char *type = json_get_string(block, "type");
+                if (type && strcmp(type, "text") == 0) {
+                    char *value = json_get_string(block, "text");
+                    if (value) { sb_append(&text, value); FREE_PTR(value); }
+                } else if (type && strcmp(type, "tool_use") == 0) {
+                    char *id = json_get_string(block, "id");
+                    char *name = json_get_string(block, "name");
+                    JsonVal input = json_get(block, "input");
+                    if (wrote++) sb_append_char(out, ',');
+                    sb_append(out, "{\"type\":\"function_call\",\"call_id\":"); sb_append_json_string(out, id ? id : "");
+                    sb_append(out, ",\"name\":"); sb_append_json_string(out, name ? name : "");
+                    sb_append(out, ",\"arguments\":");
+                    StrBuf args; sb_init(&args); if (input.type == JSON_NULL) sb_append(&args, "{}"); else sb_append_json_val(&args, input);
+                    sb_append_json_string(out, args.data ? args.data : "{}"); sb_free(&args); sb_append_char(out, '}');
+                    FREE_PTR(id); FREE_PTR(name);
+                }
+                FREE_PTR(type);
+            }
+            if (text.len > 0) { if (wrote++) sb_append_char(out, ','); sb_append(out, "{\"role\":\"assistant\",\"content\":"); sb_append_json_string(out, text.data); sb_append_char(out, '}'); }
+            sb_free(&text);
+        } else if (role && strcmp(role, "user") == 0 && content.type == JSON_ARRAY) {
+            int blocks = json_array_len(content);
+            for (int j = 0; j < blocks; j++) {
+                JsonVal block = json_array_get(content, j);
+                char *type = json_get_string(block, "type");
+                if (type && strcmp(type, "tool_result") == 0) {
+                    char *id = json_get_string(block, "tool_use_id"); char *value = json_get_string(block, "content");
+                    if (wrote++) sb_append_char(out, ','); sb_append(out, "{\"type\":\"function_call_output\",\"call_id\":"); sb_append_json_string(out, id ? id : ""); sb_append(out, ",\"output\":"); sb_append_json_string(out, value ? value : ""); sb_append_char(out, '}');
+                    FREE_PTR(id); FREE_PTR(value);
+                } else if (type && strcmp(type, "text") == 0) {
+                    char *value = json_get_string(block, "text"); if (wrote++) sb_append_char(out, ','); sb_append(out, "{\"role\":\"user\",\"content\":"); sb_append_json_string(out, value ? value : ""); sb_append_char(out, '}'); FREE_PTR(value);
+                }
+                FREE_PTR(type);
+            }
+        } else { if (wrote++) sb_append_char(out, ','); sb_append_json_val(out, msg); }
+        FREE_PTR(role);
+    }
+    sb_append_char(out, ']');
+}
+
+char *convert_to_responses(const char *claude_body) {
+    JsonParse jp = json_parse_root(claude_body);
+    if (jp.error) return util_strdup(claude_body);
+    char *model = json_get_string(jp.val, "model");
+    int max_tokens = json_get_int(jp.val, "max_tokens");
+    JsonVal system = json_get(jp.val, "system");
+    JsonVal thinking = json_get(jp.val, "thinking");
+    JsonVal output = json_get(jp.val, "output_config");
+    JsonVal messages = json_get(jp.val, "messages");
+    JsonVal tools_val = json_get(jp.val, "tools");
+    StrBuf input, tools, result; sb_init(&input); sb_init(&tools); sb_init(&result);
+    responses_convert_messages(&input, messages);
+    if (tools_val.type == JSON_ARRAY && json_array_len(tools_val)) responses_convert_tools(&tools, tools_val);
+    sb_append(&result, "{\"model\":"); sb_append_json_string(&result, model ? model : "");
+    sb_append(&result, ",\"input\":"); sb_append(&result, input.data ? input.data : "[]");
+    sb_appendf(&result, ",\"max_output_tokens\":%d,\"stream\":true", max_tokens);
+    if (system.type != JSON_NULL) { char *value = json_as_string(system); if (value && value[0]) { sb_append(&result, ",\"instructions\":"); sb_append_json_string(&result, value); } FREE_PTR(value); }
+    char *thinking_type = json_get_string(thinking, "type");
+    if (thinking_type && (!strcmp(thinking_type, "adaptive") || !strcmp(thinking_type, "enabled"))) { char *effort = json_get_string(output, "effort"); sb_append(&result, ",\"reasoning\":{\"effort\":"); sb_append_json_string(&result, effort && effort[0] ? effort : "high"); sb_append_char(&result, '}'); FREE_PTR(effort); }
+    FREE_PTR(thinking_type);
+    if (tools.len && strcmp(tools.data, "[]")) { sb_append(&result, ",\"tools\":"); sb_append(&result, tools.data); }
+    sb_append_char(&result, '}');
+    FREE_PTR(model); sb_free(&input); sb_free(&tools);
     return result.data;
 }

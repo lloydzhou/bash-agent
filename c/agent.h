@@ -38,7 +38,7 @@ DPConfig dp_config_init(int max_context_tokens);
 
 typedef struct {
     /* 配置 */
-    char *provider;         /* "claude" 或 "openai" */
+    char *provider;         /* "claude"、"openai" 或 "responses" */
     char *model;
     char *api_key;
     char *base_url;

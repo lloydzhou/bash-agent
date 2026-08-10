@@ -61,6 +61,24 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: {\"id\":\"chatcmpl-summary\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/responses'):
+                for event, data in [
+                    ('response.output_text.delta', {'delta':'Task focus: summarize compact test'}),
+                    ('response.output_text.delta', {'delta':'\nLatest request: compact session'}),
+                    ('response.output_text.delta', {'delta':'\nProgress: trimmed old context'}),
+                    ('response.output_text.delta', {'delta':'\nTool evidence: none'}),
+                    ('response.completed', {'response':{'usage':{'input_tokens':10,'output_tokens':12}}}),
+                ]:
+                    w.write(('event: ' + event + '\ndata: ' + json.dumps(data) + '\n\n').encode()); w.flush()
+            return
+        if path.startswith('/responses') and b'WRITE_FILE_MARKER' not in body:
+            for event, data in [
+                ('response.reasoning_text.delta', {'delta':'mock reasoning'}),
+                ('response.output_text.delta', {'delta':'Hello from'}),
+                ('response.output_text.delta', {'delta':' mock server!'}),
+                ('response.completed', {'response':{'usage':{'input_tokens':10,'output_tokens':7}}}),
+            ]:
+                w.write(('event: ' + event + '\ndata: ' + json.dumps(data) + '\n\n').encode()); w.flush()
             return
         # --- SubAgent mock moved above Skill marker check ---
         if b'Skill marker for tests' in body and b'ANSI_TOOL_RESULT_MARKER' not in body:
@@ -662,7 +680,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing code snippet edit tool_result content')
             return
-        if b'WRITE_FILE_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body:
+        if b'WRITE_FILE_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body and b'"function_call_output"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_write\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -683,6 +701,15 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: {\"id\":\"chatcmpl-write\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/responses'):
+                for event, data in [
+                    ('response.output_text.delta', {'delta':'I will write the file now.'}),
+                    ('response.output_item.added', {'output_index':1, 'item':{'id':'fc_write_1','type':'function_call','call_id':'call_write_1','name':'Write','arguments':''}}),
+                    ('response.function_call_arguments.delta', {'output_index':1, 'item_id':'fc_write_1','delta':'{"path":"/tmp/bash-agent-write-test.txt",'}),
+                    ('response.function_call_arguments.delta', {'output_index':1, 'item_id':'fc_write_1','delta':'"content":"line1\\nline2\\nline3"}'}),
+                    ('response.completed', {'response':{'usage':{'input_tokens':10,'output_tokens':12}}}),
+                ]:
+                    w.write(('event: ' + event + '\ndata: ' + json.dumps(data) + '\n\n').encode()); w.flush()
             return
         if b'UNICODE_WRITE_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
@@ -709,7 +736,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
                 ]: w.write(c.encode()); w.flush()
             return
-        if b'WRITE_FILE_MARKER' in body and (b'"tool_result"' in body or b'"role":"tool"' in body):
+        if b'WRITE_FILE_MARKER' in body and (b'"tool_result"' in body or b'"role":"tool"' in body or b'"function_call_output"' in body):
             if path.startswith('/v1/messages'):
                 for c in [
                     'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_write_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
@@ -725,6 +752,12 @@ class H(http.server.BaseHTTPRequestHandler):
                     'data: {\"id\":\"chatcmpl-write-done\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":12}}\n\n',
                     'data: [DONE]\n\n',
                 ]: w.write(c.encode()); w.flush()
+            elif path.startswith('/responses'):
+                for event, data in [
+                    ('response.output_text.delta', {'delta':'Done.'}),
+                    ('response.completed', {'response':{'usage':{'input_tokens':10,'output_tokens':2}}}),
+                ]:
+                    w.write(('event: ' + event + '\ndata: ' + json.dumps(data) + '\n\n').encode()); w.flush()
             return
         # --- sensenova-style OpenAI SSE (finish_reason:"" + name:"" in subsequent chunks) ---
         if b'SENSENOVA_STYLE_MARKER' in body and b'"tool_result"' not in body and b'"role":"tool"' not in body:

@@ -524,3 +524,321 @@ pub mod openai {
         Ok(())
     }
 }
+
+pub mod responses {
+    use crate::protocol::{
+        ErrorEvent, Event, RetryEvent, StopEvent, TextEvent, ThinkingEvent, UsageEvent,
+    };
+    use crate::sse::toolcall::build_tool_call_event;
+    use anyhow::Result;
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    use std::io::{BufRead, BufReader, Read};
+
+    #[derive(Default)]
+    struct PendingCall {
+        id: String,
+        name: String,
+        arguments: String,
+    }
+
+    pub fn parse<R: Read>(reader: R, mut emit: impl FnMut(Event) -> Result<()>) -> Result<()> {
+        let mut br = BufReader::new(reader);
+        let mut line = String::new();
+        let mut event = String::new();
+        let mut saw_text = false;
+        let mut input_tokens = 0i64;
+        let mut output_tokens = 0i64;
+        let mut cache_read_input_tokens = 0i64;
+        let mut calls: BTreeMap<i64, PendingCall> = BTreeMap::new();
+        let mut item_indexes: BTreeMap<String, i64> = BTreeMap::new();
+        let mut completed = false;
+        while {
+            line.clear();
+            br.read_line(&mut line)? != 0
+        } {
+            let l = line.trim_end_matches(['\n', '\r']);
+            if l == "RETRY:" {
+                event.clear();
+                saw_text = false;
+                input_tokens = 0;
+                output_tokens = 0;
+                cache_read_input_tokens = 0;
+                calls.clear();
+                item_indexes.clear();
+                completed = false;
+                emit(Event::Retry(RetryEvent {}))?;
+                continue;
+            }
+            if let Some(v) = l.strip_prefix("event: ") {
+                event = v.to_string();
+                continue;
+            }
+            let Some(payload) = l.strip_prefix("data: ") else {
+                continue;
+            };
+            let body: Value = match serde_json::from_str(payload) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            match event.as_str() {
+                "response.reasoning_text.delta" => {
+                    if let Some(delta) = body.get("delta").and_then(Value::as_str) {
+                        if !delta.is_empty() {
+                            emit(Event::Thinking(ThinkingEvent {
+                                content: delta.to_string(),
+                            }))?;
+                        }
+                    }
+                }
+                "response.output_text.delta" => {
+                    if let Some(delta) = body.get("delta").and_then(Value::as_str) {
+                        let text = if saw_text {
+                            delta
+                        } else {
+                            delta.trim_start_matches(['\n', '\r'])
+                        };
+                        if !text.is_empty() {
+                            saw_text = true;
+                            emit(Event::Text(TextEvent {
+                                content: text.to_string(),
+                            }))?;
+                        }
+                    }
+                }
+                "response.output_item.added" | "response.output_item.done" => {
+                    record_item(&body, &mut calls, &mut item_indexes)
+                }
+                "response.function_call_arguments.delta" => {
+                    if let Some(idx) = tool_index(&body, &mut item_indexes) {
+                        let call = calls.entry(idx).or_default();
+                        if let Some(delta) = body.get("delta").and_then(Value::as_str) {
+                            call.arguments.push_str(delta);
+                        }
+                    }
+                }
+                "response.completed" => {
+                    let response = body.get("response").unwrap_or(&body);
+                    record_usage(
+                        response,
+                        &mut input_tokens,
+                        &mut output_tokens,
+                        &mut cache_read_input_tokens,
+                    );
+                    let has_tools = !calls.is_empty();
+                    emit_calls(&mut calls, &mut emit)?;
+                    emit(Event::Usage(UsageEvent {
+                        input_tokens,
+                        output_tokens,
+                        cache_read_input_tokens,
+                        cache_creation_input_tokens: 0,
+                    }))?;
+                    emit(Event::Stop(StopEvent {
+                        reason: if has_tools { "tool_use" } else { "end_turn" }.to_string(),
+                    }))?;
+                    completed = true;
+                }
+                "response.failed" | "response.incomplete" | "error" => {
+                    let response = body.get("response").unwrap_or(&body);
+                    record_usage(
+                        response,
+                        &mut input_tokens,
+                        &mut output_tokens,
+                        &mut cache_read_input_tokens,
+                    );
+                    let message = response
+                        .get("error")
+                        .and_then(|v| v.get("message"))
+                        .and_then(Value::as_str)
+                        .or_else(|| response.get("message").and_then(Value::as_str))
+                        .or_else(|| response.get("reason").and_then(Value::as_str))
+                        .unwrap_or(if event == "response.incomplete" {
+                            "Response incomplete"
+                        } else if event == "error" {
+                            "Stream error"
+                        } else {
+                            "Response failed"
+                        });
+                    emit(Event::Error(ErrorEvent {
+                        message: message.to_string(),
+                    }))?;
+                    emit(Event::Usage(UsageEvent {
+                        input_tokens,
+                        output_tokens,
+                        cache_read_input_tokens,
+                        cache_creation_input_tokens: 0,
+                    }))?;
+                    emit(Event::Stop(StopEvent {
+                        reason: "error".to_string(),
+                    }))?;
+                    completed = true;
+                }
+                _ => {}
+            }
+        }
+        if !completed {
+            emit(Event::Error(ErrorEvent {
+                message: "Stream interrupted (no response.completed received)".to_string(),
+            }))?;
+            emit(Event::Stop(StopEvent {
+                reason: "error".to_string(),
+            }))?;
+        }
+        Ok(())
+    }
+
+    fn tool_index(body: &Value, item_indexes: &mut BTreeMap<String, i64>) -> Option<i64> {
+        let item = body.get("item");
+        let id = body
+            .get("item_id")
+            .and_then(Value::as_str)
+            .or_else(|| item.and_then(|v| v.get("id")).and_then(Value::as_str));
+        let idx = body
+            .get("output_index")
+            .and_then(Value::as_i64)
+            .or_else(|| id.and_then(|id| item_indexes.get(id).copied()));
+        if let (Some(id), Some(idx)) = (id, idx) {
+            item_indexes.insert(id.to_string(), idx);
+        }
+        idx
+    }
+
+    fn record_item(
+        body: &Value,
+        calls: &mut BTreeMap<i64, PendingCall>,
+        item_indexes: &mut BTreeMap<String, i64>,
+    ) {
+        let Some(item) = body.get("item") else { return };
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            return;
+        }
+        let Some(idx) = tool_index(body, item_indexes) else {
+            return;
+        };
+        let call = calls.entry(idx).or_default();
+        if let Some(v) = item.get("call_id").and_then(Value::as_str) {
+            call.id = v.to_string();
+        }
+        if let Some(v) = item.get("name").and_then(Value::as_str) {
+            call.name = v.to_string();
+        }
+        if let Some(v) = item.get("arguments").and_then(Value::as_str) {
+            call.arguments = v.to_string();
+        }
+    }
+
+    fn record_usage(response: &Value, input: &mut i64, output: &mut i64, cached: &mut i64) {
+        let usage = response.get("usage").unwrap_or(response);
+        *output = usage
+            .get("output_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        *cached = usage
+            .get("input_tokens_details")
+            .and_then(|v| v.get("cached_tokens"))
+            .and_then(Value::as_i64)
+            .filter(|v| *v != 0)
+            .or_else(|| usage.get("cached_tokens").and_then(Value::as_i64))
+            .unwrap_or(0);
+        *input = (usage
+            .get("input_tokens")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            - *cached)
+            .max(0);
+    }
+
+    fn emit_calls(
+        calls: &mut BTreeMap<i64, PendingCall>,
+        emit: &mut impl FnMut(Event) -> Result<()>,
+    ) -> Result<()> {
+        for call in calls.values() {
+            let args = if call.arguments.is_empty() {
+                "{}"
+            } else {
+                &call.arguments
+            };
+            emit(Event::ToolCall(build_tool_call_event(
+                &call.name, &call.id, args,
+            )?))?;
+        }
+        calls.clear();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::io::Cursor;
+
+        #[test]
+        fn responses_parses_nested_cache_and_error_event() {
+            let stream = concat!(
+                "event: response.output_item.added\n",
+                "data: {\"output_index\":2,\"item\":{\"id\":\"item_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"Read\"}}\n\n",
+                "event: response.function_call_arguments.delta\n",
+                "data: {\"item_id\":\"item_1\",\"delta\":\"{\\\"path\\\":\\\"/tmp/a\\\"}\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"response\":{\"usage\":{\"input_tokens\":15,\"output_tokens\":8,\"cached_tokens\":4,\"input_tokens_details\":{\"cached_tokens\":6}}}}\n"
+            );
+            let mut events = Vec::new();
+            parse(Cursor::new(stream), |event| {
+                events.push(event);
+                Ok(())
+            })
+            .unwrap();
+            assert!(
+                matches!(&events[0], Event::ToolCall(call) if call.name == "Read" && call.id == "call_1" && call.input_json == serde_json::json!({"path":"/tmp/a"}))
+            );
+            assert!(
+                matches!(&events[1], Event::Usage(usage) if usage.input_tokens == 9 && usage.output_tokens == 8 && usage.cache_read_input_tokens == 6)
+            );
+            assert!(matches!(&events[2], Event::Stop(stop) if stop.reason == "tool_use"));
+
+            let mut errors = Vec::new();
+            parse(
+                Cursor::new("event: error\ndata: {\"reason\":\"upstream failed\"}\n"),
+                |event| {
+                    errors.push(event);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(
+                matches!(&errors[0], Event::Error(error) if error.message == "upstream failed")
+            );
+            assert!(matches!(&errors[1], Event::Usage(_)));
+            assert!(matches!(&errors[2], Event::Stop(stop) if stop.reason == "error"));
+
+            let mut bare = Vec::new();
+            parse(Cursor::new("event: error\ndata: {}\n"), |event| {
+                bare.push(event);
+                Ok(())
+            })
+            .unwrap();
+            assert!(
+                matches!(&bare[0], Event::Error(error) if error.message == "Stream error")
+            );
+            assert!(matches!(&bare[1], Event::Usage(_)));
+            assert!(matches!(&bare[2], Event::Stop(stop) if stop.reason == "error"));
+        }
+
+        #[test]
+        fn responses_reports_interrupted_stream() {
+            let mut events = Vec::new();
+            parse(
+                Cursor::new("event: response.output_text.delta\ndata: {\"delta\":\"partial\"}\n"),
+                |event| {
+                    events.push(event);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(matches!(&events[0], Event::Text(text) if text.content == "partial"));
+            assert!(
+                matches!(&events[1], Event::Error(error) if error.message == "Stream interrupted (no response.completed received)")
+            );
+            assert!(matches!(&events[2], Event::Stop(stop) if stop.reason == "error"));
+        }
+    }
+}

@@ -2,7 +2,7 @@
  * cagent.c — C 版 bash-agent 入口
  *
  * 用法: cagent [选项] [prompt]
- *   --provider claude|openai    API 提供者 (默认: claude)
+ *   --provider claude|openai|responses API 提供者 (默认: claude)
  *   --model MODEL              模型名称
  *   --api-key KEY              API 密钥
  *   --base-url URL             API 基础 URL
@@ -32,7 +32,7 @@
 static void usage(const char *prog) {
     fprintf(stderr, "Usage: %s [options] [prompt]\n", prog);
     fprintf(stderr, "Options:\n");
-    fprintf(stderr, "  --provider claude|openai    API provider (default: claude)\n");
+    fprintf(stderr, "  --provider claude|openai|responses API provider (default: claude)\n");
     fprintf(stderr, "  --model MODEL              Model name\n");
     fprintf(stderr, "  --api-key KEY              API key\n");
     fprintf(stderr, "  --base-url URL             API base URL\n");
@@ -186,11 +186,11 @@ int main(int argc, char *argv[]) {
     if (strcmp(provider, "claude") == 0) {
         effective_api_key = util_strdup(api_key && api_key[0] ? api_key : util_env("ANTHROPIC_API_KEY", ""));
         effective_base_url = util_strdup(base_url && base_url[0] ? base_url : util_env("ANTHROPIC_BASE_URL", ""));
-    } else if (strcmp(provider, "openai") == 0) {
+    } else if (strcmp(provider, "openai") == 0 || strcmp(provider, "responses") == 0) {
         effective_api_key = util_strdup(api_key && api_key[0] ? api_key : util_env("OPENAI_API_KEY", ""));
         effective_base_url = util_strdup(base_url && base_url[0] ? base_url : util_env("OPENAI_BASE_URL", ""));
     } else {
-        fprintf(stderr, "Error: unknown provider '%s' (use claude|openai)\n", provider);
+        fprintf(stderr, "Error: unknown provider '%s' (use claude|openai|responses)\n", provider);
         return 1;
     }
 
@@ -209,13 +209,14 @@ int main(int argc, char *argv[]) {
 
     if (!effective_api_key[0] && !effective_base_url[0]) {
         fprintf(stderr, "Error: no API key. Set %s_API_KEY or use --api-key\n",
-                strcmp(provider, "openai") == 0 ? "OPENAI" : "ANTHROPIC");
+                (strcmp(provider, "openai") == 0 || strcmp(provider, "responses") == 0) ? "OPENAI" : "ANTHROPIC");
         return 1;
     }
 
     if (!effective_model) {
         effective_model = util_strdup(model && model[0] ? model :
-            (strcmp(provider, "openai") == 0 ? "gpt-4o" : "claude-sonnet-4-20250514"));
+            (strcmp(provider, "openai") == 0 ? "gpt-4o" :
+             strcmp(provider, "responses") == 0 ? "deepseek-v4-flash" : "claude-sonnet-4-20250514"));
     }
 
     /* 继续 session */

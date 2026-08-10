@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bash-agent — AI Agent in pure bash/awk
-# Supports: Anthropic Claude, OpenAI Chat
+# Supports: Anthropic Claude, OpenAI Chat, DeepSeek Responses
 # No dependencies beyond: bash, curl, awk
 
 set -uo pipefail
@@ -1437,8 +1437,8 @@ agent_loop_stream() {
                 return 1
                 ;;
         esac
-        # Tools already executed inline; persist unless interrupted
-        if [[ "$INTERRUPT_REQUESTED" != true ]]; then
+        # Tools already executed inline; persist unless interrupted or failed
+        if [[ "$INTERRUPT_REQUESTED" != true && "$stop" != "error" ]]; then
             store_conv_add_assistant "$text" "$thinking" "$tool_calls"
             if [[ -n "$tool_conv_results" ]]; then
                 store_conv_add_tool_results "$tool_conv_results"
@@ -1521,7 +1521,7 @@ usage() {
 Usage: agent.sh [options] [prompt]
 
 Options:
-  -p, --provider PROV     LLM provider: claude | openai (default: claude)
+  -p, --provider PROV     LLM provider: claude | openai | responses (default: claude)
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
   --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
@@ -1632,12 +1632,12 @@ validate_config() {
             : "${API_KEY:=${ANTHROPIC_API_KEY:-}}"
             : "${BASE_URL:=${ANTHROPIC_BASE_URL:-}}"
             ;;
-        openai)
+        openai|responses)
             : "${API_KEY:=${OPENAI_API_KEY:-}}"
             : "${BASE_URL:=${OPENAI_BASE_URL:-}}"
             ;;
         *)
-            util_die "Unknown provider: $PROVIDER (use claude|openai)"
+            util_die "Unknown provider: $PROVIDER (use claude|openai|responses)"
             ;;
     esac
 
@@ -1653,7 +1653,7 @@ validate_config() {
     if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
         case "$PROVIDER" in
             claude) util_die "No API key. Set ANTHROPIC_API_KEY or use --api-key" ;;
-            openai) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
+            openai|responses) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
         esac
     fi
 
@@ -1666,22 +1666,32 @@ validate_config() {
                 -H "Content-Type: application/json"
                 -H "x-api-key: ${API_KEY}"
                 -H "anthropic-version: 2023-06-01"
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+                -H "User-Agent: bash-agent/4.3.2"
                 -H "x-app: cli"
             )
             util_body_convert() { cat; }
             sse_convert()  { cat; }
             ;;
-        openai)
-            : "${MODEL:=gpt-4o}"
-            API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
+        openai|responses)
             HEADER_ARGS=(
                 -H "Content-Type: application/json"
                 -H "Authorization: Bearer ${API_KEY}"
-                -H "User-Agent: claude-cli/1.0.33 (max, cli)"
+                -H "User-Agent: bash-agent/4.3.2"
             )
-            util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
-            sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
+            case "$PROVIDER" in
+                openai)
+                    : "${MODEL:=gpt-4o}"
+                    API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
+                    sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
+                    ;;
+                responses)
+                    : "${MODEL:=deepseek-v4-flash}"
+                    API_URL="${BASE_URL:-https://api.deepseek.com}/responses"
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"; }
+                    sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"; }
+                    ;;
+            esac
             ;;
     esac
 

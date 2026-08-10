@@ -840,6 +840,86 @@ func TestSSEParser(t *testing.T) {
 	}
 }
 
+func TestResponsesTransportBodyAndSSE(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Provider = "responses"
+	cfg.Model = "test-model"
+	tr := NewHTTPTransport(cfg)
+
+	body, err := tr.buildResponsesBody(
+		`[{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Read","input":{"path":"/tmp/a"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}]`,
+		"system", `[{"name":"Read","description":"Read","input_schema":{"type":"object"}}]`, 128, "enabled",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request struct {
+		Instructions string `json:"instructions"`
+		Input        []struct {
+			Type      string `json:"type"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+			Output    string `json:"output"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Instructions != "system" || len(request.Input) != 2 || request.Input[0].Type != "function_call" || request.Input[0].CallID != "call_1" || request.Input[0].Name != "Read" || request.Input[0].Arguments != `{"path":"/tmp/a"}` || request.Input[1].Type != "function_call_output" || request.Input[1].Output != "ok" {
+		t.Fatalf("unexpected Responses request: %s", body)
+	}
+
+	ch := make(chan Event, 8)
+	pending := map[int]*responsesPendingCall{}
+	indexes := map[string]int{}
+	if tr.handleResponsesEvent("response.output_item.added", `{"output_index":2,"item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"Read"}}`, ch, pending, indexes, new(bool), new(int), new(int), new(int)) {
+		t.Fatal("tool item must not terminate the stream")
+	}
+	if tr.handleResponsesEvent("response.function_call_arguments.delta", `{"item_id":"item_1","delta":"{\"path\":\"/tmp/a\"}"}`, ch, pending, indexes, new(bool), new(int), new(int), new(int)) {
+		t.Fatal("argument delta must not terminate the stream")
+	}
+	input, output, cached := 0, 0, 0
+	if !tr.handleResponsesEvent("response.completed", `{"response":{"usage":{"input_tokens":15,"output_tokens":8,"cached_tokens":4,"input_tokens_details":{"cached_tokens":6}}}}`, ch, pending, indexes, new(bool), &input, &output, &cached) {
+		t.Fatal("completed must terminate the stream")
+	}
+	close(ch)
+	var events []Event
+	for event := range ch {
+		events = append(events, event)
+	}
+	usage, usageOK := events[1].Payload.(Usage)
+	if len(events) != 3 || events[0].Type != EventToolCall || events[0].Fields[1] != "Read" || events[0].Fields[2] != "call_1" || events[0].Fields[3] != `{"path":"/tmp/a"}` || events[1].Type != EventUsage || !usageOK || usage.InputTokens != 9 || usage.CacheRead != 6 || events[2].Type != EventStop || events[2].Fields[1] != "tool_use" {
+		t.Fatalf("unexpected Responses events: %#v", events)
+	}
+
+	failure := make(chan Event, 3)
+	if !tr.handleResponsesEvent("error", `{"reason":"upstream failed"}`, failure, map[int]*responsesPendingCall{}, map[string]int{}, new(bool), new(int), new(int), new(int)) {
+		t.Fatal("error must terminate the stream")
+	}
+	close(failure)
+	var failed []Event
+	for event := range failure {
+		failed = append(failed, event)
+	}
+	if len(failed) != 3 || failed[0].Type != EventError || failed[0].Fields[1] != "upstream failed" || failed[2].Type != EventStop || failed[2].Fields[1] != "error" {
+		t.Fatalf("unexpected Responses error events: %#v", failed)
+	}
+
+	bare := make(chan Event, 3)
+	if !tr.handleResponsesEvent("error", `{}`, bare, map[int]*responsesPendingCall{}, map[string]int{}, new(bool), new(int), new(int), new(int)) {
+		t.Fatal("bare error must terminate the stream")
+	}
+	close(bare)
+	var bareFailed []Event
+	for event := range bare {
+		bareFailed = append(bareFailed, event)
+	}
+	if len(bareFailed) != 3 || bareFailed[0].Type != EventError || bareFailed[0].Fields[1] != "Stream error" || bareFailed[1].Type != EventUsage || bareFailed[2].Type != EventStop || bareFailed[2].Fields[1] != "error" {
+		t.Fatalf("unexpected Responses bare error events: %#v", bareFailed)
+	}
+}
+
 func TestSSEParserInterruptedStreamClosesAfterFallbackEvents(t *testing.T) {
 	cfg := DefaultConfig()
 	tr := NewHTTPTransport(cfg)
@@ -857,11 +937,29 @@ func TestSSEParserInterruptedStreamClosesAfterFallbackEvents(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("events len = %d, want 2", len(events))
 	}
-	if events[0].Type != EventError {
-		t.Fatalf("first event = %v, want EventError", events[0].Type)
+	if events[0].Type != EventError || len(events[0].Fields) < 2 || events[0].Fields[1] != "Stream interrupted (no message_stop received)" {
+		t.Fatalf("first event = %#v, want generic interruption error", events[0])
 	}
 	if events[1].Type != EventStop || len(events[1].Fields) < 2 || events[1].Fields[1] != "error" {
 		t.Fatalf("second event = %#v, want STOP error", events[1])
+	}
+}
+
+func TestResponsesInterruptedStreamUsesResponsesMessage(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Provider = "responses"
+	tr := NewHTTPTransport(cfg)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(""))}
+	ch := make(chan Event, 2)
+
+	tr.parseSSEStream(context.Background(), resp, ch)
+
+	var events []Event
+	for event := range ch {
+		events = append(events, event)
+	}
+	if len(events) != 2 || events[0].Type != EventError || len(events[0].Fields) < 2 || events[0].Fields[1] != "Stream interrupted (no response.completed received)" || events[1].Type != EventStop || len(events[1].Fields) < 2 || events[1].Fields[1] != "error" {
+		t.Fatalf("unexpected Responses interruption events: %#v", events)
 	}
 }
 
