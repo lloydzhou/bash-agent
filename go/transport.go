@@ -514,6 +514,8 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 		if message == "" {
 			if eventType == "response.incomplete" {
 				message = "Response incomplete"
+			} else if eventType == "error" {
+				message = "Stream error"
 			} else {
 				message = "Response failed"
 			}

@@ -654,6 +654,8 @@ pub mod responses {
                         .or_else(|| response.get("reason").and_then(Value::as_str))
                         .unwrap_or(if event == "response.incomplete" {
                             "Response incomplete"
+                        } else if event == "error" {
+                            "Stream error"
                         } else {
                             "Response failed"
                         });
@@ -807,6 +809,18 @@ pub mod responses {
             );
             assert!(matches!(&errors[1], Event::Usage(_)));
             assert!(matches!(&errors[2], Event::Stop(stop) if stop.reason == "error"));
+
+            let mut bare = Vec::new();
+            parse(Cursor::new("event: error\ndata: {}\n"), |event| {
+                bare.push(event);
+                Ok(())
+            })
+            .unwrap();
+            assert!(
+                matches!(&bare[0], Event::Error(error) if error.message == "Stream error")
+            );
+            assert!(matches!(&bare[1], Event::Usage(_)));
+            assert!(matches!(&bare[2], Event::Stop(stop) if stop.reason == "error"));
         }
 
         #[test]

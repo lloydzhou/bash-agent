@@ -321,7 +321,7 @@ static void parse_responses_sse_event(StreamCtx *sctx, const char *event, const 
         char *message = json_get_string(error, "message");
         if (!message) message = json_get_string(response, "message");
         if (!message) message = json_get_string(response, "reason");
-        if (!message) message = util_strdup(strcmp(event, "response.incomplete") == 0 ? "Response incomplete" : "Response failed");
+        if (!message) message = util_strdup(strcmp(event, "response.incomplete") == 0 ? "Response incomplete" : (strcmp(event, "error") == 0 ? "Stream error" : "Response failed"));
         emit_simple_event(sctx->callback, sctx->ctx, SSE_ERROR, message);
         FREE_PTR(message);
         responses_emit_usage(sctx);

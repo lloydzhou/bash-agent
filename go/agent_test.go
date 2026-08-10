@@ -905,6 +905,19 @@ func TestResponsesTransportBodyAndSSE(t *testing.T) {
 	if len(failed) != 3 || failed[0].Type != EventError || failed[0].Fields[1] != "upstream failed" || failed[2].Type != EventStop || failed[2].Fields[1] != "error" {
 		t.Fatalf("unexpected Responses error events: %#v", failed)
 	}
+
+	bare := make(chan Event, 3)
+	if !tr.handleResponsesEvent("error", `{}`, bare, map[int]*responsesPendingCall{}, map[string]int{}, new(bool), new(int), new(int), new(int)) {
+		t.Fatal("bare error must terminate the stream")
+	}
+	close(bare)
+	var bareFailed []Event
+	for event := range bare {
+		bareFailed = append(bareFailed, event)
+	}
+	if len(bareFailed) != 3 || bareFailed[0].Type != EventError || bareFailed[0].Fields[1] != "Stream error" || bareFailed[1].Type != EventUsage || bareFailed[2].Type != EventStop || bareFailed[2].Fields[1] != "error" {
+		t.Fatalf("unexpected Responses bare error events: %#v", bareFailed)
+	}
 }
 
 func TestSSEParserInterruptedStreamClosesAfterFallbackEvents(t *testing.T) {

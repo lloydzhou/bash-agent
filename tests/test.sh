@@ -534,6 +534,22 @@ SSE
     fi
 }
 
+test_responses_sse_bare_error() {
+    info "Test 7g: Responses SSE 裸 error 兜底文案"
+    local output
+    output=$(awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk" <<'SSE' | protocol_awk -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk" | decode_awk_output
+event: error
+data: {}
+SSE
+)
+    if echo "$output" | grep -q '^ERROR:Stream error$' && \
+       echo "$output" | grep -q '^STOP:error$'; then
+        green "Responses SSE 裸 error 兜底文案"; ((PASS++)) || true
+    else
+        red "Responses SSE 裸 error 兜底文案"; echo "  输出: $output"; ((FAIL++)) || true
+    fi
+}
+
 # Test 8: HTTP stream preserves error body
 test_http_stream_error_body() {
     info "Test 8: HTTP stream preserves error body"
@@ -2952,6 +2968,7 @@ if $RUN_RESPONSES_TESTS; then
     test_responses_sse
     test_responses_sse_failure_and_retry
     test_responses_sse_interrupted
+    test_responses_sse_bare_error
 fi
 test_http_stream_error_body
 test_transport_body

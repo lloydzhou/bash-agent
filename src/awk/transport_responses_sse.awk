@@ -76,7 +76,7 @@ BEGIN {
         message = extract_str(error_obj, "message", 1)
         if (message == "") message = extract_str(response, "message", 1)
         if (message == "") message = extract_str(response, "reason", 1)
-        if (message == "") message = (event == "response.incomplete" ? "Response incomplete" : "Response failed")
+        if (message == "") message = (event == "response.incomplete" ? "Response incomplete" : (event == "error" ? "Stream error" : "Response failed"))
         _close_block()
         printf "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"%s\"}}\n\n", escape_json_string(message)
         _emit_terminal("error")

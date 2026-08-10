@@ -70,7 +70,21 @@ int main(void) {
     parse_responses_sse_event(&stream, "error", error, strlen(error));
     check(capture.count == 3, "Responses error emits error, usage, stop");
     check(capture.events[0].type == SSE_ERROR && strcmp(capture.events[0].content, "upstream failed") == 0, "Responses error uses reason fallback");
+    check(capture.events[1].type == SSE_USAGE, "Responses error emits usage event");
     check(capture.events[2].type == SSE_STOP && strcmp(capture.events[2].content, "error") == 0, "Responses error stops");
+    capture_free(&capture);
+    streamctx_free_openai_tools(&stream);
+
+    memset(&capture, 0, sizeof(capture));
+    memset(&stream, 0, sizeof(stream));
+    stream.callback = capture_event;
+    stream.ctx = &capture;
+    const char *bare_error = "{}";
+    parse_responses_sse_event(&stream, "error", bare_error, strlen(bare_error));
+    check(capture.count == 3, "Responses bare error emits error, usage, stop");
+    check(capture.events[0].type == SSE_ERROR && strcmp(capture.events[0].content, "Stream error") == 0, "Responses bare error uses stream error fallback");
+    check(capture.events[1].type == SSE_USAGE, "Responses bare error emits zero usage event");
+    check(capture.events[2].type == SSE_STOP && strcmp(capture.events[2].content, "error") == 0, "Responses bare error stops");
     capture_free(&capture);
     streamctx_free_openai_tools(&stream);
 
