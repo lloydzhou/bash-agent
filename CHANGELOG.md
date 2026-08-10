@@ -8,6 +8,26 @@
 
 ---
 
+## [4.3.3] - 2026-08-11
+
+> **Responses API provider 落地**：Bash、Go、Rust、C 四个运行时新增 `responses` provider（默认面向 DeepSeek Responses 兼容接口），统一实现请求转换、流式解析与终态语义的安全兼容子集，并明确文档化支持边界。
+
+### Added
+
+- **`responses` provider**：四运行时支持将本地会话（文本历史、`tool_use`/`tool_result`、工具定义、thinking 配置）转换为 Responses `create` 请求；流式侧处理 `response.output_text.delta`、`response.reasoning_text.delta`、函数调用 item 与参数增量，并映射到本地 tool loop。
+- **终态与用量统一语义**：四运行时一致处理 `response.completed`、`response.failed`、`response.incomplete`、顶层 `event: error`、SSE 重试与 usage；cached tokens 优先读取 `input_tokens_details.cached_tokens`，无有效值时回退 `cached_tokens`；异常 EOF 未收到终态时统一发出中断错误和 `STOP:error`。
+- **兼容性文档**：新增 `docs/responses-compatibility.md`，明确已支持的安全子集与不支持的 Responses 能力（托管工具、reasoning 回放、`previous_response_id` 等）及判定原则。
+
+### Changed
+
+- **OpenAI 兼容 provider 配置合并**：Bash 版合并 OpenAI 系 provider 配置并共享请求头构建；User-Agent 通用化，不再按 provider 特判。
+
+### Fixed
+
+- **四端流终止行为对齐**：统一顶层 `error` 事件为终态、嵌套 `cached_tokens` 读取与异常 EOF 兜底；无 message 字段的顶层 `error` 事件改用中性文案 `Stream error`，不再误报为 `Response failed`。
+
+---
+
 ## [4.3.2] - 2026-08-03
 
 > **C 版超长会话记录压缩修复**：修复压缩 `conversation.jsonl` 时将超过 64 KiB 的单条 JSONL 记录误拆为多行、导致会话内容损坏的问题。
@@ -1494,7 +1514,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.2...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.3...HEAD
+[4.3.3]: https://github.com/lloydzhou/bash-agent/compare/v4.3.2...v4.3.3
 [4.3.2]: https://github.com/lloydzhou/bash-agent/compare/v4.3.1...v4.3.2
 [4.3.1]: https://github.com/lloydzhou/bash-agent/compare/v4.3.0...v4.3.1
 [4.3.0]: https://github.com/lloydzhou/bash-agent/compare/v4.2.21...v4.3.0
