@@ -35,7 +35,7 @@ END {
     }
 
     # 4. Build output JSON
-    result = "{\"model\":\"" model "\",\"max_tokens\":" max_tokens ",\"stream\":true"
+    result = "{\"model\":\"" model "\",\"max_tokens\":" max_tokens ",\"stream\":true,\"stream_options\":{\"include_usage\":true}"
 
     # thinking adaptive/enabled -> OpenAI enabled + reasoning_effort
     thinking_type = ""

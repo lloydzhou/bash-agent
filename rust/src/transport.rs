@@ -98,6 +98,7 @@ impl Transport for OpenAITransport {
             "model": model,
             "max_tokens": max_tokens,
             "stream": true,
+            "stream_options": {"include_usage": true},
             "messages": openai_messages,
         });
 
