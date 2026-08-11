@@ -862,7 +862,10 @@ func (t *HTTPTransport) buildOpenAIBody(messages, systemPrompt, toolDefs string,
 		"model":      t.cfg.Model,
 		"max_tokens": maxTokens,
 		"stream":     true,
-		"messages":   converted,
+		"stream_options": map[string]interface{}{
+			"include_usage": true,
+		},
+		"messages": converted,
 	}
 	if thinking == "adaptive" || thinking == "enabled" {
 		body["thinking"] = map[string]interface{}{

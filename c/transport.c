@@ -1281,7 +1281,7 @@ char *convert_to_openai(const char *claude_body) {
     sb_append_json_string(&result, model ? model : "");
     sb_append(&result, ",\"max_tokens\":");
     sb_appendf(&result, "%d", max_tokens);
-    sb_append(&result, ",\"stream\":true");
+    sb_append(&result, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}");
 
     if (system_val.type != JSON_NULL) {
         char *sys = json_as_string(system_val);
