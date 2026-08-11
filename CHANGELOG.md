@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`--watch <session>` 入口**：Bash、Go、Rust、C 四运行时主程序新增 `--watch` 参数，实时跟踪某个 session 的 `events.jsonl`——先渲染最后 10 行已有事件作为上下文，再 follow 新增事件直到 Ctrl+C（Bash 用 `tail -f` 逐行渲染，Go/Rust/C 用 500ms 轮询）。渲染复用与 `--resume` replay 相同的事件→display 映射；不需要 API key、不创建 session。参数支持三种形式：events.jsonl 文件路径、session 目录、session_id（在 `$BASH_AGENT_HOME/.bash-agent/projects` 下递归查找）。`--output-format stream-json` 下直接透传原始事件行。
+
+### Removed
+
+- **`scripts/watch.sh`**：单 session 场景由四运行时内置的 `--watch` 入口替代；多 session tmux 分屏场景一并移除。
+
 ---
 
 ## [4.3.3] - 2026-08-11

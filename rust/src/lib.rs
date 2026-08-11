@@ -53,6 +53,7 @@ pub mod config {
         pub continue_session: bool,
         pub list_sessions: bool,
         pub fork: bool,
+        pub watch: String,
     }
 
     impl Default for Config {
@@ -92,6 +93,7 @@ pub mod config {
                 continue_session: false,
                 list_sessions: false,
                 fork: false,
+                watch: String::new(),
             }
         }
     }

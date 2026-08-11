@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	agent "github.com/lloyd/claude-code/bash-agent/go2"
 	"github.com/lloyd/claude-code/bash-agent/go2/linenoise"
@@ -55,6 +58,7 @@ func main() {
 		cont         bool
 		fork         bool
 		listSessions bool
+	watch        string
 		verbose      bool
 		interactive  bool
 		effort       string
@@ -80,6 +84,7 @@ func main() {
 	flag.BoolVar(&cont, "continue", false, "Continue most recent session")
 	flag.BoolVar(&fork, "fork", false, "When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)")
 	flag.BoolVar(&listSessions, "list-sessions", false, "List all saved sessions")
+	flag.StringVar(&watch, "watch", "", "Watch a session's events in real time (session_id | session_dir | events.jsonl path)")
 	flag.BoolVar(&verbose, "verbose", false, "Verbose mode")
 	flag.BoolVar(&verbose, "v", false, "Verbose mode (shorthand)")
 	flag.BoolVar(&interactive, "interactive", false, "Interactive mode (REPL)")
@@ -101,6 +106,7 @@ Environment:
 Examples:
   goagent "Read /etc/hostname and tell me what it says"
   goagent --continue "What did we discuss?"
+  goagent --watch sub_20260706-193403-a105
   goagent --fork --continue "Branch off the last session"
   goagent -i
 `)
@@ -204,6 +210,12 @@ Examples:
 	// --list-sessions 不需要 API key（对齐 bash/rust/c）
 	if listSessions {
 		listAllSessions(store)
+		return
+	}
+
+	// --watch 不需要 API key，不创建 session（对齐 bash agent_watch_session）
+	if watch != "" {
+		runWatch(store, watch, outputFormat)
 		return
 	}
 
@@ -362,15 +374,23 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 	}
 
 	for _, line := range lines {
+		renderEventLine(display, line)
+	}
+	fmt.Println()
+}
+
+// renderEventLine 渲染单行事件（replayEvents 与 runWatch 共用）
+func renderEventLine(display *agent.TermDisplay, line string) {
+	{
 		var ev map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			continue
+			return
 		}
 		typ, _ := ev["type"].(string)
 
 		switch typ {
 		case "session_start", "usage", "sub_agent_start", "sub_agent_end", "context_update":
-			continue
+			return
 		case "user_input":
 			content, _ := ev["content"].(string)
 			if content != "" {
@@ -437,7 +457,102 @@ func replayEvents(a *agent.Agent, store agent.SessionStore, display *agent.TermD
 			display.ShowEvent(agent.Event{Type: agent.EventError, Fields: []string{"ERROR", msg}})
 		}
 	}
-	fmt.Println()
+}
+
+// resolveWatchFile 解析 --watch 参数为 events.jsonl 路径（对齐 bash agent_watch_resolve 三种形式）
+func resolveWatchFile(store agent.SessionStore, arg string) (string, error) {
+	if info, err := os.Stat(arg); err == nil {
+		if !info.IsDir() {
+			return arg, nil
+		}
+		p := filepath.Join(arg, "events.jsonl")
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	root := filepath.Join(store.GetHomeDir(), ".bash-agent", "projects")
+	var found string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || found != "" {
+			return nil
+		}
+		if d.IsDir() && d.Name() == arg {
+			p := filepath.Join(path, "events.jsonl")
+			if _, err := os.Stat(p); err == nil {
+				found = p
+			}
+		}
+		return nil
+	})
+	if found == "" {
+		return "", fmt.Errorf("session not found: %s", arg)
+	}
+	return found, nil
+}
+
+// completeLines 按 \n 切分，仅保留完整行（丢弃末尾未写完的半行，对齐 bash 的 wc -l 语义）
+func completeLines(data []byte) []string {
+	if len(data) == 0 {
+		return nil
+	}
+	if data[len(data)-1] != '\n' {
+		i := bytes.LastIndexByte(data, '\n')
+		if i < 0 {
+			return nil
+		}
+		data = data[:i+1]
+	}
+	out := strings.Split(string(data), "\n")
+	return out[:len(out)-1] // 去掉末尾空串
+}
+
+// runWatch 实时跟踪某个 session 的 events.jsonl（对齐 bash agent_watch_session）
+func runWatch(store agent.SessionStore, arg, outputFormat string) {
+	file, err := resolveWatchFile(store, arg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: session not found: %s\n", arg)
+		fmt.Fprintf(os.Stderr, "  Searched: %s\n", filepath.Join(store.GetHomeDir(), ".bash-agent", "projects"))
+		os.Exit(1)
+	}
+	streamJSON := outputFormat == "stream-json"
+	var display *agent.TermDisplay
+	if !streamJSON {
+		display = agent.NewTermDisplay()
+		fmt.Printf("\033[1m=== %s ===\033[0m\n\n", filepath.Base(filepath.Dir(file)))
+	}
+	render := func(line string) {
+		if streamJSON {
+			fmt.Println(line)
+		} else {
+			renderEventLine(display, line)
+		}
+	}
+	// 初始渲染最后 10 行作为上下文，随后 500ms 轮询新增行
+	data, _ := os.ReadFile(file)
+	lines := completeLines(data)
+	start := 0
+	if len(lines) > 10 {
+		start = len(lines) - 10
+	}
+	for _, line := range lines[start:] {
+		render(line)
+	}
+	offset := len(lines)
+	for {
+		time.Sleep(500 * time.Millisecond)
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		lines := completeLines(data)
+		if len(lines) <= offset {
+			continue
+		}
+		for _, line := range lines[offset:] {
+			render(line)
+		}
+		offset = len(lines)
+	}
 }
 
 // listAllSessions 列出所有 session（与 bash 版 list_sessions 一致）

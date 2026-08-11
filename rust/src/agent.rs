@@ -2331,65 +2331,8 @@ impl Agent {
 
     /// Replay maps stored events into the same display queue used by live execution.
     /// It must not append events again; events.jsonl is already the source of truth.
-    fn display_replay_event(
-        &self,
-        _ds: &mut DisplayState,
-        evt_type: &str,
-        fields: &std::collections::HashMap<&str, &str>,
-    ) {
-        let evt = match evt_type {
-            "TEXT" => DisplayEvent::Text(fields.get("content").copied().unwrap_or("").to_string()),
-            "THINKING" => {
-                DisplayEvent::Thinking(fields.get("content").copied().unwrap_or("").to_string())
-            }
-            "TOOL_CALL" => {
-                let name = fields.get("name").copied().unwrap_or("").to_string();
-                let mut summary_fields = std::collections::BTreeMap::new();
-                for (k, v) in fields {
-                    if *k != "name" {
-                        summary_fields.insert(k.to_string(), v.to_string());
-                    }
-                }
-                DisplayEvent::ToolCall(ToolCallEvent {
-                    name,
-                    id: String::new(),
-                    input_json: json!({}),
-                    fields: summary_fields,
-                    order: Vec::new(),
-                })
-            }
-            "TOOL_RESULT" => DisplayEvent::ToolResult(ToolResult {
-                tool_use_id: String::new(),
-                tool_name: fields.get("name").copied().unwrap_or("").to_string(),
-                tool_args: std::collections::BTreeMap::new(),
-                content: fields.get("content").copied().unwrap_or("").to_string(),
-                conv_content: String::new(),
-            }),
-            "USER_MESSAGE" => {
-                DisplayEvent::UserMessage(fields.get("content").copied().unwrap_or("").to_string())
-            }
-            "SUB_AGENT_RESULT" => DisplayEvent::SubAgentResult {
-                session_id: fields.get("session_id").copied().unwrap_or("").to_string(),
-                status: fields.get("status").copied().unwrap_or("").to_string(),
-                thinking: fields.get("thinking").copied().unwrap_or("").to_string(),
-                text: fields.get("text").copied().unwrap_or("").to_string(),
-                in_tokens: fields
-                    .get("input_tokens")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
-                out_tokens: fields
-                    .get("output_tokens")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
-            },
-            "STOP" => DisplayEvent::Stop(fields.get("reason").copied().unwrap_or("").to_string()),
-            "ERROR" => {
-                DisplayEvent::Error(fields.get("message").copied().unwrap_or("").to_string())
-            }
-            _ => return,
-        };
-        self.queue_display_only(evt);
-    }
+    /// 行级事件映射已抽为自由函数 replay_event_build / replay_parse_line，
+    /// 供 replay_last_turns 与 --watch 共用。
 
     fn replay_last_turns(&self) {
         let max_turns = 10usize;
@@ -2435,143 +2378,11 @@ impl Agent {
             return;
         }
 
-        let mut ds = DisplayState {
-            last_char: "\n".to_string(),
-            prev_was_thinking: false,
-        };
-
         let reader = BufReader::new(file);
         for line in reader.lines() {
             let Ok(line) = line else { continue };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let Ok(evt) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            let evt_type = evt.get("type").and_then(Value::as_str).unwrap_or("");
-            match evt_type {
-                "session_start" | "usage" | "stop" | "retry" => continue,
-                "user_input" | "user_message" => {
-                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    if content.is_empty() {
-                        continue;
-                    }
-                    self.display_replay_event(
-                        &mut ds,
-                        "USER_MESSAGE",
-                        &std::collections::HashMap::from([("content", content)]),
-                    );
-                }
-                "sub_agent_result" => {
-                    let session_id = evt.get("session_id").and_then(Value::as_str).unwrap_or("");
-                    let status = evt.get("status").and_then(Value::as_str).unwrap_or("");
-                    let input_tokens = evt
-                        .get("input_tokens")
-                        .map(|v| v.to_string())
-                        .unwrap_or_default();
-                    let output_tokens = evt
-                        .get("output_tokens")
-                        .map(|v| v.to_string())
-                        .unwrap_or_default();
-                    let thinking = evt.get("thinking").and_then(Value::as_str).unwrap_or("");
-                    let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
-                    self.display_replay_event(
-                        &mut ds,
-                        "SUB_AGENT_RESULT",
-                        &std::collections::HashMap::from([
-                            ("session_id", session_id),
-                            ("status", status),
-                            ("input_tokens", input_tokens.as_str()),
-                            ("output_tokens", output_tokens.as_str()),
-                            ("thinking", thinking),
-                            ("text", text),
-                        ]),
-                    );
-                }
-                "thinking" => {
-                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    if !content.is_empty() {
-                        self.display_replay_event(
-                            &mut ds,
-                            "THINKING",
-                            &std::collections::HashMap::from([("content", content)]),
-                        );
-                    }
-                }
-                "text" => {
-                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    if !content.is_empty() {
-                        self.display_replay_event(
-                            &mut ds,
-                            "TEXT",
-                            &std::collections::HashMap::from([("content", content)]),
-                        );
-                    }
-                }
-                "tool_call" => {
-                    let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
-                    let default_input = json!({});
-                    let input = evt.get("input").unwrap_or(&default_input);
-                    let fields = parse_input_fields(input);
-                    let mut map = std::collections::HashMap::new();
-                    map.insert("name", name.to_string());
-                    for (k, v) in &fields {
-                        map.insert(k.as_str(), v.as_str().to_string());
-                    }
-                    let str_map: std::collections::HashMap<&str, &str> =
-                        map.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                    self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
-                }
-                "tool_result" => {
-                    let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
-                    let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
-                    let display = truncate_for_replay(content, 200);
-                    self.display_replay_event(
-                        &mut ds,
-                        "TOOL_RESULT",
-                        &std::collections::HashMap::from([
-                            ("name", name),
-                            ("content", display.as_str()),
-                        ]),
-                    );
-                }
-                "error" => {
-                    let msg = evt.get("message").and_then(Value::as_str).unwrap_or("");
-                    self.display_replay_event(
-                        &mut ds,
-                        "ERROR",
-                        &std::collections::HashMap::from([("message", msg)]),
-                    );
-                }
-                "assistant_message" => {
-                    // Legacy format: emit TEXT + TOOL_CALL per tool_call (match bash event_replay.awk)
-                    let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
-                    if !text.is_empty() {
-                        self.display_replay_event(
-                            &mut ds,
-                            "TEXT",
-                            &std::collections::HashMap::from([("content", text)]),
-                        );
-                    }
-                    if let Some(tool_calls) = evt.get("tool_calls").and_then(Value::as_array) {
-                        for tc in tool_calls {
-                            let name = tc.get("name").and_then(Value::as_str).unwrap_or("");
-                            let default_input = json!({});
-                            let input = tc.get("input").unwrap_or(&default_input);
-                            let fields = parse_input_fields(input);
-                            let mut map = std::collections::HashMap::new();
-                            map.insert("name", name.to_string());
-                            for (k, v) in &fields {
-                                map.insert(k.as_str(), v.as_str().to_string());
-                            }
-                            let str_map: std::collections::HashMap<&str, &str> =
-                                map.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                            self.display_replay_event(&mut ds, "TOOL_CALL", &str_map);
-                        }
-                    }
-                }
-                _ => {}
+            for evt in replay_parse_line(&line) {
+                self.queue_display_only(evt);
             }
         }
         self.queue_display_only(DisplayEvent::Text("\n".to_string()));
@@ -2590,6 +2401,332 @@ impl Agent {
     fn debug(&self, msg: &str) {
         if self.cfg.verbose {
             let _ = writeln!(self.stderr.borrow_mut(), "[debug] {msg}");
+        }
+    }
+}
+
+/// 事件类型 + 字段 → DisplayEvent（replay 与 --watch 共用的映射，对齐 bash event_replay.awk）
+fn replay_event_build(
+    evt_type: &str,
+    fields: &std::collections::HashMap<&str, &str>,
+) -> Option<DisplayEvent> {
+    let evt = match evt_type {
+        "TEXT" => DisplayEvent::Text(fields.get("content").copied().unwrap_or("").to_string()),
+        "THINKING" => {
+            DisplayEvent::Thinking(fields.get("content").copied().unwrap_or("").to_string())
+        }
+        "TOOL_CALL" => {
+            let name = fields.get("name").copied().unwrap_or("").to_string();
+            let mut summary_fields = std::collections::BTreeMap::new();
+            for (k, v) in fields {
+                if *k != "name" {
+                    summary_fields.insert(k.to_string(), v.to_string());
+                }
+            }
+            DisplayEvent::ToolCall(ToolCallEvent {
+                name,
+                id: String::new(),
+                input_json: json!({}),
+                fields: summary_fields,
+                order: Vec::new(),
+            })
+        }
+        "TOOL_RESULT" => DisplayEvent::ToolResult(ToolResult {
+            tool_use_id: String::new(),
+            tool_name: fields.get("name").copied().unwrap_or("").to_string(),
+            tool_args: std::collections::BTreeMap::new(),
+            content: fields.get("content").copied().unwrap_or("").to_string(),
+            conv_content: String::new(),
+        }),
+        "USER_MESSAGE" => {
+            DisplayEvent::UserMessage(fields.get("content").copied().unwrap_or("").to_string())
+        }
+        "SUB_AGENT_RESULT" => DisplayEvent::SubAgentResult {
+            session_id: fields.get("session_id").copied().unwrap_or("").to_string(),
+            status: fields.get("status").copied().unwrap_or("").to_string(),
+            thinking: fields.get("thinking").copied().unwrap_or("").to_string(),
+            text: fields.get("text").copied().unwrap_or("").to_string(),
+            in_tokens: fields
+                .get("input_tokens")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            out_tokens: fields
+                .get("output_tokens")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+        },
+        "STOP" => DisplayEvent::Stop(fields.get("reason").copied().unwrap_or("").to_string()),
+        "ERROR" => DisplayEvent::Error(fields.get("message").copied().unwrap_or("").to_string()),
+        _ => return None,
+    };
+    Some(evt)
+}
+
+/// 将一行 events.jsonl 映射为 DisplayEvent 列表（replay_last_turns 与 --watch 共用）
+fn replay_parse_line(line: &str) -> Vec<DisplayEvent> {
+    fn push(out: &mut Vec<DisplayEvent>, t: &str, fields: &std::collections::HashMap<&str, &str>) {
+        if let Some(e) = replay_event_build(t, fields) {
+            out.push(e);
+        }
+    }
+
+    let mut out = Vec::new();
+    if line.trim().is_empty() {
+        return out;
+    }
+    let Ok(evt) = serde_json::from_str::<Value>(line) else {
+        return out;
+    };
+    let evt_type = evt.get("type").and_then(Value::as_str).unwrap_or("");
+    match evt_type {
+        "session_start" | "usage" | "stop" | "retry" => {}
+        "user_input" | "user_message" => {
+            let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+            if !content.is_empty() {
+                push(
+                    &mut out,
+                    "USER_MESSAGE",
+                    &std::collections::HashMap::from([("content", content)]),
+                );
+            }
+        }
+        "sub_agent_result" => {
+            let session_id = evt.get("session_id").and_then(Value::as_str).unwrap_or("");
+            let status = evt.get("status").and_then(Value::as_str).unwrap_or("");
+            let input_tokens = evt
+                .get("input_tokens")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let output_tokens = evt
+                .get("output_tokens")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let thinking = evt.get("thinking").and_then(Value::as_str).unwrap_or("");
+            let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
+            push(
+                &mut out,
+                "SUB_AGENT_RESULT",
+                &std::collections::HashMap::from([
+                    ("session_id", session_id),
+                    ("status", status),
+                    ("input_tokens", input_tokens.as_str()),
+                    ("output_tokens", output_tokens.as_str()),
+                    ("thinking", thinking),
+                    ("text", text),
+                ]),
+            );
+        }
+        "thinking" => {
+            let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+            if !content.is_empty() {
+                push(
+                    &mut out,
+                    "THINKING",
+                    &std::collections::HashMap::from([("content", content)]),
+                );
+            }
+        }
+        "text" => {
+            let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+            if !content.is_empty() {
+                push(
+                    &mut out,
+                    "TEXT",
+                    &std::collections::HashMap::from([("content", content)]),
+                );
+            }
+        }
+        "tool_call" => {
+            let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
+            let default_input = json!({});
+            let input = evt.get("input").unwrap_or(&default_input);
+            let fields = parse_input_fields(input);
+            let mut map = std::collections::HashMap::new();
+            map.insert("name", name.to_string());
+            for (k, v) in &fields {
+                map.insert(k.as_str(), v.as_str().to_string());
+            }
+            let str_map: std::collections::HashMap<&str, &str> =
+                map.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            push(&mut out, "TOOL_CALL", &str_map);
+        }
+        "tool_result" => {
+            let name = evt.get("name").and_then(Value::as_str).unwrap_or("");
+            let content = evt.get("content").and_then(Value::as_str).unwrap_or("");
+            let display = truncate_for_replay(content, 200);
+            push(
+                &mut out,
+                "TOOL_RESULT",
+                &std::collections::HashMap::from([("name", name), ("content", display.as_str())]),
+            );
+        }
+        "error" => {
+            let msg = evt.get("message").and_then(Value::as_str).unwrap_or("");
+            push(
+                &mut out,
+                "ERROR",
+                &std::collections::HashMap::from([("message", msg)]),
+            );
+        }
+        "assistant_message" => {
+            // Legacy format: emit TEXT + TOOL_CALL per tool_call (match bash event_replay.awk)
+            let text = evt.get("text").and_then(Value::as_str).unwrap_or("");
+            if !text.is_empty() {
+                push(
+                    &mut out,
+                    "TEXT",
+                    &std::collections::HashMap::from([("content", text)]),
+                );
+            }
+            if let Some(tool_calls) = evt.get("tool_calls").and_then(Value::as_array) {
+                for tc in tool_calls {
+                    let name = tc.get("name").and_then(Value::as_str).unwrap_or("");
+                    let default_input = json!({});
+                    let input = tc.get("input").unwrap_or(&default_input);
+                    let fields = parse_input_fields(input);
+                    let mut map = std::collections::HashMap::new();
+                    map.insert("name", name.to_string());
+                    for (k, v) in &fields {
+                        map.insert(k.as_str(), v.as_str().to_string());
+                    }
+                    let str_map: std::collections::HashMap<&str, &str> =
+                        map.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                    push(&mut out, "TOOL_CALL", &str_map);
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// --watch 入口：解析 session → 渲染最后 10 行已有事件 → 500ms 轮询 follow 新增事件。
+/// 不需要 API key，不创建 session（对齐 bash agent_watch_session）。
+pub fn agent_watch_session(home: &std::path::Path, arg: &str, stream_json: bool) -> Result<()> {
+    let file = match watch_resolve(home, arg) {
+        Some(f) => f,
+        None => {
+            eprintln!("Error: session not found: {arg}");
+            eprintln!(
+                "  Searched: {}",
+                home.join(".bash-agent/projects").display()
+            );
+            std::process::exit(1);
+        }
+    };
+    let sid = file
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let (tx, _handle) = if stream_json {
+        (None, None)
+    } else {
+        let (tx, handle) = Agent::start_display_worker(false);
+        println!("\x1b[1m=== {sid} ===\x1b[0m\n");
+        (Some(tx), Some(handle))
+    };
+
+    let lines = watch_read_lines(&file);
+    let start = lines.len().saturating_sub(10);
+    for line in &lines[start..] {
+        watch_emit(tx.as_ref(), stream_json, line);
+    }
+    watch_flush(tx.as_ref());
+    let mut offset = lines.len();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let lines = watch_read_lines(&file);
+        if lines.len() <= offset {
+            continue;
+        }
+        for line in &lines[offset..] {
+            watch_emit(tx.as_ref(), stream_json, line);
+        }
+        offset = lines.len();
+        watch_flush(tx.as_ref());
+    }
+}
+
+fn watch_emit(tx: Option<&mpsc::Sender<DisplayCommand>>, stream_json: bool, line: &str) {
+    if stream_json {
+        println!("{line}");
+    } else if let Some(tx) = tx {
+        for evt in replay_parse_line(line) {
+            let _ = tx.send(DisplayCommand::Event(evt));
+        }
+    }
+}
+
+fn watch_flush(tx: Option<&mpsc::Sender<DisplayCommand>>) {
+    if let Some(tx) = tx {
+        let (done_tx, done_rx) = mpsc::channel();
+        if tx.send(DisplayCommand::Flush(done_tx)).is_ok() {
+            let _ = done_rx.recv();
+        }
+    }
+}
+
+/// 读取完整行（对齐 bash 的 wc -l 语义：丢弃末尾未写完的半行）
+fn watch_read_lines(path: &std::path::Path) -> Vec<String> {
+    let Ok(data) = fs::read(path) else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&data);
+    let text = text.as_ref();
+    let end = if text.ends_with('\n') {
+        text.len()
+    } else {
+        match text.rfind('\n') {
+            Some(i) => i + 1,
+            None => return Vec::new(),
+        }
+    };
+    text[..end].lines().map(|s| s.to_string()).collect()
+}
+
+/// 解析 --watch 参数：events.jsonl 路径 | session 目录 | session_id
+/// （对齐 bash agent_watch_resolve / watch.sh resolve_session）
+fn watch_resolve(home: &std::path::Path, arg: &str) -> Option<PathBuf> {
+    let p = std::path::Path::new(arg);
+    if p.is_file() {
+        return Some(p.to_path_buf());
+    }
+    if p.is_dir() {
+        let f = p.join("events.jsonl");
+        if f.is_file() {
+            return Some(f);
+        }
+    }
+    let root = home.join(".bash-agent").join("projects");
+    let mut found = None;
+    watch_find_dir(&root, arg, &mut found);
+    let dir = found?;
+    let f = dir.join("events.jsonl");
+    if f.is_file() { Some(f) } else { None }
+}
+
+/// 递归查找第一个同名目录（遍历顺序对齐 find：先检查目录自身再递归子目录）
+fn watch_find_dir(dir: &std::path::Path, name: &str, found: &mut Option<PathBuf>) {
+    if found.is_some() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if entry.file_name() == name {
+            *found = Some(path);
+            return;
+        }
+        watch_find_dir(&path, name, found);
+        if found.is_some() {
+            return;
         }
     }
 }

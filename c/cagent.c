@@ -9,6 +9,7 @@
  *   --session ID               会话 ID
  *   --continue                 继续最近的会话
  *   --list-sessions            列出所有会话
+ *   --watch SESSION            实时跟踪 session 的 events.jsonl
  *   --interactive              强制交互模式
  *   --verbose                  详细日志
  *   --output human|stream-json 输出格式
@@ -42,6 +43,7 @@ static void usage(const char *prog) {
     fprintf(stderr, "  --interactive              Force interactive mode\n");
     fprintf(stderr, "  --verbose                  Verbose logging\n");
     fprintf(stderr, "  --output human|stream-json Output format\n");
+    fprintf(stderr, "  --watch SESSION         Watch a session's events in real time (session_id | session_dir | events.jsonl path)\n");
     fprintf(stderr, "  -h, --help                 Show this help\n");
     fprintf(stderr, "Environment:\n");
     fprintf(stderr, "  *_API_KEY               API key (ANTHROPIC / OPENAI / DEEPSEEK auto-detected)\n");
@@ -77,6 +79,7 @@ int main(int argc, char *argv[]) {
     const char *base_url = NULL;
     const char *session_id = "";
     const char *output_fmt = "human";
+    const char *watch_session = NULL;
     const char *max_context_str = NULL;
     const char *max_tokens_str = NULL;
     const char *max_turns_str = NULL;
@@ -157,6 +160,8 @@ int main(int argc, char *argv[]) {
             }
             sb_free(&list_rows);
             return 0;
+        } else if (strcmp(argv[i], "--watch") == 0 && i + 1 < argc) {
+            watch_session = argv[++i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;
@@ -166,6 +171,14 @@ int main(int argc, char *argv[]) {
     }
 
     if (do_print) output_fmt = "stream-json";
+
+    /* --watch 不需要 API key，不创建 session（对齐 bash agent_watch_session） */
+    if (watch_session) {
+        const char *watch_env_h = util_env("BASH_AGENT_HOME", NULL);
+        const char *watch_h = (watch_env_h && watch_env_h[0]) ? watch_env_h : util_env("HOME", util_home_dir());
+        return agent_watch_session(watch_h, watch_session,
+                                   strcmp(output_fmt, "stream-json") == 0);
+    }
 
     /* 校验 --max-context（在 API key 检查之前，与 bash 版一致） */
     if (max_context_str) {

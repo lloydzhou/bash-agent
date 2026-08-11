@@ -3066,6 +3066,66 @@ test_agent_max_tokens_suffix
 test_agent_image_placeholders
 
 # ──────────────────────────────────────────────
+# Test 52: --watch 入口（四运行时一致）
+# 不需要 mock server / API key：只读 events.jsonl
+# ──────────────────────────────────────────────
+test_agent_watch() {
+    info "Test 52: --watch (not-found / initial render / follow)"
+
+    # 52a: 不存在的 session → 退出码 1 + stderr 报错
+    # 注：前面的 sub-agent 用例会 unset BASH_AGENT_HOME，这里显式传入
+    local werr wrc
+    werr=$(BASH_AGENT_HOME="$_TEST_HOME" "$AGENT" --watch "watch-nonexistent-$$" 2>&1 >/dev/null) && wrc=0 || wrc=$?
+    if [[ "$wrc" -eq 1 ]] && grep -q "session not found: watch-nonexistent-$$" <<< "$werr"; then
+        green "--watch 不存在 session → exit 1 + stderr"; ((PASS++)) || true
+    else
+        red "--watch 不存在 session → exit 1 + stderr"; echo "  rc=$wrc stderr: $werr"; ((FAIL++)) || true
+    fi
+
+    # 准备伪 session（BASH_AGENT_HOME 下，覆盖 session_id 解析路径）
+    local wsess="watch-test-$$"
+    local wdir="$_TEST_HOME/.bash-agent/projects/test-watch-$$/$wsess"
+    mkdir -p "$wdir"
+    printf '%s\n' \
+        '{"type":"user_input","content":"WATCH_INIT_USER_MARKER"}' \
+        '{"type":"text","content":"WATCH_INIT_TEXT_MARKER"}' \
+        > "$wdir/events.jsonl"
+
+    # 52b: human 模式渲染已有事件（初始最后 10 行）
+    local wout
+    wout=$(BASH_AGENT_HOME="$_TEST_HOME" timeout 3 "$AGENT" --watch "$wsess" 2>&1) || true
+    local wplain
+    wplain=$(printf '%s' "$wout" | LC_ALL=C sed 's/\x1B\[[0-9;]*[[:alpha:]]//g')
+    if grep -q "WATCH_INIT_USER_MARKER" <<< "$wplain" && grep -q "WATCH_INIT_TEXT_MARKER" <<< "$wplain"; then
+        green "--watch 渲染已有事件（human）"; ((PASS++)) || true
+    else
+        red "--watch 渲染已有事件（human）"; echo "  Output: $wout"; ((FAIL++)) || true
+    fi
+
+    # 52c: follow 新增事件
+    local wlog
+    wlog=$(mktemp)
+    BASH_AGENT_HOME="$_TEST_HOME" "$AGENT" --watch "$wdir" > "$wlog" 2>&1 &
+    local wpid=$!
+    sleep 1
+    printf '%s\n' '{"type":"text","content":"WATCH_FOLLOW_MARKER"}' >> "$wdir/events.jsonl"
+    local ok=1 i
+    for i in 1 2 3 4 5 6 7 8; do
+        grep -q "WATCH_FOLLOW_MARKER" "$wlog" 2>/dev/null && { ok=0; break; }
+        sleep 0.5
+    done
+    kill "$wpid" 2>/dev/null || true
+    wait "$wpid" 2>/dev/null || true
+    if (( ok == 0 )); then
+        green "--watch follow 新增事件"; ((PASS++)) || true
+    else
+        red "--watch follow 新增事件"; echo "  Output: $(cat "$wlog")"; ((FAIL++)) || true
+    fi
+    rm -f "$wlog"
+}
+test_agent_watch
+
+# ──────────────────────────────────────────────
 # Test 51: bash mode scanner unit tests (Bash only)
 # NOTE: This test directly sources Bash functions from src/agent.sh.
 # It only validates the Bash implementation. Go/Rust/C versions have
