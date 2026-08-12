@@ -13,17 +13,17 @@
 <style>
   :root { --border:#333; --bg:#0f1115; --fg:#d8dee9; }
   * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+  html,body { margin:0; height:100vh; height:100dvh; background:var(--bg); color:var(--fg);
               font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-  #app { display:flex; flex-direction:column; height:100%; }
+  #app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
   header { padding:8px 12px; border-bottom:1px solid var(--border);
-           display:flex; gap:12px; align-items:center; font-weight:600; }
+           display:flex; gap:12px; align-items:center; font-weight:600; flex-shrink:0; }
   #status { margin-left:auto; font-size:12px; color:#8a93a3; }
   #status.ok { color:#7bc86c; }
   .astatus { font-size:12px; color:#8a93a3; margin-left:8px; }
   .astatus.working { color:#ffcb6b; }
   .hud { font-size:12px; color:#5c6370; margin-left:8px; }
-  #out { flex:1; overflow-y:auto; padding:12px; }
+  #out { flex:1; overflow-y:auto; padding:12px; min-height:0; }
   .row { margin-bottom:6px; white-space:pre-wrap; word-break:break-word; }
   .user { color:#82aaff; } .assistant { }
   .thinking { color:#6b7280; font-style:italic; }
@@ -37,8 +37,8 @@
   details { margin:2px 0; }
   summary { cursor:pointer; color:#ffcb6b; user-select:none; }
   pre { background:#161a22; border:1px solid var(--border); border-radius:6px;
-        padding:8px; overflow-x:auto; font-size:12px; max-height:420px; }
-  #input-bar { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border); }
+        padding:8px; overflow-x:auto; font-size:12px; max-height:40dvh; }
+  #input-bar { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border); flex-shrink:0; }
   textarea { flex:1; resize:none; background:#161a22; color:var(--fg); border:1px solid var(--border);
              border-radius:6px; padding:8px 10px; font:inherit; min-height:40px; }
   textarea:focus { outline:1px solid #82aaff; }
