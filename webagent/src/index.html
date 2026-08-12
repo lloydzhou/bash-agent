@@ -11,11 +11,11 @@
 <meta name="apple-mobile-web-app-title" content="webagent">
 <meta name="theme-color" content="#0f1115">
 <style>
-  :root { --border:#333; --bg:#0f1115; --fg:#d8dee9; }
+  :root { --border:#333; --bg:#0f1115; --fg:#d8dee9; --app-h:100vh; }
   * { box-sizing:border-box; }
-  html,body { margin:0; height:100vh; height:100dvh; background:var(--bg); color:var(--fg);
+  html,body { margin:0; height:var(--app-h); overflow:hidden; background:var(--bg); color:var(--fg);
               font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-  #app { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+  #app { display:flex; flex-direction:column; height:var(--app-h); }
   header { padding:8px 12px; border-bottom:1px solid var(--border);
            display:flex; gap:12px; align-items:center; font-weight:600; flex-shrink:0; }
   #status { margin-left:auto; font-size:12px; color:#8a93a3; }
@@ -64,6 +64,16 @@
 </div>
 <script>
 (function () {
+  // 用 window.innerHeight 驱动布局高度：浏览器内和 PWA standalone 都返回真实可视区域，
+  // 键盘弹出/导航栏出现时自动缩小，header 固定、input-bar 不被遮挡。
+  function syncHeight() {
+    document.documentElement.style.setProperty('--app-h', window.innerHeight + 'px');
+  }
+  window.addEventListener('resize', syncHeight);
+  window.addEventListener('orientationchange', syncHeight);
+  if (window.visualViewport) { window.visualViewport.addEventListener('resize', syncHeight); }
+  syncHeight();
+
   var out = document.getElementById('out');
   var status = document.getElementById('status');
   var astatus = document.getElementById('agentstatus');
