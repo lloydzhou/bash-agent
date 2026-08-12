@@ -227,8 +227,8 @@ fn usage() {
     eprintln!("  webagent [options] <agent> [agent args...]");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --ws-bind ADDR   bind address (default 127.0.0.1)");
-    eprintln!("  --ws-port PORT   listen port (default 8686)");
+    eprintln!("  --bind ADDR      bind address (default 127.0.0.1)");
+    eprintln!("  --port PORT      listen port (default 8686)");
     eprintln!("  --agent PATH     agent binary (default: resolve <agent> from dist/ or PATH)");
     eprintln!("  -h, --help       show this help");
     eprintln!();
@@ -258,17 +258,17 @@ fn main() -> Result<()> {
                 after_sep = true;
                 i += 1;
             }
-            "--ws-bind" => {
+            "--bind" => {
                 bind = args
                     .get(i + 1)
                     .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("--ws-bind requires a value"))?;
+                    .ok_or_else(|| anyhow::anyhow!("--bind requires a value"))?;
                 i += 2;
             }
-            "--ws-port" => {
+            "--port" => {
                 let v = args
                     .get(i + 1)
-                    .ok_or_else(|| anyhow::anyhow!("--ws-port requires a value"))?;
+                    .ok_or_else(|| anyhow::anyhow!("--port requires a value"))?;
                 port = v
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid --ws-port: {v}"))?;
@@ -349,7 +349,7 @@ fn main() -> Result<()> {
     eprintln!("[webagent] agent: {}", agent_bin.display());
     eprintln!("[webagent] agent args: {}", base_args.join(" "));
     eprintln!(
-        "[webagent] point your phone browser at http://{}:{}/  (use --ws-bind 0.0.0.0 for LAN)",
+        "[webagent] point your phone browser at http://{}:{}/  (use --bind 0.0.0.0 for LAN)",
         bind, port
     );
 
