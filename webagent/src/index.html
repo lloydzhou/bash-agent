@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bash-agent · webagent</title>
+<style>
+  :root { --border:#333; --bg:#0f1115; --fg:#d8dee9; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+              font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  #app { display:flex; flex-direction:column; height:100%; }
+  header { padding:8px 12px; border-bottom:1px solid var(--border);
+           display:flex; gap:12px; align-items:center; font-weight:600; }
+  #status { margin-left:auto; font-size:12px; color:#8a93a3; }
+  #status.ok { color:#7bc86c; }
+  .astatus { font-size:12px; color:#8a93a3; margin-left:8px; }
+  .astatus.working { color:#ffcb6b; }
+  .hud { font-size:12px; color:#5c6370; margin-left:8px; }
+  #out { flex:1; overflow-y:auto; padding:12px; }
+  .row { margin-bottom:6px; white-space:pre-wrap; word-break:break-word; }
+  .user { color:#82aaff; } .assistant { }
+  .thinking { color:#6b7280; font-style:italic; }
+  .tool { color:#ffcb6b; }
+  .tool-result { color:#89ddff; font-size:12px; }
+  .usage { color:#7bc86c; font-size:12px; }
+  .error { color:#ff5370; }
+  .context { color:#c792ea; font-size:12px; }
+  .stderr { color:#e5c07b; font-size:12px; }
+  .event { color:#5c6370; font-size:11px; }
+  details { margin:2px 0; }
+  summary { cursor:pointer; color:#ffcb6b; user-select:none; }
+  pre { background:#161a22; border:1px solid var(--border); border-radius:6px;
+        padding:8px; overflow-x:auto; font-size:12px; max-height:420px; }
+  #input-bar { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border); }
+  textarea { flex:1; resize:none; background:#161a22; color:var(--fg); border:1px solid var(--border);
+             border-radius:6px; padding:8px 10px; font:inherit; min-height:40px; }
+  textarea:focus { outline:1px solid #82aaff; }
+  button { background:#2a3040; color:var(--fg); border:1px solid var(--border);
+           border-radius:6px; padding:0 16px; cursor:pointer; font:inherit; }
+  button:hover { background:#363e52; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    webagent <span style="color:#7bc86c">●</span>
+    <span id="hud" class="hud"></span>
+    <span id="agentstatus" class="astatus"></span>
+    <span id="status" class="">connecting…</span>
+  </header>
+  <div id="out"></div>
+  <div id="input-bar">
+    <textarea id="input" placeholder="输入提示词，Enter 发送 / Shift+Enter 换行 / Ctrl+Enter 发送" autofocus></textarea>
+    <button id="send">发送</button>
+  </div>
+</div>
+<script>
+(function () {
+  var out = document.getElementById('out');
+  var status = document.getElementById('status');
+  var astatus = document.getElementById('agentstatus');
+  var hudEl = document.getElementById('hud');
+  var ta = document.getElementById('input');
+  var sendBtn = document.getElementById('send');
+  var ws = null;
+
+  // 累计统计（对齐 display 侧 HUD，仅用前端能拿到的 usage 事件数据）
+  var H = { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, busy: false };
+
+  function fmt(n) { return '' + n; }
+
+  function renderHud() {
+    var ie = H.tin + H.cr;
+    var pct = ie > 0 ? Math.round(H.cr / ie * 100) + '%' : '—';
+    var spin = H.busy ? '⏳ ' : '';
+    hudEl.textContent = spin + 'T:' + fmt(H.turn) + ' R:' + fmt(H.req) +
+      ' I:' + fmt(ie) + '(' + pct + ') O:' + fmt(H.tout);
+    if (H.cc > 0) hudEl.textContent += ' CC:' + fmt(H.cc);
+  }
+
+  function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; }
+
+  // agent 运行状态指示（不占用对话行）：working… / tool: xxx / idle
+  function setWorking(text) { H.busy = true; astatus.textContent = text; astatus.className = 'astatus working'; renderHud(); }
+  function setIdle() { H.busy = false; astatus.textContent = ''; astatus.className = 'astatus'; renderHud(); }
+
+  // 剥离 ANSI CSI/OSC 转义序列（终端标题、进度等），只留可见文本
+  function stripAnsi(s) {
+    var out = '', i = 0;
+    while (i < s.length) {
+      var c = s.charCodeAt(i);
+      if (c === 0x1b) {
+        var c1 = s.charCodeAt(i + 1);
+        if (c1 === 0x5b) { // ESC [
+          var j = i + 2;
+          while (j < s.length) { var cc = s.charCodeAt(j); if (cc >= 0x40 && cc <= 0x7e) break; j++; }
+          i = Math.min(j + 1, s.length);
+          continue;
+        }
+        if (c1 === 0x5d) { // ESC ] ... BEL(\x07) 或 ST(ESC\)
+          var j = i + 2;
+          while (j < s.length) {
+            if (s.charCodeAt(j) === 0x07) break;
+            if (s.charCodeAt(j) === 0x1b && s.charCodeAt(j + 1) === 0x5c) break;
+            j++;
+          }
+          if (j < s.length && s.charCodeAt(j) === 0x07) i = j + 1;
+          else if (j + 1 < s.length) i = j + 2;
+          else i = s.length;
+          continue;
+        }
+        i += 2;
+        continue;
+      }
+      if (c < 0x20 && c !== 0x0a && c !== 0x09) { i++; continue; }
+      out += s[i];
+      i++;
+    }
+    return out;
+  }
+
+  function addRow(cls, text) {
+    var p = document.createElement('div');
+    p.className = 'row ' + cls;
+    p.textContent = text;
+    out.appendChild(p);
+    out.scrollTop = out.scrollHeight;
+    return p;
+  }
+  function addCollapsible(summary, bodyText, open) {
+    var det = document.createElement('details');
+    if (open) det.open = true;
+    var s = document.createElement('summary');
+    s.textContent = summary;
+    var pre = document.createElement('pre');
+    pre.textContent = bodyText;
+    det.appendChild(s); det.appendChild(pre);
+    out.appendChild(det);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  // 流式累积状态：同一消息的连续 text/thinking 分片追加到同一元素，避免碎行
+  var streamState = { kind: null, el: null };
+
+  function resetStream() { streamState = { kind: null, el: null }; }
+
+  // 追加到当前流式块；若类型变化则先落地
+  function appendStream(kind, cls, content) {
+    if (streamState.kind !== kind || !streamState.el) {
+      if (streamState.el && streamState.kind === 'text') streamState.el = null;
+      var p = document.createElement('div');
+      p.className = 'row ' + cls;
+      p.textContent = '';
+      out.appendChild(p);
+      streamState = { kind: kind, el: p };
+    }
+    streamState.el.textContent += content;
+    out.scrollTop = out.scrollHeight;
+  }
+
+  // 对齐 display 侧 build_tool_call_summary：折叠态只显示关键参数摘要
+  function toolSummary(name, input) {
+    if (!input || typeof input !== 'object') return name + '()';
+    var s = function (k) {
+      return (input[k] !== undefined && input[k] !== null) ? String(input[k]) : '';
+    };
+    var label = '';
+    if (name === 'Read' || name === 'Write' || name === 'Edit') {
+      label = s('path');
+    } else if (name === 'Glob' || name === 'Grep') {
+      label = s('pattern');
+    } else if (name === 'Bash') {
+      label = s('command').replace(/\n/g, ' ');
+      if (label.length > 80) label = label.slice(0, 77) + '...';
+    } else if (name === 'TodoWrite') {
+      label = s('summary');
+      if (!label && Array.isArray(input.todos)) {
+        var total = input.todos.length;
+        var completed = input.todos.filter(function (t) { return t.status === 'completed'; }).length;
+        label = completed + '/' + total;
+      }
+    } else if (name === 'Skill') {
+      label = s('name');
+    } else if (name === 'SubAgent') {
+      label = s('description');
+    }
+    return label ? name + '(' + label + ')' : name + '()';
+  }
+
+  function handleLine(raw) {
+    if (!raw || !raw.trim()) return;
+    var evt;
+    try { evt = JSON.parse(raw); } catch (e) {
+      addRow('event', raw); return;
+    }
+    switch (evt.type) {
+      case 'session_start':
+        resetStream(); hudReset(); setIdle(); break;
+      case 'user_input':
+      case 'user_message':
+        resetStream();
+        var uin = (evt.content !== undefined && evt.content !== null) ? evt.content : evt.input;
+        addRow('user', '> ' + uin);
+        H.turn++;
+        setWorking('working…');
+        break;
+      case 'thinking':
+        if (!evt.content) break;
+        appendStream('thinking', 'thinking', evt.content);
+        break;
+      case 'text':
+        appendStream('text', 'assistant', evt.content);
+        break;
+      case 'tool_call': {
+        resetStream();
+        setWorking('tool: ' + (evt.name || '?'));
+        var raw = evt.input !== undefined ? evt.input : (evt.arguments || evt.args || '');
+        var inputObj = (typeof raw === 'string') ? {} : raw;
+        var args = (typeof raw === 'string') ? raw : JSON.stringify(raw);
+        addCollapsible('[tool] ' + toolSummary(evt.name, inputObj), args, false);
+        break;
+      }
+      case 'tool_result': {
+        setWorking('working…');
+        var content = (typeof evt.content === 'string') ? evt.content : JSON.stringify(evt.content);
+        var tname = evt.name || evt.tool_name;
+        if (tname === 'Edit' && content.length > 2000) {
+          addCollapsible('[result] ' + tname, content, false);
+        } else {
+          addRow('tool-result', content.slice(0, 2000));
+        }
+        break;
+      }
+      case 'usage':
+        // 只累计主 agent 用量（skip sub_agent）；仅作头部状态展示，不占对话行
+        if (evt.kind === undefined || evt.kind === 'agent') {
+          H.req++;
+          H.tin += (evt.input_tokens || 0);
+          H.tout += (evt.output_tokens || 0);
+          H.cr += (evt.cache_read_input_tokens || 0);
+          H.cc += (evt.cache_creation_input_tokens || 0);
+          renderHud();
+        }
+        break;
+      case 'context_update':
+        resetStream(); addRow('context', '[compact] ' + (evt.trigger || '')); break;
+      case 'sub_agent_start':
+        resetStream(); addRow('context', '[subagent] ' + (evt.description || evt.prompt || '')); break;
+      case 'stderr': {
+        var vis = stripAnsi(evt.content || '').trim();
+        if (vis) addRow('stderr', vis);
+        break;
+      }
+      case 'process_exit':
+        resetStream(); setIdle(); break;
+      case 'error':
+        resetStream(); setIdle(); addRow('error', 'Error: ' + evt.message); break;
+      case 'stop':
+        resetStream(); setIdle(); break;
+      default:
+        addRow('event', raw);
+    }
+  }
+
+  function reconnect() {
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+    var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(proto + '://' + location.host + '/ws');
+    ws.onopen = function () {
+      // 重连会收到完整 replay，先清空 DOM + HUD 状态，避免重复堆积
+      out.innerHTML = '';
+      resetStream();
+      hudReset();
+      setIdle();
+      status.textContent = 'connected';
+      status.className = 'ok';
+    };
+    ws.onmessage = function (ev) { handleLine(ev.data); };
+    ws.onclose = function () {
+      status.textContent = 'disconnected · retrying…'; status.className = '';
+      setTimeout(reconnect, 1500);
+    };
+    ws.onerror = function () { ws.close(); };
+  }
+  reconnect();
+
+  function sendMsg() {
+    var v = ta.value.trim();
+    if (!v || !ws || ws.readyState !== 1) { if (!v) ta.focus(); return; }
+    ws.send(v);
+    ta.value = '';
+    // 不在此处 addRow：子进程会把 user_input 事件回显，避免重复显示
+    ta.focus();
+  }
+  sendBtn.addEventListener('click', sendMsg);
+  ta.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) { return; } // allow newline
+      e.preventDefault(); sendMsg();
+    }
+  });
+  setInterval(function () {
+    if (ws && ws.readyState === 1) { return; }
+    reconnect();
+  }, 3000);
+})();
+</script>
+</body>
+</html>

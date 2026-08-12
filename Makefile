@@ -30,6 +30,17 @@ build-tcode:
 	cp scripts/tcode dist/tcode
 	chmod +x dist/tcode
 
+build-webagent:
+	cd webagent && cargo build --release -j 10
+	cp webagent/target/release/webagent dist/webagent
+	strip -x dist/webagent
+
+# 交叉编译 webagent 到 Android (Termux) — 需要 NDK
+build-webagent-android:
+	@test -n "$(NDK)" || { echo "用法：make build-webagent-android NDK=/path/to/android-ndk" >&2; exit 2; }
+	cd webagent && CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK)/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android27-clang" cargo build --release --target aarch64-linux-android -j 10
+	cp webagent/target/aarch64-linux-android/release/webagent dist/webagent-android
+
 build-c:
 	$(MAKE) -C c
 
