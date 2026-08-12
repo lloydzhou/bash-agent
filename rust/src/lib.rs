@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod ffi;
+pub mod serve;
 pub mod sse;
 pub mod store;
 pub mod tools;
@@ -54,6 +55,9 @@ pub mod config {
         pub list_sessions: bool,
         pub fork: bool,
         pub watch: String,
+        pub serve: bool,
+        pub serve_port: u16,
+        pub serve_bind: String,
     }
 
     impl Default for Config {
@@ -94,6 +98,9 @@ pub mod config {
                 list_sessions: false,
                 fork: false,
                 watch: String::new(),
+                serve: false,
+                serve_port: 8765,
+                serve_bind: "127.0.0.1".to_string(),
             }
         }
     }
@@ -238,7 +245,7 @@ pub mod config {
             }
         }
 
-        if cfg.api_key.is_empty() && cfg.base_url.is_empty() {
+        if cfg.api_key.is_empty() && cfg.base_url.is_empty() && !cfg.serve {
             match cfg.provider.as_str() {
                 "claude" => bail!("no API key. Set ANTHROPIC_API_KEY or use --api-key"),
                 "openai" | "responses" => bail!("no API key. Set OPENAI_API_KEY or use --api-key"),

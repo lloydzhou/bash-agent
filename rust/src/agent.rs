@@ -28,6 +28,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 type TransportRef = Arc<dyn crate::transport::Transport>;
 
@@ -223,8 +224,21 @@ pub fn agent_run(cfg: Config, cwd: PathBuf, home: PathBuf) -> Result<()> {
     })
     .ok();
 
-    let mut rt = Agent::new(cfg, cwd, home)?;
-    rt.cancel_read_fd = cancel_read_fd;
+    // serve 模式：先强制 stream-json（Agent::new 据此跳过 display worker），
+    // 事件经 stdout -> WsWriter 广播到浏览器
+    let cfg = if cfg.serve {
+        let mut c = cfg;
+        c.interactive = true;
+        c.output_format = OutputFormat::StreamJson;
+        c
+    } else {
+        cfg
+    };
+    let mut rt = Agent::new(cfg, cwd, home)?;    rt.cancel_read_fd = cancel_read_fd;
+
+    if rt.cfg.serve {
+        return rt.serve_mode();
+    }
 
     if rt.cfg.interactive || (rt.cfg.prompt.is_empty() && io::stdin().is_terminal()) {
         rt.cfg.interactive = true;
@@ -269,6 +283,7 @@ enum MainLoopMessage {
         text: String,
     },
     NotifyPending,
+    Exit,
 }
 
 struct Agent {
@@ -1075,6 +1090,8 @@ impl Agent {
                             let err = unsafe { *libc::__error() };
                             #[cfg(target_os = "linux")]
                             let err = unsafe { *libc::__errno_location() };
+                            #[cfg(target_os = "android")]
+                            let err = unsafe { *libc::__errno() };
                             if err == libc::EAGAIN {
                                 break Err(ffi::LineError::Interrupted);
                             }
@@ -1165,16 +1182,90 @@ impl Agent {
         Ok(())
     }
 
+    /// serve_mode：嵌入 Web UI 服务器模式。
+    /// 复用 main_loop 消息通道——WS 客户端文本经 input_rx 转为 UserInput 注入，
+    /// stream-json 事件经 stdout（被替换为 WsWriter）广播到浏览器。
+    fn serve_mode(&mut self) -> Result<()> {
+        let addr = format!("{}:{}", self.cfg.serve_bind, self.cfg.serve_port);
+        let events_path = self.events_path_for_serve();
+        let (handle, _server_thread) = crate::serve::start_server(&addr, crate::serve::INDEX_HTML, events_path)?;
+
+        // 替换 stdout 为 WS 广播 writer（stream-json 事件自动 tee 到浏览器）
+        let ws_writer = crate::serve::WsWriter::new(handle.hub.clone());
+        *self.stdout.borrow_mut() = Box::new(ws_writer);
+
+        // 转发 WS 用户输入 -> main_loop 消息队列（等价 readline 线程）
+        let input_rx = handle.input_rx;
+        let msg_tx_arc = self.msg_tx.clone();
+        std::thread::spawn(move || {
+            while let Ok(line) = input_rx.recv() {
+                let tx_guard = msg_tx_arc.lock().unwrap();
+                match tx_guard.as_ref() {
+                    Some(tx) => {
+                        if tx
+                            .send(MainLoopMessage::UserInput { input: line })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+        });
+        self.info(&format!("bash-agent serving on http://{addr}"));
+        self.main_loop()?;
+        // Ctrl+C 或通道断开时退出。不要 join input_thread——它阻塞在 input_rx.recv()，
+        // 而 input_tx 被 server 线程永远持有，join 会死锁。进程退出时线程自动终止。
+        self.info("Goodbye!");
+        if !self.cfg.session_id.is_empty() {
+            let _ = writeln!(
+                self.stderr.borrow_mut(),
+                "\x1b[90mResume with: --session {}  or  --continue\x1b[0m",
+                self.cfg.session_id
+            );
+        }
+        std::process::exit(0);
+    }
+
+    /// events.jsonl 路径，供 serve 客户端每次连接时读取并回放历史。
+    fn events_path_for_serve(&self) -> Option<std::path::PathBuf> {
+        let path = &self.paths.events;
+        if path.as_os_str().is_empty() {
+            return None;
+        }
+        Some(path.clone())
+    }
+
     // main_loop 主事件循环，从消息队列读取并分发处理
     // 借鉴 bash 版本设计：readline 线程退出时主动 drop 发送端（类似 bash 的 exec 4>&-），
     // 这样 recv() 收到 Disconnected 后自然退出，无需轮询 should_exit
     pub(crate) fn main_loop(&mut self) -> Result<()> {
         loop {
-            let msg = match self.msg_rx.recv() {
-                Ok(msg) => msg,
-                Err(std::sync::mpsc::RecvError) => {
-                    // 所有发送端已关闭（readline 线程退出时主动 drop），退出
-                    break;
+            let msg = if self.cfg.serve {
+                // serve 模式：轮询 CTRLC_FLAG 以便空闲时 Ctrl+C 退出。
+                // 正在执行 turn 时 Ctrl+C 由 agent_loop_stream 消费（中断），
+                // 这里只在空闲（阻塞 recv）时捕获退出。
+                loop {
+                    match self.msg_rx.recv_timeout(Duration::from_millis(200)) {
+                        Ok(msg) => break msg,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            if CTRLC_FLAG.swap(false, Ordering::SeqCst) {
+                                break MainLoopMessage::Exit;
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            break MainLoopMessage::Exit;
+                        }
+                    }
+                }
+            } else {
+                match self.msg_rx.recv() {
+                    Ok(msg) => msg,
+                    Err(std::sync::mpsc::RecvError) => {
+                        // 所有发送端已关闭（readline 线程退出时主动 drop），退出
+                        break;
+                    }
                 }
             };
             match msg {
@@ -1210,6 +1301,7 @@ impl Agent {
 
                     // 不再通知 readline 线程 — 它已经在下一轮 EditStart
                 }
+                MainLoopMessage::Exit => break,
                 _ => {}
             }
 
@@ -1277,6 +1369,7 @@ impl Agent {
                     self.flush_display();
                 }
                 Ok(MainLoopMessage::NotifyPending) | Ok(MainLoopMessage::UserInput { .. }) => {}
+                Ok(_) => {}
                 Err(_) => return Err(anyhow!("后台结果通道已断开")),
             }
         }

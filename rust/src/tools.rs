@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::prompt;
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use nix::unistd::pipe;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -1142,65 +1142,36 @@ fn strip_ansi(s: &str) -> String {
 /// Ported from src/awk/sanitize_utf8.awk — ensures JSON serialization won't
 /// fail on illegal bytes and produces the same `\ufffd` text the mock server checks for.
 fn sanitize_utf8(data: &[u8]) -> String {
+    // 把合法多字节序列按 UTF-8 正确解码，非法字节替换为字面 `\ufffd` 文本
+    // （mock server 约定）——不能逐字节 `b as char`，否则把 UTF-8 拆成 Latin-1 乱码。
     let mut out = String::with_capacity(data.len());
     let mut i = 0;
     let n = data.len();
     while i < n {
         let b = data[i];
-        if b < 0x80 {
-            // ASCII
-            out.push(b as char);
-            i += 1;
+        let len = if b < 0x80 {
+            1
         } else if b >= 0xC2 && b <= 0xDF {
-            // 2-byte: C2-DF + 80-BF
-            if i + 1 < n && data[i + 1] >= 0x80 && data[i + 1] <= 0xBF {
-                out.push(b as char);
-                out.push(data[i + 1] as char);
-                i += 2;
-            } else {
-                out.push_str("\\ufffd");
-                i += 1;
-            }
+            2
         } else if b >= 0xE0 && b <= 0xEF {
-            // 3-byte: E0-EF + 80-BF + 80-BF
-            if i + 2 < n
-                && data[i + 1] >= 0x80
-                && data[i + 1] <= 0xBF
-                && data[i + 2] >= 0x80
-                && data[i + 2] <= 0xBF
-            {
-                out.push(b as char);
-                out.push(data[i + 1] as char);
-                out.push(data[i + 2] as char);
-                i += 3;
-            } else {
-                out.push_str("\\ufffd");
-                i += 1;
-            }
+            3
         } else if b >= 0xF0 && b <= 0xF4 {
-            // 4-byte: F0-F4 + 80-BF + 80-BF + 80-BF
-            if i + 3 < n
-                && data[i + 1] >= 0x80
-                && data[i + 1] <= 0xBF
-                && data[i + 2] >= 0x80
-                && data[i + 2] <= 0xBF
-                && data[i + 3] >= 0x80
-                && data[i + 3] <= 0xBF
-            {
-                out.push(b as char);
-                out.push(data[i + 1] as char);
-                out.push(data[i + 2] as char);
-                out.push(data[i + 3] as char);
-                i += 4;
-            } else {
-                out.push_str("\\ufffd");
-                i += 1;
-            }
+            4
         } else {
-            // Illegal byte: C0-C1 (overlong), 80-BF (orphan continuation), F5-FF (out of range)
-            out.push_str("\\ufffd");
-            i += 1;
+            0
+        };
+        if len > 0 && i + len <= n {
+            match std::str::from_utf8(&data[i..i + len]) {
+                Ok(s) => {
+                    out.push_str(s);
+                    i += len;
+                    continue;
+                }
+                Err(_) => {}
+            }
         }
+        out.push_str("\\ufffd");
+        i += 1;
     }
     out
 }
@@ -1257,8 +1228,8 @@ fn utf8_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::{
-        Runner, WaitResult, bash_mode_allows, classify_bash_required_mode, drain_fd,
-        wait_child_or_cancel,
+        bash_mode_allows, classify_bash_required_mode, drain_fd, wait_child_or_cancel, Runner,
+        WaitResult,
     };
     use crate::config::Config;
     use nix::unistd::pipe;
@@ -1317,82 +1288,56 @@ mod tests {
         };
 
         unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0467") };
-        assert!(
-            runner
-                .native_file_mode_guard("Read", "src/agent.sh", "")
-                .is_ok()
-        );
-        assert!(
-            runner
-                .native_file_mode_guard("Read", "/etc/hosts", "")
-                .is_err()
-        );
-        assert!(
-            runner
-                .native_file_mode_guard("Write", "~/note.txt", "")
-                .is_err()
-        );
+        assert!(runner
+            .native_file_mode_guard("Read", "src/agent.sh", "")
+            .is_ok());
+        assert!(runner
+            .native_file_mode_guard("Read", "/etc/hosts", "")
+            .is_err());
+        assert!(runner
+            .native_file_mode_guard("Write", "~/note.txt", "")
+            .is_err());
         assert!(runner.native_file_mode_guard("Grep", "", "").is_ok());
         assert!(runner.native_file_mode_guard("Glob", "", "/etc/*").is_err());
         assert!(runner.native_file_mode_guard("Glob", "", "../*").is_err());
 
         unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0004") };
-        assert!(
-            runner
-                .native_file_mode_guard("Read", "/tmp/native-file-mode-test", "")
-                .is_ok()
-        );
-        assert!(
-            runner
-                .native_file_mode_guard("Write", "/tmp/native-file-mode-test", "")
-                .is_ok()
-        );
-        assert!(
-            runner
-                .native_file_mode_guard("Edit", "/tmp/native-file-mode-test", "")
-                .is_ok()
-        );
+        assert!(runner
+            .native_file_mode_guard("Read", "/tmp/native-file-mode-test", "")
+            .is_ok());
+        assert!(runner
+            .native_file_mode_guard("Write", "/tmp/native-file-mode-test", "")
+            .is_ok());
+        assert!(runner
+            .native_file_mode_guard("Edit", "/tmp/native-file-mode-test", "")
+            .is_ok());
         assert!(runner.native_file_mode_guard("Grep", "/tmp", "").is_ok());
-        assert!(
-            runner
-                .native_file_mode_guard("Glob", "/tmp", "*.txt")
-                .is_ok()
-        );
+        assert!(runner
+            .native_file_mode_guard("Glob", "/tmp", "*.txt")
+            .is_ok());
         unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0000") };
-        assert!(
-            runner
-                .native_file_mode_guard("Read", "/tmp-other/native-file-mode-test", "")
-                .is_err()
-        );
+        assert!(runner
+            .native_file_mode_guard("Read", "/tmp-other/native-file-mode-test", "")
+            .is_err());
         unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0004") };
-        assert!(
-            runner
-                .native_file_mode_guard("Read", "/tmp/../etc/hosts", "")
-                .is_err()
-        );
-        assert!(
-            runner
-                .native_file_mode_guard("Write", "/tmp/../etc/native-file-mode-test", "")
-                .is_err()
-        );
-        assert!(
-            runner
-                .native_file_mode_guard("Edit", "/tmp/../etc/hosts", "")
-                .is_err()
-        );
+        assert!(runner
+            .native_file_mode_guard("Read", "/tmp/../etc/hosts", "")
+            .is_err());
+        assert!(runner
+            .native_file_mode_guard("Write", "/tmp/../etc/native-file-mode-test", "")
+            .is_err());
+        assert!(runner
+            .native_file_mode_guard("Edit", "/tmp/../etc/hosts", "")
+            .is_err());
 
         unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "0465") };
-        assert!(
-            runner
-                .native_file_mode_guard("Edit", "src/agent.sh", "")
-                .is_err()
-        );
+        assert!(runner
+            .native_file_mode_guard("Edit", "src/agent.sh", "")
+            .is_err());
         unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", "invalid") };
-        assert!(
-            runner
-                .native_file_mode_guard("Read", "src/agent.sh", "")
-                .is_err()
-        );
+        assert!(runner
+            .native_file_mode_guard("Read", "src/agent.sh", "")
+            .is_err());
 
         if let Some(value) = prior {
             unsafe { std::env::set_var("BASH_AGENT_BASH_MODE", value) };

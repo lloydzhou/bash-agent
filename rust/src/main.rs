@@ -1,6 +1,6 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use rustagent::agent::{self, agent_run};
-use rustagent::config::{Config, OutputFormat, apply_provider_defaults, parse_size_bytes};
+use rustagent::config::{apply_provider_defaults, parse_size_bytes, Config, OutputFormat};
 use rustagent::store;
 use rustagent::util::format_system_time;
 use std::path::Path;
@@ -149,6 +149,18 @@ fn parse_args(args: Vec<String>) -> Result<Config> {
                 cfg.interactive = true;
                 i += 1;
             }
+            "--serve" => {
+                cfg.serve = true;
+                i += 1;
+            }
+            "--serve-port" => {
+                cfg.serve_port = require_value(&args, i)?.parse()?;
+                i += 2;
+            }
+            "--serve-bind" => {
+                cfg.serve_bind = require_value(&args, i)?.to_string();
+                i += 2;
+            }
             "-h" | "--help" => {
                 return Err(anyhow!("__HELP__"));
             }
@@ -206,6 +218,9 @@ fn print_usage() {
     println!("  --watch SESSION         Watch a session's events in real time (session_id | session_dir | events.jsonl path)");
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
+    println!("  --serve                 Start embedded web UI server (web socket)");
+    println!("  --serve-port N          Web UI server port (default: 8765)");
+    println!("  --serve-bind IP         Web UI bind address (default: 127.0.0.1; use 0.0.0.0 for LAN access)");
     println!("  -h, --help              Show this help");
     println!();
     println!("Environment:");

@@ -18,6 +18,9 @@ time = { version = "0.3.47", features = ["formatting", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 ctrlc = "3"
+tungstenite = "0.24"
+sha1 = "0.10"
+base64 = "0.22"
 
 [build-dependencies]
 cc = "1"
