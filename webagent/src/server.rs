@@ -13,6 +13,34 @@ use tungstenite::protocol::Message;
 
 pub(crate) const INDEX_HTML: &str = include_str!("index.html");
 
+/// PWA manifest（内嵌，支持安装到桌面/Home Screen）
+pub(crate) const MANIFEST_JSON: &str = r####"{
+  "name": "bash-agent webagent",
+  "short_name": "webagent",
+  "description": "WebSocket 桥接器：浏览器操作 agent 子进程",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}"####;
+
+/// bash-agent logo（来自 docs/assets/logo.svg）
+pub(crate) const ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="bash-agent runtime grid logo">
+  <rect width="64" height="64" rx="14" fill="#111318"/>
+  <rect x="10" y="10" width="20" height="20" rx="5" fill="#42d39b"/>
+  <rect x="34" y="10" width="20" height="20" rx="5" fill="#77a8ff"/>
+  <rect x="10" y="34" width="20" height="20" rx="5" fill="#f59e68"/>
+  <rect x="34" y="34" width="20" height="20" rx="5" fill="#eef2f7"/>
+  <path d="M16 19l5 4-5 4" fill="none" stroke="#111318" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M39 21h10" fill="none" stroke="#111318" stroke-width="3" stroke-linecap="round"/>
+  <path d="M17 40h6a3 3 0 0 1 0 6h-6V40Zm0 6h7a3 3 0 0 1 0 6h-7v-6Z" fill="none" stroke="#111318" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M39 52l5-12h2l5 12" fill="none" stroke="#111318" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M42 48h6" fill="none" stroke="#111318" stroke-width="3.2" stroke-linecap="round"/>
+</svg>"##;
+
 /// 当前会话的 events.jsonl 路径（可动态更新）。
 /// 客户端连接时从中读取最近 500 条做回放，保证 --continue 旧会话也能看到历史。
 pub(crate) type EventsPath = Arc<Mutex<Option<PathBuf>>>;
@@ -92,6 +120,20 @@ fn handle_connection(
             INDEX_HTML.as_bytes(),
             "text/html; charset=utf-8",
         )?;
+        return Ok(());
+    }
+
+    if path == "/manifest.json" {
+        serve_static(
+            &mut stream,
+            MANIFEST_JSON.as_bytes(),
+            "application/manifest+json; charset=utf-8",
+        )?;
+        return Ok(());
+    }
+
+    if path == "/icon.svg" {
+        serve_static(&mut stream, ICON_SVG.as_bytes(), "image/svg+xml")?;
         return Ok(());
     }
 
