@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
-use sha1::{Digest, Sha1};
 use std::fs;
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -41,15 +38,17 @@ pub(crate) const ICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" vi
   <path d="M42 48h6" fill="none" stroke="#111318" stroke-width="3.2" stroke-linecap="round"/>
 </svg>"##;
 
+/// 每客户端发送队列容量上限：超过此值的慢客户端会被强制断开，防止内存无限增长。
+const CLIENT_QUEUE_BOUND: usize = 256;
+
 /// 当前会话的 events.jsonl 路径（可动态更新）。
 /// 客户端连接时从中读取最近 500 条做回放，保证 --continue 旧会话也能看到历史。
 pub(crate) type EventsPath = Arc<Mutex<Option<PathBuf>>>;
 
-/// 广播中心：持有所有已连接客户端的写入通道。
-/// 运行线程 broadcast(line) -> 每个客户端的 channel 收到 -> 客户端线程写 WS。
-/// 客户端断开后 receiver 被 drop，send 返回 Err，广播自动跳过，无需显式注销。
+/// 广播中心：持有所有已连接客户端的有界写入通道。
+/// broadcast 时对已满/失效的 channel 执行 remove，自动断开慢客户端。
 pub(crate) struct WsHub {
-    clients: Mutex<Vec<mpsc::Sender<String>>>,
+    clients: Mutex<Vec<mpsc::SyncSender<String>>>,
 }
 
 impl WsHub {
@@ -60,50 +59,57 @@ impl WsHub {
     }
 
     fn register(&self) -> mpsc::Receiver<String> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(CLIENT_QUEUE_BOUND);
         self.clients.lock().unwrap().push(tx);
         rx
     }
 
     pub(crate) fn broadcast(&self, line: &str) {
-        let clients = self.clients.lock().unwrap();
-        for tx in clients.iter() {
-            let _ = tx.send(line.to_string());
+        let mut clients = self.clients.lock().unwrap();
+        let mut dead = Vec::new();
+        for (i, tx) in clients.iter().enumerate() {
+            // try_send：有界队列满时返回 Err，标记为死连接稍后移除
+            if tx.send(line.to_string()).is_err() {
+                dead.push(i);
+            }
+        }
+        // 从后往前删除，避免索引偏移
+        for i in dead.into_iter().rev() {
+            clients.remove(i);
         }
     }
 }
 
 /// HTTP/1.1 最小服务 + WebSocket 握手。
 /// 端点：
-///   GET /    -> index.html（内嵌单页 UI）
-///   GET /ws  -> WebSocket 升级
+///   GET /              -> index.html（内嵌单页 UI）
+///   GET /manifest.json -> PWA manifest
+///   GET /icon.svg      -> logo
+///   GET /ws            -> WebSocket 升级（交给 tungstenite 完成握手，避免预读丢帧）
 fn handle_connection(
-    stream: TcpStream,
+    mut stream: TcpStream,
     hub: Arc<WsHub>,
     input_tx: mpsc::Sender<String>,
     events_path: EventsPath,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
 
-    // 读请求头（到 \r\n\r\n）
+    // 先读请求头（到 \r\n\r\n），只用于路由判断；不使用 BufReader 以避免预读丢帧。
     let mut request_head = Vec::new();
     let mut buf = [0u8; 2048];
-    {
-        let mut reader = BufReader::new(stream.try_clone()?);
-        loop {
-            let n = reader
-                .read(&mut buf)
-                .map_err(|e| anyhow::anyhow!("read request: {e}"))?;
-            if n == 0 {
-                break;
-            }
-            request_head.extend_from_slice(&buf[..n]);
-            if request_head.len() > 64 * 1024 {
-                return Err(anyhow::anyhow!("request too large"));
-            }
-            if request_head.windows(4).any(|w| w == b"\r\n\r\n") {
-                break;
-            }
+    loop {
+        let n = stream
+            .read(&mut buf)
+            .map_err(|e| anyhow::anyhow!("read request: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        request_head.extend_from_slice(&buf[..n]);
+        if request_head.len() > 64 * 1024 {
+            return Err(anyhow::anyhow!("request too large"));
+        }
+        if request_head.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
         }
     }
 
@@ -113,6 +119,7 @@ fn handle_connection(
     let _method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("");
 
+    // 静态路由：直接从已读的请求头响应，用原始 stream 写回
     let mut stream = stream;
     if path == "/" {
         serve_static(
@@ -122,7 +129,6 @@ fn handle_connection(
         )?;
         return Ok(());
     }
-
     if path == "/manifest.json" {
         serve_static(
             &mut stream,
@@ -131,72 +137,91 @@ fn handle_connection(
         )?;
         return Ok(());
     }
-
     if path == "/icon.svg" {
         serve_static(&mut stream, ICON_SVG.as_bytes(), "image/svg+xml")?;
         return Ok(());
     }
 
-    if path == "/ws" {
-        let key = head
-            .lines()
-            .find(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:"))
-            .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
-            .ok_or_else(|| anyhow::anyhow!("missing sec-websocket-key"))?;
-
-        let upgrade_ws = head
-            .lines()
-            .any(|l| l.eq_ignore_ascii_case("upgrade: websocket"));
-        if !upgrade_ws {
-            serve_static(&mut stream, b"expected websocket upgrade", "text/plain")?;
-            return Ok(());
-        }
-
-        let accept = ws_accept_key(&key)?;
-        let response = format!(
-            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
-            accept
-        );
-        stream.write_all(response.as_bytes())?;
-        stream.flush()?;
-
-        // 握手已手动完成，直接接管原始流（不再让 tungstenite 重读请求头）
-        let mut ws = tungstenite::WebSocket::<TcpStream>::from_raw_socket(
-            stream,
-            tungstenite::protocol::Role::Server,
-            None,
-        );
-        client_loop(&mut ws, &hub, &input_tx, &events_path)?;
+    if path != "/ws" {
+        serve_static(&mut stream, b"not found", "text/plain")?;
         return Ok(());
     }
 
-    serve_static(&mut stream, b"not found", "text/plain")?;
+    // WebSocket：用 tungstenite::accept 完成握手。
+    // 由于请求头已被我们读走，需要把已读的原始字节作为前缀喂回 tungstenite。
+    let request_bytes = request_head.clone();
+    let prefixed = PrefixedRead::new(request_bytes, stream);
+    let mut ws = tungstenite::accept(prefixed)?;
+
+    client_loop(&mut ws, &hub, &input_tx, &events_path)?;
     Ok(())
+}
+
+/// 包装器：先把前缀字节读出，再透传底层 stream。
+/// 这样 tungstenite 能完整重读 HTTP 请求头并继续解析后续 WS 帧，不丢任何字节。
+struct PrefixedRead {
+    prefix: Vec<u8>,
+    pos: usize,
+    inner: TcpStream,
+}
+
+impl PrefixedRead {
+    fn new(prefix: Vec<u8>, inner: TcpStream) -> Self {
+        Self {
+            prefix,
+            pos: 0,
+            inner,
+        }
+    }
+}
+
+impl Read for PrefixedRead {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos < self.prefix.len() {
+            let remaining = &self.prefix[self.pos..];
+            let n = remaining.len().min(buf.len());
+            buf[..n].copy_from_slice(&remaining[..n]);
+            self.pos += n;
+            return Ok(n);
+        }
+        self.inner.read(buf)
+    }
+}
+
+impl Write for PrefixedRead {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 /// 每连接一线程：读超时轮询实现双向。
 /// WS 来文本 -> 注入 input_tx；hub 队列事件 -> 写 WS。
 /// 新连接先从 events.jsonl 读取最近 500 条回放，再注册为活跃监听者。
 fn client_loop(
-    ws: &mut tungstenite::WebSocket<TcpStream>,
+    ws: &mut tungstenite::WebSocket<PrefixedRead>,
     hub: &Arc<WsHub>,
     input_tx: &mpsc::Sender<String>,
     events_path: &EventsPath,
 ) -> Result<()> {
-    // 从 events.jsonl 回放最近 500 条（页面刷新/重连也能看到完整历史，包括 --continue 的旧会话）
-    if let Some(p) = events_path.lock().unwrap().as_ref() {
-        if let Ok(h) = fs::read_to_string(p) {
-            let tail: Vec<&str> = h.lines().rev().take(500).collect();
-            for line in tail.iter().rev() {
-                if ws.send(Message::Text(line.to_string())).is_err() {
-                    return Ok(());
-                }
+    // 从 events.jsonl 回放最近 500 条
+    if let Some(p) = events_path.lock().unwrap().as_ref()
+        && let Ok(h) = fs::read_to_string(p)
+    {
+        let tail: Vec<&str> = h.lines().rev().take(500).collect();
+        for line in tail.iter().rev() {
+            if ws.send(Message::Text(line.to_string())).is_err() {
+                return Ok(());
             }
         }
     }
     let evt_rx = hub.register();
 
+    // 读超时设置在底层 TcpStream 上，实现非阻塞轮询
     ws.get_mut()
+        .inner
         .set_read_timeout(Some(Duration::from_millis(100)))?;
     loop {
         match ws.read() {
@@ -228,15 +253,6 @@ fn serve_static(stream: &mut TcpStream, body: &[u8], ctype: &str) -> Result<()> 
     stream.write_all(body)?;
     stream.flush()?;
     Ok(())
-}
-
-fn ws_accept_key(key: &str) -> Result<String> {
-    const GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    let mut hasher = Sha1::new();
-    hasher.update(key.as_bytes());
-    hasher.update(GUID.as_bytes());
-    let digest = hasher.finalize();
-    Ok(BASE64.encode(digest))
 }
 
 /// serve 服务器句柄：hub 用于广播，input_rx 接收用户输入行。

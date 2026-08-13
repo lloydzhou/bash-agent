@@ -80,13 +80,14 @@ fn resolve_latest_session(home: &Path, cwd: &Path) -> Option<String> {
 }
 
 /// 启动时尝试解析 events.jsonl 路径：
-/// --session <id>  → 直接构造
+/// --session <id>  → 直接构造（仅当下一个参数不以 `-` 开头，避免把 --output-format 当 session 名）
 /// --continue      → 扫描项目目录找最近 session
 /// 都没有           → None（首次 session_start 后动态设置）
 fn resolve_events_path(args: &[String], home: &Path, cwd: &Path) -> Option<PathBuf> {
     for i in 0..args.len() {
         if args[i] == "--session"
             && let Some(sid) = args.get(i + 1)
+            && !sid.starts_with('-')
         {
             return Some(events_path_for(home, cwd, sid));
         }
@@ -168,15 +169,13 @@ fn run_turn(
                 Ok(_) => {
                     let line = buf.trim_end();
                     // 首次 session_start：如果 events_path 尚未设置，用 session_id 构造路径
-                    if let Ok(evt) = serde_json::from_str::<serde_json::Value>(line) {
-                        if evt.get("type").and_then(|v| v.as_str()) == Some("session_start") {
-                            if let Some(sid) = evt.get("session_id").and_then(|v| v.as_str()) {
-                                let mut guard = ep_out.lock().unwrap();
-                                if guard.is_none() {
-                                    *guard =
-                                        Some(events_path_for(&home_out, &cwd_out, sid));
-                                }
-                            }
+                    if let Ok(evt) = serde_json::from_str::<serde_json::Value>(line)
+                        && evt.get("type").and_then(|v| v.as_str()) == Some("session_start")
+                        && let Some(sid) = evt.get("session_id").and_then(|v| v.as_str())
+                    {
+                        let mut guard = ep_out.lock().unwrap();
+                        if guard.is_none() {
+                            *guard = Some(events_path_for(&home_out, &cwd_out, sid));
                         }
                     }
                     emit(&h_out, line);
