@@ -158,6 +158,15 @@ header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 1px;
 .md th { background: var(--code-block); font-weight: 500; }
 .md td { white-space: normal; }
 
+/* ============================================================ 数学公式
+   零依赖方案：LaTeX 词法 → Unicode 符号 + 原生 sup/sub */
+.mathspan { font-family: Georgia, "Times New Roman", "Nimbus Roman", serif; }
+.mathspan sup, .mathspan sub { font-size: .7em; }
+.mathblock { display: flex; justify-content: center; overflow-x: auto;
+  font-family: Georgia, "Times New Roman", "Nimbus Roman", serif;
+  font-size: 1.08em; padding: 2px 0; }
+.mtext { font-style: normal; }
+
 /* ============================================================ 折叠行（思考 / 工具 / 子任务）
    结构对齐 DSH ReasoningRow / ToolRow：[icon] 标题 · 摘要 …… [chevron] */
 details.row { min-width: 0; }
@@ -464,8 +473,182 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
      只构建 DOM 节点（textContent 赋值），不拼接 innerHTML，天然防注入 */
   function el(tag, cls) { var e = document.createElement(tag); if (cls) e.className = cls; return e; }
 
+  /* ------------------------------------------------------------ 数学公式
+     零依赖：LaTeX 词法级转换 → Unicode 符号 + 原生 sup/sub。
+     覆盖：希腊字母、常用算子、^/_ 上下标、\frac、\sqrt、\hat/\bar/\vec、
+     函数名、\mathbb 黑板粗体。未识别的命令原样保留文本（安全降级）。 */
+  var MATH_SYM = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε',
+    zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ',
+    lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ',
+    varsigma: 'ς', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ',
+    psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π',
+    Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+    times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓', ast: '∗', star: '⋆',
+    oplus: '⊕', otimes: '⊗', odot: '⊙',
+    leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠', equiv: '≡',
+    approx: '≈', sim: '∼', simeq: '≃', cong: '≅', propto: '∝', ll: '≪', gg: '≫',
+    infty: '∞', partial: '∂', nabla: '∇', imath: 'ı', jmath: 'ȷ', ell: 'ℓ',
+    hbar: 'ℏ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
+    sum: '∑', prod: '∏', coprod: '∐', int: '∫', iint: '∬', iiint: '∭', oint: '∮',
+    to: '→', rightarrow: '→', longrightarrow: '⟶', leftarrow: '←',
+    Rightarrow: '⇒', Leftarrow: '⇐', leftrightarrow: '↔', Leftrightarrow: '⇔',
+    mapsto: '↦', uparrow: '↑', downarrow: '↓',
+    in: '∈', notin: '∉', ni: '∋', subset: '⊂', supset: '⊃', subseteq: '⊆',
+    supseteq: '⊇', nsubset: '⊄', cup: '∪', cap: '∩', setminus: '∖',
+    emptyset: '∅', varnothing: '∅', forall: '∀', exists: '∃', nexists: '∄',
+    neg: '¬', lnot: '¬', land: '∧', lor: '∨', oplus: '⊕',
+    perp: '⊥', parallel: '∥', angle: '∠', triangle: '△', square: '□',
+    therefore: '∴', because: '∵', vdots: '⋮', cdots: '⋯', ldots: '…',
+    dots: '…', dotsc: '…', prime: '′', circ: '∘', bullet: '∙',
+    lceil: '⌈', rceil: '⌉', lfloor: '⌊', rfloor: '⌋',
+    langle: '⟨', rangle: '⟩', quad: '\u2003', qquad: '\u2003\u2003',
+    ',': '\u2009', ';': '\u2009', ':': '\u2009', '!': '', ' ': ' ',
+    log: 'log', ln: 'ln', lg: 'lg', sin: 'sin', cos: 'cos', tan: 'tan',
+    cot: 'cot', sec: 'sec', csc: 'csc', arcsin: 'arcsin', arccos: 'arccos',
+    arctan: 'arctan', sinh: 'sinh', cosh: 'cosh', tanh: 'tanh',
+    exp: 'exp', max: 'max', min: 'min', sup: 'sup', inf: 'inf',
+    lim: 'lim', limsup: 'lim sup', liminf: 'lim inf', det: 'det',
+    dim: 'dim', arg: 'arg', deg: 'deg', gcd: 'gcd', hom: 'hom',
+    ker: 'ker', Pr: 'Pr', bmod: 'mod', pmod: 'mod'
+  };
+  var MATH_BB = { R: 'ℝ', N: 'ℕ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ', H: 'ℍ', P: 'ℙ', E: '𝔼' };
+  // \hat \bar \vec → 前缀组合字符（追加在被修饰字母后）
+  var MATH_ACCENT = { hat: '\u0302', bar: '\u0304', vec: '\u20D7', tilde: '\u0303', dot: '\u0307' };
+
+  // 读取一个"组"：{balanced} / 单字符 / \command；返回 {content, next}
+  function mathGroup(s, pos) {
+    if (s[pos] === '{') {
+      var depth = 0, k = pos;
+      for (; k < s.length; k++) {
+        if (s[k] === '{') depth++;
+        else if (s[k] === '}') { depth--; if (depth === 0) { k++; break; } }
+      }
+      var closed = depth === 0 && s[k - 1] === '}';
+      return closed
+        ? { content: s.slice(pos + 1, k - 1), next: k }
+        : { content: s.slice(pos + 1), next: s.length }; // 未闭合：容错取余
+    }
+    if (s[pos] === '\\') {
+      var k2 = pos + 1;
+      if (/[a-zA-Z]/.test(s[k2] || '')) {
+        while (k2 < s.length && /[a-zA-Z]/.test(s[k2])) k2++;
+      } else { k2 = pos + 2; }
+      return { content: s.slice(pos, k2), next: k2 };
+    }
+    return { content: s.slice(pos, pos + 1), next: pos + 1 };
+  }
+
+  // LaTeX → DOM 片段。递归下降扫描；sup/sub 递归处理（支持嵌套如 e^{x^2}）
+  function mathNodes(s) {
+    var frag = document.createDocumentFragment();
+    var buf = '';
+    var i = 0;
+    function flush() { if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ''; } }
+    function emitInto(target, sub) {
+      var f = mathNodes(sub);
+      while (f.firstChild) target.appendChild(f.firstChild);
+    }
+    while (i < s.length) {
+      var c = s[i];
+      if (c === '\\') {
+        var j = i + 1;
+        if (/[a-zA-Z]/.test(s[j] || '')) {
+          while (j < s.length && /[a-zA-Z]/.test(s[j])) j++;
+          var name = s.slice(i + 1, j);
+          if (name === 'frac' || name === 'dfrac' || name === 'tfrac' || name === 'cfrac') {
+            var g1 = mathGroup(s, j);
+            var g2 = mathGroup(s, g1.next);
+            var simple1 = g1.content.length === 1 || /^\\[a-zA-Z]+$/.test(g1.content.trim());
+            var simple2 = g2.content.length === 1 || /^\\[a-zA-Z]+$/.test(g2.content.trim());
+            // 单 token（单字符/单命令）不加括号：\frac{1}{2} → 1/2
+            if (!simple1) buf += '(';
+            flush(); emitInto(frag, g1.content);
+            if (!simple1) buf += ')';
+            buf += '/';
+            if (!simple2) buf += '(';
+            flush(); emitInto(frag, g2.content);
+            if (!simple2) buf += ')';
+            flush(); // 立即落地闭合括号，防止与后续 token 乱序
+            i = g2.next; continue;
+          }
+          if (name === 'sqrt') {
+            var gs = mathGroup(s, j);
+            buf += '√'; flush();
+            // 单字符或单命令（如 \pi）不加括号；复合表达式加括号
+            if (gs.content.length === 1 || /^\\[a-zA-Z]+$/.test(gs.content.trim())) {
+              emitInto(frag, gs.content);
+            } else { buf += '('; flush(); emitInto(frag, gs.content); buf += ')'; }
+            i = gs.next; continue;
+          }
+          if (name === 'text' || name === 'mathrm' || name === 'operatorname' || name === 'mbox') {
+            var gt = mathGroup(s, j);
+            flush();
+            var t = el('span', 'mtext'); t.textContent = gt.content;
+            frag.appendChild(t); i = gt.next; continue;
+          }
+          if (name === 'mathbb' || name === 'Bbb') {
+            var gb = mathGroup(s, j);
+            buf += MATH_BB[gb.content.trim()] || gb.content;
+            i = gb.next; continue;
+          }
+          if (MATH_ACCENT[name]) {
+            var ga = mathGroup(s, j);
+            flush();
+            emitInto(frag, ga.content);
+            buf += MATH_ACCENT[name];
+            i = ga.next; continue;
+          }
+          if (name === 'left' || name === 'right' || name === 'big' ||
+              name === 'Big' || name === 'bigg' || name === 'displaystyle' ||
+              name === 'limits' || name === 'nolimits') { i = j; continue; }
+          if (MATH_SYM[name] !== undefined) {
+            buf += MATH_SYM[name];
+            if (/^(log|ln|lg|sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|exp|max|min|sup|inf|lim|det|dim|arg|deg|gcd)$/.test(name)) buf += '\u2009';
+            i = j; continue;
+          }
+          buf += s.slice(i, j); i = j; continue; // 未识别：原样保留（降级）
+        }
+        // 双字符转义：\\ \{ \} \| \, \; \! \\  等
+        var two = s.slice(i, i + 2);
+        if (two === '\\\\') { buf += '  '; i += 2; continue; }
+        if (two === '\\{') { buf += '{'; i += 2; continue; }
+        if (two === '\\}') { buf += '}'; i += 2; continue; }
+        if (two === '\\|') { buf += '‖'; i += 2; continue; }
+        if (two === '\\%') { buf += '%'; i += 2; continue; }
+        if (two === '\\&') { buf += '&'; i += 2; continue; }
+        if (two === '\\$') { buf += '$'; i += 2; continue; }
+        if (two === '\\,') { buf += '\u2009'; i += 2; continue; }
+        if (two === '\\;') { buf += '\u2009'; i += 2; continue; }
+        if (two === '\\!') { i += 2; continue; }
+        if (two === '\\ ') { buf += ' '; i += 2; continue; }
+        buf += two; i += 2; continue;
+      }
+      if (c === '^' || c === '_') {
+        var g = mathGroup(s, i + 1);
+        flush();
+        var supEl = el(c === '^' ? 'sup' : 'sub');
+        emitInto(supEl, g.content);
+        frag.appendChild(supEl);
+        i = g.next; continue;
+      }
+      if (c === '{' || c === '}') { i++; continue; } // 分组括号：剥掉
+      if (c === '~') { buf += ' '; i++; continue; }
+      buf += c; i++;
+    }
+    flush();
+    return frag;
+  }
+
+  // 行内公式守卫：内容首尾不能是空白（避免 "$100 和 $200" 误判为公式）
+  function isInlineMath(token) {
+    var inner = token.slice(1, -1);
+    return inner.length > 0 && !/\s/.test(inner[0]) && !/\s$/.test(inner);
+  }
+
   function renderInline(parent, text) {
-    var re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))/g;
+    var re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(\$[^\s$][^$]*\$)|(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))/g;
     var last = 0, m;
     while ((m = re.exec(text)) !== null) {
       if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
@@ -473,9 +656,23 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
       if (m[1]) { var c = el('code'); c.textContent = tok.slice(1, -1); parent.appendChild(c); }
       else if (m[2]) { var b = el('strong'); b.textContent = tok.slice(2, -2); parent.appendChild(b); }
       else if (m[3]) { var i = el('em'); i.textContent = tok.slice(1, -1); parent.appendChild(i); }
+      else if (m[4] !== undefined) {
+        if (isInlineMath(tok)) {
+          var ms = el('span', 'mathspan');
+          var mf = mathNodes(tok.slice(1, -1));
+          while (mf.firstChild) ms.appendChild(mf.firstChild);
+          parent.appendChild(ms);
+        } else {
+          // 货币等误判：只消费开头 $，从下一位重新扫描，
+          // 避免吞掉后续真公式的起始 $（如 "$100 下标 $a_1$"）
+          parent.appendChild(document.createTextNode('$'));
+          last = m.index + 1;
+          re.lastIndex = m.index + 1;
+        }
+      }
       else {
         var mm = /^\[([^\]]+)\]\(/.exec(tok);
-        var a = el('a'); a.href = m[5]; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        var a = el('a'); a.href = m[6]; a.target = '_blank'; a.rel = 'noopener noreferrer';
         a.textContent = mm[1]; parent.appendChild(a);
       }
       last = m.index + tok.length;
@@ -504,6 +701,25 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
         i++; // 跳过收尾 ```
         code.textContent = buf.join('\n');
         pre.appendChild(code); root.appendChild(pre);
+        continue;
+      }
+      // 块级公式 $$...$$（单行或跨行）
+      if (/^\s*\$\$/.test(line)) {
+        var single = /^\s*\$\$(.+)\$\$\s*$/.exec(line);
+        var mcontent;
+        if (single) { mcontent = single[1]; i++; }
+        else {
+          mcontent = line.replace(/^\s*\$\$/, '');
+          i++;
+          while (i < lines.length) {
+            if (lines[i].indexOf('$$') >= 0) { mcontent += '\n' + lines[i].split('$$')[0]; i++; break; }
+            mcontent += '\n' + lines[i]; i++;
+          }
+        }
+        var mb = el('div', 'mathblock');
+        var mf2 = mathNodes(mcontent.trim());
+        while (mf2.firstChild) mb.appendChild(mf2.firstChild);
+        root.appendChild(mb);
         continue;
       }
       // 标题
