@@ -17,8 +17,8 @@ pub(crate) const MANIFEST_JSON: &str = r####"{
   "description": "WebSocket 桥接器：浏览器操作 agent 子进程",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f1115",
-  "theme_color": "#0f1115",
+  "background_color": "#151517",
+  "theme_color": "#151517",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
