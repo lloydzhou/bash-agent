@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>bash-agent · webagent</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="webagent">
+<meta name="theme-color" content="#151517" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<style>
+/* ============================================================
+   设计令牌：取自 DeepSeek Harness Web GUI（dsw palette）
+   深色为默认，浅色通过 html[data-theme=light] 切换
+   ============================================================ */
+:root {
+  color-scheme: dark;
+  /* neutral-bluish 静态色板 */
+  --nb-00: #ffffff; --nb-50: rgb(249,250,251); --nb-75: rgb(241,243,245);
+  --nb-100: rgb(235,238,242); --nb-150: rgb(233,236,242); --nb-200: rgb(225,229,238);
+  --nb-300: rgb(207,211,214); --nb-400: rgb(173,178,184); --nb-500: rgb(151,157,166);
+  --nb-600: rgb(129,133,140); --nb-700: rgb(97,102,107); --nb-750: rgb(67,69,74);
+  --nb-800: rgb(53,54,56); --nb-850: rgb(44,44,46); --nb-875: rgb(35,35,36);
+  --nb-900: rgb(27,27,28); --nb-950: rgb(21,21,23); --nb-1000: rgb(15,17,21);
+  /* deepseek 品牌蓝 */
+  --ds-50: rgb(237,243,254); --ds-100: rgb(228,237,253); --ds-200: rgb(211,226,255);
+  --ds-300: rgb(183,200,254); --ds-400: rgb(103,158,254); --ds-450: rgb(86,134,254);
+  --ds-500: rgb(65,118,230); --ds-600: rgb(72,104,178);
+  --red-400: rgb(242,90,90); --red-600: rgb(236,19,19);
+  --amber-500: rgb(245,158,11);
+  /* 语义别名（深色） */
+  --bg-base: var(--nb-950);
+  --bg-float: var(--nb-850);
+  --label-primary: var(--nb-50);
+  --label-primary-dimmed: var(--nb-100);
+  --label-secondary: var(--nb-300);
+  --label-tertiary: var(--nb-400);
+  --label-caption: var(--nb-400);
+  --bubble: var(--nb-850);
+  --code-block: var(--nb-900);
+  --input-major: var(--nb-850);
+  --hover: rgba(255,255,255,.08);
+  --hover-solid: var(--nb-800);
+  --border-l1: rgba(255,255,255,.06);
+  --border-l2: rgba(255,255,255,.12);
+  --brand: var(--ds-400);
+  --brand-fill: var(--ds-500);
+  --brand-weak: rgba(97,135,216,.24);
+  --error: var(--red-400);
+  --warn: var(--amber-500);
+  --shadow-lv2: 0 4px 12px 0 rgba(0,0,0,.02), 0 2px 8px 0 rgba(0,0,0,.04);
+  --shadow-lv3: 0 0 1px 0 rgba(0,0,0,.2), 0 0 4px 0 rgba(0,0,0,.02), 0 12px 32px 0 rgba(0,0,0,.08);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-code: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, Courier, "PingFang SC", "Microsoft YaHei", monospace;
+  --chat-width: 748px;
+  --app-h: 100vh;
+}
+html[data-theme=light] {
+  color-scheme: light;
+  --bg-base: var(--nb-00);
+  --bg-float: var(--nb-00);
+  --label-primary: var(--nb-1000);
+  --label-primary-dimmed: var(--nb-950);
+  --label-secondary: var(--nb-700);
+  --label-tertiary: var(--nb-600);
+  --label-caption: var(--nb-600);
+  --bubble: var(--ds-50);
+  --code-block: var(--nb-50);
+  --input-major: var(--nb-00);
+  --hover: rgba(38,49,72,.06);
+  --hover-solid: var(--nb-75);
+  --border-l1: rgba(0,0,0,.04);
+  --border-l2: rgba(0,0,0,.1);
+  --brand: var(--ds-500);
+  --brand-fill: var(--ds-500);
+  --brand-weak: rgba(97,135,216,.16);
+  --error: var(--red-600);
+}
+
+/* ============================================================ 布局骨架 */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: var(--app-h); overflow: hidden;
+  background: var(--bg-base); color: var(--label-primary);
+  font: 14px/22px var(--font);
+  -webkit-font-smoothing: antialiased; }
+#app { display: flex; flex-direction: column; height: var(--app-h); min-width: 0; }
+
+header { flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 12px 20px 0; min-height: 44px; position: relative; }
+header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 1px;
+  height: 1px; background: var(--border-l1); }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
+.brand img { width: 20px; height: 20px; border-radius: 5px; }
+.spacer { flex: 1; }
+.iconbtn { display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border: none; border-radius: 8px; cursor: pointer;
+  background: transparent; color: var(--label-secondary); padding: 0; }
+.iconbtn:hover { background: var(--hover); color: var(--label-primary); }
+.iconbtn svg { width: 16px; height: 16px; display: block; }
+#status { display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; line-height: 18px; color: var(--label-caption); }
+#status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--label-caption); flex: none; }
+#status.ok .dot { background: #42d39b; }
+#status.ok { color: var(--label-secondary); }
+
+/* ============================================================ 对话滚动区 */
+#scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  scrollbar-gutter: stable; display: flex; flex-direction: column; }
+#scroll::-webkit-scrollbar { width: 8px; }
+#scroll::-webkit-scrollbar-thumb { background: var(--border-l2); border-radius: 6px; }
+#flow { width: 100%; max-width: var(--chat-width); margin: 0 auto;
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 20px 16px 28px; }
+
+/* 空态 hero（对齐 DSH hero phase） */
+.hero { display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 18vh 24px 0; text-align: center; }
+.hero img { width: 56px; height: 56px; border-radius: 14px;
+  box-shadow: var(--shadow-lv3); }
+.hero h1 { margin: 0; font-size: 26px; font-weight: 500; line-height: 32px; }
+.hero p { margin: 0; color: var(--label-tertiary); font-size: 14px; line-height: 22px; }
+#flow:not(:empty) + .hero, #flow:not(:empty) ~ .hero { display: none; }
+
+/* ============================================================ 用户消息（右侧气泡） */
+.msg-user { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.msg-user .bubble { max-width: min(525px, 82%); background: var(--bubble);
+  color: var(--label-primary); border-radius: 22px; padding: 10px 16px;
+  font-size: 16px; line-height: 24px; white-space: pre-wrap; word-break: break-word; }
+
+/* ============================================================ 助手 Markdown */
+.md { color: var(--label-primary); font-size: 16px; line-height: 28px;
+  display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.md > * { margin: 0; min-width: 0; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 500; line-height: 28px; margin: 4px 0 0; }
+.md h1 { font-size: 22px; } .md h2 { font-size: 19px; }
+.md h3 { font-size: 17px; } .md h4 { font-size: 16px; }
+.md p { white-space: pre-wrap; word-break: break-word; }
+.md ul, .md ol { padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
+.md li > p { white-space: normal; }
+.md blockquote { border-left: 3px solid var(--border-l2); padding: 2px 0 2px 14px;
+  color: var(--label-secondary); }
+.md code { font-family: var(--font-code); font-size: .86em;
+  background: var(--code-block); border: 1px solid var(--border-l1);
+  border-radius: 6px; padding: 1px 6px; word-break: break-word; }
+.md pre { background: var(--code-block); border: 1px solid var(--border-l1);
+  border-radius: 12px; padding: 13px 16px; overflow-x: auto; }
+.md pre code { background: none; border: none; padding: 0; font-size: 13px; line-height: 21px; }
+.md a { color: var(--brand); text-decoration: none; }
+.md a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.md hr { border: none; border-top: 1px solid var(--border-l2); }
+.md table { border-collapse: collapse; font-size: 14px; line-height: 22px;
+  display: block; overflow-x: auto; max-width: 100%; }
+.md th, .md td { border: 1px solid var(--border-l2); padding: 5px 12px; text-align: left;
+  white-space: nowrap; }
+.md th { background: var(--code-block); font-weight: 500; }
+.md td { white-space: normal; }
+
+/* ============================================================ 数学公式
+   零依赖方案：LaTeX 词法 → Unicode 符号 + 原生 sup/sub */
+.mathspan { font-family: Georgia, "Times New Roman", "Nimbus Roman", serif; }
+.mathspan sup, .mathspan sub { font-size: .7em; }
+.mathblock { display: flex; justify-content: center; overflow-x: auto;
+  font-family: Georgia, "Times New Roman", "Nimbus Roman", serif;
+  font-size: 1.08em; padding: 2px 0; }
+.mtext { font-style: normal; }
+
+/* ============================================================ 折叠行（思考 / 工具 / 子任务）
+   结构对齐 DSH ReasoningRow / ToolRow：[icon] 标题 · 摘要 …… [chevron] */
+details.row { min-width: 0; }
+details.row > summary { display: flex; align-items: center; gap: 0;
+  height: 26px; list-style: none; cursor: pointer; user-select: none;
+  border-radius: 6px; padding: 0 2px; margin: 0 -2px; }
+details.row > summary::-webkit-details-marker { display: none; }
+details.row > summary:hover { background: var(--hover); }
+.rowline { position: relative; display: flex; align-items: center;
+  min-width: 0; width: 100%; }
+/* 仅运行态裁切（扫光动画需要）；常态不裁切，避免旋转后的 chevron 尖端被切 */
+details.row[data-state=running] .rowline { overflow: hidden; }
+/* 运行中扫光动画（DSH sweep） */
+details.row[data-state=running] .rowline::after { content: ""; position: absolute;
+  top: 0; bottom: 0; left: 0; width: 300px; pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%,
+    color-mix(in srgb, var(--bg-base) 40%, transparent) 55%, transparent 100%);
+  animation: 2.6s ease-out infinite sweep; }
+@keyframes sweep { 0% { left: -300px; } 90%, to { left: 100%; } }
+
+.lead { flex: none; width: 16px; height: 16px; display: inline-grid;
+  place-items: center; margin-right: 6px; color: var(--label-secondary); }
+.lead .doticon { width: 7px; height: 7px; border-radius: 3px; background: currentColor; }
+.lead .ringicon { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; }
+.rtitle { flex: none; font-size: 14px; line-height: 24px; font-weight: 400;
+  color: var(--label-secondary); white-space: nowrap; }
+details.row[data-kind=tool] .rtitle { color: var(--label-primary-dimmed); }
+.rsep { flex: none; width: 2px; height: 2px; border-radius: 1px;
+  background: var(--label-caption); margin: 0 8px; }
+.rsummary { flex: auto; min-width: 0; font-size: 14px; line-height: 24px;
+  color: var(--label-tertiary); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.rsummary[data-error] { color: var(--error); }
+.chev { flex: none; margin: 0 3px 0 8px; width: 8px; height: 8px;
+  color: var(--label-secondary);
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform .12s; }
+details.row[open] > summary .chev { transform: rotate(45deg); }
+
+/* 思考正文（纯文本、缩进 22px，对齐 thinkBody） */
+.thinkbody { color: var(--label-tertiary); white-space: pre-wrap; word-break: break-word;
+  padding: 4px 0 4px 22px; font-size: 14px; line-height: 24px; }
+
+/* 工具 IO 卡片（对齐 ioCard / GenericCommandCard body） */
+.iocard { border: 1px solid var(--border-l1); background: var(--code-block);
+  border-radius: 12px; margin: 4px 0 4px 4px; display: flex; flex-direction: column;
+  font-family: var(--font-code); font-size: 12px; line-height: 18px;
+  max-height: 300px; overflow: auto; }
+.ioscroll { display: flex; flex-direction: column; min-width: 0; }
+.iosection { display: grid; grid-template-columns: max-content 1fr; column-gap: 14px;
+  align-items: baseline; padding: 10px 14px; }
+.iolabel { color: var(--label-caption); align-self: start; position: sticky; top: 0; }
+.iotext { color: var(--label-secondary); white-space: pre-wrap; word-break: break-word;
+  min-width: 0; margin: 0; }
+.iotext[data-error] { color: var(--error); }
+.iodivider { flex: none; height: 1px; background: var(--border-l2); }
+.rs-status { flex: none; margin-left: 8px; font-size: 12px; line-height: 24px;
+  color: var(--label-caption); white-space: nowrap; }
+.rs-status[data-error] { color: var(--error); }
+
+/* ============================================================ 系统行 */
+.sysrow { display: flex; align-items: baseline; gap: 8px; min-width: 0;
+  font-size: 13px; line-height: 20px; color: var(--label-tertiary);
+  padding: 2px 0; }
+.sysrow .tag { flex: none; color: var(--label-secondary); font-weight: 500; }
+.sysrow .sysmsg { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.sysrow.stderr .sysmsg { font-family: var(--font-code); font-size: 12px; line-height: 18px;
+  color: var(--label-tertiary); }
+
+/* 错误行（对齐 turnErrorRow） */
+.errorrow { display: grid; grid-template-columns: 10px minmax(0,1fr); column-gap: 8px;
+  align-items: start; padding: 2px 0; font-size: 13px; line-height: 20px; }
+.errorrow .dot { width: 7px; height: 7px; border-radius: 50%;
+  background: var(--error); margin-top: 6px; }
+.errorrow .etitle { color: var(--error); font-weight: 600; margin-right: 6px; }
+.errorrow .emsg { color: var(--label-secondary); overflow-wrap: anywhere; }
+
+/* 运行状态行（DSH turnStatus shimmer） */
+.turnstatus { display: inline-flex; align-items: center; align-self: flex-start;
+  height: 26px; font-size: 14px; font-weight: 500; white-space: nowrap;
+  background: linear-gradient(90deg, var(--ds-500) 0%, var(--ds-500) 40%,
+    var(--ds-200) 50%, var(--ds-500) 60%, var(--ds-500) 100%);
+  background-size: 250% 100%; background-position: 100% 0;
+  color: transparent; -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: 1.8s linear infinite shimmer; }
+@keyframes shimmer { to { background-position: 0 0; } }
+
+/* ============================================================ 统计行（对齐 StatsLine） */
+#statsline { flex: none; text-align: center; color: var(--label-tertiary);
+  font-size: 12px; line-height: 20px; padding: 2px 16px 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#statsline .sep { margin: 0 10px; color: var(--border-l2); }
+
+/* ============================================================ 输入区（对齐 composer card） */
+.composer-stack { flex: none; display: flex; flex-direction: column; align-items: center;
+  padding: 8px 16px calc(10px + env(safe-area-inset-bottom)); width: 100%; }
+.composer { width: 100%; max-width: calc(var(--chat-width) + 32px);
+  border: 1px solid var(--border-l2); background: var(--input-major);
+  border-radius: 22px; box-shadow: var(--shadow-lv2);
+  display: flex; flex-direction: column; padding: 12px 6px 8px 16px;
+  transition: border-color .12s; }
+.composer:focus-within { border-color: var(--brand-weak); }
+#input { width: 100%; border: none; outline: none; resize: none;
+  background: transparent; color: var(--label-primary);
+  font: 16px/24px var(--font); min-height: 24px; max-height: 200px;
+  padding: 0; }
+#input::placeholder { color: var(--label-caption); user-select: none; }
+.composer-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.hint { flex: 1; font-size: 12px; line-height: 18px; color: var(--label-caption);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#send { flex: none; width: 34px; height: 34px; border-radius: 50%; border: none;
+  background: var(--brand-fill); color: #fff; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+#send:hover { filter: brightness(1.1); }
+#send:disabled { opacity: .4; cursor: not-allowed; }
+#send svg { width: 18px; height: 18px; display: block; }
+#send .pending { width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor; animation: 1s ease-in-out infinite alternate pulse; }
+@keyframes pulse { 0% { opacity: .35; } to { opacity: 1; } }
+
+/* ============================================================ 跳到底部 */
+#tobottom-wrap { position: sticky; bottom: 16px; height: 0; z-index: 8;
+  display: flex; justify-content: flex-end; pointer-events: none;
+  padding-right: max(0px, calc((100% - var(--chat-width)) / 2)); }
+#tobottom { pointer-events: auto; width: 34px; height: 34px; margin-top: -34px;
+  border: 1px solid var(--border-l2); border-radius: 100px; cursor: pointer;
+  background: var(--bg-float); color: var(--label-primary);
+  box-shadow: var(--shadow-lv3);
+  display: none; align-items: center; justify-content: center; }
+#tobottom.show { display: flex; }
+#tobottom:hover { background: var(--hover-solid); }
+#tobottom svg { width: 16px; height: 16px; }
+
+@media (prefers-reduced-motion: reduce) {
+  details.row[data-state=running] .rowline::after { animation: none; }
+  .turnstatus { animation: none; background-position: 0 0; background-size: 100% 100%; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand"><img src="/icon.svg" alt="">webagent</div>
+    <div class="spacer"></div>
+    <button id="theme" class="iconbtn" title="切换主题" aria-label="切换主题"></button>
+    <span id="status"><span class="dot"></span><span id="status-text">connecting…</span></span>
+  </header>
+
+  <div id="scroll">
+    <div id="flow"></div>
+    <div class="hero">
+      <img src="/icon.svg" alt="">
+      <h1>bash-agent</h1>
+      <p>输入提示词开始对话 · Enter 发送 · Shift+Enter 换行</p>
+    </div>
+    <div id="tobottom-wrap"><button id="tobottom" aria-label="跳到底部">
+      <svg viewBox="0 0 16 16" fill="none"><path d="M8 3v10M4 9l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button></div>
+  </div>
+
+  <div id="statsline"></div>
+
+  <div class="composer-stack">
+    <div class="composer">
+      <textarea id="input" placeholder="给 bash-agent 发送消息…" rows="1" autofocus></textarea>
+      <div class="composer-row">
+        <span class="hint" id="hint">Enter 发送 · Shift+Enter 换行</span>
+        <button id="send" aria-label="发送">
+          <svg viewBox="0 0 16 16" fill="none"><path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // 用 window.innerHeight 驱动布局高度：浏览器内和 PWA standalone 都返回真实可视区域，
+  // 键盘弹出/导航栏出现时自动缩小，header 固定、composer 不被遮挡。
+  function syncHeight() {
+    document.documentElement.style.setProperty('--app-h', window.innerHeight + 'px');
+  }
+  window.addEventListener('resize', syncHeight);
+  window.addEventListener('orientationchange', syncHeight);
+  if (window.visualViewport) { window.visualViewport.addEventListener('resize', syncHeight); }
+  syncHeight();
+
+  var flow = document.getElementById('flow');
+  var scrollEl = document.getElementById('scroll');
+  var statusEl = document.getElementById('status');
+  var statusText = document.getElementById('status-text');
+  var statsline = document.getElementById('statsline');
+  var toBottom = document.getElementById('tobottom');
+  var ta = document.getElementById('input');
+  var sendBtn = document.getElementById('send');
+  var themeBtn = document.getElementById('theme');
+  var hintEl = document.getElementById('hint');
+  var ws = null;
+
+  /* ------------------------------------------------------------ 主题 */
+  var SUN = '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.2v1.8M8 13v1.8M1.2 8H3M13 8h1.8M3.2 3.2l1.3 1.3M11.5 11.5l1.3 1.3M12.8 3.2l-1.3 1.3M4.5 11.5l-1.3 1.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  var MOON = '<svg viewBox="0 0 16 16" fill="none"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8 5.6 5.6 0 1 0 13.2 9.6Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  function applyTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    themeBtn.innerHTML = t === 'light' ? MOON : SUN;
+    try { localStorage.setItem('webagent-theme', t); } catch (e) {}
+  }
+  var savedTheme = null;
+  try { savedTheme = localStorage.getItem('webagent-theme'); } catch (e) {}
+  applyTheme(savedTheme === 'light' || savedTheme === 'dark'
+    ? savedTheme
+    : (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  themeBtn.addEventListener('click', function () {
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+  });
+
+  /* ------------------------------------------------------------ 滚动策略 */
+  var stickBottom = true;
+  function nearBottom() { return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 120; }
+  function autoScroll(force) {
+    if (force || stickBottom) scrollEl.scrollTop = scrollEl.scrollHeight;
+  }
+  scrollEl.addEventListener('scroll', function () {
+    stickBottom = nearBottom();
+    toBottom.classList.toggle('show', !stickBottom);
+  });
+  toBottom.addEventListener('click', function () {
+    stickBottom = true; toBottom.classList.remove('show');
+    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
+  });
+
+  /* ------------------------------------------------------------ HUD 统计 */
+  var H = { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, busy: false };
+  function fmtK(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return '' + n;
+  }
+  function renderHud() {
+    var ie = H.tin + H.cr;
+    var pct = ie > 0 ? Math.round(H.cr / ie * 100) + '%' : '—';
+    var parts = ['对话 ' + H.turn, '请求 ' + H.req,
+      '输入 ' + fmtK(ie) + '（缓存 ' + pct + '）', '输出 ' + fmtK(H.tout)];
+    if (H.cc > 0) parts.push('压缩 ' + fmtK(H.cc));
+    statsline.textContent = '';
+    for (var i = 0; i < parts.length; i++) {
+      if (i) { var sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '·'; statsline.appendChild(sep); }
+      statsline.appendChild(document.createTextNode(parts[i]));
+    }
+  }
+  function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; renderHud(); }
+
+  /* ------------------------------------------------------------ 运行状态行（shimmer） */
+  var turnStatus = null;
+  function setWorking(text) {
+    H.busy = true;
+    if (!turnStatus) { turnStatus = document.createElement('div'); turnStatus.className = 'turnstatus'; }
+    turnStatus.textContent = text;
+    flow.appendChild(turnStatus);
+    sendBtn.innerHTML = '<span class="pending"></span>';
+    autoScroll();
+  }
+  function setIdle() {
+    H.busy = false;
+    if (turnStatus && turnStatus.parentNode) turnStatus.parentNode.removeChild(turnStatus);
+    turnStatus = null;
+    sendBtn.innerHTML = '<svg viewBox="0 0 16 16" fill="none"><path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  }
+
+  /* ------------------------------------------------------------ 剥离 ANSI 转义序列 */
+  function stripAnsi(s) {
+    var o = '', i = 0;
+    while (i < s.length) {
+      var c = s.charCodeAt(i);
+      if (c === 0x1b) {
+        var c1 = s.charCodeAt(i + 1);
+        if (c1 === 0x5b) {
+          var j = i + 2;
+          while (j < s.length) { var cc = s.charCodeAt(j); if (cc >= 0x40 && cc <= 0x7e) break; j++; }
+          i = Math.min(j + 1, s.length); continue;
+        }
+        if (c1 === 0x5d) {
+          var j = i + 2;
+          while (j < s.length) {
+            if (s.charCodeAt(j) === 0x07) break;
+            if (s.charCodeAt(j) === 0x1b && s.charCodeAt(j + 1) === 0x5c) break;
+            j++;
+          }
+          if (j < s.length && s.charCodeAt(j) === 0x07) i = j + 1;
+          else if (j + 1 < s.length) i = j + 2;
+          else i = s.length;
+          continue;
+        }
+        i += 2; continue;
+      }
+      if (c < 0x20 && c !== 0x0a && c !== 0x09) { i++; continue; }
+      o += s[i]; i++;
+    }
+    return o;
+  }
+
+  /* ------------------------------------------------------------ 极简 Markdown 渲染
+     只构建 DOM 节点（textContent 赋值），不拼接 innerHTML，天然防注入 */
+  function el(tag, cls) { var e = document.createElement(tag); if (cls) e.className = cls; return e; }
+
+  /* ------------------------------------------------------------ 数学公式
+     零依赖：LaTeX 词法级转换 → Unicode 符号 + 原生 sup/sub。
+     覆盖：希腊字母、常用算子、^/_ 上下标、\frac、\sqrt、\hat/\bar/\vec、
+     函数名、\mathbb 黑板粗体。未识别的命令原样保留文本（安全降级）。 */
+  var MATH_SYM = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε',
+    zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ',
+    lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ',
+    varsigma: 'ς', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ',
+    psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π',
+    Sigma: 'Σ', Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+    times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓', ast: '∗', star: '⋆',
+    oplus: '⊕', otimes: '⊗', odot: '⊙',
+    leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠', equiv: '≡',
+    approx: '≈', sim: '∼', simeq: '≃', cong: '≅', propto: '∝', ll: '≪', gg: '≫',
+    infty: '∞', partial: '∂', nabla: '∇', imath: 'ı', jmath: 'ȷ', ell: 'ℓ',
+    hbar: 'ℏ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
+    sum: '∑', prod: '∏', coprod: '∐', int: '∫', iint: '∬', iiint: '∭', oint: '∮',
+    to: '→', rightarrow: '→', longrightarrow: '⟶', leftarrow: '←',
+    Rightarrow: '⇒', Leftarrow: '⇐', leftrightarrow: '↔', Leftrightarrow: '⇔',
+    mapsto: '↦', uparrow: '↑', downarrow: '↓',
+    in: '∈', notin: '∉', ni: '∋', subset: '⊂', supset: '⊃', subseteq: '⊆',
+    supseteq: '⊇', nsubset: '⊄', cup: '∪', cap: '∩', setminus: '∖',
+    emptyset: '∅', varnothing: '∅', forall: '∀', exists: '∃', nexists: '∄',
+    neg: '¬', lnot: '¬', land: '∧', lor: '∨', oplus: '⊕',
+    perp: '⊥', parallel: '∥', angle: '∠', triangle: '△', square: '□',
+    therefore: '∴', because: '∵', vdots: '⋮', cdots: '⋯', ldots: '…',
+    dots: '…', dotsc: '…', prime: '′', circ: '∘', bullet: '∙',
+    lceil: '⌈', rceil: '⌉', lfloor: '⌊', rfloor: '⌋',
+    langle: '⟨', rangle: '⟩', quad: '\u2003', qquad: '\u2003\u2003',
+    ',': '\u2009', ';': '\u2009', ':': '\u2009', '!': '', ' ': ' ',
+    log: 'log', ln: 'ln', lg: 'lg', sin: 'sin', cos: 'cos', tan: 'tan',
+    cot: 'cot', sec: 'sec', csc: 'csc', arcsin: 'arcsin', arccos: 'arccos',
+    arctan: 'arctan', sinh: 'sinh', cosh: 'cosh', tanh: 'tanh',
+    exp: 'exp', max: 'max', min: 'min', sup: 'sup', inf: 'inf',
+    lim: 'lim', limsup: 'lim sup', liminf: 'lim inf', det: 'det',
+    dim: 'dim', arg: 'arg', deg: 'deg', gcd: 'gcd', hom: 'hom',
+    ker: 'ker', Pr: 'Pr', bmod: 'mod', pmod: 'mod'
+  };
+  var MATH_BB = { R: 'ℝ', N: 'ℕ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ', H: 'ℍ', P: 'ℙ', E: '𝔼' };
+  // \hat \bar \vec → 前缀组合字符（追加在被修饰字母后）
+  var MATH_ACCENT = { hat: '\u0302', bar: '\u0304', vec: '\u20D7', tilde: '\u0303', dot: '\u0307' };
+
+  // 读取一个"组"：{balanced} / 单字符 / \command；返回 {content, next}
+  function mathGroup(s, pos) {
+    if (s[pos] === '{') {
+      var depth = 0, k = pos;
+      for (; k < s.length; k++) {
+        if (s[k] === '{') depth++;
+        else if (s[k] === '}') { depth--; if (depth === 0) { k++; break; } }
+      }
+      var closed = depth === 0 && s[k - 1] === '}';
+      return closed
+        ? { content: s.slice(pos + 1, k - 1), next: k }
+        : { content: s.slice(pos + 1), next: s.length }; // 未闭合：容错取余
+    }
+    if (s[pos] === '\\') {
+      var k2 = pos + 1;
+      if (/[a-zA-Z]/.test(s[k2] || '')) {
+        while (k2 < s.length && /[a-zA-Z]/.test(s[k2])) k2++;
+      } else { k2 = pos + 2; }
+      return { content: s.slice(pos, k2), next: k2 };
+    }
+    return { content: s.slice(pos, pos + 1), next: pos + 1 };
+  }
+
+  // LaTeX → DOM 片段。递归下降扫描；sup/sub 递归处理（支持嵌套如 e^{x^2}）
+  function mathNodes(s) {
+    var frag = document.createDocumentFragment();
+    var buf = '';
+    var i = 0;
+    function flush() { if (buf) { frag.appendChild(document.createTextNode(buf)); buf = ''; } }
+    function emitInto(target, sub) {
+      var f = mathNodes(sub);
+      while (f.firstChild) target.appendChild(f.firstChild);
+    }
+    while (i < s.length) {
+      var c = s[i];
+      if (c === '\\') {
+        var j = i + 1;
+        if (/[a-zA-Z]/.test(s[j] || '')) {
+          while (j < s.length && /[a-zA-Z]/.test(s[j])) j++;
+          var name = s.slice(i + 1, j);
+          if (name === 'frac' || name === 'dfrac' || name === 'tfrac' || name === 'cfrac') {
+            var g1 = mathGroup(s, j);
+            var g2 = mathGroup(s, g1.next);
+            var simple1 = g1.content.length === 1 || /^\\[a-zA-Z]+$/.test(g1.content.trim());
+            var simple2 = g2.content.length === 1 || /^\\[a-zA-Z]+$/.test(g2.content.trim());
+            // 单 token（单字符/单命令）不加括号：\frac{1}{2} → 1/2
+            if (!simple1) buf += '(';
+            flush(); emitInto(frag, g1.content);
+            if (!simple1) buf += ')';
+            buf += '/';
+            if (!simple2) buf += '(';
+            flush(); emitInto(frag, g2.content);
+            if (!simple2) buf += ')';
+            flush(); // 立即落地闭合括号，防止与后续 token 乱序
+            i = g2.next; continue;
+          }
+          if (name === 'sqrt') {
+            var gs = mathGroup(s, j);
+            buf += '√'; flush();
+            // 单字符或单命令（如 \pi）不加括号；复合表达式加括号
+            if (gs.content.length === 1 || /^\\[a-zA-Z]+$/.test(gs.content.trim())) {
+              emitInto(frag, gs.content);
+            } else { buf += '('; flush(); emitInto(frag, gs.content); buf += ')'; }
+            i = gs.next; continue;
+          }
+          if (name === 'text' || name === 'mathrm' || name === 'operatorname' || name === 'mbox') {
+            var gt = mathGroup(s, j);
+            flush();
+            var t = el('span', 'mtext'); t.textContent = gt.content;
+            frag.appendChild(t); i = gt.next; continue;
+          }
+          if (name === 'mathbb' || name === 'Bbb') {
+            var gb = mathGroup(s, j);
+            buf += MATH_BB[gb.content.trim()] || gb.content;
+            i = gb.next; continue;
+          }
+          if (MATH_ACCENT[name]) {
+            var ga = mathGroup(s, j);
+            flush();
+            emitInto(frag, ga.content);
+            buf += MATH_ACCENT[name];
+            i = ga.next; continue;
+          }
+          if (name === 'left' || name === 'right' || name === 'big' ||
+              name === 'Big' || name === 'bigg' || name === 'displaystyle' ||
+              name === 'limits' || name === 'nolimits') { i = j; continue; }
+          if (MATH_SYM[name] !== undefined) {
+            buf += MATH_SYM[name];
+            if (/^(log|ln|lg|sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|exp|max|min|sup|inf|lim|det|dim|arg|deg|gcd)$/.test(name)) buf += '\u2009';
+            i = j; continue;
+          }
+          buf += s.slice(i, j); i = j; continue; // 未识别：原样保留（降级）
+        }
+        // 双字符转义：\\ \{ \} \| \, \; \! \\  等
+        var two = s.slice(i, i + 2);
+        if (two === '\\\\') { buf += '  '; i += 2; continue; }
+        if (two === '\\{') { buf += '{'; i += 2; continue; }
+        if (two === '\\}') { buf += '}'; i += 2; continue; }
+        if (two === '\\|') { buf += '‖'; i += 2; continue; }
+        if (two === '\\%') { buf += '%'; i += 2; continue; }
+        if (two === '\\&') { buf += '&'; i += 2; continue; }
+        if (two === '\\$') { buf += '$'; i += 2; continue; }
+        if (two === '\\,') { buf += '\u2009'; i += 2; continue; }
+        if (two === '\\;') { buf += '\u2009'; i += 2; continue; }
+        if (two === '\\!') { i += 2; continue; }
+        if (two === '\\ ') { buf += ' '; i += 2; continue; }
+        buf += two; i += 2; continue;
+      }
+      if (c === '^' || c === '_') {
+        var g = mathGroup(s, i + 1);
+        flush();
+        var supEl = el(c === '^' ? 'sup' : 'sub');
+        emitInto(supEl, g.content);
+        frag.appendChild(supEl);
+        i = g.next; continue;
+      }
+      if (c === '{' || c === '}') { i++; continue; } // 分组括号：剥掉
+      if (c === '~') { buf += ' '; i++; continue; }
+      buf += c; i++;
+    }
+    flush();
+    return frag;
+  }
+
+  // 行内公式守卫：内容首尾不能是空白（避免 "$100 和 $200" 误判为公式）
+  function isInlineMath(token) {
+    var inner = token.slice(1, -1);
+    return inner.length > 0 && !/\s/.test(inner[0]) && !/\s$/.test(inner);
+  }
+
+  function renderInline(parent, text) {
+    var re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(\$[^\s$][^$]*\$)|(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))/g;
+    var last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      var tok = m[0];
+      if (m[1]) { var c = el('code'); c.textContent = tok.slice(1, -1); parent.appendChild(c); }
+      else if (m[2]) { var b = el('strong'); b.textContent = tok.slice(2, -2); parent.appendChild(b); }
+      else if (m[3]) { var i = el('em'); i.textContent = tok.slice(1, -1); parent.appendChild(i); }
+      else if (m[4] !== undefined) {
+        if (isInlineMath(tok)) {
+          var ms = el('span', 'mathspan');
+          var mf = mathNodes(tok.slice(1, -1));
+          while (mf.firstChild) ms.appendChild(mf.firstChild);
+          parent.appendChild(ms);
+        } else {
+          // 货币等误判：只消费开头 $，从下一位重新扫描，
+          // 避免吞掉后续真公式的起始 $（如 "$100 下标 $a_1$"）
+          parent.appendChild(document.createTextNode('$'));
+          last = m.index + 1;
+          re.lastIndex = m.index + 1;
+        }
+      }
+      else {
+        var mm = /^\[([^\]]+)\]\(/.exec(tok);
+        var a = el('a'); a.href = m[6]; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.textContent = mm[1]; parent.appendChild(a);
+      }
+      last = m.index + tok.length;
+    }
+    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  function renderMd(text) {
+    var root = el('div', 'md');
+    var lines = text.split('\n');
+    var i = 0;
+    function para(target, buf) {
+      var p = el('p'); renderInline(p, buf.join('\n')); target.appendChild(p);
+    }
+    while (i < lines.length) {
+      var line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      // 围栏代码块
+      if (/^\s*```/.test(line)) {
+        var lang = line.trim().replace(/^`+/, '').trim();
+        var pre = el('pre'), code = el('code');
+        if (lang) code.setAttribute('data-lang', lang);
+        i++;
+        var buf = [];
+        while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++; // 跳过收尾 ```
+        code.textContent = buf.join('\n');
+        pre.appendChild(code); root.appendChild(pre);
+        continue;
+      }
+      // 块级公式 $$...$$（单行或跨行）
+      if (/^\s*\$\$/.test(line)) {
+        var single = /^\s*\$\$(.+)\$\$\s*$/.exec(line);
+        var mcontent;
+        if (single) { mcontent = single[1]; i++; }
+        else {
+          mcontent = line.replace(/^\s*\$\$/, '');
+          i++;
+          while (i < lines.length) {
+            if (lines[i].indexOf('$$') >= 0) { mcontent += '\n' + lines[i].split('$$')[0]; i++; break; }
+            mcontent += '\n' + lines[i]; i++;
+          }
+        }
+        var mb = el('div', 'mathblock');
+        var mf2 = mathNodes(mcontent.trim());
+        while (mf2.firstChild) mb.appendChild(mf2.firstChild);
+        root.appendChild(mb);
+        continue;
+      }
+      // 标题
+      var h = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (h) {
+        var hn = el('h' + h[1].length); renderInline(hn, h[2]); root.appendChild(hn);
+        i++; continue;
+      }
+      // 分隔线
+      if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { root.appendChild(el('hr')); i++; continue; }
+      // 引用块
+      if (/^\s*>/.test(line)) {
+        var q = el('blockquote'), qbuf = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) { qbuf.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+        var qp = el('p'); renderInline(qp, qbuf.join('\n')); q.appendChild(qp); root.appendChild(q);
+        continue;
+      }
+      // 表格（当前行含 | 且下一行是分隔行）
+      if (line.indexOf('|') >= 0 && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
+        var table = el('table'), thead = el('thead'), hrow = el('tr');
+        var heads = splitRow(line);
+        for (var hi = 0; hi < heads.length; hi++) { var th = el('th'); renderInline(th, heads[hi].trim()); hrow.appendChild(th); }
+        thead.appendChild(hrow); table.appendChild(thead);
+        i += 2;
+        var tbody = el('tbody');
+        while (i < lines.length && lines[i].indexOf('|') >= 0 && lines[i].trim()) {
+          var tr = el('tr'), cells = splitRow(lines[i]);
+          for (var ci = 0; ci < cells.length; ci++) { var td = el('td'); renderInline(td, cells[ci].trim()); tr.appendChild(td); }
+          tbody.appendChild(tr); i++;
+        }
+        table.appendChild(tbody); root.appendChild(table);
+        continue;
+      }
+      // 列表
+      if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
+        var ordered = /^\s*\d+[.)]\s+/.test(line);
+        var list = el(ordered ? 'ol' : 'ul');
+        var reItem = ordered ? /^\s*\d+[.)]\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/;
+        while (i < lines.length) {
+          var im = reItem.exec(lines[i]);
+          if (!im) {
+            if (/^\s{2,}\S/.test(lines[i]) && list.lastChild) {
+              var lp = list.lastChild.firstChild || el('p');
+              renderInline(lp, ' ' + lines[i].trim());
+              i++; continue;
+            }
+            break;
+          }
+          var li = el('li'); renderInline(li, im[1]); list.appendChild(li); i++;
+        }
+        root.appendChild(list);
+        continue;
+      }
+      // 晵通段落（聚合连续非空行）
+      var pbuf = [line]; i++;
+      while (i < lines.length && lines[i].trim() &&
+        !/^\s*```/.test(lines[i]) && !/^(#{1,4})\s/.test(lines[i]) &&
+        !/^\s*>/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i])) {
+        pbuf.push(lines[i]); i++;
+      }
+      para(root, pbuf);
+    }
+    return root;
+  }
+  function splitRow(line) {
+    var s = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return s.split('|');
+  }
+
+  /* ------------------------------------------------------------ 消息渲染 */
+  function addUserRow(content) {
+    var row = el('div', 'msg-user');
+    var b = el('div', 'bubble'); b.textContent = content;
+    row.appendChild(b); flow.appendChild(row); autoScroll();
+  }
+
+  // 流式状态：同一消息的连续 text / thinking 分片聚合到同一元素
+  var stream = { kind: null, el: null, buf: '', raf: 0 };
+  function renderStreamNow() {
+    // 同步落地 pending 的 markdown（replay 时事件密集，stop/user_input
+    // 会在 rAF 触发前到来，此时必须 flush 而不是丢弃，否则整条消息丢失）
+    if (stream.kind === 'text' && stream.el && stream.buf) {
+      var md = renderMd(stream.buf);
+      stream.el.textContent = '';
+      while (md.firstChild) stream.el.appendChild(md.firstChild);
+    }
+  }
+  function resetStream() {
+    if (stream.raf) cancelAnimationFrame(stream.raf);
+    renderStreamNow();
+    stream = { kind: null, el: null, buf: '', raf: 0 };
+  }
+  function appendText(content) {
+    if (stream.kind !== 'text') {
+      // 从 thinking / 其他类型切换过来：先落地旧流，再开新 markdown 块
+      resetStream();
+      stream.kind = 'text';
+      stream.el = el('div', 'md');
+      flow.appendChild(stream.el);
+    }
+    stream.buf += content;
+    // rAF 合并同帧多次分片的重复渲染
+    if (!stream.raf) stream.raf = requestAnimationFrame(function () {
+      if (stream.raf) { stream.raf = 0; }
+      if (!stream.el || stream.kind !== 'text') return;
+      var md = renderMd(stream.buf);
+      stream.el.textContent = '';
+      while (md.firstChild) stream.el.appendChild(md.firstChild);
+      autoScroll();
+    });
+  }
+  function appendThinking(content) {
+    // 大块视为回放（历史会话），直接落地为完成态；小块视为实时流式
+    var replay = content.length > 400;
+    if (stream.kind !== 'thinking' || !stream.el) {
+      resetStream();
+      var det = el('details', 'row');
+      det.setAttribute('data-kind', 'thinking');
+      det.setAttribute('data-state', replay ? 'done' : 'running');
+      det.open = !replay;
+      var s = el('summary');
+      var line = el('div', 'rowline');
+      var lead = el('span', 'lead'); lead.appendChild(el('span', 'ringicon'));
+      var t = el('span', 'rtitle'); t.textContent = '思考过程';
+      var sep = el('span', 'rsep');
+      var sum = el('span', 'rsummary');
+      var chev = el('span', 'chev');
+      line.appendChild(lead); line.appendChild(t); line.appendChild(sep);
+      line.appendChild(sum); line.appendChild(chev);
+      s.appendChild(line); det.appendChild(s);
+      var body = el('div', 'thinkbody'); det.appendChild(body);
+      flow.appendChild(det);
+      stream = { kind: 'thinking', el: det, buf: '', raf: 0, body: body, sum: sum, replay: replay };
+    }
+    stream.buf += content;
+    stream.body.textContent = stream.buf;
+    var oneLine = stream.buf.replace(/\s+/g, ' ').trim();
+    stream.sum.textContent = oneLine.slice(-60);
+    autoScroll();
+  }
+  function finishThinking() {
+    if (stream.kind === 'thinking' && stream.el) {
+      stream.el.setAttribute('data-state', 'done');
+      stream.el.open = false; // 完成后自动折叠（对齐 DSH 行为）
+    }
+  }
+
+  // 对齐 display 侧 build_tool_call_summary：折叠态只显示关键参数摘要
+  function toolSummary(name, input) {
+    if (!input || typeof input !== 'object') return name + '()';
+    var s = function (k) {
+      return (input[k] !== undefined && input[k] !== null) ? String(input[k]) : '';
+    };
+    var label = '';
+    if (name === 'Read' || name === 'Write' || name === 'Edit') label = s('path');
+    else if (name === 'Glob' || name === 'Grep') label = s('pattern');
+    else if (name === 'Bash') {
+      label = s('command').replace(/\n/g, ' ');
+      if (label.length > 80) label = label.slice(0, 77) + '...';
+    } else if (name === 'TodoWrite') {
+      label = s('summary');
+      if (!label && Array.isArray(input.todos)) {
+        var total = input.todos.length;
+        var done = input.todos.filter(function (t) { return t.status === 'completed'; }).length;
+        label = done + '/' + total;
+      }
+    } else if (name === 'Skill') label = s('name');
+    else if (name === 'SubAgent') label = s('description');
+    return label ? name + '(' + label + ')' : name + '()';
+  }
+
+  function addIoSection(card, label, text, isError) {
+    var sc = card.querySelector('.ioscroll') || card;
+    if (sc.lastChild && sc.lastChild.classList && sc.lastChild.classList.contains('iosection')) {
+      var d = el('div', 'iodivider'); sc.appendChild(d);
+    }
+    var sec = el('div', 'iosection');
+    var l = el('span', 'iolabel'); l.textContent = label;
+    var t = el('p', 'iotext'); t.textContent = text;
+    if (isError) t.setAttribute('data-error', '');
+    sec.appendChild(l); sec.appendChild(t); sc.appendChild(sec);
+  }
+
+  var openTool = null; // 最近一个尚未收到结果的工具卡片（顺序配对）
+  function addToolCall(name, raw) {
+    var inputObj = (typeof raw === 'string') ? null : raw;
+    var args = (typeof raw === 'string') ? raw : JSON.stringify(raw, null, 2);
+    var det = el('details', 'row');
+    det.setAttribute('data-kind', 'tool');
+    det.setAttribute('data-state', 'running');
+    var s = el('summary');
+    var line = el('div', 'rowline');
+    var lead = el('span', 'lead'); lead.appendChild(el('span', 'doticon'));
+    var t = el('span', 'rtitle'); t.textContent = name || 'Tool';
+    var sep = el('span', 'rsep');
+    var full = toolSummary(name, inputObj);
+    var label = full.slice(full.indexOf('(') + 1, -1);
+    var sum = el('span', 'rsummary'); sum.textContent = label;
+    var st = el('span', 'rs-status'); st.textContent = '运行中';
+    var chev = el('span', 'chev');
+    line.appendChild(lead); line.appendChild(t); line.appendChild(sep);
+    line.appendChild(sum); line.appendChild(st); line.appendChild(chev);
+    s.appendChild(line); det.appendChild(s);
+    var card = el('div', 'iocard'); var sc = el('div', 'ioscroll'); card.appendChild(sc);
+    det.appendChild(card);
+    if (args) addIoSection(card, '输入', args);
+    flow.appendChild(det);
+    openTool = { el: det, card: card, status: st };
+    autoScroll();
+  }
+  function addToolResult(name, content, isError) {
+    var text = (typeof content === 'string') ? content : JSON.stringify(content);
+    if (text.length > 40000) text = text.slice(0, 40000) + '\n…（截断）';
+    if (openTool) {
+      addIoSection(openTool.card, '输出', text, isError);
+      openTool.el.setAttribute('data-state', 'done');
+      openTool.status.textContent = isError ? '失败' : '完成';
+      if (isError) openTool.status.setAttribute('data-error', '');
+      openTool = null;
+    } else {
+      var det = el('details', 'row');
+      det.setAttribute('data-kind', 'tool'); det.setAttribute('data-state', 'done');
+      var s = el('summary');
+      var line = el('div', 'rowline');
+      var lead = el('span', 'lead'); lead.appendChild(el('span', 'doticon'));
+      var t = el('span', 'rtitle'); t.textContent = name || 'Result';
+      var sep = el('span', 'rsep');
+      var sum = el('span', 'rsummary');
+      if (isError) sum.setAttribute('data-error', '');
+      sum.textContent = text.replace(/\s+/g, ' ').slice(0, 80);
+      var st = el('span', 'rs-status'); st.textContent = isError ? '失败' : '完成';
+      if (isError) st.setAttribute('data-error', '');
+      var chev = el('span', 'chev');
+      line.appendChild(lead); line.appendChild(t); line.appendChild(sep);
+      line.appendChild(sum); line.appendChild(st); line.appendChild(chev);
+      s.appendChild(line); det.appendChild(s);
+      var card = el('div', 'iocard'); var sc = el('div', 'ioscroll'); card.appendChild(sc);
+      det.appendChild(card);
+      addIoSection(card, '输出', text, isError);
+      flow.appendChild(det);
+    }
+    autoScroll();
+  }
+
+  function addSysRow(tag, msg, cls) {
+    var row = el('div', 'sysrow' + (cls ? ' ' + cls : ''));
+    var t = el('span', 'tag'); t.textContent = tag;
+    var m = el('span', 'sysmsg'); m.textContent = msg;
+    row.appendChild(t); row.appendChild(m);
+    flow.appendChild(row); autoScroll();
+  }
+  function addErrorRow(title, msg) {
+    var row = el('div', 'errorrow');
+    var d = el('span', 'dot');
+    var body = el('div');
+    var t = el('span', 'etitle'); t.textContent = title;
+    var m = el('span', 'emsg'); m.textContent = msg;
+    body.appendChild(t); body.appendChild(m);
+    row.appendChild(d); row.appendChild(body);
+    flow.appendChild(row); autoScroll();
+  }
+
+  /* ------------------------------------------------------------ 事件分发 */
+  function handleLine(raw) {
+    if (!raw || !raw.trim()) return;
+    var evt;
+    try { evt = JSON.parse(raw); } catch (e) { addSysRow('', raw); return; }
+    switch (evt.type) {
+      case 'session_start':
+        finishStreamForNewTurn(); hudReset(); setIdle(); openTool = null; break;
+      case 'user_input':
+      case 'user_message':
+        finishStreamForNewTurn();
+        var uin = (evt.content !== undefined && evt.content !== null) ? evt.content : evt.input;
+        addUserRow(typeof uin === 'string' ? uin : JSON.stringify(uin));
+        H.turn++;
+        setWorking('思考中');
+        break;
+      case 'thinking':
+        if (!evt.content) break;
+        finishTextIfNeeded();
+        appendThinking(evt.content);
+        setWorking('深度思考');
+        break;
+      case 'text':
+        finishThinking();
+        appendText(evt.content);
+        setWorking('回复中');
+        break;
+      case 'tool_call': {
+        finishThinking(); finishTextIfNeeded();
+        setWorking('执行 ' + (evt.name || '工具'));
+        var rawIn = evt.input !== undefined ? evt.input : (evt.arguments || evt.args || '');
+        addToolCall(evt.name, rawIn);
+        break;
+      }
+      case 'tool_result': {
+        setWorking('处理结果');
+        var content = (typeof evt.content === 'string') ? evt.content : JSON.stringify(evt.content);
+        var tname = evt.name || evt.tool_name || 'Result';
+        addToolResult(tname, content, !!evt.is_error);
+        break;
+      }
+      case 'usage':
+        // 只累计主 agent 用量（skip sub_agent）
+        if (evt.kind === undefined || evt.kind === 'agent') {
+          H.req++;
+          H.tin += (evt.input_tokens || 0);
+          H.tout += (evt.output_tokens || 0);
+          H.cr += (evt.cache_read_input_tokens || 0);
+          H.cc += (evt.cache_creation_input_tokens || 0);
+          renderHud();
+        }
+        break;
+      case 'context_update':
+        finishStreamForNewTurn();
+        addSysRow('上下文', '已压缩 · ' + (evt.trigger || ''), 'compact'); break;
+      case 'sub_agent_start':
+        finishStreamForNewTurn();
+        addSysRow('子任务', evt.description || evt.prompt || '', 'subagent'); break;
+      case 'stderr': {
+        var vis = stripAnsi(evt.content || '').trim();
+        if (vis) addSysRow('', vis, 'stderr');
+        break;
+      }
+      case 'process_exit':
+        finishStreamForNewTurn(); setIdle(); break;
+      case 'error':
+        finishStreamForNewTurn(); setIdle();
+        addErrorRow('错误', evt.message || ''); break;
+      case 'stop':
+        finishStreamForNewTurn(); setIdle(); break;
+      default:
+        addSysRow('', raw);
+    }
+  }
+
+  // 新 turn 开始 / 流结束：把聚合流落地
+  function finishTextIfNeeded() { if (stream.kind === 'text') resetStream(); }
+  function finishStreamForNewTurn() {
+    if (stream.kind === 'thinking') finishThinking();
+    resetStream();
+    openTool = null;
+  }
+
+  /* ------------------------------------------------------------ WebSocket */
+  function reconnect() {
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+    var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(proto + '://' + location.host + '/ws');
+    ws.onopen = function () {
+      // 重连会收到完整 replay，先清空 DOM + HUD 状态，避免重复堆积
+      flow.textContent = '';
+      resetStream(); openTool = null; turnStatus = null;
+      hudReset(); setIdle();
+      statusEl.className = 'ok'; statusText.textContent = '已连接';
+      stickBottom = true; toBottom.classList.remove('show');
+    };
+    ws.onmessage = function (ev) { handleLine(ev.data); };
+    ws.onclose = function () {
+      statusEl.className = ''; statusText.textContent = '已断开 · 重连中';
+      setTimeout(reconnect, 1500);
+    };
+    ws.onerror = function () { ws.close(); };
+  }
+  reconnect();
+
+  /* ------------------------------------------------------------ 输入 */
+  function grow() {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+  }
+  function sendMsg() {
+    var v = ta.value.trim();
+    if (!v || !ws || ws.readyState !== 1) { if (!v) ta.focus(); return; }
+    ws.send(v);
+    ta.value = ''; grow();
+    ta.focus();
+  }
+  sendBtn.addEventListener('click', sendMsg);
+  ta.addEventListener('input', grow);
+  ta.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) { return; } // allow newline
+      e.preventDefault(); sendMsg();
+    }
+  });
+  setInterval(function () {
+    if (ws && ws.readyState === 1) { return; }
+    reconnect();
+  }, 3000);
+})();
+</script>
+</body>
+</html>

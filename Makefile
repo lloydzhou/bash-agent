@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode build-c build-deb test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify test-c-transport update-system-prompt-golden clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c build-webagent build-webagent-android build-deb test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify test-c-transport update-system-prompt-golden clean
 
 VERSION ?=
 DEB_DIST_DIR ?= dist
@@ -29,6 +29,18 @@ build-rust2:
 build-tcode:
 	cp scripts/tcode dist/tcode
 	chmod +x dist/tcode
+
+build-webagent:
+	mkdir -p dist
+	cd webagent && cargo build --release -j 10
+	cp webagent/target/release/webagent dist/webagent
+	strip -x dist/webagent
+
+# 交叉编译 webagent 到 Android (Termux) — 需要 NDK
+build-webagent-android:
+	@test -n "$(NDK)" || { echo "用法：make build-webagent-android NDK=/path/to/android-ndk" >&2; exit 2; }
+	cd webagent && CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK)/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android27-clang" cargo build --release --target aarch64-linux-android -j 10
+	cp webagent/target/aarch64-linux-android/release/webagent dist/webagent-android
 
 build-c:
 	$(MAKE) -C c
@@ -70,5 +82,5 @@ update-system-prompt-golden: build-bash
 	bash scripts/update-system-prompt-golden.sh
 
 clean:
-	rm -rf go/dist rust/target dist/cagent
+	rm -rf go/dist rust/target webagent/target dist/cagent
 	$(MAKE) -C c clean

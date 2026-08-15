@@ -61,6 +61,8 @@ required=(
   rustagent-linux-arm64
   cagent-linux-amd64
   cagent-linux-arm64
+  webagent-linux-amd64
+  webagent-linux-arm64
 )
 for artifact in "${required[@]}"; do
   [[ -f "$DIST_DIR/$artifact" ]] || {
@@ -166,6 +168,7 @@ build_package() {
   else
     strip --strip-unneeded "$bin_dir/cagent"
   fi
+  install -m 0755 "$DIST_DIR/webagent-linux-$arch" "$bin_dir/webagent"
   install -m 0755 "$DIST_DIR/tcode" "$bin_dir/tcode"
   write_control "$pkg_dir" "$arch" \
     "This package contains the Bash, Go, Rust and C implementations plus tcode."

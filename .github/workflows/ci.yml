@@ -209,6 +209,82 @@ jobs:
           name: rustagent-${{ matrix.suffix }}
           path: dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
+  webagent:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-amd64
+            bin: webagent
+            ext: ""
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            suffix: linux-arm64
+            bin: webagent
+            ext: ""
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            suffix: darwin-arm64
+            bin: webagent
+            ext: ""
+          - runner: macos-14
+            target: x86_64-apple-darwin
+            suffix: darwin-amd64
+            bin: webagent
+            ext: ""
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross linker (linux arm64 target)
+        if: matrix.runner == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build webagent (macOS)
+        if: matrix.runner == 'macos-14'
+        run: |
+          mkdir -p dist
+          cd webagent && cargo build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/webagent-${{ matrix.suffix }}${{ matrix.ext }}
+
+      - name: Build webagent (linux, Debian 11 container)
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:11 \
+            bash -euxo pipefail -c '
+              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
+              apt-get update
+              apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
+              if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+                apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+              fi
+              export RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+              export PATH="$CARGO_HOME/bin:$PATH"
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable --target ${{ matrix.target }}
+              if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+              fi
+              mkdir -p dist
+              cd webagent && cargo build --release --target ${{ matrix.target }}
+              cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/webagent-${{ matrix.suffix }}${{ matrix.ext }}
+            '
+
+      - name: Upload webagent
+        uses: actions/upload-artifact@v4
+        with:
+          name: webagent-${{ matrix.suffix }}
+          path: dist/webagent-${{ matrix.suffix }}${{ matrix.ext }}
+
   cagent:
     strategy:
       fail-fast: false
@@ -296,7 +372,7 @@ jobs:
           path: dist/tcode
 
   deb-package:
-    needs: [bash-agent, goagent, rustagent, cagent, tcode]
+    needs: [bash-agent, goagent, rustagent, cagent, tcode, webagent]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -333,7 +409,7 @@ jobs:
           test "$(dpkg-deb -f "$amd64_deb" Architecture)" = amd64
           test "$(dpkg-deb -f "$arm64_deb" Architecture)" = arm64
           sudo apt-get install -y "./$amd64_deb"
-          for command_name in bash-agent goagent rustagent cagent tcode; do
+          for command_name in bash-agent goagent rustagent cagent webagent tcode; do
             test -x "/usr/bin/$command_name"
           done
 
@@ -355,10 +431,10 @@ jobs:
             fi
             echo "通过：$file 最高 GLIBC_$max_ver"
           }
-          for f in dist/goagent-linux-amd64 dist/rustagent-linux-amd64 dist/cagent-linux-amd64; do
+          for f in dist/goagent-linux-amd64 dist/rustagent-linux-amd64 dist/cagent-linux-amd64 dist/webagent-linux-amd64; do
             check "$f" objdump
           done
-          for f in dist/goagent-linux-arm64 dist/rustagent-linux-arm64 dist/cagent-linux-arm64; do
+          for f in dist/goagent-linux-arm64 dist/rustagent-linux-arm64 dist/cagent-linux-arm64 dist/webagent-linux-arm64; do
             check "$f" aarch64-linux-gnu-objdump
           done
 
@@ -370,7 +446,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [bash-agent, goagent, rustagent, cagent, tcode, deb-package]
+    needs: [bash-agent, goagent, rustagent, cagent, tcode, webagent, deb-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -409,6 +485,10 @@ jobs:
               cagent-linux-arm64 \
               cagent-darwin-amd64 \
               cagent-darwin-arm64 \
+              webagent-linux-amd64 \
+              webagent-linux-arm64 \
+              webagent-darwin-amd64 \
+              webagent-darwin-arm64 \
               tcode \
               bash-agent_*_amd64.deb \
               bash-agent_*_arm64.deb > checksums.txt
@@ -446,6 +526,10 @@ jobs:
             dist/cagent-linux-arm64
             dist/cagent-darwin-amd64
             dist/cagent-darwin-arm64
+            dist/webagent-linux-amd64
+            dist/webagent-linux-arm64
+            dist/webagent-darwin-amd64
+            dist/webagent-darwin-arm64
             dist/tcode
             dist/bash-agent_*_amd64.deb
             dist/bash-agent_*_arm64.deb
