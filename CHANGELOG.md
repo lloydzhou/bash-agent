@@ -8,6 +8,32 @@
 
 ---
 
+## [4.3.4] - 2026-08-15
+
+> **webagent 浏览器网关发布**：新增 `webagent` —— WebSocket 桥接进程，在浏览器/手机上操作本地 agent 子进程；前端按 DeepSeek Harness 对话样式构建并支持零依赖数学公式渲染。同时修复 OpenAI 兼容 provider 流式 usage 全零问题与 APT 仓库体积膨胀。
+
+### Added
+
+- **`webagent` 网关**：独立进程，每条浏览器输入 spawn 一个 agent 子进程（参数原样透传，仅追加 `--output-format stream-json`），stdout stream-json 逐行转发给所有 WebSocket 客户端，stderr 套事件外壳；`--bind`/`--port` 控制监听地址（默认 127.0.0.1:8686），`--agent` 指定 agent 二进制（默认按 dist/ 与 PATH 解析）。
+- **会话回放**：客户端连接时从 events.jsonl 回放最近 500 条（配合 agent 侧 `--session`/`--continue`，旧会话首连即可见历史）；页面刷新/断线重连自动清空重建，不重复堆积。
+- **DSH 风格前端**：单文件 `index.html` 经 `include_str!` 内嵌进二进制，零构建链、零外部资源、不引入前端框架。设计令牌取自 DeepSeek Harness Web GUI（neutral-bluish 色板 + deepseek 品牌蓝），深/浅双主题（跟随系统、可手动切换、持久化）；用户右侧气泡（radius 22px）、助手 Markdown 正文（748px 居中列）、思考/工具折叠行（运行态扫光动画、完成后自动折叠）、工具 IO 卡片（输入/输出分节、tool_call 与 tool_result 合并同卡、运行中/完成/失败状态）、turnStatus shimmer 状态行、StatsLine 统计行（含缓存命中率）、Hero 空态、toBottom 悬浮按钮、composer 圆角输入卡（自动增高）。
+- **前端 Markdown 渲染器**：手写极简实现（纯 DOM 构建 + textContent 赋值，天然防 XSS），支持标题/列表/表格/代码块/引用/链接/加粗斜体/行内代码。
+- **零依赖数学公式渲染**：不引入 KaTeX/MathJax，以 Unicode 数学符号 + 浏览器原生 `<sup>`/`<sub>` 实现词法级 LaTeX 转换。行内 `$...$` 与块级 `$$...$$`（居中 serif）；~120 个常用命令映射（希腊字母、关系/集合算子、大算子 ∑∫∏、箭头、函数名、`\mathbb` 黑板粗体、`\hat`/`\vec` 组合字符重音）；上下标支持嵌套；`\frac` 降级 `(a)/(b)`（单 token 不加括号）、`\sqrt` 智能括号；货币守卫防 `$100` 误判；未识别命令原样保留文本（安全降级不丢内容）。
+- **PWA 支持**：内嵌 manifest 与 icon，支持安装到桌面/Home Screen；`window.innerHeight` + `visualViewport` 驱动布局高度，键盘弹出/系统导航栏出现时 header 固定、输入框不被遮挡。
+- **发布产物**：CI 新增 webagent 四平台构建（linux amd64/arm64 于 Debian 11 容器、macOS arm64/amd64），纳入 `.deb` 安装包（安装到 `/usr/bin/webagent`）、checksums 与 Release 资产；GLIBC 2.31 基线门禁覆盖 webagent Linux 产物。
+
+### Fixed
+
+- **OpenAI 兼容 provider 流式 usage 全零**：四运行时（Bash/Go/Rust/C）chat completions 请求体补 `stream_options.include_usage=true`。Kimi/Moonshot 等仅在最终 SSE chunk 携带 usage 且需显式开启该选项的 provider，此前所有 usage 事件均为零。
+- **WS 握手首帧丢失**：webagent 手动握手时 `BufReader` 可能预读 `\r\n\r\n` 之后的 WS 帧并随 reader 销毁而丢失；改为裸 `read` + `PrefixedRead` 回放已读字节交给 `tungstenite::accept`，不丢任何字节。
+- **慢客户端内存积压**：webagent 广播通道由无界改为有界（256），队列满/失效的连接自动移除，防止内存无限增长。
+- **`--session` 无名称时误解析**：`--session` 后紧跟的 `--output-format` 不再被误当作 session 名，仅在下一参数不以 `-` 开头时视为 session 名。
+- **replay 密集事件丢消息**：前端 rAF 合并渲染在事件同步密集到达（会话回放）时会被流重置提前取消，整条 text 消息丢失；改为重置前同步 flush 落地。
+- **折叠行 chevron 裁切**：`.rowline` 的 `overflow:hidden`（扫光动画用）会切掉旋转 45° 后超出布局盒约 1.66px 的箭头尖端；改为仅运行态裁切并增加边距余量。
+- **APT 仓库体积膨胀**：此前每次发版向 gh-pages 提交 `.deb` blob（~3.5MB×2），累积拖慢 clone（历史 blob 已 34MB）。改为 Packages 索引 Filename 直接指向 GitHub Releases 下载 URL，`.deb` 不再经过 gh-pages；并清理历史中已积累的 blob。
+
+---
+
 ## [4.3.3] - 2026-08-11
 
 > **Responses API provider 落地**：Bash、Go、Rust、C 四个运行时新增 `responses` provider（默认面向 DeepSeek Responses 兼容接口），统一实现请求转换、流式解析与终态语义的安全兼容子集，并明确文档化支持边界。
