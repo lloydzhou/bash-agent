@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: build build-bash build-go build-rust build-tcode build-c build-webagent build-webagent-android build-deb test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify test-c-transport update-system-prompt-golden clean
+.PHONY: build build-bash build-go build-rust build-tcode build-c build-webagent build-webagent-android build-rustagent-android build-deb test test-bash test-go test-rust test-go-e2e test-rust-e2e test-c-e2e test-c-classify test-c-transport update-system-prompt-golden clean
 
 VERSION ?=
 DEB_DIST_DIR ?= dist
@@ -21,11 +21,6 @@ build-rust:
 	cp rust/target/release/rustagent dist/rustagent
 	strip -x dist/rustagent
 
-build-rust2:
-	cd rust2 && cargo build --release -j 10
-	cp rust2/target/release/rust2agent dist/rust2agent
-	strip -x dist/rust2agent
-
 build-tcode:
 	cp scripts/tcode dist/tcode
 	chmod +x dist/tcode
@@ -36,10 +31,21 @@ build-webagent:
 	cp webagent/target/release/webagent dist/webagent
 	strip -x dist/webagent
 
+# 交叉编译 rustagent 到 Android (Termux) — 需要 NDK
+# 说明：NDK 只有带 API level 的 clang，cc-rs（ring）探测不到
+# aarch64-linux-android-clang 通用名，必须用 env 显式指定 CC/AR
+# （变量名含 '-'，bash 无法直接赋值，需经 env 命令传入）
+NDK_TOOLCHAIN = $(NDK)/toolchains/llvm/prebuilt/darwin-x86_64/bin
+ANDROID_CC = $(NDK_TOOLCHAIN)/aarch64-linux-android27-clang
+ANDROID_ENV = env 'CC_aarch64-linux-android=$(ANDROID_CC)' 'AR_aarch64-linux-android=$(NDK_TOOLCHAIN)/llvm-ar' CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER='$(ANDROID_CC)'
+build-rustagent-android:
+	@test -n "$(NDK)" || { echo "用法：make build-rustagent-android NDK=/path/to/android-ndk" >&2; exit 2; }
+	cd rust && $(ANDROID_ENV) cargo build --release --target aarch64-linux-android -j 10
+	cp rust/target/aarch64-linux-android/release/rustagent dist/rustagent-android
+
 # 交叉编译 webagent 到 Android (Termux) — 需要 NDK
-build-webagent-android:
-	@test -n "$(NDK)" || { echo "用法：make build-webagent-android NDK=/path/to/android-ndk" >&2; exit 2; }
-	cd webagent && CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK)/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android27-clang" cargo build --release --target aarch64-linux-android -j 10
+build-webagent-android: build-rustagent-android
+	cd webagent && $(ANDROID_ENV) cargo build --release --target aarch64-linux-android -j 10
 	cp webagent/target/aarch64-linux-android/release/webagent dist/webagent-android
 
 build-c:
