@@ -547,6 +547,121 @@ static long find_recent_turn_start_offset(const SessionPaths *paths, int max_tur
     return start;
 }
 
+/* 将一行 events.jsonl 事件渲染到 display queue（agent_replay_events 与 --watch 共用）。
+   line 会被原地修改（去掉行尾换行）。返回是否产生了输出。 */
+static int agent_render_event_line(MsgQueue *queue, char *line) {
+    int rendered = 0;
+    size_t line_len = strlen(line);
+    while (line_len > 0 && (line[line_len - 1] == '\n' || line[line_len - 1] == '\r')) {
+        line[--line_len] = '\0';
+    }
+    if (line_len == 0) return 0;
+
+    JsonParse jp = json_parse_root(line);
+    if (jp.error) return 0;
+
+    char *type = json_get_string(jp.val, "type");
+    if (!type) return 0;
+
+    if (strcmp(type, "user_input") == 0) {
+        char *content = json_get_string(jp.val, "content");
+        if (content && content[0]) {
+            util_truncate_str(content, 80);
+            char *nl = strchr(content, '\n');
+            if (nl) *nl = '\0';
+
+            StrBuf user_display;
+            sb_init(&user_display);
+            sb_appendf(&user_display, "\n\x1b[32m> %s\x1b[0m\n", content);
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_text(user_display.data);
+            push_display(queue, dm);
+            rendered = 1;
+            sb_free(&user_display);
+        }
+        free(content);
+    } else if (strcmp(type, "text") == 0) {
+        char *content = json_get_string(jp.val, "content");
+        if (content && *content) {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_text(content);
+            push_display(queue, dm);
+            rendered = 1;
+        }
+        free(content);
+    } else if (strcmp(type, "thinking") == 0) {
+        char *content = json_get_string(jp.val, "content");
+        if (content && *content) {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_thinking(content);
+            push_display(queue, dm);
+            rendered = 1;
+        }
+        free(content);
+    } else if (strcmp(type, "tool_call") == 0) {
+        char *name = json_get_string(jp.val, "name");
+        char *id = json_get_string(jp.val, "id");
+        JsonVal input_val = json_get(jp.val, "input");
+        char *input_str = NULL;
+        char *summary = NULL;
+        if (input_val.type != JSON_NULL) {
+            input_str = json_as_string(input_val);
+            summary = agent_tool_display_summary(name ? name : "", input_val, input_str);
+        }
+        if (!input_str) input_str = util_strdup("{}");
+        if (!summary) summary = util_strdup("");
+
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_tool_call(id ? id : "", name ? name : "", summary);
+        free(dm->tool_input);
+        dm->tool_input = util_strdup(input_str);
+        push_display(queue, dm);
+        rendered = 1;
+        free(input_str);
+        free(summary);
+        free(name);
+        free(id);
+    } else if (strcmp(type, "tool_result") == 0) {
+        char *content = json_get_string(jp.val, "content");
+        if (content) util_truncate_str(content, 200);
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_tool_result(content ? content : "", 0);
+        dm->tool_id = json_get_string(jp.val, "tool_use_id");
+        dm->tool_name = json_get_string(jp.val, "name");
+        push_display(queue, dm);
+        rendered = 1;
+        free(content);
+    } else if (strcmp(type, "sub_agent_result") == 0) {
+        char *sid = json_get_string(jp.val, "session_id");
+        char *status = json_get_string(jp.val, "status");
+        char *thinking = json_get_string(jp.val, "thinking");
+        char *text = json_get_string(jp.val, "text");
+        int in_tok = json_get_int(jp.val, "input_tokens");
+        int out_tok = json_get_int(jp.val, "output_tokens");
+        if (thinking) thinking[util_utf8_truncate_len(thinking, 120)] = '\0';
+        if (text) util_truncate_str(text, 200);
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_sub_agent_result(sid ? sid : "", status ? status : "ok",
+                                           thinking, text ? text : "", in_tok, out_tok);
+        push_display(queue, dm);
+        rendered = 1;
+        free(sid);
+        free(status);
+        free(thinking);
+        free(text);
+    } else if (strcmp(type, "error") == 0) {
+        char *message = json_get_string(jp.val, "message");
+        DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+        *dm = display_msg_error(message ? message : "unknown");
+        push_display(queue, dm);
+        rendered = 1;
+        free(message);
+    }
+
+    free(type);
+    return rendered;
+}
+
 int agent_replay_events(Agent *agent, int max_turns) {
     long start = find_recent_turn_start_offset(&agent->paths, max_turns);
     int replayed = 0;
@@ -562,119 +677,158 @@ int agent_replay_events(Agent *agent, int max_turns) {
     char *line = NULL;
     size_t line_cap = 0;
     while (getline(&line, &line_cap, f) >= 0) {
-        size_t line_len = strlen(line);
-        while (line_len > 0 && (line[line_len - 1] == '\n' || line[line_len - 1] == '\r')) {
-            line[--line_len] = '\0';
-        }
-        if (line_len == 0) continue;
-
-        JsonParse jp = json_parse_root(line);
-        if (jp.error) continue;
-
-        char *type = json_get_string(jp.val, "type");
-        if (!type) continue;
-
-        if (strcmp(type, "user_input") == 0) {
-            char *content = json_get_string(jp.val, "content");
-            if (content && content[0]) {
-                util_truncate_str(content, 80);
-                char *nl = strchr(content, '\n');
-                if (nl) *nl = '\0';
-
-                StrBuf user_display;
-                sb_init(&user_display);
-                sb_appendf(&user_display, "\n\x1b[32m> %s\x1b[0m\n", content);
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(user_display.data);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-                sb_free(&user_display);
-            }
-            free(content);
-        } else if (strcmp(type, "text") == 0) {
-            char *content = json_get_string(jp.val, "content");
-            if (content && *content) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_text(content);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-            }
-            free(content);
-        } else if (strcmp(type, "thinking") == 0) {
-            char *content = json_get_string(jp.val, "content");
-            if (content && *content) {
-                DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-                *dm = display_msg_thinking(content);
-                push_display(agent->display_queue, dm);
-                replayed = 1;
-            }
-            free(content);
-        } else if (strcmp(type, "tool_call") == 0) {
-            char *name = json_get_string(jp.val, "name");
-            char *id = json_get_string(jp.val, "id");
-            JsonVal input_val = json_get(jp.val, "input");
-            char *input_str = NULL;
-            char *summary = NULL;
-            if (input_val.type != JSON_NULL) {
-                input_str = json_as_string(input_val);
-                summary = agent_tool_display_summary(name ? name : "", input_val, input_str);
-            }
-            if (!input_str) input_str = util_strdup("{}");
-            if (!summary) summary = util_strdup("");
-
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_tool_call(id ? id : "", name ? name : "", summary);
-            free(dm->tool_input);
-            dm->tool_input = util_strdup(input_str);
-            push_display(agent->display_queue, dm);
-            replayed = 1;
-            free(input_str);
-            free(summary);
-            free(name);
-            free(id);
-        } else if (strcmp(type, "tool_result") == 0) {
-            char *content = json_get_string(jp.val, "content");
-            if (content) util_truncate_str(content, 200);
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_tool_result(content ? content : "", 0);
-            dm->tool_id = json_get_string(jp.val, "tool_use_id");
-            dm->tool_name = json_get_string(jp.val, "name");
-            push_display(agent->display_queue, dm);
-            replayed = 1;
-            free(content);
-        } else if (strcmp(type, "sub_agent_result") == 0) {
-            char *sid = json_get_string(jp.val, "session_id");
-            char *status = json_get_string(jp.val, "status");
-            char *thinking = json_get_string(jp.val, "thinking");
-            char *text = json_get_string(jp.val, "text");
-            int in_tok = json_get_int(jp.val, "input_tokens");
-            int out_tok = json_get_int(jp.val, "output_tokens");
-            if (thinking) thinking[util_utf8_truncate_len(thinking, 120)] = '\0';
-            if (text) util_truncate_str(text, 200);
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_sub_agent_result(sid ? sid : "", status ? status : "ok",
-                                               thinking, text ? text : "", in_tok, out_tok);
-            push_display(agent->display_queue, dm);
-            replayed = 1;
-            free(sid);
-            free(status);
-            free(thinking);
-            free(text);
-        } else if (strcmp(type, "error") == 0) {
-            char *message = json_get_string(jp.val, "message");
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_error(message ? message : "unknown");
-            push_display(agent->display_queue, dm);
-            replayed = 1;
-            free(message);
-        }
-
-        free(type);
+        if (agent_render_event_line(agent->display_queue, line)) replayed = 1;
     }
 
     free(line);
     fclose(f);
     return replayed;
+}
+
+/* ============================================================
+ * --watch 入口：实时跟踪 session 的 events.jsonl
+ * 对齐 bash agent_watch_session / agent_watch_resolve
+ * ============================================================ */
+
+/* 递归查找 projects 下第一个同名目录（遍历顺序对齐 find：先自身再子目录） */
+static int watch_find_dir(const char *dir, const char *name, char *out, size_t out_size) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *ent;
+    int found = 0;
+    while (!found && (ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (strcmp(ent->d_name, name) == 0) {
+            snprintf(out, out_size, "%s", path);
+            found = 1;
+            break;
+        }
+        found = watch_find_dir(path, name, out, out_size);
+    }
+    closedir(d);
+    return found;
+}
+
+/* 解析 --watch 参数：events.jsonl 路径 | session 目录 | session_id。
+   成功返回 malloc 的 events.jsonl 路径，失败返回 NULL。 */
+static char *watch_resolve(const char *home, const char *arg) {
+    struct stat st;
+    if (stat(arg, &st) == 0) {
+        if (S_ISREG(st.st_mode)) return util_strdup(arg);
+        if (S_ISDIR(st.st_mode)) {
+            char path[4096];
+            snprintf(path, sizeof(path), "%s/events.jsonl", arg);
+            if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) return util_strdup(path);
+        }
+    }
+    char root[4096];
+    snprintf(root, sizeof(root), "%s/.bash-agent/projects", home);
+    char dir[4096];
+    if (watch_find_dir(root, arg, dir, sizeof(dir))) {
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/events.jsonl", dir);
+        if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) return util_strdup(path);
+    }
+    return NULL;
+}
+
+int agent_watch_session(const char *home, const char *arg, int stream_json) {
+    char *file = watch_resolve(home, arg);
+    if (!file) {
+        fprintf(stderr, "Error: session not found: %s\n  Searched: %s/.bash-agent/projects\n",
+                arg, home);
+        return 1;
+    }
+
+    /* sid = events.jsonl 所在目录名 */
+    const char *sid = "";
+    char dir_buf[4096];
+    snprintf(dir_buf, sizeof(dir_buf), "%s", file);
+    char *slash = strrchr(dir_buf, '/');
+    if (slash) {
+        *slash = '\0';
+        const char *base = strrchr(dir_buf, '/');
+        sid = base ? base + 1 : dir_buf;
+    }
+
+    FILE *f = fopen(file, "r");
+    if (!f) {
+        fprintf(stderr, "Error: session not found: %s\n  Searched: %s/.bash-agent/projects\n",
+                arg, home);
+        free(file);
+        return 1;
+    }
+
+    MsgQueue queue;
+    if (!stream_json) {
+        mq_init(&queue);
+        pthread_t display_thread;
+        DisplayConfig dcfg;
+        dcfg.queue = &queue;
+        dcfg.format = OUTPUT_HUMAN;
+        dcfg.interactive = 0;
+        display_thread_start(&display_thread, &dcfg);
+        pthread_detach(display_thread);
+        printf("\x1b[1m=== %s ===\x1b[0m\n\n", sid);
+        fflush(stdout);
+    }
+
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    long pos;
+
+    /* 初始：渲染最后 10 行已有事件（ring buffer）；末尾半行丢弃
+       （对齐 bash wc -l 只数 \n 结尾行的语义） */
+    char *ring[10];
+    int ring_count = 0;
+    memset(ring, 0, sizeof(ring));
+    while ((pos = ftell(f)), (n = getline(&line, &cap, f)) >= 0) {
+        if (n == 0 || line[n - 1] != '\n') {
+            fseek(f, pos, SEEK_SET); /* 半行：留给 follow 阶段 */
+            break;
+        }
+        free(ring[ring_count % 10]);
+        ring[ring_count % 10] = util_strdup(line);
+        ring_count++;
+    }
+    int ring_start = ring_count > 10 ? ring_count - 10 : 0;
+    for (int i = ring_start; i < ring_count; i++) {
+        char *l = ring[i % 10];
+        if (stream_json) {
+            fputs(l, stdout);
+            fflush(stdout);
+        } else {
+            agent_render_event_line(&queue, l);
+        }
+    }
+    for (int i = 0; i < 10; i++) {
+        free(ring[i]);
+        ring[i] = NULL;
+    }
+
+    /* follow：500ms 轮询新增完整行，直到 Ctrl+C（默认信号处理终止进程） */
+    for (;;) {
+        usleep(500 * 1000);
+        clearerr(f);
+        while ((pos = ftell(f)), (n = getline(&line, &cap, f)) >= 0) {
+            if (n == 0 || line[n - 1] != '\n') {
+                fseek(f, pos, SEEK_SET); /* 半行：等下次补全 */
+                break;
+            }
+            if (stream_json) {
+                fputs(line, stdout);
+                fflush(stdout);
+            } else {
+                agent_render_event_line(&queue, line);
+            }
+        }
+    }
+    /* unreachable */
 }
 
 /* ============================================================

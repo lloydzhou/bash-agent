@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, bail};
-use rustagent::agent::agent_run;
+use rustagent::agent::{self, agent_run};
 use rustagent::config::{Config, OutputFormat, apply_provider_defaults, parse_size_bytes};
 use rustagent::store;
 use rustagent::util::format_system_time;
@@ -35,6 +35,13 @@ fn run() -> Result<()> {
 
     if cfg.list_sessions {
         list_sessions(&home, &cwd)?;
+        return Ok(());
+    }
+
+    // --watch 不需要 API key，不创建 session（对齐 bash agent_watch_session）
+    if !cfg.watch.is_empty() {
+        let stream_json = cfg.output_format == OutputFormat::StreamJson;
+        agent::agent_watch_session(&home, &cfg.watch, stream_json)?;
         return Ok(());
     }
 
@@ -130,6 +137,10 @@ fn parse_args(args: Vec<String>) -> Result<Config> {
                 cfg.list_sessions = true;
                 i += 1;
             }
+            "--watch" => {
+                cfg.watch = require_value(&args, i)?;
+                i += 2;
+            }
             "-v" | "--verbose" => {
                 cfg.verbose = true;
                 i += 1;
@@ -192,6 +203,7 @@ fn print_usage() {
         "  --fork                   When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)"
     );
     println!("  --list-sessions         List saved sessions");
+    println!("  --watch SESSION         Watch a session's events in real time (session_id | session_dir | events.jsonl path)");
     println!("  -v, --verbose           Verbose mode");
     println!("  -i, --interactive       Interactive mode (REPL)");
     println!("  -h, --help              Show this help");

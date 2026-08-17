@@ -142,6 +142,10 @@ int agent_compact_context(Agent *agent, const char *trigger);
 /* 从 events.jsonl 重放最近 N 轮事件到 display_queue */
 int agent_replay_events(Agent *agent, int max_turns);
 
+/* --watch 入口：实时跟踪 session 的 events.jsonl（不需要 API key，不创建 session）。
+   stream_json 非 0 时透传原始事件行。返回退出码。 */
+int agent_watch_session(const char *home, const char *arg, int stream_json);
+
 /* 更新终端标题 */
 void agent_update_title(Agent *agent);
 void agent_update_title_status(Agent *agent, const char *status);

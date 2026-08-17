@@ -1538,6 +1538,7 @@ Options:
   --continue              Continue most recent session
   --fork                  When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)
   --list-sessions         List all saved sessions
+  --watch SESSION         Watch a session's events in real time (session_id | session_dir | events.jsonl path)
   -v, --verbose           Verbose mode
   -i, --interactive       Interactive mode (REPL)
   -h, --help              Show this help
@@ -1551,6 +1552,7 @@ Environment:
 Examples:
   ./agent.sh "Read /etc/hostname and tell me what it says"
   ./agent.sh --continue "What did we discuss?"
+  ./agent.sh --watch sub_20260706-193403-a105
   echo "prompt" | ./agent.sh --print
   ./agent.sh -i
 EOF
@@ -1595,6 +1597,7 @@ parse_args() {
                 list_sessions
                 exit 0
                 ;;
+            --watch)         WATCH_SESSION="$2"; shift 2 ;;
             -v|--verbose)    VERBOSE=true; shift ;;
             -i|--interactive) INTERACTIVE=true; shift ;;
             -h|--help)       usage ;;
@@ -1754,9 +1757,23 @@ interactive_mode() {
     printf '\033[36mGoodbye!\033[0m\n\033[90mResume with: --session %s  or  --continue\033[0m\n' "$SESSION_ID"
 }
 
+# — watch: tail -f 跟踪 session 的 events.jsonl；逐行喂有限 awk 管道（进程退出即 flush，规避 awk 管道块缓冲），read 按 \n 交付完整行 —
+agent_watch_session() {
+    local file="$1" _line
+    [[ -d "$file" ]] && file+="/events.jsonl"
+    [[ -f "$file" ]] || file="$(find "${BASH_AGENT_HOME:-$HOME}/.bash-agent/projects" -type d -name "$1" 2>/dev/null | head -1)/events.jsonl"
+    [[ -f "$file" ]] || { printf 'Error: session not found: %s\n  Searched: %s\n' "$1" "${BASH_AGENT_HOME:-$HOME}/.bash-agent/projects" >&2; return 1; }
+    [[ "$OUTPUT_FORMAT" == stream-json ]] && { tail -f "$file"; return; }
+    printf '\033[1m=== %s ===\033[0m\n\n' "$(basename "$(dirname "$file")")"
+    tail -f "$file" | while IFS= read -r _line; do
+        printf '%s\n' "$_line" | util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/event_replay.awk"
+    done | ( display_stream )
+}
+
 main() {
     parse_args "$@"
     util_find_awk_dir
+    [[ -n "${WATCH_SESSION:-}" ]] && { agent_watch_session "$WATCH_SESSION"; exit $?; }
     validate_config
     [[ "${FORK:-}" == true ]] && { local _fs="$(store_session_get_dir)/${SESSION_ID}"; SESSION_ID="$(util_new_session_id)"; store_session_fork "$_fs" "$(store_session_get_dir)/${SESSION_ID}"; }
     store_session_init
