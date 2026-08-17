@@ -450,6 +450,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pages: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -534,29 +536,28 @@ jobs:
             dist/bash-agent_*_amd64.deb
             dist/bash-agent_*_arm64.deb
 
-      - name: Build and deploy APT repository (gh-pages)
+      - name: Build APT repository and site
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq apt-utils gnupg 2>&1 | tail -1
+          sudo apt-get install -y -qq gnupg 2>&1 | tail -1
           bash scripts/build-apt-repo.sh "${{ github.ref_name }}" dist apt-repo
-          mkdir -p apt-repo
+          # 组装 Pages 站点根：官网（site/）+ apt 仓库（debian/）+ install.sh
+          cp -r site/. apt-repo/
           cp scripts/install-apt.sh apt-repo/install.sh
-          # 增量更新 gh-pages：保留现有内容（官网等），仅更新 debian/ 与 install.sh
-          rm -rf /tmp/apt-publish && mkdir -p /tmp/apt-publish && cd /tmp/apt-publish
-          git init -q
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
-          git fetch -q origin gh-pages || true
-          git checkout -q -b gh-pages FETCH_HEAD 2>/dev/null || git checkout -q --orphan gh-pages
-          rm -rf debian install.sh
-          cp -r "$GITHUB_WORKSPACE/apt-repo/debian" .
-          cp "$GITHUB_WORKSPACE/apt-repo/install.sh" .
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" add -A
-          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -m "apt: publish repository for ${{ github.ref_name }}"
-          git push origin gh-pages:gh-pages
-          echo "APT 仓库已发布到 gh-pages（保留既有内容）"
+          find apt-repo -maxdepth 2 | sort
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apt-repo
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

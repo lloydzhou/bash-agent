@@ -11,7 +11,7 @@
 set -euo pipefail
 
 BASE_URL="https://lloydzhou.github.io/bash-agent"
-REPO_URL="https://github.com/lloydzhou/bash-agent/releases/latest/download"
+GITHUB_REPO="https://github.com/lloydzhou/bash-agent"
 
 [[ "$(id -u)" -eq 0 ]] || { echo "错误：需要 root 权限（使用 sudo bash）" >&2; exit 1; }
 
@@ -33,18 +33,21 @@ install_via_apt() {
 
 install_via_deb() {
   echo "==> 直接下载 .deb 安装"
-  local deb_name="bash-agent_*_${arch}.deb"
-  local url
-  url="$(curl -fsSL "$REPO_URL" 2>/dev/null | grep -oE "${deb_name}" | head -1 || true)"
-  if [[ -z "$url" ]]; then
-    # 无法解析 latest 页面时按已知文件名尝试
-    curl -fsSL -o "/tmp/bash-agent_${arch}.deb" "$REPO_URL/$(basename "$deb_name")" || {
-      echo "错误：无法下载 $REPO_URL/$deb_name" >&2
-      return 1
-    }
-  else
-    curl -fsSL -o "/tmp/bash-agent_${arch}.deb" "$REPO_URL/$url"
+  # 从 releases/latest 的 302 Location 提取 tag（release 页面 HTML 为异步渲染，
+  # 不含 asset 文件名，无法从页面解析；URL 中也不支持通配符）
+  local tag ver url
+  tag="$(curl -fsSIL -o /dev/null -w '%{url_effective}' "$GITHUB_REPO/releases/latest" \
+         2>/dev/null | grep -oE '[^/]+$' || true)"
+  ver="${tag#v}"
+  if [[ -z "$ver" ]]; then
+    echo "错误：无法解析最新 release tag（$GITHUB_REPO/releases/latest）" >&2
+    return 1
   fi
+  url="$GITHUB_REPO/releases/download/${tag}/bash-agent_${ver}_${arch}.deb"
+  curl -fsSL --retry 2 -o "/tmp/bash-agent_${arch}.deb" "$url" || {
+    echo "错误：无法下载 $url" >&2
+    return 1
+  }
   dpkg -i "/tmp/bash-agent_${arch}.deb" || apt-get install -f -y -qq
   rm -f "/tmp/bash-agent_${arch}.deb"
 }

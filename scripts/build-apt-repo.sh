@@ -2,9 +2,9 @@
 # 从 dist/ 目录中的 .deb 构建标准 apt 仓库，输出到 apt-repo/。
 # 用法：scripts/build-apt-repo.sh <version> [deb_dir] [out_dir] [repo_slug]
 #
-# .deb 文件不存入 gh-pages（避免 git 历史膨胀）。
-# Packages 索引的 Filename 字段直接指向 GitHub Releases 下载地址，
-# apt 客户端会从该 URL 拉取 .deb。
+# .deb 文件存放于仓库内 pool/ 目录（部署走 Pages artifact，不进任何 git 分支）。
+# Packages 索引的 Filename 字段使用相对路径（apt 所有版本均不支持绝对 URL，
+# 会将其直接拼接在源 base URL 之后导致 404）。
 #
 # 产物结构（部署到 GitHub Pages 的 /debian/ 路径）：
 #   dists/stable/main/binary-{amd64,arm64}/Packages(.gz)
@@ -27,9 +27,7 @@ VERSION="${VERSION_INPUT#v}"
 
 [[ -d "$DEB_DIR" ]] || { echo "错误：deb 目录不存在：$DEB_DIR" >&2; exit 1; }
 
-# GitHub Releases 下载基础 URL（apt 从这里拉 .deb，不经过 gh-pages）
-RELEASES_URL="https://github.com/${REPO_SLUG}/releases/download/${VERSION_INPUT}"
-
+# .deb 与索引同源托管（pool/），Filename 使用相对路径
 REPO_DIR="$OUT_DIR/debian"
 rm -rf "$OUT_DIR"
 mkdir -p "$REPO_DIR/dists/stable"
@@ -46,14 +44,13 @@ fi
 # 生成 Packages 索引（Python，跨平台一致）
 # Filename 字段指向 GitHub Releases URL，.deb 不写入 gh-pages
 PYTHON_BIN="$(command -v python3 || command -v python)"
-export REPO_DIR VERSION RELEASES_URL DEB_DIR
+export REPO_DIR VERSION DEB_DIR
 
 "$PYTHON_BIN" - <<'PYEOF'
-import gzip, hashlib, os, io, tarfile, sys, datetime
+import gzip, hashlib, os, io, shutil, tarfile, sys, datetime
 
 repo       = os.environ["REPO_DIR"]
 version    = os.environ["VERSION"]
-releases   = os.environ["RELEASES_URL"]
 deb_dir    = os.environ["DEB_DIR"]
 comp       = "main"
 dist       = os.path.join(repo, "dists/stable")
@@ -102,7 +99,12 @@ def pkg_entry(deb_name):
     sha256 = hashlib.sha256(data).hexdigest()
     sha1 = hashlib.sha1(data).hexdigest()
     md5 = hashlib.md5(data).hexdigest()
-    filename_url = f"{releases}/{deb_name}"
+    # 相对路径（相对于 apt 源 base URL），.deb 复制到 pool/main/
+    filename_rel = f"pool/main/{deb_name}"
+    # 复制 .deb 到 pool（与索引同源，所有 apt 版本可下载）
+    pool_dir = os.path.join(repo, "pool", comp)
+    os.makedirs(pool_dir, exist_ok=True)
+    shutil.copy2(full, os.path.join(pool_dir, deb_name))
     lines = [
         f"Package: {ctl.get('Package', 'bash-agent')}",
         f"Version: {ctl.get('Version', version)}",
@@ -116,7 +118,7 @@ def pkg_entry(deb_name):
     if ctl.get("Description"):
         lines.append(f"Description: {ctl['Description'].splitlines()[0]}")
     lines += [
-        f"Filename: {filename_url}",
+        f"Filename: {filename_rel}",
         f"Size: {size}",
         f"MD5sum: {md5}",
         f"SHA1: {sha1}",
@@ -167,6 +169,15 @@ for arch in archs:
         p = os.path.join(dist, comp, f"binary-{arch}", suffix)
         indices.append((f"{comp}/binary-{arch}/{suffix}",) + file_info(p))
 
+# 生成空的 cnf/Commands-<arch>（apt ≥2.4 会请求该文件，Release 无条目会报
+# "W: No Hash entry in Release file"）
+cnf_dir = os.path.join(dist, comp, "cnf")
+os.makedirs(cnf_dir, exist_ok=True)
+for arch in archs:
+    p = os.path.join(cnf_dir, f"Commands-{arch}")
+    open(p, "w").close()
+    indices.append((f"{comp}/cnf/Commands-{arch}",) + file_info(p))
+
 md5s, sha1s, sha256s = [], [], []
 for path, size, md5, sha1, sha256 in indices:
     md5s.append(f"  {md5} {size:11} {path}\n")
@@ -176,9 +187,11 @@ for path, size, md5, sha1, sha256 in indices:
 with open(os.path.join(dist, "Release"), "w") as f:
     for k, v in release_extra.items():
         f.write(f"{k}: {v}\n")
-    f.write("\nMD5Sum:\n" + "".join(md5s))
-    f.write("\nSHA1:\n" + "".join(sha1s))
-    f.write("\nSHA256:\n" + "".join(sha256s))
+    # 注意：hash 块之间不能有空行——apt 的 tagfile 解析器遇空行即认为
+    # 记录结束，空行后的块会被丢弃（导致 "W: No Hash entry" 警告）
+    f.write("MD5Sum:\n" + "".join(md5s))
+    f.write("SHA1:\n" + "".join(sha1s))
+    f.write("SHA256:\n" + "".join(sha256s))
 
 print("生成：dists/stable/Release")
 print("APT 仓库构建完成：", repo)
