@@ -1,0 +1,1610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>bash-agent | 多运行时 AI Coding Agent</title>
+<meta name="description" content="bash-agent 是零运行时依赖的 AI Coding Agent，同时提供 Bash、C、Go、Rust 版本，并保持一致的 session、tool、event 和 stream-json 语义。">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;600;700&amp;display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f7f8fb;
+  --ink: #121417;
+  --muted: #626b78;
+  --faint: #8a93a0;
+  --line: #dfe4eb;
+  --panel: #ffffff;
+  --panel-soft: #eef2f7;
+  --dark: #111318;
+  --dark-2: #1c2027;
+  --dark-3: #272d36;
+  --accent: #0f9f6e;
+  --accent-2: #2563eb;
+  --accent-3: #c2410c;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --nav-bg: rgba(247, 248, 251, 0.88);
+  --hero-bg:
+    linear-gradient(135deg, rgba(15, 159, 110, 0.12), transparent 34%),
+    linear-gradient(315deg, rgba(37, 99, 235, 0.12), transparent 38%),
+    #f7f8fb;
+  --hero-grid: rgba(18, 20, 23, 0.05);
+  --copy: #3f4652;
+  --point-bg: rgba(255, 255, 255, 0.7);
+  --nav-line: rgba(18, 20, 23, 0.08);
+}
+
+body[data-theme="dark"] {
+  --bg: #101217;
+  --ink: #eef2f7;
+  --muted: #a9b2bf;
+  --faint: #7d8795;
+  --line: rgba(255, 255, 255, 0.12);
+  --panel: #171b22;
+  --panel-soft: #12161d;
+  --dark: #080a0f;
+  --dark-2: #111620;
+  --dark-3: #1d2530;
+  --accent: #42d39b;
+  --accent-2: #77a8ff;
+  --accent-3: #f59e68;
+  --nav-bg: rgba(16, 18, 23, 0.88);
+  --hero-bg:
+    linear-gradient(135deg, rgba(66, 211, 155, 0.12), transparent 34%),
+    linear-gradient(315deg, rgba(119, 168, 255, 0.13), transparent 38%),
+    #101217;
+  --hero-grid: rgba(255, 255, 255, 0.055);
+  --copy: #c7d0dd;
+  --point-bg: rgba(255, 255, 255, 0.055);
+  --nav-line: rgba(255, 255, 255, 0.1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.6;
+  letter-spacing: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+}
+
+.container {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: 1px solid var(--nav-line);
+  background: var(--nav-bg);
+  backdrop-filter: blur(18px);
+}
+
+.nav-inner {
+  height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+.brand-mark {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--dark);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.16);
+}
+
+.brand-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: block;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-links a {
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.nav-links a:hover {
+  color: var(--ink);
+  background: rgba(127, 137, 150, 0.13);
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.toggle:hover {
+  border-color: var(--accent);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+.button.primary {
+  color: #fff;
+  background: var(--dark);
+}
+
+.button.secondary {
+  color: var(--ink);
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 74px 0 56px;
+  border-bottom: 1px solid var(--line);
+  background: var(--hero-bg);
+}
+
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--hero-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hero-grid) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: linear-gradient(to bottom, black, transparent 78%);
+}
+
+.hero-layout {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr);
+  gap: 48px;
+  align-items: center;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 7px 10px;
+  border: 1px solid rgba(15, 159, 110, 0.22);
+  border-radius: 8px;
+  color: #08734f;
+  background: rgba(15, 159, 110, 0.08);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.eyebrow::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+h1 {
+  margin: 0;
+  font-size: 72px;
+  line-height: 0.96;
+  letter-spacing: 0;
+}
+
+.hero-title {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.hero-logo {
+  width: 68px;
+  height: 68px;
+  border-radius: 16px;
+  flex: 0 0 auto;
+  box-shadow: 0 18px 42px rgba(18, 20, 23, 0.18);
+}
+
+.hero-copy {
+  margin: 24px 0 0;
+  max-width: 650px;
+  color: var(--copy);
+  font-size: 20px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+.hero-points {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 34px;
+}
+
+.point {
+  min-height: 76px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--point-bg);
+}
+
+.point strong {
+  display: block;
+  font-family: var(--mono);
+  font-size: 17px;
+}
+
+.point span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.terminal {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+  color: #e9edf3;
+  background: var(--dark);
+  box-shadow: 0 30px 70px rgba(18, 20, 23, 0.24);
+}
+
+.terminal-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--dark-2);
+}
+
+.window-dots {
+  display: flex;
+  gap: 7px;
+}
+
+.window-dots span {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #697282;
+}
+
+.terminal-title {
+  color: #aab3c0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.terminal-body {
+  padding: 22px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.9;
+}
+
+.prompt {
+  color: #66d19e;
+}
+
+.cmd {
+  color: #ffffff;
+}
+
+.comment {
+  color: #7c8797;
+}
+
+.flag {
+  color: #8eb7ff;
+}
+
+.str {
+  color: #f0b987;
+}
+
+.ok {
+  color: #66d19e;
+}
+
+.section {
+  padding: 82px 0;
+}
+
+.section.dark {
+  color: #eef2f7;
+  background: var(--dark);
+}
+
+body[data-theme="light"] .section.dark {
+  color: var(--ink);
+  background: var(--panel-soft);
+}
+
+.section.soft {
+  background: var(--panel-soft);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.section-head {
+  max-width: 720px;
+  margin-bottom: 34px;
+}
+
+.section-kicker {
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.section.dark .section-kicker {
+  color: #66d19e;
+}
+
+body[data-theme="light"] .section.dark .section-kicker {
+  color: var(--accent);
+}
+
+.section h2 {
+  margin: 0;
+  font-size: 38px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.section-desc {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+.section.dark .section-desc {
+  color: #aab3c0;
+}
+
+body[data-theme="light"] .section.dark .section-desc {
+  color: var(--muted);
+}
+
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.metric {
+  padding: 28px 24px;
+  border-right: 1px solid var(--line);
+}
+
+.metric:last-child {
+  border-right: 0;
+}
+
+.metric strong {
+  display: block;
+  font-family: var(--mono);
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+.metric span {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.performance-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.performance-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.performance-stat {
+  padding: 22px;
+  border-right: 1px solid var(--line);
+}
+
+.performance-stat:last-child {
+  border-right: 0;
+}
+
+.performance-stat span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.performance-stat strong {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.cache-table {
+  display: grid;
+}
+
+.cache-row {
+  display: grid;
+  grid-template-columns: 96px 88px 88px 92px minmax(150px, 1fr) 84px;
+  gap: 14px;
+  align-items: center;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.cache-row:last-child {
+  border-bottom: 0;
+}
+
+.cache-row.header {
+  color: var(--muted);
+  background: var(--panel-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cache-row.header span:nth-child(1) {
+  text-align: left;
+}
+
+.cache-row.header span:nth-child(2),
+.cache-row.header span:nth-child(3),
+.cache-row.header span:nth-child(4),
+.cache-row.header span:nth-child(6) {
+  text-align: right;
+}
+
+.cache-row.header span:nth-child(5) {
+  text-align: center;
+}
+
+.cache-date,
+.cache-input,
+.cache-hit,
+.cache-rate,
+.cache-output {
+  font-family: var(--mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cache-date {
+  text-align: left;
+  color: var(--ink);
+}
+
+.cache-input {
+  color: var(--muted);
+}
+
+.cache-hit {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.cache-rate {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.cache-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.cache-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.performance-note {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.grid {
+  display: grid;
+  gap: 18px;
+}
+
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.card {
+  min-height: 100%;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.section.dark .card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--dark-2);
+}
+
+body[data-theme="light"] .section.dark .card {
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.card-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: #075b40;
+  background: rgba(15, 159, 110, 0.12);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.card h3 {
+  margin: 18px 0 8px;
+  font-size: 19px;
+  line-height: 1.28;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.section.dark .card p {
+  color: #b3bdca;
+}
+
+body[data-theme="light"] .section.dark .card p {
+  color: var(--muted);
+}
+
+.runtime-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.runtime-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-name h3 {
+  margin: 0;
+}
+
+.runtime-tag {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 3px 7px;
+  color: #aab3c0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+body[data-theme="light"] .runtime-tag {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.mini-code {
+  padding: 12px;
+  border-radius: 8px;
+  color: #dce3ec;
+  background: #0c0e12;
+  font-family: var(--mono);
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+.pipeline {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 28px;
+}
+
+.pipe-step {
+  min-height: 118px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: var(--dark-2);
+}
+
+body[data-theme="light"] .pipe-step {
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.pipe-step strong {
+  display: block;
+  color: #fff;
+  font-size: 15px;
+}
+
+body[data-theme="light"] .pipe-step strong {
+  color: var(--ink);
+}
+
+.pipe-step span {
+  display: block;
+  margin-top: 8px;
+  color: #aab3c0;
+  font-size: 13px;
+}
+
+body[data-theme="light"] .pipe-step span {
+  color: var(--muted);
+}
+
+.code-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.code-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-soft);
+  color: var(--ink);
+}
+
+.code-panel-head strong {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.install-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.install-grid .code-panel {
+  min-width: 0;
+}
+
+.copy-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--panel);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.copy-btn:hover {
+  border-color: var(--accent);
+}
+
+.code-panel pre {
+  margin: 0;
+  padding: 20px;
+  overflow-x: auto;
+  min-height: 210px;
+  max-width: 100%;
+  color: #e9edf3;
+  background: var(--dark);
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.tool-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.tool-group {
+  min-height: 178px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.tool-group h3 {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.tool-group p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.tool-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tool-tag {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.footer {
+  padding: 44px 0;
+  color: #b3bdca;
+  background: var(--dark);
+}
+
+.footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.footer a {
+  color: #eef2f7;
+}
+
+@media (max-width: 980px) {
+  .hero-layout {
+    grid-template-columns: 1fr;
+  }
+
+  h1 {
+    font-size: 56px;
+  }
+
+  .grid.three,
+  .grid.four,
+  .pipeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .install-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric:nth-child(2) {
+    border-right: 0;
+  }
+
+  .tool-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .container {
+    width: min(100% - 28px, 1180px);
+  }
+
+  .nav-inner {
+    height: auto;
+    min-height: 64px;
+  }
+
+  .nav-actions {
+    gap: 6px;
+  }
+
+  .toggle {
+    min-width: 40px;
+    padding: 0 8px;
+  }
+
+  .nav-links {
+    display: none;
+  }
+
+  .hero {
+    padding: 48px 0 40px;
+  }
+
+  h1 {
+    font-size: 42px;
+  }
+
+  .hero-title {
+    gap: 12px;
+  }
+
+  .hero-logo {
+    width: 52px;
+    height: 52px;
+    border-radius: 12px;
+  }
+
+  .hero-copy {
+    font-size: 17px;
+  }
+
+  .hero-points,
+  .grid.three,
+  .grid.four,
+  .performance-summary,
+  .install-grid,
+  .pipeline,
+  .metric-strip,
+  .tool-list {
+    grid-template-columns: 1fr;
+  }
+
+  .performance-stat {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .performance-stat:last-child {
+    border-bottom: 0;
+  }
+
+  .cache-row {
+    grid-template-columns: 76px 58px 58px 66px 1fr 48px;
+    gap: 8px;
+    padding: 12px;
+    font-size: 11.5px;
+  }
+
+  .metric,
+  .metric:nth-child(2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .metric:last-child {
+    border-bottom: 0;
+  }
+
+  .section {
+    padding: 58px 0;
+  }
+
+  .section h2 {
+    font-size: 30px;
+  }
+
+  .footer-inner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+</style>
+</head>
+<body data-theme="light">
+<nav class="nav">
+  <div class="container nav-inner">
+    <a class="brand" href="#">
+      <img class="brand-logo" src="favicon.svg" alt="" width="32" height="32">
+      <span>bash-agent</span>
+    </a>
+    <div class="nav-links" aria-label="页面导航">
+      <a href="#features" data-zh="特点" data-en="Features">特点</a>
+      <a href="#performance" data-zh="性能" data-en="Performance">性能</a>
+      <a href="#runtimes" data-zh="运行时" data-en="Runtimes">运行时</a>
+      <a href="#events" data-zh="事件流" data-en="Events">事件流</a>
+      <a href="#install" data-zh="安装" data-en="Install">安装</a>
+      <a href="#tools" data-zh="工具" data-en="Tools">工具</a>
+    </div>
+    <div class="nav-actions">
+      <button class="toggle" type="button" id="lang-toggle" aria-label="Switch language">EN</button>
+      <button class="toggle" type="button" id="theme-toggle" aria-label="Switch theme">Dark</button>
+      <a class="button secondary" href="https://github.com/lloydzhou/bash-agent" target="_blank" rel="noreferrer">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <section class="hero">
+    <div class="container hero-layout">
+      <div>
+        <div class="eyebrow" data-zh="Bash 优先，原生移植，语义一致" data-en="Bash first, native ports, same semantics">Bash 优先，原生移植，语义一致</div>
+        <div class="hero-title">
+          <img class="hero-logo" src="favicon.svg" alt="" width="68" height="68">
+          <h1>bash-agent</h1>
+        </div>
+        <p class="hero-copy" data-zh="一个面向真实编码工作的 AI Agent Runtime。Bash 版本保持零运行时依赖，C、Go、Rust 版本对齐同一套 session、tool、display queue、events.jsonl 和 stream-json 行为。" data-en="An AI Agent Runtime built for real coding work. The Bash implementation keeps zero runtime dependencies while C, Go, and Rust align on the same session, tool, display queue, events.jsonl, and stream-json semantics.">
+          一个面向真实编码工作的 AI Agent Runtime。Bash 版本保持零运行时依赖，C、Go、Rust 版本对齐同一套 session、tool、display queue、events.jsonl 和 stream-json 行为。
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#install" data-zh="快速开始" data-en="Quick start">快速开始</a>
+          <a class="button secondary" href="https://github.com/lloydzhou/bash-agent/tree/main/docs" target="_blank" rel="noreferrer" data-zh="查看文档" data-en="Read docs">查看文档</a>
+        </div>
+        <div class="hero-points">
+          <div class="point">
+            <strong>0 runtime</strong>
+            <span data-zh="Bash 版无需 Node/Python" data-en="No Node/Python for Bash">Bash 版无需 Node/Python</span>
+          </div>
+          <div class="point">
+            <strong>4 ports</strong>
+            <span data-zh="Bash / C / Go / Rust" data-en="Bash / C / Go / Rust">Bash / C / Go / Rust</span>
+          </div>
+          <div class="point">
+            <strong>events.jsonl</strong>
+            <span data-zh="人类展示和机器输出解耦" data-en="Human display and machine output are separated">人类展示和机器输出解耦</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="terminal" aria-label="bash-agent terminal demo">
+        <div class="terminal-top">
+          <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="terminal-title">~/workspace · bash-agent</div>
+        </div>
+        <div class="terminal-body">
+          <div><span class="comment"># install</span></div>
+          <div><span class="prompt">$</span> <span class="cmd">brew install lloydzhou/tap/bash-agent</span></div>
+          <div><span class="ok">installed:</span> bash-agent cagent goagent rustagent tcode</div>
+          <br>
+          <div><span class="comment"># human display</span></div>
+          <div><span class="prompt">$</span> <span class="cmd">bash-agent</span> <span class="str" data-zh='"检查这个 PR 的风险"' data-en='"review this PR for risks"'>"检查这个 PR 的风险"</span></div>
+          <div>tool: Read · Grep · Bash</div>
+          <div><span class="ok">done:</span> session saved, cache stats updated</div>
+          <br>
+          <div><span class="comment" data-zh="# 粘贴图片" data-en="# image paste"># 粘贴图片</span></div>
+          <div><span class="prompt">$</span> <span class="cmd">Ctrl+V</span> <span class="str" data-zh="粘贴截图" data-en="paste screenshot">粘贴截图</span></div>
+          <div><span class="ok">[Image #1]</span> <span data-zh="图片已缓存，发送时自动转录" data-en="image cached, auto-transcribed on send">图片已缓存，发送时自动转录</span></div>
+          <br>
+          <div><span class="comment"># machine events</span></div>
+          <div><span class="prompt">$</span> <span class="cmd">bash-agent</span> <span class="flag">--output-format stream-json</span> <span class="str">"run tests"</span></div>
+          <div>{"type":"tool_result","session_id":"...","turn":12}</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="metric-strip" aria-label="项目指标">
+    <div class="metric">
+      <strong>11</strong>
+      <span data-zh="内置工具覆盖文件、搜索、执行、技能和子 Agent" data-en="Built-in tools for files, search, execution, skills, and sub-agents">内置工具覆盖文件、搜索、执行、技能和子 Agent</span>
+    </div>
+    <div class="metric">
+      <strong>99%+</strong>
+      <span data-zh="DeepSeek 长会话实测缓存命中率" data-en="Observed DeepSeek long-session cache hit rate">DeepSeek 长会话实测缓存命中率</span>
+    </div>
+    <div class="metric">
+      <strong>1 log</strong>
+      <span data-zh="所有模式统一写入 events.jsonl，stream-json 可同步输出" data-en="Every mode writes events.jsonl; stream-json can tee to stdout">所有模式统一写入 events.jsonl，stream-json 可同步输出</span>
+    </div>
+    <div class="metric">
+      <strong data-zh="同一展示" data-en="same UI">同一展示</strong>
+      <span data-zh="直接执行、replay、不同语言版本走同层 display 语义" data-en="Direct runs, replay, and every port share display semantics">直接执行、replay、不同语言版本走同层 display 语义</span>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-kicker" data-zh="核心设计" data-en="Core design">核心设计</div>
+        <h2 data-zh="不是 demo 脚本，而是一套可移植的 Agent 架构。" data-en="Not a demo script. A portable Agent architecture.">不是 demo 脚本，而是一套可移植的 Agent 架构。</h2>
+        <p class="section-desc" data-zh="页面新增的信息集中在架构一致性、事件持久化和机器可消费输出上，这些是 bash-agent 和普通 CLI wrapper 最大的差别。" data-en="The page now highlights architectural parity, event persistence, and machine-readable output: the parts that separate bash-agent from a typical CLI wrapper.">页面新增的信息集中在架构一致性、事件持久化和机器可消费输出上，这些是 bash-agent 和普通 CLI wrapper 最大的差别。</p>
+      </div>
+      <div class="grid three">
+        <div class="card">
+          <span class="card-label" data-zh="会话" data-en="session">会话</span>
+          <h3 data-zh="长会话可恢复" data-en="Recoverable long sessions">长会话可恢复</h3>
+          <p data-zh="按项目保存会话、turn、缓存统计和事件流。中断、compact、continue、replay 都围绕同一份 session 状态工作。" data-en="Sessions, turns, cache stats, and event streams are stored per project. Interrupt, compact, continue, and replay all operate on the same session state.">按项目保存会话、turn、缓存统计和事件流。中断、compact、continue、replay 都围绕同一份 session 状态工作。</p>
+        </div>
+        <div class="card">
+          <span class="card-label" data-zh="展示" data-en="display">展示</span>
+          <h3 data-zh="展示层单独排队" data-en="A separate display queue">展示层单独排队</h3>
+          <p data-zh="Human 输出由 display queue 消费，stream-json 模式直接面向事件，不再把展示格式和事件格式混在一起。" data-en="Human output is consumed by the display queue, while stream-json targets events directly, keeping presentation separate from event format.">Human 输出由 display queue 消费，stream-json 模式直接面向事件，不再把展示格式和事件格式混在一起。</p>
+        </div>
+        <div class="card">
+          <span class="card-label" data-zh="工具" data-en="tools">工具</span>
+          <h3 data-zh="工具协议一致" data-en="Consistent tool protocol">工具协议一致</h3>
+          <p data-zh="Bash、C、Go、Rust 共用工具定义和调用语义，上层客户端不需要为不同运行时写多套解析逻辑。" data-en="Bash, C, Go, and Rust share tool definitions and invocation semantics, so clients do not need separate parsers per runtime.">Bash、C、Go、Rust 共用工具定义和调用语义，上层客户端不需要为不同运行时写多套解析逻辑。</p>
+        </div>
+        <div class="card">
+          <span class="card-label" data-zh="缓存" data-en="cache">缓存</span>
+          <h3 data-zh="缓存感知压缩" data-en="Cache-aware compaction">缓存感知压缩</h3>
+          <p data-zh="长 session 下优先保持 prompt/cache 边界稳定，降低重复输入成本，也让统计数据在版本切换后仍可兼容读取。" data-en="Long sessions keep prompt/cache boundaries stable to reduce repeated input cost, and stats remain compatible across runtime switches.">长 session 下优先保持 prompt/cache 边界稳定，降低重复输入成本，也让统计数据在版本切换后仍可兼容读取。</p>
+        </div>
+        <div class="card">
+          <span class="card-label" data-zh="子 Agent" data-en="sub-agent">子 Agent</span>
+          <h3 data-zh="并行任务模型" data-en="Parallel task model">并行任务模型</h3>
+          <p data-zh="支持 fork 上下文、后台运行、等待结果和隔离失败，适合把探索、验证、实现拆成并行工作流。" data-en="Fork context, background execution, waiting, and isolated failure make it practical to split exploration, verification, and implementation.">支持 fork 上下文、后台运行、等待结果和隔离失败，适合把探索、验证、实现拆成并行工作流。</p>
+        </div>
+        <div class="card">
+          <span class="card-label" data-zh="权限" data-en="policy">权限</span>
+          <h3 data-zh="Bash 工具权限模式" data-en="Bash tool permission mode">Bash 工具权限模式</h3>
+          <p data-zh="Bash 权限模型把命令分类到 system、external、network、workspace 四个 scope，并使用类似 Linux rwx 的 read、write、execute 三种权限位；四个运行时共用同一套分类和报错语义。" data-en="The Bash permission model classifies commands into four scopes: system, external, network, and workspace, then applies Linux-style read, write, and execute bits; all runtimes share the same classifier and block message.">Bash 权限模型把命令分类到 system、external、network、workspace 四个 scope，并使用类似 Linux rwx 的 read、write、execute 三种权限位；四个运行时共用同一套分类和报错语义。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section soft" id="performance">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-kicker" data-zh="缓存性能实测" data-en="Observed cache performance">缓存性能实测</div>
+        <h2 data-zh="稳定前缀带来的缓存收益是可以量化的。" data-en="The value of a stable prompt prefix is measurable.">稳定前缀带来的缓存收益是可以量化的。</h2>
+        <p class="section-desc" data-zh="下面是 2026 年 5 月及 7 月末基于 DeepSeek API 长会话使用数据的缓存命中趋势。它不是对所有模型的承诺，而是展示 cache-aware session、prompt 和 compact 设计在真实使用中的效果。" data-en="Below is the cache-hit trend from DeepSeek API long-session usage in May and late July 2026. It is not a promise for every provider; it shows what the cache-aware session, prompt, and compaction design achieved in real use.">下面是 2026 年 5 月及 7 月末基于 DeepSeek API 长会话使用数据的缓存命中趋势。它不是对所有模型的承诺，而是展示 cache-aware session、prompt 和 compact 设计在真实使用中的效果。</p>
+      </div>
+      <div class="performance-panel">
+        <div class="performance-summary" aria-label="缓存性能汇总">
+          <div class="performance-stat">
+            <span data-zh="总输入 Tokens" data-en="Input tokens">总输入 Tokens</span>
+            <strong>754,702,708</strong>
+          </div>
+          <div class="performance-stat">
+            <span data-zh="总输出 Tokens" data-en="Output tokens">总输出 Tokens</span>
+            <strong>2,528,051</strong>
+          </div>
+          <div class="performance-stat">
+            <span data-zh="平均缓存命中率" data-en="Avg cache hit">平均缓存命中率</span>
+            <strong>99.27%</strong>
+          </div>
+          <div class="performance-stat">
+            <span data-zh="观测天数" data-en="Observed days">观测天数</span>
+            <strong data-zh="11 天" data-en="11 days">11 天</strong>
+          </div>
+        </div>
+        <div class="cache-table" aria-label="DeepSeek 缓存命中率趋势">
+          <div class="cache-row header">
+            <span data-zh="日期" data-en="Date">日期</span>
+            <span data-zh="输入" data-en="Input">输入</span>
+            <span data-zh="缓存" data-en="Cache">缓存</span>
+            <span data-zh="命中率" data-en="Hit rate">命中率</span>
+            <span data-zh="趋势" data-en="Trend">趋势</span>
+            <span data-zh="输出" data-en="Output">输出</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-07</span>
+            <span class="cache-input">73.7M</span>
+            <span class="cache-hit">73.0M</span>
+            <span class="cache-rate">99.05%</span>
+            <div class="cache-bar"><span style="width:99.05%"></span></div>
+            <span class="cache-output">216K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-08</span>
+            <span class="cache-input">8.1M</span>
+            <span class="cache-hit">8.1M</span>
+            <span class="cache-rate">99.88%</span>
+            <div class="cache-bar"><span style="width:99.88%"></span></div>
+            <span class="cache-output">13K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-09</span>
+            <span class="cache-input">5.0M</span>
+            <span class="cache-hit">5.0M</span>
+            <span class="cache-rate">98.77%</span>
+            <div class="cache-bar"><span style="width:98.77%"></span></div>
+            <span class="cache-output">36K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-15</span>
+            <span class="cache-input">32.8M</span>
+            <span class="cache-hit">32.6M</span>
+            <span class="cache-rate">99.37%</span>
+            <div class="cache-bar"><span style="width:99.37%"></span></div>
+            <span class="cache-output">197K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-16</span>
+            <span class="cache-input">90.2M</span>
+            <span class="cache-hit">88.7M</span>
+            <span class="cache-rate">98.31%</span>
+            <div class="cache-bar"><span style="width:98.31%"></span></div>
+            <span class="cache-output">362K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-17</span>
+            <span class="cache-input">108.4M</span>
+            <span class="cache-hit">107.8M</span>
+            <span class="cache-rate">99.45%</span>
+            <div class="cache-bar"><span style="width:99.45%"></span></div>
+            <span class="cache-output">412K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-18</span>
+            <span class="cache-input">100.1M</span>
+            <span class="cache-hit">99.9M</span>
+            <span class="cache-rate">99.74%</span>
+            <div class="cache-bar"><span style="width:99.74%"></span></div>
+            <span class="cache-output">240K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-19</span>
+            <span class="cache-input">93.3M</span>
+            <span class="cache-hit">93.1M</span>
+            <span class="cache-rate">99.78%</span>
+            <div class="cache-bar"><span style="width:99.78%"></span></div>
+            <span class="cache-output">173K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-21</span>
+            <span class="cache-input">80.3M</span>
+            <span class="cache-hit">79.9M</span>
+            <span class="cache-rate">99.49%</span>
+            <div class="cache-bar"><span style="width:99.49%"></span></div>
+            <span class="cache-output">359K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-05-22</span>
+            <span class="cache-input">105.3M</span>
+            <span class="cache-hit">104.0M</span>
+            <span class="cache-rate">98.77%</span>
+            <div class="cache-bar"><span style="width:98.77%"></span></div>
+            <span class="cache-output">375K</span>
+          </div>
+          <div class="cache-row">
+            <span class="cache-date">2026-07-31</span>
+            <span class="cache-input">57.4M</span>
+            <span class="cache-hit">57.1M</span>
+            <span class="cache-rate">99.56%</span>
+            <div class="cache-bar"><span style="width:99.56%"></span></div>
+            <span class="cache-output">145K</span>
+          </div>
+        </div>
+      </div>
+      <p class="performance-note" data-zh="注：命中率 = 缓存 ÷ 输入；数据来自 DeepSeek API 长会话使用记录；不同 provider、模型、任务形态和缓存策略会产生不同结果。" data-en="Note: hit rate = cache ÷ input; data comes from DeepSeek API long-session usage; provider, model, task shape, and cache policy can change the result.">注：命中率 = 缓存 ÷ 输入；数据来自 DeepSeek API 长会话使用记录；不同 provider、模型、任务形态和缓存策略会产生不同结果。</p>
+    </div>
+  </section>
+
+  <section class="section dark" id="runtimes">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-kicker" data-zh="运行时一致性" data-en="Runtime parity">运行时一致性</div>
+        <h2 data-zh="四个版本，一套抽象层级。" data-en="Four runtimes, one abstraction stack.">四个版本，一套抽象层级。</h2>
+        <p class="section-desc" data-zh="Bash 是规格源头，C、Go、Rust 保持对应的链路层次。不同语言可以传结构体，不需要强行复制 Bash 的文件描述符限制。" data-en="Bash is the behavioral specification. C, Go, and Rust keep the corresponding layers while passing structured data instead of copying Bash file-descriptor constraints.">Bash 是规格源头，C、Go、Rust 保持对应的链路层次。不同语言可以传结构体，不需要强行复制 Bash 的文件描述符限制。</p>
+      </div>
+      <div class="grid four">
+        <div class="card runtime-card">
+          <div class="runtime-name">
+            <h3>Bash</h3>
+            <span class="runtime-tag" data-zh="规格源头" data-en="spec">规格源头</span>
+          </div>
+          <p data-zh="最小依赖、最容易审计，适合作为行为基准。" data-en="Minimal dependencies and easy to audit, suitable as the behavior baseline.">最小依赖、最容易审计，适合作为行为基准。</p>
+          <div class="mini-code">./src/agent.sh -i</div>
+        </div>
+        <div class="card runtime-card">
+          <div class="runtime-name">
+            <h3>C</h3>
+            <span class="runtime-tag" data-zh="原生" data-en="native">原生</span>
+          </div>
+          <p data-zh="原生二进制，保留 display queue 和 replay 展示一致性。" data-en="A native binary that preserves display queue and replay presentation consistency.">原生二进制，保留 display queue 和 replay 展示一致性。</p>
+          <div class="mini-code">./dist/cagent -i</div>
+        </div>
+        <div class="card runtime-card">
+          <div class="runtime-name">
+            <h3>Go</h3>
+            <span class="runtime-tag" data-zh="可移植" data-en="portable">可移植</span>
+          </div>
+          <p data-zh="结构化 chain 层传递事件和展示消息，便于集成。" data-en="Structured chain layers pass events and display messages for easier integration.">结构化 chain 层传递事件和展示消息，便于集成。</p>
+          <div class="mini-code">./dist/goagent -i</div>
+        </div>
+        <div class="card runtime-card">
+          <div class="runtime-name">
+            <h3>Rust</h3>
+            <span class="runtime-tag" data-zh="异步" data-en="async">异步</span>
+          </div>
+          <p data-zh="异步执行和强类型状态管理，保持同层队列边界。" data-en="Async execution and strongly typed state management while preserving queue boundaries.">异步执行和强类型状态管理，保持同层队列边界。</p>
+          <div class="mini-code">./dist/rustagent -i</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section dark" id="events">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-kicker" data-zh="事件管线" data-en="Event pipeline">事件管线</div>
+        <h2 data-zh="events.jsonl 是事实来源，display 只是消费者。" data-en="events.jsonl is the source of truth. Display is only a consumer.">events.jsonl 是事实来源，display 只是消费者。</h2>
+        <p class="section-desc" data-zh="这也解释了为什么 stream-json 更适合抽象在 event append 层：同一个事件可以同时写入 session 文件，并在机器模式下输出到 stdout。" data-en="That is why stream-json belongs at the event append layer: the same event can be written to the session file and emitted to stdout in machine mode.">这也解释了为什么 stream-json 更适合抽象在 event append 层：同一个事件可以同时写入 session 文件，并在机器模式下输出到 stdout。</p>
+      </div>
+      <div class="pipeline">
+        <div class="pipe-step">
+          <strong data-zh="Agent 主循环" data-en="Agent loop">Agent 主循环</strong>
+          <span data-zh="模型响应、工具调用、tool result 和 assistant message 都生成结构化事件。" data-en="Model responses, tool calls, tool results, and assistant messages become structured events.">模型响应、工具调用、tool result 和 assistant message 都生成结构化事件。</span>
+        </div>
+        <div class="pipe-step">
+          <strong data-zh="事件追加" data-en="Event append">事件追加</strong>
+          <span data-zh="所有模式写入 events.jsonl；stream-json 模式在这里同步输出。" data-en="Every mode writes events.jsonl; stream-json tees output here.">所有模式写入 events.jsonl；stream-json 模式在这里同步输出。</span>
+        </div>
+        <div class="pipe-step">
+          <strong data-zh="展示队列" data-en="Display queue">展示队列</strong>
+          <span data-zh="Human 模式才进入展示队列，避免 JSON 输出夹杂提示符和格式化文本。" data-en="Only human mode enters the display queue, avoiding prompts and formatted text in JSON output.">Human 模式才进入展示队列，避免 JSON 输出夹杂提示符和格式化文本。</span>
+        </div>
+        <div class="pipe-step">
+          <strong data-zh="回放" data-en="Replay">回放</strong>
+          <span data-zh="回放读取同一份事件，并复用相同 display 函数展示 tool 和消息。" data-en="Replay reads the same events and reuses the same display functions for tools and messages.">回放读取同一份事件，并复用相同 display 函数展示 tool 和消息。</span>
+        </div>
+        <div class="pipe-step">
+          <strong data-zh="统计" data-en="Stats">统计</strong>
+          <span data-zh="兼容读取旧字段，写入时自然落到标准格式，避免单独 repair 文件。" data-en="Old fields are read compatibly, then naturally rewritten in the standard format without a repair file.">兼容读取旧字段，写入时自然落到标准格式，避免单独 repair 文件。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section soft" id="install">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-kicker" data-zh="快速开始" data-en="Quick start">快速开始</div>
+        <h2 data-zh="一分钟启动，可以选脚本版或原生版。" data-en="Start in a minute with either the script or native binaries.">一分钟启动，可以选脚本版或原生版。</h2>
+        <p class="section-desc" data-zh="macOS 推荐 Homebrew；Arch Linux 保留 AUR 安装；只想验证 Bash 版时也可以直接下载单文件脚本。" data-en="Use Homebrew on macOS, AUR on Arch Linux, or download the single Bash script when you only need to try the baseline runtime.">macOS 推荐 Homebrew；Arch Linux 保留 AUR 安装；只想验证 Bash 版时也可以直接下载单文件脚本。</p>
+      </div>
+      <div class="install-grid">
+        <div class="code-panel">
+          <div class="code-panel-head">
+            <strong>Homebrew</strong>
+            <button class="copy-btn" type="button" data-copy="#brew-code" data-zh="复制" data-en="Copy">复制</button>
+          </div>
+          <pre id="brew-code"><span class="comment"># install all runtimes</span>
+brew install lloydzhou/tap/bash-agent
+
+export DEEPSEEK_API_KEY="sk-..."
+bash-agent "hello"</pre>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-head">
+            <strong data-zh="单文件脚本" data-en="Single file">单文件脚本</strong>
+            <button class="copy-btn" type="button" data-copy="#single-code" data-zh="复制" data-en="Copy">复制</button>
+          </div>
+          <pre id="single-code">curl -fsSL \
+  https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
+  -o ~/.local/bin/bash-agent
+
+chmod +x ~/.local/bin/bash-agent</pre>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-head">
+            <strong>Arch Linux (AUR)</strong>
+            <button class="copy-btn" type="button" data-copy="#aur-code" data-zh="复制" data-en="Copy">复制</button>
+          </div>
+          <pre id="aur-code"><span class="comment"># yay</span>
+yay -S bash-agent
+
+<span class="comment"># paru</span>
+paru -S bash-agent</pre>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-head">
+            <strong data-zh="OpenAI 兼容端点" data-en="OpenAI compatible">OpenAI 兼容端点</strong>
+            <button class="copy-btn" type="button" data-copy="#openai-code" data-zh="复制" data-en="Copy">复制</button>
+          </div>
+          <pre id="openai-code">OPENAI_BASE_URL=http://localhost:11434/v1 \
+bash-agent -p openai -m llama3 "review this repo"
+
+bash-agent --output-format stream-json "run tests"</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="tools">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-kicker" data-zh="内置工具" data-en="Built-in tools">内置工具</div>
+        <h2 data-zh="编码工作流需要的工具内置好了。" data-en="The tools a coding workflow needs are built in.">编码工作流需要的工具内置好了。</h2>
+        <p class="section-desc" data-zh="文件读写、搜索、Shell、计划、技能和子 Agent 都通过统一 tool schema 暴露。" data-en="File operations, search, shell execution, planning, skills, and sub-agents are exposed through one tool schema.">文件读写、搜索、Shell、计划、技能和子 Agent 都通过统一 tool schema 暴露。</p>
+      </div>
+      <div class="tool-list" aria-label="内置工具分组">
+        <article class="tool-group">
+          <div>
+            <h3 data-zh="文件读写与精确编辑" data-en="Files and precise edits">文件读写与精确编辑</h3>
+            <p data-zh="读取带行号的文件内容，写入新文件，并用精确字符串替换完成可审计修改。" data-en="Read files with line numbers, write new files, and apply auditable exact-string edits.">读取带行号的文件内容，写入新文件，并用精确字符串替换完成可审计修改。</p>
+          </div>
+          <div class="tool-tags">
+            <span class="tool-tag">Read</span>
+            <span class="tool-tag">Write</span>
+            <span class="tool-tag">Edit</span>
+          </div>
+        </article>
+        <article class="tool-group">
+          <div>
+            <h3 data-zh="搜索与定位" data-en="Search and discovery">搜索与定位</h3>
+            <p data-zh="用 glob 和 ripgrep 快速定位上下文、文件和匹配片段，为后续编辑、测试和重构提供精确入口。" data-en="Find context, files, and matching snippets quickly with glob and ripgrep before editing, testing, or refactoring.">用 glob 和 ripgrep 快速定位上下文、文件和匹配片段，为后续编辑、测试和重构提供精确入口。</p>
+          </div>
+          <div class="tool-tags">
+            <span class="tool-tag">Glob</span>
+            <span class="tool-tag">Grep</span>
+          </div>
+        </article>
+        <article class="tool-group">
+          <div>
+            <h3 data-zh="受控 Bash 执行" data-en="Controlled Bash execution">受控 Bash 执行</h3>
+            <p data-zh="执行测试、构建和诊断命令；Shell 权限按类似 Linux 文件权限的 rwx 位受控，并区分 system、external、network、workspace 四个 scope。" data-en="Run tests, builds, and diagnostics with Linux-style rwx permission bits across four scopes: system, external, network, and workspace.">执行测试、构建和诊断命令；Shell 权限按类似 Linux 文件权限的 rwx 位受控，并区分 system、external、network、workspace 四个 scope。</p>
+          </div>
+          <div class="tool-tags">
+            <span class="tool-tag">Bash</span>
+          </div>
+        </article>
+        <article class="tool-group">
+          <div>
+            <h3 data-zh="计划与待办" data-en="Plans and todos">计划与待办</h3>
+            <p data-zh="把复杂任务拆成可跟踪步骤并锁定计划，让执行有据可依。" data-en="Break complex tasks into trackable steps and lock the plan to keep execution on track.">把复杂任务拆成可跟踪步骤并锁定计划，让执行有据可依。</p>
+          </div>
+          <div class="tool-tags">
+            <span class="tool-tag">TodoWrite</span>
+            <span class="tool-tag">PlanConfirm</span>
+            <span class="tool-tag">PlanClear</span>
+          </div>
+        </article>
+        <article class="tool-group">
+          <div>
+            <h3 data-zh="技能加载" data-en="Skill loading">技能加载</h3>
+            <p data-zh="按需加载项目或用户定义的技能说明，为特定工作流注入上下文与操作步骤。" data-en="Load project or user-defined skill instructions on demand to inject context and procedures for specific workflows.">按需加载项目或用户定义的技能说明，为特定工作流注入上下文与操作步骤。</p>
+          </div>
+          <div class="tool-tags">
+            <span class="tool-tag">Skill</span>
+          </div>
+        </article>
+        <article class="tool-group">
+          <div>
+            <h3 data-zh="并行子 Agent" data-en="Parallel sub-agents">并行子 Agent</h3>
+            <p data-zh="把独立调查或验证任务交给子会话并行执行，结果回注主对话继续推理。" data-en="Delegate independent investigation or verification work to child sessions and merge results back into the main conversation.">把独立调查或验证任务交给子会话并行执行，结果回注主对话继续推理。</p>
+          </div>
+          <div class="tool-tags">
+            <span class="tool-tag">SubAgent</span>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div>
+      <strong>bash-agent</strong><br>
+      MIT License · AI Coding Agent Runtime
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/lloydzhou/bash-agent" target="_blank" rel="noreferrer">GitHub</a>
+      <a href="https://github.com/lloydzhou/bash-agent/releases" target="_blank" rel="noreferrer" data-zh="发布" data-en="Releases">发布</a>
+      <a href="https://github.com/lloydzhou/bash-agent/tree/main/docs" target="_blank" rel="noreferrer" data-zh="文档" data-en="Docs">文档</a>
+      <a href="https://github.com/lloydzhou/bash-agent/blob/main/CHANGELOG.md" target="_blank" rel="noreferrer" data-zh="更新日志" data-en="Changelog">更新日志</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+const STORAGE_KEYS = {
+  lang: "bash-agent-lang",
+  theme: "bash-agent-theme",
+};
+
+const pageMeta = {
+  zh: {
+    title: "bash-agent | 多运行时 AI Coding Agent",
+    description: "bash-agent 是零运行时依赖的 AI Coding Agent，同时提供 Bash、C、Go、Rust 版本，并保持一致的 session、tool、event 和 stream-json 语义。",
+    copied: "已复制",
+    copy: "复制",
+    themeToDark: "深色",
+    themeToLight: "浅色",
+    lang: "EN",
+  },
+  en: {
+    title: "bash-agent | Multi-runtime AI Coding Agent",
+    description: "bash-agent is a zero-runtime AI Coding Agent with Bash, C, Go, and Rust implementations aligned on session, tool, event, and stream-json semantics.",
+    copied: "Copied",
+    copy: "Copy",
+    themeToDark: "Dark",
+    themeToLight: "Light",
+    lang: "中文",
+  },
+};
+
+const langToggle = document.getElementById("lang-toggle");
+const themeToggle = document.getElementById("theme-toggle");
+const descriptionMeta = document.querySelector('meta[name="description"]');
+
+function applyLanguage(lang) {
+  const next = pageMeta[lang] ? lang : "zh";
+  document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
+  document.title = pageMeta[next].title;
+  if (descriptionMeta) descriptionMeta.content = pageMeta[next].description;
+  document.querySelectorAll("[data-zh][data-en]").forEach((node) => {
+    node.textContent = node.dataset[next];
+  });
+  if (langToggle) langToggle.textContent = pageMeta[next].lang;
+  if (themeToggle) {
+    const theme = document.body.dataset.theme === "dark" ? "dark" : "light";
+    themeToggle.textContent = theme === "dark" ? pageMeta[next].themeToLight : pageMeta[next].themeToDark;
+  }
+  localStorage.setItem(STORAGE_KEYS.lang, next);
+}
+
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  const lang = localStorage.getItem(STORAGE_KEYS.lang) || "zh";
+  document.body.dataset.theme = next;
+  if (themeToggle) {
+    themeToggle.textContent = next === "dark" ? pageMeta[lang].themeToLight : pageMeta[lang].themeToDark;
+    themeToggle.setAttribute("aria-pressed", String(next === "dark"));
+  }
+  localStorage.setItem(STORAGE_KEYS.theme, next);
+}
+
+const savedLang = localStorage.getItem(STORAGE_KEYS.lang);
+const initialLang = savedLang || ((navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en");
+const initialTheme = localStorage.getItem(STORAGE_KEYS.theme) || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+
+applyTheme(initialTheme);
+applyLanguage(initialLang);
+
+if (langToggle) {
+  langToggle.addEventListener("click", () => {
+    applyLanguage(localStorage.getItem(STORAGE_KEYS.lang) === "zh" ? "en" : "zh");
+  });
+}
+
+if (themeToggle) {
+  themeToggle.addEventListener("click", () => {
+    applyTheme(document.body.dataset.theme === "dark" ? "light" : "dark");
+  });
+}
+
+document.querySelectorAll("[data-copy]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const target = document.querySelector(button.dataset.copy);
+    if (!target) return;
+    await navigator.clipboard.writeText(target.textContent.trim());
+    const lang = localStorage.getItem(STORAGE_KEYS.lang) || "zh";
+    button.textContent = pageMeta[lang].copied;
+    setTimeout(() => {
+      button.textContent = pageMeta[localStorage.getItem(STORAGE_KEYS.lang) || "zh"].copy;
+    }, 1600);
+  });
+});
+</script>
+</body>
+</html>
