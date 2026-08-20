@@ -236,6 +236,37 @@ fn usage() {
     eprintln!("a per-input prompt positional and --output-format stream-json.");
 }
 
+/// 从透传给 agent 的参数中提取前端展示配置（--model / --provider / --max-context-tokens）。
+/// 参数在 `--` 之后也可能出现，扫描全部 pos；值支持 `--k v` 与 `--k=v` 两种形式。
+fn build_config_json(args: &[String]) -> String {
+    let mut model: Option<&str> = None;
+    let mut provider: Option<&str> = None;
+    let mut max_context: Option<&str> = None;
+    for (i, a) in args.iter().enumerate() {
+        let a = a.as_str();
+        for (key, slot) in [("--model", &mut model), ("--provider", &mut provider), ("--max-context-tokens", &mut max_context)] {
+            if let Some(v) = a.strip_prefix(&format!("{key}=")) {
+                *slot = Some(v);
+            } else if a == key && let Some(v) = args.get(i + 1) {
+                *slot = Some(v.as_str());
+            }
+        }
+    }
+    let mut obj = serde_json::Map::new();
+    if let Some(m) = model {
+        obj.insert("model".into(), json!(m));
+    }
+    if let Some(p) = provider {
+        obj.insert("provider".into(), json!(p));
+    }
+    if let Some(mc) = max_context {
+        if let Ok(n) = mc.replace('_', "").parse::<u64>() {
+            obj.insert("max_context".into(), json!(n));
+        }
+    }
+    json!(obj).to_string()
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -342,7 +373,9 @@ fn main() -> Result<()> {
     .ok();
 
     let addr = format!("{bind}:{port}");
-    let (handle, server_thread) = server::start_server(&addr, events_path.clone())?;
+    let config_json = build_config_json(&base_args);
+    eprintln!("[webagent] config: {config_json}");
+    let (handle, server_thread) = server::start_server(&addr, events_path.clone(), &config_json)?;
 
     eprintln!("[webagent] listening on ws://{addr}/  (Ctrl+C to stop)");
     eprintln!("[webagent] agent: {}", agent_bin.display());

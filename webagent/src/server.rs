@@ -91,6 +91,7 @@ fn handle_connection(
     hub: Arc<WsHub>,
     input_tx: mpsc::Sender<String>,
     events_path: EventsPath,
+    index_html: Arc<String>,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
 
@@ -124,7 +125,7 @@ fn handle_connection(
     if path == "/" {
         serve_static(
             &mut stream,
-            INDEX_HTML.as_bytes(),
+            index_html.as_bytes(),
             "text/html; charset=utf-8",
         )?;
         return Ok(());
@@ -199,19 +200,42 @@ impl Write for PrefixedRead {
 
 /// 每连接一线程：读超时轮询实现双向。
 /// WS 来文本 -> 注入 input_tx；hub 队列事件 -> 写 WS。
-/// 新连接先从 events.jsonl 读取最近 500 条回放，再注册为活跃监听者。
+/// 新连接先回放最近 REPLAY_TURNS 轮事件（见 client_loop 内策略），再注册为活跃监听者。
 fn client_loop(
     ws: &mut tungstenite::WebSocket<PrefixedRead>,
     hub: &Arc<WsHub>,
     input_tx: &mpsc::Sender<String>,
     events_path: &EventsPath,
 ) -> Result<()> {
-    // 从 events.jsonl 回放最近 500 条
+    // 从 events.jsonl 回放：取最近 2000 原始行，合并 delta 分片后取 500 逻辑事件。
+    // （thinking/text 流式 delta 一行一小片，长思考一轮可达数千行；不合并的话
+    //   500 行只能覆盖尾部一小段，实际展示的内容量很小。）
+    // 回放策略：以 user_input 为锚点取最近 REPLAY_TURNS 轮的完整事件流，
+    // 轮内的 thinking/text delta 分片合并为单条（一轮长思考可达数千分片，
+    // 按行数截断会把思考从中间截掉，实际展示内容量很小）。
+    // 兜底：合并后的逻辑事件再按 REPLAY_MAX_EVENTS 从尾部截断。
+    const REPLAY_TURNS: usize = 5;
+    const REPLAY_MAX_EVENTS: usize = 2000;
     if let Some(p) = events_path.lock().unwrap().as_ref()
         && let Ok(h) = fs::read_to_string(p)
     {
-        let tail: Vec<&str> = h.lines().rev().take(500).collect();
-        for line in tail.iter().rev() {
+        let lines: Vec<&str> = h.lines().collect();
+        // 从尾往前找第 REPLAY_TURNS 个 user_input / user_message 锚点
+        let mut anchor = 0usize;
+        let mut seen = 0usize;
+        for (i, line) in lines.iter().enumerate().rev() {
+            if line.contains("\"type\":\"user_input\"")
+                || line.contains("\"type\":\"user_message\"")
+            {
+                seen += 1;
+                if seen >= REPLAY_TURNS {
+                    anchor = i;
+                    break;
+                }
+            }
+        }
+        let merged = merge_replay(lines[anchor..].iter().copied(), usize::MAX);
+        for line in merged.iter().rev().take(REPLAY_MAX_EVENTS).rev() {
             if ws.send(Message::Text(line.to_string())).is_err() {
                 return Ok(());
             }
@@ -244,6 +268,63 @@ fn client_loop(
     Ok(())
 }
 
+/// 回放合并器：把 events.jsonl 中连续的 thinking / text delta 分片合并为单条完整事件。
+/// 输入按时间正序（文件顺序），输出同样按正序；非分片事件原样保留。
+fn merge_replay<'a, I: Iterator<Item = &'a str>>(lines: I, max_lines: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur_type: Option<&'static str> = None;
+    let mut cur_buf = String::new();
+    let mut count = 0usize;
+    for line in lines {
+        count += 1;
+        if count > max_lines {
+            break;
+        }
+        let piece: Option<(&'static str, String)> =
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| {
+                    let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                    let c = v.get("content").and_then(|x| x.as_str()).unwrap_or("");
+                    match t {
+                        "thinking" => Some(("thinking", c.to_string())),
+                        "text" => Some(("text", c.to_string())),
+                        _ => None,
+                    }
+                });
+        match piece {
+            Some((t, c)) => {
+                if cur_type == Some(t) {
+                    cur_buf.push_str(&c);
+                } else {
+                    flush_piece(&mut out, &mut cur_type, &mut cur_buf);
+                    cur_type = Some(t);
+                    cur_buf = c;
+                }
+            }
+            None => {
+                flush_piece(&mut out, &mut cur_type, &mut cur_buf);
+                out.push(line.to_string());
+            }
+        }
+    }
+    flush_piece(&mut out, &mut cur_type, &mut cur_buf);
+    out
+}
+
+fn flush_piece(
+    out: &mut Vec<String>,
+    cur_type: &mut Option<&'static str>,
+    cur_buf: &mut String,
+) {
+    if let Some(t) = cur_type.take() {
+        out.push(
+            serde_json::json!({"type": t, "content": cur_buf.as_str()}).to_string(),
+        );
+        cur_buf.clear();
+    }
+}
+
 fn serve_static(stream: &mut TcpStream, body: &[u8], ctype: &str) -> Result<()> {
     let headers = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -264,10 +345,13 @@ pub(crate) struct ServeHandle {
 pub(crate) fn start_server(
     addr: &str,
     events_path: EventsPath,
+    config_json: &str,
 ) -> Result<(ServeHandle, std::thread::JoinHandle<()>)> {
     let listener = TcpListener::bind(addr).with_context(|| format!("serve on {addr}"))?;
     let hub = Arc::new(WsHub::new());
     let (input_tx, input_rx) = mpsc::channel();
+    // 启动时一次性完成占位符替换（model / max_context 注入页面 CFG）
+    let index_html = Arc::new(INDEX_HTML.replace("__WEBAGENT_CONFIG__", config_json));
     let hub_clone = hub.clone();
     let handle = std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -276,8 +360,9 @@ pub(crate) fn start_server(
                     let hub = hub_clone.clone();
                     let input_tx = input_tx.clone();
                     let events_path = events_path.clone();
+                    let index_html = index_html.clone();
                     std::thread::spawn(move || {
-                        let _ = handle_connection(stream, hub, input_tx, events_path);
+                        let _ = handle_connection(stream, hub, input_tx, events_path, index_html);
                     });
                 }
                 Err(_) => break,

@@ -31,6 +31,7 @@
   --ds-500: rgb(65,118,230); --ds-600: rgb(72,104,178);
   --red-400: rgb(242,90,90); --red-600: rgb(236,19,19);
   --amber-500: rgb(245,158,11);
+  --ok-400: rgb(90,200,120); --ok-500: rgb(66,176,98);
   /* 语义别名（深色） */
   --bg-base: var(--nb-950);
   --bg-float: var(--nb-850);
@@ -89,7 +90,7 @@ html, body { margin: 0; padding: 0; height: var(--app-h); overflow: hidden;
 #app { display: flex; flex-direction: column; height: var(--app-h); min-width: 0; }
 
 header { flex: none; display: flex; align-items: center; gap: 10px;
-  padding: 12px 20px 0; min-height: 44px; position: relative; }
+  padding: 0 20px; min-height: 44px; position: relative; }
 header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 1px;
   height: 1px; background: var(--border-l1); }
 .brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; }
@@ -227,6 +228,46 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
   color: var(--label-caption); white-space: nowrap; }
 .rs-status[data-error] { color: var(--error); }
 
+/* 工具输出 diff 块（对齐 CLI unified diff display：红删绿增、hunk 头灰） */
+.diffwrap { padding: 8px 0; min-width: 0; }
+.diffhead { display: flex; align-items: center; gap: 10px; padding: 0 14px 8px;
+  font-family: var(--font-code); font-size: 12px; line-height: 18px;
+  color: var(--label-tertiary); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.diffhead .path { color: var(--label-secondary); overflow: hidden;
+  text-overflow: ellipsis; }
+.diffhead .add { color: var(--ok-400); } .diffhead .del { color: var(--red-400); }
+.diff { margin: 0 10px; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border-l1); font-family: var(--font-code);
+  font-size: 12px; line-height: 18px; }
+.diff .dl { display: grid; grid-template-columns: 3.5ch 3.5ch minmax(0,1fr);
+  white-space: pre; }
+.diff .ln { color: var(--label-caption); text-align: right; padding: 0 6px 0 4px;
+  user-select: none; }
+.diff .txt { padding-right: 12px; overflow-x: auto; overflow-y: hidden;
+  white-space: pre; overflow-wrap: normal; }
+.diff .dl.ctx .txt { color: var(--label-secondary); }
+.diff .dl.add { background: rgba(90,200,120,.12); }
+.diff .dl.add .txt { color: var(--label-primary); }
+.diff .dl.del { background: rgba(242,90,90,.12); }
+.diff .dl.del .txt { color: var(--label-primary); }
+.diff .dl.hunk { background: var(--hover); }
+.diff .dl.hunk .txt { color: var(--label-tertiary); }
+.diff .dl.meta .txt { color: var(--label-caption); }
+html[data-theme=light] .diff .dl.add { background: rgba(66,176,98,.12); }
+html[data-theme=light] .diff .dl.del { background: rgba(236,19,19,.08); }
+
+/* 带行号的代码块（Read / Write 展示，对齐 CLI 行号 display） */
+.codelines { padding: 8px 0; min-width: 0; }
+.codelines .dl { display: grid; grid-template-columns: 5ch minmax(0,1fr);
+  font-family: var(--font-code); font-size: 12px; line-height: 18px; }
+.codelines .ln { color: var(--label-caption); text-align: right;
+  padding: 0 8px 0 4px; user-select: none; }
+.codelines .txt { padding-right: 12px; overflow-x: auto; overflow-y: hidden;
+  white-space: pre; color: var(--label-secondary); overflow-wrap: normal; }
+.codelines.add .txt { color: var(--label-primary); }
+.codelines.add .ln { color: var(--ok-400); }
+
 /* ============================================================ 系统行 */
 .sysrow { display: flex; align-items: baseline; gap: 8px; min-width: 0;
   font-size: 13px; line-height: 20px; color: var(--label-tertiary);
@@ -255,11 +296,58 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
   animation: 1.8s linear infinite shimmer; }
 @keyframes shimmer { to { background-position: 0 0; } }
 
-/* ============================================================ 统计行（对齐 StatsLine） */
-#statsline { flex: none; text-align: center; color: var(--label-tertiary);
-  font-size: 12px; line-height: 20px; padding: 2px 16px 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#statsline .sep { margin: 0 10px; color: var(--border-l2); }
+/* ============================================================ 统计行（对齐 StatsLine，composer 下方） */
+#statsline { flex: none; display: flex; align-items: center; justify-content: center;
+  gap: 10px; color: var(--label-tertiary); font-size: 12px; line-height: 20px;
+  width: 100%; max-width: calc(var(--chat-width) + 32px); box-sizing: border-box;
+  margin-top: 8px; padding: 0 16px; white-space: nowrap; overflow: hidden; }
+#statsline .seg { display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#statsline .sep { color: var(--border-l2); }
+#statsline .model { color: var(--label-secondary); }
+#ctxbar { width: 72px; height: 3px; border-radius: 2px; background: var(--border-l2);
+  overflow: hidden; flex: none; }
+#ctxbar i { display: block; height: 100%; width: 0%;
+  background: var(--brand); border-radius: 2px; transition: width .3s; }
+#ctxbar.warn i { background: var(--warn); }
+#ctxbar.full i { background: var(--error); }
+
+/* ============================================================ TodoPanel（composer 上部计划条，对齐 DSH TodoPanel） */
+#todoPanel { width: 100%; max-width: calc(var(--chat-width) + 32px);
+  box-sizing: border-box; margin-bottom: 8px;
+  border: 1px solid var(--border-l1); border-radius: 12px;
+  background: var(--bg-float); overflow: hidden; }
+#todoPanel .tpbody { display: flex; flex-direction: column; gap: 8px;
+  padding: 6px 12px; }
+#todoPanel .tphead { display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 0; border: none; background: transparent; text-align: left;
+  cursor: pointer; font: inherit; color: inherit; height: 24px; }
+#todoPanel .tphead .lead { display: inline-grid; place-items: center;
+  color: var(--label-tertiary); width: auto; height: auto; margin: 0; }
+#todoPanel .tptitle { flex: none; font-size: 13px; line-height: 24px;
+  font-weight: 500; color: var(--label-primary); }
+#todoPanel .tpprog { flex: 1 1 auto; min-width: 0; overflow: hidden;
+  font-size: 13px; line-height: 20px; color: var(--label-tertiary);
+  text-overflow: ellipsis; white-space: nowrap; }
+#todoPanel .tpchev { flex: none; width: 8px; height: 8px; margin-left: 2px;
+  color: var(--label-tertiary);
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform .12s; }
+#todoPanel.open .tpchev { transform: rotate(45deg); }
+#todoPanel .tplist { display: flex; flex-direction: column; gap: 8px;
+  margin: 0; padding: 0 0 6px 2px; list-style: none;
+  max-height: 180px; overflow-y: auto; }
+#todoPanel .tpli { display: flex; align-items: center; gap: 10px; min-width: 0;
+  font-size: 13px; line-height: 20px; color: var(--label-secondary); }
+#todoPanel .glyph { display: inline-grid; flex: none; place-items: center;
+  width: 16px; height: 16px; }
+#todoPanel .g-done { color: var(--ok-400); }
+#todoPanel .g-pend { color: var(--label-caption); }
+#todoPanel .g-prog { color: var(--brand); animation: tp-spin 1s linear infinite; }
+@keyframes tp-spin { to { transform: rotate(360deg); } }
+#todoPanel .tpct { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+#todoPanel .tpli.done .tpct { color: var(--label-tertiary); }
 
 /* ============================================================ 输入区（对齐 composer card） */
 .composer-stack { flex: none; display: flex; flex-direction: column; align-items: center;
@@ -328,9 +416,8 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
     </button></div>
   </div>
 
-  <div id="statsline"></div>
-
   <div class="composer-stack">
+    <div id="todoPanel" hidden></div>
     <div class="composer">
       <textarea id="input" placeholder="给 bash-agent 发送消息…" rows="1" autofocus></textarea>
       <div class="composer-row">
@@ -340,10 +427,13 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
         </button>
       </div>
     </div>
+    <div id="statsline"></div>
   </div>
 </div>
 
 <script>
+// webagent 启动注入的配置（model / max_context）；serve 时替换占位符
+var CFG = __WEBAGENT_CONFIG__;
 (function () {
   // 用 window.innerHeight 驱动布局高度：浏览器内和 PWA standalone 都返回真实可视区域，
   // 键盘弹出/导航栏出现时自动缩小，header 固定、composer 不被遮挡。
@@ -400,25 +490,127 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
   });
 
   /* ------------------------------------------------------------ HUD 统计 */
-  var H = { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, busy: false };
+  var H = { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, ctx: 0, busy: false };
+  var MAXCTX = (CFG && CFG.max_context) || 200000;
+  var MODEL = (CFG && CFG.model) || '';
   function fmtK(n) {
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    if (n >= 1000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + 'K';
     return '' + n;
+  }
+  function hudSeg(text, cls) {
+    var s = document.createElement('span'); s.className = 'seg' + (cls ? ' ' + cls : '');
+    s.textContent = text; return s;
   }
   function renderHud() {
     var ie = H.tin + H.cr;
     var pct = ie > 0 ? Math.round(H.cr / ie * 100) + '%' : '—';
-    var parts = ['对话 ' + H.turn, '请求 ' + H.req,
-      '输入 ' + fmtK(ie) + '（缓存 ' + pct + '）', '输出 ' + fmtK(H.tout)];
-    if (H.cc > 0) parts.push('压缩 ' + fmtK(H.cc));
     statsline.textContent = '';
-    for (var i = 0; i < parts.length; i++) {
-      if (i) { var sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '·'; statsline.appendChild(sep); }
-      statsline.appendChild(document.createTextNode(parts[i]));
-    }
+    if (MODEL) statsline.appendChild(hudSeg(MODEL, 'model'));
+    // 上下文占用 = 最近一次请求的 input+cache_read+cache_creation+output
+    var seg = hudSeg('上下文 ' + fmtK(H.ctx) + '/' + fmtK(MAXCTX) + ' · ' +
+      (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—'));
+    var bar = document.createElement('span'); bar.id = 'ctxbar';
+    var fill = document.createElement('i'); bar.appendChild(fill);
+    var ratio = H.ctx / MAXCTX;
+    fill.style.width = Math.min(100, Math.round(ratio * 100)) + '%';
+    if (ratio >= 0.9) bar.className = 'full'; else if (ratio >= 0.8) bar.className = 'warn';
+    seg.appendChild(bar); statsline.appendChild(seg);
+    statsline.appendChild(hudSeg('输入 ' + fmtK(ie) + '（缓存 ' + pct + '）'));
+    statsline.appendChild(hudSeg('输出 ' + fmtK(H.tout)));
+    statsline.appendChild(hudSeg('对话 ' + H.turn + ' 轮 · ' + H.req + ' 请求'));
+    if (H.cc > 0) statsline.appendChild(hudSeg('压缩 ' + fmtK(H.cc)));
   }
-  function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; renderHud(); }
+  function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; H.ctx = 0; renderHud(); }
+
+  /* ------------------------------------------------------------ TodoPanel（composer 上部计划条，对齐 DSH TodoPanel） */
+  var todoPanel = document.getElementById('todoPanel');
+  var todos = [];            // 最新一次 TodoWrite 快照
+  var todoCollapsed = true;  // 默认收起
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs) {
+    var n = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    return n;
+  }
+  // 三态 glyph（DSH figma 14×14）：completed 实线圈+勾 / in_progress 旋转弧环 / pending 虚线圈
+  function todoGlyph(status) {
+    var s = svgEl('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', 'aria-hidden': 'true' });
+    if (status === 'completed') {
+      s.appendChild(svgEl('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', 'stroke-width': 1.2 }));
+      var p = svgEl('path', { fill: 'currentColor', d: 'M10.96 5.71L7.70 8.98c-.22.22-.42.42-.61.57-.2.16-.43.3-.73.35-.16.03-.32.03-.48 0-.3-.05-.53-.19-.73-.35-.18-.15-.38-.35-.6-.57L3.04 7.46l.93-.93 1.51 1.52c.24.24.39.38.5.48.11.09.13.09.19.02.03.01.06 0 .13-.06.11-.09.26-.23.5-.48l3.26-3.26.93.93z' });
+      s.appendChild(p);
+    } else if (status === 'in_progress') {
+      s.appendChild(svgEl('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', 'stroke-width': 1.2, 'stroke-dasharray': '4 3.2' }));
+    } else {
+      s.appendChild(svgEl('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', 'stroke-width': 1.2, 'stroke-dasharray': '2.4 2.4' }));
+    }
+    return s;
+  }
+  function todoProgressLabel(list) {
+    var done = 0, active = 0;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].status === 'completed') done++;
+      else if (list[i].status === 'in_progress') active++;
+    }
+    var pending = list.length - done - active;
+    var segs = [];
+    if (done > 0) segs.push(done + ' 完成');
+    if (active > 0) segs.push(active + ' 进行');
+    if (pending > 0) segs.push(pending + ' 待办');
+    return segs.join('\u2002·\u2002');
+  }
+  function renderTodoPanel() {
+    if (!todos.length) { todoPanel.hidden = true; todoPanel.textContent = ''; return; }
+    todoPanel.hidden = false;
+    todoPanel.className = todoCollapsed ? '' : 'open';
+    todoPanel.textContent = '';
+    var body = el('div', 'tpbody');
+    var head = el('button', 'tphead');
+    head.type = 'button';
+    head.setAttribute('aria-expanded', todoCollapsed ? 'false' : 'true');
+    var lead = el('span', 'lead');
+    lead.appendChild(svgEl('svg', {
+      width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none',
+      stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true'
+    }, ));
+    lead.firstChild.appendChild(svgEl('path', { d: 'M2.5 4.2l1.3 1.3 2.2-2.5' }));
+    lead.firstChild.appendChild(svgEl('path', { d: 'M8.5 4.3h5' }));
+    lead.firstChild.appendChild(svgEl('circle', { cx: 3.1, cy: 8.5, r: .8, fill: 'currentColor', stroke: 'none' }));
+    lead.firstChild.appendChild(svgEl('path', { d: 'M8.5 8.5h5' }));
+    lead.firstChild.appendChild(svgEl('circle', { cx: 3.1, cy: 12.7, r: .8, fill: 'currentColor', stroke: 'none' }));
+    lead.firstChild.appendChild(svgEl('path', { d: 'M8.5 12.7h5' }));
+    var title = el('span', 'tptitle'); title.textContent = '任务清单';
+    var prog = el('span', 'tpprog'); prog.textContent = todoProgressLabel(todos);
+    var chev = el('span', 'tpchev');
+    head.appendChild(lead); head.appendChild(title); head.appendChild(prog); head.appendChild(chev);
+    head.addEventListener('click', function () {
+      todoCollapsed = !todoCollapsed;
+      renderTodoPanel();
+    });
+    body.appendChild(head);
+    if (!todoCollapsed) {
+      var ul = el('ul', 'tplist');
+      for (var i = 0; i < todos.length; i++) {
+        var it = todos[i] || {};
+        var li = el('li', 'tpli' + (it.status === 'completed' ? ' done' : ''));
+        li.setAttribute('data-status', it.status || 'pending');
+        var g = el('span', 'glyph');
+        var gc = it.status === 'completed' ? 'g-done' : (it.status === 'in_progress' ? 'g-prog' : 'g-pend');
+        var gw = el('span', gc); gw.appendChild(todoGlyph(it.status || 'pending'));
+        g.appendChild(gw);
+        var ct = el('span', 'tpct'); ct.textContent = it.content || '';
+        li.appendChild(g); li.appendChild(ct);
+        ul.appendChild(li);
+      }
+      body.appendChild(ul);
+    }
+    todoPanel.appendChild(body);
+  }
+  function setTodos(list) {
+    todos = Array.isArray(list) ? list : [];
+    renderTodoPanel();
+  }
 
   /* ------------------------------------------------------------ 运行状态行（shimmer） */
   var turnStatus = null;
@@ -856,6 +1048,8 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
     }
     stream.buf += content;
     stream.body.textContent = stream.buf;
+    // 重连/回放后继续收到实时分片：恢复运行态（合并大块落地时是 done）
+    stream.el.setAttribute('data-state', replay ? 'done' : 'running');
     var oneLine = stream.buf.replace(/\s+/g, ' ').trim();
     stream.sum.textContent = oneLine.slice(-60);
     autoScroll();
@@ -891,16 +1085,87 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
     return label ? name + '(' + label + ')' : name + '()';
   }
 
-  function addIoSection(card, label, text, isError) {
+  function addIoSection(card, label, text, isError, node) {
     var sc = card.querySelector('.ioscroll') || card;
     if (sc.lastChild && sc.lastChild.classList && sc.lastChild.classList.contains('iosection')) {
       var d = el('div', 'iodivider'); sc.appendChild(d);
     }
     var sec = el('div', 'iosection');
     var l = el('span', 'iolabel'); l.textContent = label;
-    var t = el('p', 'iotext'); t.textContent = text;
-    if (isError) t.setAttribute('data-error', '');
-    sec.appendChild(l); sec.appendChild(t); sc.appendChild(sec);
+    if (node) {
+      sec.appendChild(l); sec.appendChild(node);
+    } else {
+      var t = el('p', 'iotext'); t.textContent = text;
+      if (isError) t.setAttribute('data-error', '');
+      sec.appendChild(l); sec.appendChild(t);
+    }
+    sc.appendChild(sec);
+  }
+
+  /* ---------------- 工具输出的结构化展示（对齐 CLI display） ---------------- */
+  // 带行号的代码块（Read 输出 / Write 内容），start 为起始行号
+  function renderCodeBlock(text, start, add) {
+    var wrap = el('div', 'codelines' + (add ? ' add' : ''));
+    var lines = String(text).split('\n');
+    if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+    var no = start || 1;
+    for (var i = 0; i < lines.length; i++) {
+      var row = el('div', 'dl');
+      var ln = el('span', 'ln'); ln.textContent = no++;
+      var tx = el('span', 'txt'); tx.textContent = lines[i];
+      row.appendChild(ln); row.appendChild(tx);
+      wrap.appendChild(row);
+    }
+    return wrap;
+  }
+  // unified diff 渲染（Edit 输出：红删绿增、@@ hunk 头灰、双行号列）
+  function renderDiffBlock(text) {
+    var wrap = el('div', 'diffwrap');
+    var head = el('div', 'diffhead');
+    var m = text.match(/^Success: Edit\((.*?)\)\s*\[\+(\d+) -(\d+) lines?\]/);
+    if (m) {
+      var pl = el('span', 'path'); pl.textContent = m[1];
+      var pa = el('span', 'add'); pa.textContent = '+' + m[2];
+      var pd = el('span', 'del'); pd.textContent = '-' + m[3];
+      head.appendChild(pl); head.appendChild(pa); head.appendChild(pd);
+    }
+    wrap.appendChild(head);
+    var tbl = el('div', 'diff');
+    var lines = text.split('\n');
+    var oldNo = 0, newNo = 0;
+    var start = m ? 1 : 0; // 命中摘要则跳过首行
+    for (var i = start; i < lines.length; i++) {
+      var ln = lines[i];
+      if (ln === '' && i === lines.length - 1) break; // 尾部空行
+      var row, o, n, t;
+      var hunk = ln.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@?/);
+      if (hunk) {
+        oldNo = +hunk[1]; newNo = +hunk[2];
+        row = el('div', 'dl hunk');
+        o = el('span', 'ln'); n = el('span', 'ln');
+        t = el('span', 'txt'); t.textContent = '  ' + ln;
+      } else if (/^(--- |\+\+\+ )/.test(ln)) {
+        row = el('div', 'dl meta');
+        o = el('span', 'ln'); n = el('span', 'ln');
+        t = el('span', 'txt'); t.textContent = ln;
+      } else if (ln.charAt(0) === '+') {
+        row = el('div', 'dl add');
+        o = el('span', 'ln'); n = el('span', 'ln'); n.textContent = newNo++;
+        t = el('span', 'txt'); t.textContent = ln;
+      } else if (ln.charAt(0) === '-') {
+        row = el('div', 'dl del');
+        o = el('span', 'ln'); o.textContent = oldNo++; n = el('span', 'ln');
+        t = el('span', 'txt'); t.textContent = ln;
+      } else {
+        row = el('div', 'dl ctx');
+        o = el('span', 'ln'); o.textContent = oldNo++; n = el('span', 'ln'); n.textContent = newNo++;
+        t = el('span', 'txt'); t.textContent = ln;
+      }
+      row.appendChild(o); row.appendChild(n); row.appendChild(t);
+      tbl.appendChild(row);
+    }
+    wrap.appendChild(tbl);
+    return wrap;
   }
 
   var openTool = null; // 最近一个尚未收到结果的工具卡片（顺序配对）
@@ -925,21 +1190,17 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
     s.appendChild(line); det.appendChild(s);
     var card = el('div', 'iocard'); var sc = el('div', 'ioscroll'); card.appendChild(sc);
     det.appendChild(card);
-    if (args) addIoSection(card, '输入', args);
+    // Write 的输入展示为绿色新增行号块（对齐 diff 展示）；其余工具展示参数 JSON
+    if (name === 'Write' && inputObj && typeof inputObj.content === 'string') {
+      addIoSection(card, '内容', null, false, renderCodeBlock(inputObj.content, 1, true));
+    } else if (args) {
+      addIoSection(card, '输入', args);
+    }
     flow.appendChild(det);
-    openTool = { el: det, card: card, status: st };
+    openTool = { el: det, card: card, status: st, input: inputObj };
     autoScroll();
   }
-  function addToolResult(name, content, isError) {
-    var text = (typeof content === 'string') ? content : JSON.stringify(content);
-    if (text.length > 40000) text = text.slice(0, 40000) + '\n…（截断）';
-    if (openTool) {
-      addIoSection(openTool.card, '输出', text, isError);
-      openTool.el.setAttribute('data-state', 'done');
-      openTool.status.textContent = isError ? '失败' : '完成';
-      if (isError) openTool.status.setAttribute('data-error', '');
-      openTool = null;
-    } else {
+  function appendOrphanResult(name, text, isError, node) {
       var det = el('details', 'row');
       det.setAttribute('data-kind', 'tool'); det.setAttribute('data-state', 'done');
       var s = el('summary');
@@ -958,10 +1219,34 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
       s.appendChild(line); det.appendChild(s);
       var card = el('div', 'iocard'); var sc = el('div', 'ioscroll'); card.appendChild(sc);
       det.appendChild(card);
-      addIoSection(card, '输出', text, isError);
+      addIoSection(card, '输出', text, isError, node);
       flow.appendChild(det);
-    }
     autoScroll();
+  }
+
+  function addToolResult(name, content, isError) {
+    var text = (typeof content === 'string') ? content : JSON.stringify(content);
+    if (text.length > 40000) text = text.slice(0, 40000) + '\n…（截断）';
+    var inputObj = openTool ? openTool.input : null;
+    if (!isError && name === 'Edit' && text.indexOf('@@') !== -1) {
+      addToolOutputSectionDone(name, text, isError, renderDiffBlock(stripAnsi(text)));
+    } else if (!isError && name === 'Read') {
+      var start = (inputObj && inputObj.offset && inputObj.offset > 1) ? inputObj.offset : 1;
+      addToolOutputSectionDone(name, text, isError, renderCodeBlock(stripAnsi(text), start, false));
+    } else {
+      addToolOutputSectionDone(name, text, isError, null);
+    }
+  }
+  function addToolOutputSectionDone(name, text, isError, node) {
+    if (openTool) {
+      addIoSection(openTool.card, '输出', text, isError, node);
+      openTool.el.setAttribute('data-state', 'done');
+      openTool.status.textContent = isError ? '失败' : '完成';
+      if (isError) openTool.status.setAttribute('data-error', '');
+      openTool = null;
+    } else {
+      appendOrphanResult(name, text, isError, node);
+    }
   }
 
   function addSysRow(tag, msg, cls) {
@@ -996,6 +1281,7 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
         var uin = (evt.content !== undefined && evt.content !== null) ? evt.content : evt.input;
         addUserRow(typeof uin === 'string' ? uin : JSON.stringify(uin));
         H.turn++;
+        renderHud();
         setWorking('思考中');
         break;
       case 'thinking':
@@ -1014,6 +1300,10 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
         setWorking('执行 ' + (evt.name || '工具'));
         var rawIn = evt.input !== undefined ? evt.input : (evt.arguments || evt.args || '');
         addToolCall(evt.name, rawIn);
+        // TodoWrite：最新快照驱动 composer 上部的任务清单面板
+        if (evt.name === 'TodoWrite' && rawIn && typeof rawIn === 'object' && Array.isArray(rawIn.todos)) {
+          setTodos(rawIn.todos);
+        }
         break;
       }
       case 'tool_result': {
@@ -1031,6 +1321,9 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
           H.tout += (evt.output_tokens || 0);
           H.cr += (evt.cache_read_input_tokens || 0);
           H.cc += (evt.cache_creation_input_tokens || 0);
+          // 当前上下文实际占用：本次请求的全部输入（含缓存）+ 输出（compact 后会回落）
+          H.ctx = (evt.input_tokens || 0) + (evt.cache_read_input_tokens || 0)
+            + (evt.cache_creation_input_tokens || 0) + (evt.output_tokens || 0);
           renderHud();
         }
         break;
@@ -1074,6 +1367,7 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
       // 重连会收到完整 replay，先清空 DOM + HUD 状态，避免重复堆积
       flow.textContent = '';
       resetStream(); openTool = null; turnStatus = null;
+      setTodos([]); // replay 中的 TodoWrite 会重建快照
       hudReset(); setIdle();
       statusEl.className = 'ok'; statusText.textContent = '已连接';
       stickBottom = true; toBottom.classList.remove('show');
@@ -1096,6 +1390,7 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
     var v = ta.value.trim();
     if (!v || !ws || ws.readyState !== 1) { if (!v) ta.focus(); return; }
     ws.send(v);
+    setTodos([]); // 对齐 DSH：下一轮 turn 开始时清空任务清单快照
     ta.value = ''; grow();
     ta.focus();
   }
