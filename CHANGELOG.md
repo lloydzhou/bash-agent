@@ -8,6 +8,25 @@
 
 ---
 
+## [4.3.5] - 2026-08-21
+
+> **webagent 前端体验对齐 DeepSeek Harness**：新增 TodoPanel 任务清单条、工具输出结构化展示（Edit/Write diff、Read 行号）、统计行增强（模型名 + 上下文占用 + 轮次/请求计数）；修复回放按行数截断导致长思考只显示尾部一小段的问题。
+
+### Added
+
+- **TodoPanel 任务清单条**（composer 上部，对齐 DSH TodoPanel）：最新一次 TodoWrite 快照驱动；默认收起、点击展开；三态图标（completed ✓ 实线圈 / in_progress 旋转环 / pending 虚线圈）；进度摘要「N 完成 · N 进行 · N 待办」（零计数省略）；发送消息或重连时清空（对齐 DSH "cleared on the next turn"）。
+- **工具输出结构化展示**（对齐 CLI display）：Edit 输出渲染为 unified diff 块——红删绿增底色、双行号列、`@@` hunk 头、a/ b/ meta 行、diffhead 摘要（+N -M），ANSI 色码剥净；Write 输入展示为绿色新增行号块（替代 JSON dump）；Read 输出展示为行号代码块（行号从 `input.offset` 起算）。
+- **统计行增强**（移至输入框下方，对齐 DSH `composer.dock` 布局）：新增模型名与上下文占用段（`32.2K/200K · 16%`，进度条 80%/90% 变色）；对话段展示「N 轮 · M 请求」（轮次 = user_input 计数，请求 = usage 事件计数）；模型名与上下文上限经 `__WEBAGENT_CONFIG__` 占位符注入（serve 时替换；`--model`/`--provider`/`--max-context-tokens` 从透传参数解析）。
+
+### Fixed
+
+- **回放内容量过小（重要）**：原实现回放最近 500 条**原始行**，而 thinking/text 为流式 delta（一行一小片），长思考一轮可达数千行——500 行仅覆盖尾部一小段，实际展示内容量很小。改为以 `user_input`/`user_message` 为锚点回放最近 5 轮**整轮**事件（`REPLAY_TURNS`），轮内连续 thinking/text delta 合并为单条完整事件（`merge_replay`，附带使合并大块自动命中前端「回放→折叠」启发式），兜底 `REPLAY_MAX_EVENTS=2000` 逻辑事件。
+- **重连后思考卡片状态错乱**：回放合并大块落地为 done 折叠态后，后续实时 delta 继续追加时卡片恢复 running 态，避免"已折叠但仍在跑"的错觉。
+- **轮次显示滞后**：`user_input` 计数后立即刷新统计行（此前要等下一次 usage 事件）。
+- **顶部导航偏移**：header `padding: 12px 20px 0`（上 12 下 0）不对称导致整行内容偏下 6px；改为 `padding: 0 20px`，配合 `align-items: center` 全行垂直居中。
+
+---
+
 ## [4.3.4] - 2026-08-15
 
 > **webagent 浏览器网关发布**：新增 `webagent` —— WebSocket 桥接进程，在浏览器/手机上操作本地 agent 子进程；前端按 DeepSeek Harness 对话样式构建并支持零依赖数学公式渲染。同时修复 OpenAI 兼容 provider 流式 usage 全零问题与 APT 仓库体积膨胀。
