@@ -364,11 +364,15 @@ html[data-theme=light] .diff .dl.del .ln { background:
   max-height: 180px; overflow-y: auto; }
 #todoPanel .tpli { display: flex; align-items: center; gap: 10px; min-width: 0;
   font-size: 13px; line-height: 20px; color: var(--label-secondary); }
-#todoPanel .glyph { display: inline-grid; flex: none; place-items: center;
+#todoPanel .glyph { display: inline-flex; flex: none; align-items: center; justify-content: center;
   width: 16px; height: 16px; }
 #todoPanel .g-done { color: var(--ok-400); }
 #todoPanel .g-pend { color: var(--label-caption); }
-#todoPanel .g-prog { color: var(--brand); animation: tp-spin 1s linear infinite; }
+#todoPanel .g-prog { display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; color: var(--brand); }
+#todoPanel .g-prog svg { display: block; width: 14px; height: 14px;
+  transform-box: fill-box; transform-origin: center center;
+  animation: tp-spin 1s linear infinite; }
 @keyframes tp-spin { to { transform: rotate(360deg); } }
 #todoPanel .tpct { min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
