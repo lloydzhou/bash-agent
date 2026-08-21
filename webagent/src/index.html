@@ -239,12 +239,13 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
 .diffhead .add { color: var(--ok-400); } .diffhead .del { color: var(--red-400); }
 .diff { margin: 0 10px; border-radius: 8px; overflow-x: auto; overflow-y: hidden;
   border: 1px solid var(--border-l1); font-family: var(--font-code);
-  font-size: 12px; line-height: 18px; }
-.diff .dl { display: grid; grid-template-columns: 3.5ch 3.5ch minmax(0,1fr);
+  font-size: 12px; line-height: 18px; --diff-ln: 3.5ch; }
+.diff .dl { display: grid; grid-template-columns: var(--diff-ln) var(--diff-ln) minmax(0,1fr);
   white-space: pre; width: max-content; min-width: 100%; }
 .diff .ln { color: var(--label-caption); text-align: right; padding: 0 6px 0 4px;
   user-select: none; position: sticky; background: var(--code-block); }
-.diff .ln.a { left: 0; } .diff .ln.b { left: calc(3.5ch + 10px); }
+/* border-box 下 grid item 宽 = track 宽，.ln.b 偏移即 --diff-ln（padding 已含在 track 内，多算会漏缝） */
+.diff .ln.a { left: 0; } .diff .ln.b { left: var(--diff-ln); }
 .diff .txt { padding-right: 12px;
   white-space: pre; overflow-wrap: normal; }
 .diff .dl.ctx .txt { color: var(--label-secondary); }
