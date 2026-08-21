@@ -240,8 +240,10 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
 .diff { margin: 0 10px; border-radius: 8px; overflow-x: auto; overflow-y: hidden;
   border: 1px solid var(--border-l1); font-family: var(--font-code);
   font-size: 12px; line-height: 18px; --diff-ln: 3.5ch; }
+/* 所有行共享一条统一宽度的轨道；否则短行自身宽度较小，sticky 行号会受短行边界限制 */
+.diffbody { display: grid; width: max-content; min-width: 100%; }
 .diff .dl { display: grid; grid-template-columns: var(--diff-ln) var(--diff-ln) minmax(0,1fr);
-  white-space: pre; width: max-content; min-width: 100%; }
+  white-space: pre; width: 100%; min-width: 0; }
 .diff .ln { color: var(--label-caption); text-align: right; padding: 0 6px 0 4px;
   user-select: none; position: sticky; background: var(--code-block); }
 /* border-box 下 grid item 宽 = track 宽，.ln.b 偏移即 --diff-ln（padding 已含在 track 内，多算会漏缝） */
@@ -1175,7 +1177,8 @@ var CFG = __WEBAGENT_CONFIG__;
       head.appendChild(pl); head.appendChild(pa); head.appendChild(pd);
     }
     wrap.appendChild(head);
-    var tbl = el('div', 'diff');
+    var tbl = el('div', 'diffbody');
+    var scroll = el('div', 'diff'); scroll.appendChild(tbl);
     var lines = text.split('\n');
     var oldNo = 0, newNo = 0;
     var start = m ? 1 : 0; // 命中摘要则跳过首行
@@ -1209,7 +1212,7 @@ var CFG = __WEBAGENT_CONFIG__;
       row.appendChild(o); row.appendChild(n); row.appendChild(t);
       tbl.appendChild(row);
     }
-    wrap.appendChild(tbl);
+    wrap.appendChild(scroll);
     return wrap;
   }
 
