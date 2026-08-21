@@ -85,6 +85,7 @@ impl WsHub {
 ///   GET /              -> index.html（内嵌单页 UI）
 ///   GET /manifest.json -> PWA manifest
 ///   GET /icon.svg      -> logo
+///   POST /upload       -> 图片二进制落盘 <session_dir>/images/{n}.png（对齐 CLI [Image #N]）
 ///   GET /ws            -> WebSocket 升级（交给 tungstenite 完成握手，避免预读丢帧）
 fn handle_connection(
     mut stream: TcpStream,
@@ -140,6 +141,10 @@ fn handle_connection(
     }
     if path == "/icon.svg" {
         serve_static(&mut stream, ICON_SVG.as_bytes(), "image/svg+xml")?;
+        return Ok(());
+    }
+    if path == "/upload" {
+        handle_upload(&mut stream, &request_head, &events_path)?;
         return Ok(());
     }
 
@@ -334,6 +339,142 @@ fn serve_static(stream: &mut TcpStream, body: &[u8], ctype: &str) -> Result<()> 
     stream.write_all(body)?;
     stream.flush()?;
     Ok(())
+}
+
+/// 带状态码的纯文本/JSON 响应。
+fn serve_status(stream: &mut TcpStream, code: u16, body: &str, ctype: &str) -> Result<()> {
+    let reason = match code {
+        200 => "OK",
+        400 => "Bad Request",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        411 => "Length Required",
+        413 => "Payload Too Large",
+        _ => "Error",
+    };
+    let headers = format!(
+        "HTTP/1.1 {code} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(headers.as_bytes())?;
+    stream.write_all(body.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+/// POST /upload：把请求 body（图片二进制）写入 <session_dir>/images/{n}.png，
+/// 返回 {"placeholder":"[Image #n]","path":...}。
+/// 与 CLI 侧 agent_image_next_name / expand_image_placeholders 同一约定：
+/// 用户输入含 [Image #n] 时 agent 自动展开为绝对路径映射，agent 零改动。
+fn handle_upload(
+    stream: &mut TcpStream,
+    request_head: &[u8],
+    events_path: &EventsPath,
+) -> Result<()> {
+    const MAX_UPLOAD: usize = 8 * 1024 * 1024;
+    let head = String::from_utf8_lossy(request_head);
+    let method = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap_or("");
+    if method != "POST" {
+        return serve_status(stream, 405, "method not allowed", "text/plain");
+    }
+    let content_length = head.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        k.trim()
+            .eq_ignore_ascii_case("content-length")
+            .then(|| v.trim().parse::<usize>().ok())
+            .flatten()
+    });
+    let Some(len) = content_length else {
+        return serve_status(stream, 411, "length required", "text/plain");
+    };
+    if len > MAX_UPLOAD {
+        return serve_status(stream, 413, "payload too large", "text/plain");
+    }
+    // 请求头已读到 \r\n\r\n；body 可能已有前缀被一并读进 request_head
+    let head_end = request_head
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or(request_head.len());
+    let mut body = request_head[head_end..].to_vec();
+    body.truncate(len);
+    let mut buf = [0u8; 8192];
+    while body.len() < len {
+        let n = stream
+            .read(&mut buf)
+            .map_err(|e| anyhow::anyhow!("read body: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        let take = (len - body.len()).min(n);
+        body.extend_from_slice(&buf[..take]);
+    }
+    if body.len() != len || body.is_empty() {
+        return serve_status(stream, 400, "bad request", "text/plain");
+    }
+    // session 目录由 events.jsonl 路径派生（同一 session_dir 下的 images/）
+    let dir = events_path
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|d| d.join("images"));
+    let Some(dir) = dir else {
+        return serve_status(
+            stream,
+            409,
+            r#"{"error":"session not started"}"#,
+            "application/json",
+        );
+    };
+    fs::create_dir_all(&dir).ok();
+    // 起始序号对齐 agent_image_next_name（现有 png 数 + 1）；
+    // create_new 原子占名，并发上传时冲突自动递增，天然不撞名
+    let mut n: usize = fs::read_dir(&dir)
+        .map(|it| it.filter_map(|e| e.ok()).count())
+        .unwrap_or(0)
+        + 1;
+    let path;
+    loop {
+        let cand = dir.join(format!("{n}.png"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&cand)
+        {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(&body) {
+                    // IO 失败兜底 500：不让连接静默断掉，前端 errorrow 能显示具体原因
+                    return serve_status(
+                        stream,
+                        500,
+                        &serde_json::json!({"error": format!("write image: {e}")}).to_string(),
+                        "application/json",
+                    );
+                }
+                path = cand;
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => {
+                return serve_status(
+                    stream,
+                    500,
+                    &serde_json::json!({"error": format!("create image: {e}")}).to_string(),
+                    "application/json",
+                )
+            }
+        }
+    }
+    let resp = serde_json::json!({
+        "placeholder": format!("[Image #{n}]"),
+        "path": path.display().to_string(),
+    });
+    serve_status(stream, 200, &resp.to_string(), "application/json")
 }
 
 /// serve 服务器句柄：hub 用于广播，input_rx 接收用户输入行。
