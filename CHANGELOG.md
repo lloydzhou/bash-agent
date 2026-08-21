@@ -8,6 +8,25 @@
 
 ---
 
+## [4.3.6] - 2026-08-21
+
+> **webagent 前端三项增强**：行号块（diff/codelines）改为容器整块横向滚动并对齐 CLI 的浏览器图片上传 `[Image #N]` 机制；mobile 统计行精简；并修复随之而来的三处滚动/动画渲染缺陷。
+
+### Added
+
+- **行号块整块横向滚动**（Edit diff / Read / Write 代码块）：长行不再被 flex 子元素截断或各自内滚，改为整个块横向滚动；行号列 sticky 钉左（diff 双列 `ln.a`/`ln.b`），add/del 行号背景用双层渐变保持行 tint。列宽与 sticky 偏移统一由 `--diff-ln` 变量驱动（grid track 与 `.ln.b` 偏移不再双处硬编码）。
+- **图片上传（对齐 CLI `[Image #N]` 机制）**：composer 新增 📎 按钮与粘贴上传，`POST /upload` 将图片落盘 `<session_dir>/images/{n}.png`——序号从 events 路径派生、`create_new` 原子占名防并发撞号；上传期间按钮禁用旋转、hint 提示文件名，成功后在光标处插入 `[Image #N]` 占位符随消息上行，由 agent 侧既有机制展开。边界：请求体超 8MB → 413，非 POST → 405，session 未建立 → 409（前端错误行提示并恢复按钮）；create/write IO 失败返回 500 JSON 而非静默断连。仅支持 PNG/JPEG/WebP。
+- **mobile 统计行精简**（≤640px）：隐藏 model/in/out/压缩段，上下文段短文案 `32.2K · 16%`、轮次 `5轮·5req`，进度条 44px，整行不溢出；desktop 文案不变。
+
+### Fixed
+
+- **diff 双列行号滚动漏缝**：全局 `box-sizing: border-box` 下 grid item 总宽即 track 宽（padding 含在内），`.ln.b` 的 sticky 偏移误写 `calc(3.5ch + 10px)` 把 padding 重复计入，两列行号间漏出 10px 缝隙、横向滚动时正文字符从缝中透出；改为 `left: var(--diff-ln)`。
+- **长短行混排时短行行号被挤出**：每行 `.dl` 独立 `width: max-content` 导致短行自身宽度小，sticky 行号受所在行边界约束，滚动较远时短行的行号被挤到左侧不可见；新增 `.diffbody` 统一宽度轨道（`width: max-content; min-width: 100%`），所有行共享最长行的横向边界。
+- **TodoPanel 进行中图标旋转晃动**：旋转动画挂在外层 `.g-prog`（inline 元素参与基线布局，旋转参考盒不稳定）；改为固定外层 14px、对内部 SVG 显式 `transform-box: fill-box; transform-origin: center center` 旋转，圆心恒定。
+- **hunk 行号背景不一致**：`.diff .dl.hunk .ln` 背景被通用 `.ln` 规则覆盖，补齐为与行身一致的 `var(--hover)`。
+
+---
+
 ## [4.3.5] - 2026-08-21
 
 > **webagent 前端体验对齐 DeepSeek Harness**：新增 TodoPanel 任务清单条、工具输出结构化展示（Edit/Write diff、Read 行号）、统计行增强（模型名 + 上下文占用 + 轮次/请求计数）；修复回放按行数截断导致长思考只显示尾部一小段的问题。
