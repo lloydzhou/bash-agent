@@ -447,12 +447,27 @@ fn handle_upload(
             .open(&cand)
         {
             Ok(mut f) => {
-                f.write_all(&body)?;
+                if let Err(e) = f.write_all(&body) {
+                    // IO 失败兜底 500：不让连接静默断掉，前端 errorrow 能显示具体原因
+                    return serve_status(
+                        stream,
+                        500,
+                        &serde_json::json!({"error": format!("write image: {e}")}).to_string(),
+                        "application/json",
+                    );
+                }
                 path = cand;
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
-            Err(e) => return Err(anyhow::anyhow!("create image: {e}")),
+            Err(e) => {
+                return serve_status(
+                    stream,
+                    500,
+                    &serde_json::json!({"error": format!("create image: {e}")}).to_string(),
+                    "application/json",
+                )
+            }
         }
     }
     let resp = serde_json::json!({
