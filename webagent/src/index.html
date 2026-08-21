@@ -237,33 +237,44 @@ details.row[open] > summary .chev { transform: rotate(45deg); }
 .diffhead .path { color: var(--label-secondary); overflow: hidden;
   text-overflow: ellipsis; }
 .diffhead .add { color: var(--ok-400); } .diffhead .del { color: var(--red-400); }
-.diff { margin: 0 10px; border-radius: 8px; overflow: hidden;
+.diff { margin: 0 10px; border-radius: 8px; overflow-x: auto; overflow-y: hidden;
   border: 1px solid var(--border-l1); font-family: var(--font-code);
   font-size: 12px; line-height: 18px; }
 .diff .dl { display: grid; grid-template-columns: 3.5ch 3.5ch minmax(0,1fr);
-  white-space: pre; }
+  white-space: pre; width: max-content; min-width: 100%; }
 .diff .ln { color: var(--label-caption); text-align: right; padding: 0 6px 0 4px;
-  user-select: none; }
-.diff .txt { padding-right: 12px; overflow-x: auto; overflow-y: hidden;
+  user-select: none; position: sticky; background: var(--code-block); }
+.diff .ln.a { left: 0; } .diff .ln.b { left: calc(3.5ch + 10px); }
+.diff .txt { padding-right: 12px;
   white-space: pre; overflow-wrap: normal; }
 .diff .dl.ctx .txt { color: var(--label-secondary); }
 .diff .dl.add { background: rgba(90,200,120,.12); }
 .diff .dl.add .txt { color: var(--label-primary); }
+.diff .dl.add .ln { background:
+  linear-gradient(rgba(90,200,120,.12), rgba(90,200,120,.12)), var(--code-block); }
 .diff .dl.del { background: rgba(242,90,90,.12); }
 .diff .dl.del .txt { color: var(--label-primary); }
+.diff .dl.del .ln { background:
+  linear-gradient(rgba(242,90,90,.12), rgba(242,90,90,.12)), var(--code-block); }
 .diff .dl.hunk { background: var(--hover); }
 .diff .dl.hunk .txt { color: var(--label-tertiary); }
 .diff .dl.meta .txt { color: var(--label-caption); }
 html[data-theme=light] .diff .dl.add { background: rgba(66,176,98,.12); }
+html[data-theme=light] .diff .dl.add .ln { background:
+  linear-gradient(rgba(66,176,98,.12), rgba(66,176,98,.12)), var(--code-block); }
 html[data-theme=light] .diff .dl.del { background: rgba(236,19,19,.08); }
+html[data-theme=light] .diff .dl.del .ln { background:
+  linear-gradient(rgba(236,19,19,.08), rgba(236,19,19,.08)), var(--code-block); }
 
 /* 带行号的代码块（Read / Write 展示，对齐 CLI 行号 display） */
-.codelines { padding: 8px 0; min-width: 0; }
+.codelines { padding: 8px 0; min-width: 0; overflow-x: auto; }
 .codelines .dl { display: grid; grid-template-columns: 5ch minmax(0,1fr);
-  font-family: var(--font-code); font-size: 12px; line-height: 18px; }
+  font-family: var(--font-code); font-size: 12px; line-height: 18px;
+  width: max-content; min-width: 100%; }
 .codelines .ln { color: var(--label-caption); text-align: right;
-  padding: 0 8px 0 4px; user-select: none; }
-.codelines .txt { padding-right: 12px; overflow-x: auto; overflow-y: hidden;
+  padding: 0 8px 0 4px; user-select: none; position: sticky; left: 0;
+  background: var(--code-block); }
+.codelines .txt { padding-right: 12px;
   white-space: pre; color: var(--label-secondary); overflow-wrap: normal; }
 .codelines.add .txt { color: var(--label-primary); }
 .codelines.add .ln { color: var(--ok-400); }
@@ -309,6 +320,16 @@ html[data-theme=light] .diff .dl.del { background: rgba(236,19,19,.08); }
   overflow: hidden; flex: none; }
 #ctxbar i { display: block; height: 100%; width: 0%;
   background: var(--brand); border-radius: 2px; transition: width .3s; }
+#statsline .hud-full { display: inline; }
+#statsline .hud-short { display: none; }
+@media (max-width: 640px) {
+  #statsline { gap: 8px; padding: 0 10px; }
+  #statsline .seg[data-k=model], #statsline .seg[data-k=in],
+  #statsline .seg[data-k=out], #statsline .seg[data-k=cc] { display: none; }
+  #statsline .hud-full { display: none; }
+  #statsline .hud-short { display: inline; }
+  #ctxbar { width: 44px; }
+}
 #ctxbar.warn i { background: var(--warn); }
 #ctxbar.full i { background: var(--error); }
 
@@ -364,8 +385,17 @@ html[data-theme=light] .diff .dl.del { background: rgba(236,19,19,.08); }
   padding: 0; }
 #input::placeholder { color: var(--label-caption); user-select: none; }
 .composer-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+#attach { flex: none; width: 30px; height: 30px; border-radius: 50%; border: none;
+  background: transparent; color: var(--label-caption); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+#attach:hover { background: var(--hover); color: var(--label-secondary); }
+#attach:disabled { opacity: .5; cursor: wait; }
+#attach svg { width: 16px; height: 16px; }
+#attach.spin svg { animation: attachspin 1s linear infinite; }
+@keyframes attachspin { to { transform: rotate(360deg); } }
 .hint { flex: 1; font-size: 12px; line-height: 18px; color: var(--label-caption);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hint.err { color: var(--error); }
 #send { flex: none; width: 34px; height: 34px; border-radius: 50%; border: none;
   background: var(--brand-fill); color: #fff; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; padding: 0; }
@@ -421,6 +451,10 @@ html[data-theme=light] .diff .dl.del { background: rgba(236,19,19,.08); }
     <div class="composer">
       <textarea id="input" placeholder="给 bash-agent 发送消息…" rows="1" autofocus></textarea>
       <div class="composer-row">
+        <input type="file" id="filepick" accept="image/png,image/jpeg,image/webp" hidden>
+        <button id="attach" aria-label="上传图片" title="上传图片">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         <span class="hint" id="hint">Enter 发送 · Shift+Enter 换行</span>
         <button id="send" aria-label="发送">
           <svg viewBox="0 0 16 16" fill="none"><path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -498,28 +532,37 @@ var CFG = __WEBAGENT_CONFIG__;
     if (n >= 1000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + 'K';
     return '' + n;
   }
-  function hudSeg(text, cls) {
+  function hudSeg(text, cls, key, full, short) {
     var s = document.createElement('span'); s.className = 'seg' + (cls ? ' ' + cls : '');
-    s.textContent = text; return s;
+    if (key) s.setAttribute('data-k', key);
+    if (full !== undefined) {
+      var f = document.createElement('span'); f.className = 'hud-full'; f.textContent = full;
+      var h = document.createElement('span'); h.className = 'hud-short'; h.textContent = short;
+      s.appendChild(f); s.appendChild(h);
+    } else s.textContent = text;
+    return s;
   }
   function renderHud() {
     var ie = H.tin + H.cr;
     var pct = ie > 0 ? Math.round(H.cr / ie * 100) + '%' : '—';
     statsline.textContent = '';
-    if (MODEL) statsline.appendChild(hudSeg(MODEL, 'model'));
+    if (MODEL) statsline.appendChild(hudSeg(MODEL, 'model', 'model'));
     // 上下文占用 = 最近一次请求的 input+cache_read+cache_creation+output
-    var seg = hudSeg('上下文 ' + fmtK(H.ctx) + '/' + fmtK(MAXCTX) + ' · ' +
-      (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—'));
+    var seg = hudSeg('', '', 'ctx',
+      '上下文 ' + fmtK(H.ctx) + '/' + fmtK(MAXCTX) + ' · ' +
+        (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—'),
+      fmtK(H.ctx) + ' · ' + (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—'));
     var bar = document.createElement('span'); bar.id = 'ctxbar';
     var fill = document.createElement('i'); bar.appendChild(fill);
     var ratio = H.ctx / MAXCTX;
     fill.style.width = Math.min(100, Math.round(ratio * 100)) + '%';
     if (ratio >= 0.9) bar.className = 'full'; else if (ratio >= 0.8) bar.className = 'warn';
     seg.appendChild(bar); statsline.appendChild(seg);
-    statsline.appendChild(hudSeg('输入 ' + fmtK(ie) + '（缓存 ' + pct + '）'));
-    statsline.appendChild(hudSeg('输出 ' + fmtK(H.tout)));
-    statsline.appendChild(hudSeg('对话 ' + H.turn + ' 轮 · ' + H.req + ' 请求'));
-    if (H.cc > 0) statsline.appendChild(hudSeg('压缩 ' + fmtK(H.cc)));
+    statsline.appendChild(hudSeg('输入 ' + fmtK(ie) + '（缓存 ' + pct + '）', '', 'in'));
+    statsline.appendChild(hudSeg('输出 ' + fmtK(H.tout), '', 'out'));
+    statsline.appendChild(hudSeg('', '', 'turn',
+      '对话 ' + H.turn + ' 轮 · ' + H.req + ' 请求', H.turn + '轮·' + H.req + 'req'));
+    if (H.cc > 0) statsline.appendChild(hudSeg('压缩 ' + fmtK(H.cc), '', 'cc'));
   }
   function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; H.ctx = 0; renderHud(); }
 
@@ -1142,23 +1185,23 @@ var CFG = __WEBAGENT_CONFIG__;
       if (hunk) {
         oldNo = +hunk[1]; newNo = +hunk[2];
         row = el('div', 'dl hunk');
-        o = el('span', 'ln'); n = el('span', 'ln');
+        o = el('span', 'ln a'); n = el('span', 'ln b');
         t = el('span', 'txt'); t.textContent = '  ' + ln;
       } else if (/^(--- |\+\+\+ )/.test(ln)) {
         row = el('div', 'dl meta');
-        o = el('span', 'ln'); n = el('span', 'ln');
+        o = el('span', 'ln a'); n = el('span', 'ln b');
         t = el('span', 'txt'); t.textContent = ln;
       } else if (ln.charAt(0) === '+') {
         row = el('div', 'dl add');
-        o = el('span', 'ln'); n = el('span', 'ln'); n.textContent = newNo++;
+        o = el('span', 'ln a'); n = el('span', 'ln b'); n.textContent = newNo++;
         t = el('span', 'txt'); t.textContent = ln;
       } else if (ln.charAt(0) === '-') {
         row = el('div', 'dl del');
-        o = el('span', 'ln'); o.textContent = oldNo++; n = el('span', 'ln');
+        o = el('span', 'ln a'); o.textContent = oldNo++; n = el('span', 'ln b');
         t = el('span', 'txt'); t.textContent = ln;
       } else {
         row = el('div', 'dl ctx');
-        o = el('span', 'ln'); o.textContent = oldNo++; n = el('span', 'ln'); n.textContent = newNo++;
+        o = el('span', 'ln a'); o.textContent = oldNo++; n = el('span', 'ln b'); n.textContent = newNo++;
         t = el('span', 'txt'); t.textContent = ln;
       }
       row.appendChild(o); row.appendChild(n); row.appendChild(t);
@@ -1396,6 +1439,57 @@ var CFG = __WEBAGENT_CONFIG__;
   }
   sendBtn.addEventListener('click', sendMsg);
   ta.addEventListener('input', grow);
+
+  /* ------------------------------------------------------------ 图片上传（对齐 CLI [Image #N] 机制） */
+  var attachBtn = document.getElementById('attach');
+  var filepick = document.getElementById('filepick');
+  var hintEl = document.getElementById('hint');
+  var HINT_DEFAULT = hintEl.textContent;
+  function insertAtCursor(text) {
+    var s = ta.selectionStart, e = ta.selectionEnd, v = ta.value;
+    ta.value = v.slice(0, s) + text + v.slice(e);
+    ta.selectionStart = ta.selectionEnd = s + text.length;
+    grow(); ta.focus();
+  }
+  function uploadImage(file) {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { addErrorRow('上传失败', '仅支持 PNG / JPEG / WebP 图片'); return; }
+    if (file.size > 8 * 1024 * 1024) { addErrorRow('上传失败', '图片超过 8MB 限制'); return; }
+    attachBtn.disabled = true; attachBtn.classList.add('spin');
+    hintEl.textContent = '上传 ' + (file.name || '图片') + '…';
+    fetch('/upload', { method: 'POST', body: file })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          if (!r.ok) throw new Error(t.replace(/^"|"$/g, '') || ('HTTP ' + r.status));
+          try { return JSON.parse(t).placeholder; } catch (e) { throw new Error('bad response'); }
+        });
+      })
+      .then(function (ph) { insertAtCursor(ph + ' '); })
+      .catch(function (e) { addErrorRow('上传失败', String(e.message || e)); })
+      .finally(function () {
+        attachBtn.disabled = false; attachBtn.classList.remove('spin');
+        hintEl.textContent = HINT_DEFAULT;
+      });
+  }
+  attachBtn.addEventListener('click', function () { filepick.click(); });
+  filepick.addEventListener('change', function () {
+    uploadImage(filepick.files && filepick.files[0]);
+    filepick.value = '';
+  });
+  ta.addEventListener('paste', function (e) {
+    var files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length && /^image\//.test(files[0].type)) {
+      e.preventDefault();
+      uploadImage(files[0]);
+    }
+  });
+  ta.addEventListener('dragover', function (e) { e.preventDefault(); });
+  ta.addEventListener('drop', function (e) {
+    e.preventDefault();
+    var files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length) uploadImage(files[0]);
+  });
+
   ta.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
       if (e.shiftKey || e.ctrlKey || e.metaKey) { return; } // allow newline
