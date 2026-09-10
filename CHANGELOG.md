@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+> **conversation 归档**：compact 裁剪的对话行落盘 `conversation-archive.jsonl`，SubAgent fork 一并继承；四个运行时同步实现。
+
+### Added
+
+- **conversation 归档**（PR #90）：`store_conv_trim_tail` 在裁剪前把被丢弃的 conversation 行追加到 `session_dir/conversation-archive.jsonl`；session 初始化时 touch 归档文件，SubAgent fork 时随 conversation/summary/plan 一并拷贝。Bash / C / Go / Rust 四版本同步。
+- **测试**：bash e2e 新增 fork 归档继承与 compact 归档内容断言；C `test-continue` 扩展至 9 例（重复 trim 追加、CRLF/空行字节保真、>64KiB 大记录不拆行、fork 拷贝）；Go 单测扩展归档场景。
+
+### Fixed
+
+- **C 请求体空行对齐**：`build_claude_request` 跳过 conversation 中的空物理行，与 Bash `store_conv_get_messages` 语义一致，避免空行破坏 messages JSON（请求体一致性）。
+- **Rust 大记录拆行**：`store_conv_total_lines` 改为字节扫描计数；trim 重写避免超过 64KiB 的 JSONL 记录被当作多行拆开。
+- **测试基建**：`go/agent_test.go` 补缺失的 `bytes` import（编译失败）；`tests/fixtures/mock_server.py` 存活 120s→600s——bash 版全套约 4 分钟，server 中途退出曾致后半段 10 个 mock 依赖测试连坐失败。
+
 ---
 
 ## [4.3.7] - 2026-09-10
