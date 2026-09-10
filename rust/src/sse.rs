@@ -294,6 +294,7 @@ pub mod claude {
                         cache_creation_input_tokens,
                         start_ms: 0,
                         end_ms: 0,
+                        stopped: true,
                     });
                     pending_stop = Some(stop_reason.clone());
                 }
@@ -405,6 +406,7 @@ pub mod openai {
                     cache_creation_input_tokens: 0,
                     start_ms,
                     end_ms: now_ms(),
+                    stopped: true,
                 });
                 pending_stop = Some(stop_reason.clone());
                 break;
@@ -653,6 +655,7 @@ pub mod responses {
                         cache_creation_input_tokens: 0,
                         start_ms,
                         end_ms: now_ms(),
+                        stopped: true,
                     }))?;
                     emit(Event::Stop(StopEvent {
                         reason: if has_tools { "tool_use" } else { "end_turn" }.to_string(),
@@ -690,6 +693,7 @@ pub mod responses {
                         cache_creation_input_tokens: 0,
                         start_ms,
                         end_ms: now_ms(),
+                        stopped: false,
                     }))?;
                     emit(Event::Stop(StopEvent {
                         reason: "error".to_string(),

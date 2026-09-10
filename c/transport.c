@@ -650,6 +650,22 @@ int http_post_sse(const char *url, const char **headers, int header_count,
             /* 成功或不可重试错误 → 处理残留 JSON */
             if (rc == CURLE_OK) {
                 process_residual_json(&sctx, provider, callback, ctx);
+                /* 用 curl 内部计时器对齐 bash 版 curl -w 的
+                 * time_total - time_starttransfer（同一套计时器，口径完全一致，
+                 * 排除 DNS/TCP/TLS/TTFB，只算传输时间）。
+                 * 补发最终 USAGE 覆盖流中事件的 now_ms 口径时间戳；
+                 * token 字段为 0，accum 侧 >0 守卫不会重复累加 */
+                curl_off_t total_us = 0, ttfb_us = 0;
+                curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME_T, &total_us);
+                curl_easy_getinfo(curl, CURLINFO_STARTTRANSFER_TIME_T, &ttfb_us);
+                curl_off_t dur_us = total_us - ttfb_us;
+                SseEvent tevt;
+                memset(&tevt, 0, sizeof(tevt));
+                tevt.type = SSE_USAGE;
+                tevt.start_ms = 0;
+                /* 微秒向上取整到毫秒：亚毫秒传输至少 1ms，避免整数截断 speed=0 */
+                tevt.end_ms = (dur_us > 0) ? (long long)((dur_us + 999) / 1000) : 0;
+                callback(ctx, &tevt);
             }
             sb_free(&sctx.line_buf);
             FREE_PTR(sctx.event);

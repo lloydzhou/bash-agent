@@ -56,8 +56,17 @@ func (s *FileStore) UpdateStats(usage Usage, model string) error {
 	s.stats.CacheWrite += usage.CacheWrite
 	s.stats.CacheRead += usage.CacheRead
 	// 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0
-	if usage.EndMs > usage.StartMs {
-		s.stats.LastCallSpeedTokPerSec = usage.OutputTokens * 1000 / int(usage.EndMs-usage.StartMs)
+	// 且仅在流正常终结时更新（失败终态/中断 bash 不发 USAGE，保留旧值）
+	// 亚毫秒传输向上取整至少 1ms，避免整数截断导致 speed=0（对齐 bash awk 浮点行为）
+	if !usage.Stopped {
+		return s.flushStats()
+	}
+	dur := usage.EndMs - usage.StartMs
+	if dur <= 0 && usage.OutputTokens > 0 {
+		dur = 1
+	}
+	if dur > 0 {
+		s.stats.LastCallSpeedTokPerSec = usage.OutputTokens * 1000 / int(dur)
 	} else {
 		s.stats.LastCallSpeedTokPerSec = 0
 	}

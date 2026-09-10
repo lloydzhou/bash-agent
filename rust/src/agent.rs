@@ -290,6 +290,7 @@ struct Agent {
     last_cache_creation_tokens: usize,
     last_start_ms: i64,
     last_end_ms: i64,
+    last_stopped: bool,
     msg_tx: Arc<Mutex<Option<mpsc::Sender<MainLoopMessage>>>>, // 主循环消息队列发送端（Arc<Mutex<Option>> 以便 readline 线程退出时主动 drop）
     msg_rx: mpsc::Receiver<MainLoopMessage>,                   // 主循环消息队列接收端
     sub_result_rx: mpsc::Receiver<MainLoopMessage>, // SubAgent 结果专用通道（对齐 NOTIFY_FIFO）
@@ -730,6 +731,7 @@ impl Agent {
             last_cache_creation_tokens: 0,
             last_start_ms: 0,
             last_end_ms: 0,
+            last_stopped: false,
             msg_tx,
             msg_rx,
             sub_result_rx,
@@ -873,6 +875,7 @@ impl Agent {
                 last_cache_creation_tokens: 0,
                 last_start_ms: 0,
                 last_end_ms: 0,
+                last_stopped: false,
                 msg_tx: Arc::new(Mutex::new(Some(sub_msg_tx))),
                 msg_rx: _sub_msg_rx,
                 sub_result_rx: sub_rrx,
@@ -1831,6 +1834,7 @@ impl Agent {
                 cache_creation_input_tokens,
                 start_ms,
                 end_ms,
+                stopped,
             }) => {
                 self.emit_and_append_event(json!({
                     "type":"usage",
@@ -1851,6 +1855,7 @@ impl Agent {
                 self.last_cache_creation_tokens = *cache_creation_input_tokens as usize;
                 self.last_start_ms = *start_ms;
                 self.last_end_ms = *end_ms;
+                self.last_stopped = *stopped;
             }
             DisplayEvent::Stop(reason) => {
                 self.emit_and_append_event(json!({"type":"stop","reason":&reason}))?;
@@ -2227,13 +2232,20 @@ impl Agent {
                 Self::set_stat_usize(stats, "current_context_tokens", ctx);
             }
             // 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0
-            let speed = if self.last_end_ms > self.last_start_ms {
-                (self.last_output_tokens as i64 * 1000
-                    / (self.last_end_ms - self.last_start_ms)) as usize
-            } else {
-                0
-            };
-            Self::set_stat_usize(stats, "last_call_speed_tok_per_sec", speed);
+            // 且仅在流正常终结时更新（失败终态/中断 bash 不发 USAGE，保留旧值）
+            // 亚毫秒传输向上取整至少 1ms，避免整数截断导致 speed=0（对齐 bash awk 浮点行为）
+            if self.last_stopped {
+                let mut dur = self.last_end_ms - self.last_start_ms;
+                if dur <= 0 && self.last_output_tokens > 0 {
+                    dur = 1;
+                }
+                let speed = if dur > 0 {
+                    (self.last_output_tokens as i64 * 1000 / dur) as usize
+                } else {
+                    0
+                };
+                Self::set_stat_usize(stats, "last_call_speed_tok_per_sec", speed);
+            }
             stats.insert(
                 "last_updated".to_string(),
                 Value::String(chrono_now_rfc3339()),

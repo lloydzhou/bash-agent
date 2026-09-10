@@ -171,6 +171,8 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         if (evt->out_tokens > 0) sctx->accum.out_tokens = evt->out_tokens;
         if (evt->cache_read_tokens > 0) sctx->accum.cache_read_tokens = evt->cache_read_tokens;
         if (evt->cache_creation_tokens > 0) sctx->accum.cache_creation_tokens = evt->cache_creation_tokens;
+        sctx->accum.start_ms = evt->start_ms;
+        sctx->accum.end_ms = evt->end_ms;
         break;
 
     case SSE_TOOL_CALL_START: {
@@ -1029,8 +1031,9 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 store_stats_set_int_file(agent->paths.stats, "current_context_tokens",
                     agent->last_context_tokens);
             }
-            /* 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0 */
-            {
+            /* 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0
+             * 且仅在流正常终结（收到 stop）时更新——中断场景 bash 无 USAGE、保留旧值 */
+            if (accum->stopped) {
                 long long dur = agent->last_end_ms - agent->last_start_ms;
                 int speed = (dur > 0) ? (int)((long long)agent->last_output_tokens * 1000LL / dur) : 0;
                 store_stats_set_int_file(agent->paths.stats, "last_call_speed_tok_per_sec", speed);

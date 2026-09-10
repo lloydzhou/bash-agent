@@ -2545,6 +2545,16 @@ test_agent_stats_structure() {
         red "stats structure: last_call_speed_tok_per_sec field MISSING"; echo "  Content: $content"; ((FAIL++)) || true
     fi
 
+    # S5: speed value must be positive after a real LLM call
+    # (guards against accumulator wiring bugs like cagent missing start_ms/end_ms)
+    local speed_val
+    speed_val=$(grep -o '"last_call_speed_tok_per_sec":[0-9-]*' "$stats_file" 2>/dev/null | grep -o '[0-9-]*$' | head -1)
+    if [[ "$speed_val" =~ ^[0-9]+$ ]] && (( speed_val > 0 )); then
+        green "stats structure: last_call_speed_tok_per_sec positive ($speed_val)"; ((PASS++)) || true
+    else
+        red "stats structure: last_call_speed_tok_per_sec not positive"; echo "  Value: $speed_val"; ((FAIL++)) || true
+    fi
+
     # S2: last_updated must be non-empty (ISO timestamp like 2025-01-01T00:00:00Z)
     local last_updated
     last_updated=$(grep -o '"last_updated":"[^"]*"' "$stats_file" 2>/dev/null | head -1)

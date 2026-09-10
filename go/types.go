@@ -125,6 +125,7 @@ type Usage struct {
 	Cost         float64
 	StartMs      int64 // 流开始时间戳（毫秒）
 	EndMs        int64 // 流结束时间戳（毫秒）
+	Stopped      bool  // 流正常终结（message_stop/[DONE]/response.completed）；失败终态 false，不更新 speed
 }
 
 // ToolCallInfo 表示一个工具调用

@@ -458,6 +458,8 @@ pub mod types {
         pub cache_creation_input_tokens: i64,
         pub start_ms: i64,
         pub end_ms: i64,
+        /// 流正常终结（message_stop/[DONE]/response.completed）；失败终态 false，不更新 speed
+        pub stopped: bool,
     }
 
     #[derive(Debug, Clone)]
@@ -544,6 +546,7 @@ pub mod types {
             cache_creation_input_tokens: parts[3].parse()?,
             start_ms: parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0),
             end_ms: parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(0),
+            stopped: false,
         })
     }
 

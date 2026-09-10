@@ -295,6 +295,7 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 				stopEmitted = true
 				// 发送 USAGE + STOP（对齐 bash 版：带 start_ms/end_ms 用于计算 tok/s）
 				ch <- Event{Type: EventUsage, Payload: Usage{
+					Stopped: true,
 					InputTokens:  inputTokens,
 					OutputTokens: outputTokens,
 					CacheRead:    cacheRead,
@@ -501,6 +502,7 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 			CacheRead:    *cacheRead,
 			StartMs:      startMs,
 			EndMs:        time.Now().UnixMilli(),
+			Stopped:     true,
 		}}
 		stopReason := "end_turn"
 		if hasTools {
@@ -542,6 +544,7 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 			CacheRead:    *cacheRead,
 			StartMs:      startMs,
 			EndMs:        time.Now().UnixMilli(),
+			Stopped:     false,
 		}}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
 		return true
@@ -594,6 +597,7 @@ func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
 			CacheWrite:   *cacheCreate,
 			StartMs:      startMs,
 			EndMs:        time.Now().UnixMilli(),
+			Stopped:     true,
 		}}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", sr}}
 		return
