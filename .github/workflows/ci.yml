@@ -92,7 +92,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build goagent (linux, Debian 11 container)
+      - name: Build goagent (linux, Ubuntu 20.04 container)
         if: matrix.goos == 'linux'
         run: |
           docker run --rm -v /opt/hostedtoolcache:/opt/hostedtoolcache -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
@@ -180,7 +180,7 @@ jobs:
           cd rust && cargo build --release --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
-      - name: Build rustagent (linux, Debian 11 container)
+      - name: Build rustagent (linux, Ubuntu 20.04 container)
         if: matrix.runner == 'ubuntu-latest'
         run: |
           docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
@@ -255,7 +255,7 @@ jobs:
           cd webagent && cargo build --release --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/webagent-${{ matrix.suffix }}${{ matrix.ext }}
 
-      - name: Build webagent (linux, Debian 11 container)
+      - name: Build webagent (linux, Ubuntu 20.04 container)
         if: matrix.runner == 'ubuntu-latest'
         run: |
           docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
@@ -310,7 +310,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep gcc-aarch64-linux-gnu
 
-      - name: Build cagent (linux, Debian 11 container)
+      - name: Build cagent (linux, Ubuntu 20.04 container)
         if: runner.os == 'Linux'
         run: |
           docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
