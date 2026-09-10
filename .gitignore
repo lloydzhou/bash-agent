@@ -10,4 +10,9 @@ c/build/
 c/tools_embed.h
 c/test_classify
 c/test_classify.dSYM/
+c/test_continue
+c/test_continue.dSYM/
+c/test_transport
+c/test_transport.dSYM/
 .bash-agent/
+.worktree/
