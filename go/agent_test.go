@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -416,6 +417,9 @@ func TestFileStoreInit(t *testing.T) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		t.Error("session dir should exist")
 	}
+	if _, err := os.Stat(filepath.Join(store.sessionDir, "conversation-archive.jsonl")); err != nil {
+		t.Errorf("archive file should be pre-created: %v", err)
+	}
 }
 
 func TestFileStoreResolveContinueSkipsSubSessions(t *testing.T) {
@@ -594,10 +598,73 @@ func TestFileStorePlan(t *testing.T) {
 	}
 }
 
+func TestFileStoreConvTrimTailArchivesDroppedMessages(t *testing.T) {
+	store := newTestStore(t)
+	first := `{"role":"user","content":"first"}`
+	second := `{"role":"assistant","content":"answer"}`
+	third := `{"role":"user","content":"second"}`
+	if err := os.WriteFile(store.convFile, []byte(first+"\n"+second+"\n"+third+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.archiveFile); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ConvTrimTail(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ConvTrimTail(1); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := os.ReadFile(store.archiveFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := first + "\n" + second + "\n"; string(archive) != want {
+		t.Fatalf("archive = %q, want %q", archive, want)
+	}
+	conversation, err := os.ReadFile(store.convFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := third + "\n"; string(conversation) != want {
+		t.Fatalf("conversation = %q, want %q", conversation, want)
+	}
+}
+
+func TestFileStoreConvTrimTailPreservesRawBytes(t *testing.T) {
+	store := newTestStore(t)
+	input := []byte("{\"role\":\"user\",\"content\":\"first\"}\r\n\r\n{\"role\":\"assistant\",\"content\":\"second\"}\r\n{\"role\":\"user\",\"content\":\"third\"}\r\n")
+	dropped := []byte("{\"role\":\"user\",\"content\":\"first\"}\r\n\r\n")
+	kept := []byte("{\"role\":\"assistant\",\"content\":\"second\"}\r\n{\"role\":\"user\",\"content\":\"third\"}\r\n")
+	if err := os.WriteFile(store.convFile, input, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ConvTrimTail(2); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(store.archiveFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := os.ReadFile(store.convFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(archive, dropped) || !bytes.Equal(conversation, kept) {
+		t.Fatalf("archive = %q, conversation = %q", archive, conversation)
+	}
+}
+
 func TestFileStoreFork(t *testing.T) {
 	store := newTestStore(t)
 	_ = store.AddUserMessage("parent message")
 	_ = store.SetSummary("parent summary")
+	archive := `{"role":"user","content":"archived"}` + "\n"
+	if err := os.WriteFile(store.archiveFile, []byte(archive), 0644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
 
 	// parent session 目录
 	parentSessionDir := filepath.Join(store.GetDir(), store.SessionID())
@@ -626,6 +693,11 @@ func TestFileStoreFork(t *testing.T) {
 	summary, _ := childStore.GetSummary()
 	if strings.TrimSpace(summary) != "parent summary" {
 		t.Errorf("child summary = %q, want 'parent summary'", summary)
+	}
+
+	copied, err := os.ReadFile(filepath.Join(childSessionDir, "conversation-archive.jsonl"))
+	if err != nil || string(copied) != archive {
+		t.Fatalf("child archive = %q, want %q (err=%v)", copied, archive, err)
 	}
 }
 

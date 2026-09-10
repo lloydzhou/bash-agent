@@ -255,6 +255,7 @@ pub fn store_session_init(paths: &Paths, new_session: bool) -> Result<()> {
     fs::create_dir_all(&img_dir)?;
     for path in [
         &paths.conversation,
+        &paths.archive,
         &paths.events,
         &paths.summary,
         &paths.plan,
@@ -272,8 +273,9 @@ pub fn store_session_init(paths: &Paths, new_session: bool) -> Result<()> {
 
 pub fn store_session_fork(parent: &Paths, child: &Paths) -> Result<()> {
     fs::create_dir_all(&child.session_dir)?; // 先建目录（对齐 Bash mkdir -p）
-    let files_to_copy: [(&Path, &Path); 3] = [
+    let files_to_copy: [(&Path, &Path); 4] = [
         (&parent.conversation, &child.conversation),
+        (&parent.archive, &child.archive),
         (&parent.summary, &child.summary),
         (&parent.plan, &child.plan),
     ];
@@ -353,7 +355,7 @@ pub fn store_conv_total_bytes(path: &Path) -> Result<usize> {
 }
 
 pub fn store_conv_total_lines(path: &Path) -> Result<usize> {
-    Ok(store_conv_lines(path)?.len())
+    Ok(fs::read(path)?.iter().filter(|&&b| b == b'\n').count())
 }
 
 pub fn store_conv_count_user_inputs(path: &Path) -> Result<usize> {
@@ -368,19 +370,44 @@ pub fn store_conv_count_user_inputs(path: &Path) -> Result<usize> {
 }
 
 pub fn store_conv_trim_keep_last(path: &Path, keep_lines: usize) -> Result<()> {
-    let data = fs::read_to_string(path)?;
-    let raw_lines: Vec<&str> = data.lines().filter(|l| !l.trim().is_empty()).collect();
-    if keep_lines >= raw_lines.len() {
+    let data = fs::read(path)?;
+    let total_lines = data.iter().filter(|&&b| b == b'\n').count();
+    if keep_lines >= total_lines {
         return Ok(());
     }
-    let kept = &raw_lines[raw_lines.len() - keep_lines..];
-    let mut out = String::new();
-    for line in kept {
-        out.push_str(line);
-        out.push('\n');
+
+    let split_at = line_end_offset(&data, total_lines - keep_lines);
+    let archive = path
+        .parent()
+        .expect("conversation path must have a parent")
+        .join("conversation-archive.jsonl");
+    if let Ok(mut archive_file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(archive)
+    {
+        use std::io::Write;
+        let _ = archive_file.write_all(&data[..split_at]);
     }
-    fs::write(path, out)?;
+
+    fs::write(path, &data[split_at..])?;
     Ok(())
+}
+
+fn line_end_offset(data: &[u8], lines: usize) -> usize {
+    if lines == 0 {
+        return 0;
+    }
+    let mut seen = 0;
+    for (idx, byte) in data.iter().enumerate() {
+        if *byte == b'\n' {
+            seen += 1;
+            if seen == lines {
+                return idx + 1;
+            }
+        }
+    }
+    data.len()
 }
 
 pub fn store_conv_keep_line_count(path: &Path, target_bytes: usize) -> Result<usize> {
@@ -565,6 +592,7 @@ pub struct Paths {
     pub base_dir: PathBuf,
     pub session_dir: PathBuf,
     pub conversation: PathBuf,
+    pub archive: PathBuf,
     pub events: PathBuf,
     pub summary: PathBuf,
     pub plan: PathBuf,
@@ -601,6 +629,7 @@ pub fn paths_for(home: &std::path::Path, cwd: &std::path::Path, session_id: &str
         base_dir: project_dir,
         session_dir: session_dir.clone(),
         conversation: session_dir.join("conversation.jsonl"),
+        archive: session_dir.join("conversation-archive.jsonl"),
         events: session_dir.join("events.jsonl"),
         summary: session_dir.join("summary.txt"),
         plan: session_dir.join("plan.md"),
@@ -650,6 +679,109 @@ fn session_activity_mod_time(session_dir: &std::path::Path) -> Result<std::time:
         return Ok(meta.modified()?);
     }
     Ok(fs::metadata(session_dir)?.modified()?)
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_paths() -> (PathBuf, Paths) {
+        let home = std::env::temp_dir().join(format!(
+            "rustagent-archive-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = paths_for(&home, &home.join("project"), "session");
+        (home, paths)
+    }
+
+    #[test]
+    fn trim_archives_dropped_lines_and_appends_on_repeat() {
+        let (home, paths) = test_paths();
+        store_session_init(&paths, true).unwrap();
+        assert!(paths.archive.exists());
+        fs::write(
+            &paths.conversation,
+            "{\"role\":\"user\",\"content\":\"first\"}\n{\"role\":\"assistant\",\"content\":\"second\"}\n{\"role\":\"user\",\"content\":\"third\"}\n",
+        )
+        .unwrap();
+
+        store_conv_trim_keep_last(&paths.conversation, 2).unwrap();
+        assert!(paths.archive.exists());
+        assert_eq!(
+            fs::read_to_string(&paths.archive).unwrap(),
+            "{\"role\":\"user\",\"content\":\"first\"}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&paths.conversation).unwrap(),
+            "{\"role\":\"assistant\",\"content\":\"second\"}\n{\"role\":\"user\",\"content\":\"third\"}\n"
+        );
+
+        store_conv_trim_keep_last(&paths.conversation, 1).unwrap();
+        assert_eq!(
+            fs::read_to_string(&paths.archive).unwrap(),
+            "{\"role\":\"user\",\"content\":\"first\"}\n{\"role\":\"assistant\",\"content\":\"second\"}\n"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn trim_preserves_raw_bytes_in_archive_and_conversation() {
+        let (home, paths) = test_paths();
+        fs::create_dir_all(&paths.session_dir).unwrap();
+        let input = b"{\"role\":\"user\",\"content\":\"first\"}\r\n\r\n{\"role\":\"assistant\",\"content\":\"second\"}\r\n{\"role\":\"user\",\"content\":\"third\"}\r\n";
+        let dropped = b"{\"role\":\"user\",\"content\":\"first\"}\r\n\r\n";
+        let kept = b"{\"role\":\"assistant\",\"content\":\"second\"}\r\n{\"role\":\"user\",\"content\":\"third\"}\r\n";
+        fs::write(&paths.conversation, input).unwrap();
+
+        store_conv_trim_keep_last(&paths.conversation, 2).unwrap();
+
+        assert_eq!(fs::read(&paths.archive).unwrap(), dropped);
+        assert_eq!(fs::read(&paths.conversation).unwrap(), kept);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn trim_creates_missing_archive_for_legacy_session() {
+        let (home, paths) = test_paths();
+        fs::create_dir_all(&paths.session_dir).unwrap();
+        fs::write(
+            &paths.conversation,
+            "{\"role\":\"user\"}\n{\"role\":\"assistant\"}\n",
+        )
+        .unwrap();
+
+        store_conv_trim_keep_last(&paths.conversation, 1).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&paths.archive).unwrap(),
+            "{\"role\":\"user\"}\n"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn fork_copies_archive() {
+        let (home, parent) = test_paths();
+        let child = paths_for(&home, &home.join("project"), "child");
+        store_session_init(&parent, true).unwrap();
+        fs::write(
+            &parent.archive,
+            "{\"role\":\"user\",\"content\":\"archived\"}\n",
+        )
+        .unwrap();
+
+        store_session_fork(&parent, &child).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(child.archive).unwrap(),
+            "{\"role\":\"user\",\"content\":\"archived\"}\n"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
 }
 
 #[cfg(test)]
