@@ -26,12 +26,13 @@ NR == 1 {
     o  = jnum($0, "total_output_tokens")
     c  = jnum($0, "current_context_tokens")
     cr = jnum($0, "total_cache_read_tokens")
+    spd = jnum($0, "last_call_speed_tok_per_sec")
 }
 END {
     prefix = (status == "idle") ? "" : "⏳ "
     progress = (status == "idle") ? 0 : 3
     esc = sprintf("%c", 27)
     bel = sprintf("%c", 7)
-    printf "%s]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s%s%s]9;4;%d%s", \
-        esc, prefix, model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c), bel, esc, progress, bel > "/dev/stderr"
+    printf "%s]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s S:%stok/s%s%s]9;4;%d%s", \
+        esc, prefix, model, fmt(t), fmt(r), fmt(i+cr), pct(cr, cr+i), fmt(o), fmt(c), fmt(spd), bel, esc, progress, bel > "/dev/stderr"
 }

@@ -1425,7 +1425,9 @@ agent_loop_stream() {
                     ;;
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
-                USAGE) _ctx_tokens=$(agent_record_usage "agent" agent_request_count false) ;;
+                USAGE) _ctx_tokens=$(agent_record_usage "agent" agent_request_count false)
+                       local _dur _speed; _dur=$((${REPLY_MESSAGE[6]:-0}-${REPLY_MESSAGE[5]:-0})); _speed=$((_dur>0?${REPLY_MESSAGE[2]:-0}*1000/_dur:0))
+                       store_stats_update last_call_speed_tok_per_sec="$_speed" current_context_tokens="${_ctx_tokens:-0}" ;;
             esac
         done
         exec 8<&-
@@ -1442,10 +1444,6 @@ agent_loop_stream() {
             store_conv_add_assistant "$text" "$thinking" "$tool_calls"
             if [[ -n "$tool_conv_results" ]]; then
                 store_conv_add_tool_results "$tool_conv_results"
-            fi
-            # Update context tokens from USAGE (used by next turn's compact check)
-            if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
-                store_stats_update current_context_tokens=${_ctx_tokens}
             fi
             # tool_use/tool_calls → loop continues; otherwise exit unless a sub-agent result arrived meanwhile
             if [[ "$stop" != "tool_use" && "$stop" != "tool_calls" ]]; then

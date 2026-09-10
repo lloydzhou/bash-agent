@@ -3,6 +3,16 @@
 # Output: Unified protocol via emit1/emit/emit_flush
 # Requires: awk -v verbose=true/false -f json.awk -f protocol.awk -f todo_protocol.awk -f claude_sse.awk
 
+function date_ms(    cmd, ms) {
+    cmd = "perl -MTime::HiRes=time -e \047printf \042%d\\n\042, time * 1000\047"
+    if ((cmd | getline ms) > 0) { close(cmd); return ms + 0 }
+    close(cmd)
+    cmd = "date +%s%3N"
+    if ((cmd | getline ms) > 0) { close(cmd); return ms + 0 }
+    close(cmd)
+    return systime() * 1000
+}
+
 BEGIN {
     event = ""
     block_type = ""
@@ -15,6 +25,7 @@ BEGIN {
     cache_read_input_tokens = 0
     cache_creation_input_tokens = 0
     pending_stop_reason = ""
+    start_ms = date_ms()
 }
 
 /^:/ { next }
@@ -130,7 +141,8 @@ BEGIN {
 
 END {
     if (pending_stop_reason != "") {
-        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_read_tokens + 0); emit(pending_cache_creation_tokens + 0); emit_flush()
+        end_ms = date_ms()
+        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_read_tokens + 0); emit(pending_cache_creation_tokens + 0); emit(start_ms + 0); emit(end_ms); emit_flush()
         emit1("STOP"); emit(pending_stop_reason); emit_flush()
     } else {
         # No message_stop received — emit an error STOP so the caller loop
