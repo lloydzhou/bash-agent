@@ -120,9 +120,12 @@ const (
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
-	CacheRead    int // CacheReadInputTokens
-	CacheWrite   int // CacheCreationInputTokens
+	CacheRead    int   // CacheReadInputTokens
+	CacheWrite   int   // CacheCreationInputTokens
 	Cost         float64
+	StartMs      int64 // 流开始时间戳（毫秒）
+	EndMs        int64 // 流结束时间戳（毫秒）
+	Stopped      bool  // 流正常终结（message_stop/[DONE]/response.completed）；失败终态 false，不更新 speed
 }
 
 // ToolCallInfo 表示一个工具调用
@@ -143,16 +146,17 @@ type ToolResultInfo struct {
 
 // Stats 会话统计数据
 type Stats struct {
-	TurnCount        int    `json:"current_turn_count"`          // user turn count
-	TotalRequests    int    `json:"agent_request_count"`         // total LLM requests
-	TotalCompact     int    `json:"compact_request_count"`       // number of compactions
-	SubAgentRequests int    `json:"sub_agent_request_count"`     // sub-agent requests
-	InputTokens      int    `json:"total_input_tokens"`          // cumulative input
-	OutputTokens     int    `json:"total_output_tokens"`         // cumulative output
-	CacheRead        int    `json:"total_cache_read_tokens"`     // cumulative cache read
-	CacheWrite       int    `json:"total_cache_creation_tokens"` // cumulative cache write
-	ContextTokens    int    `json:"current_context_tokens"`      // current context size
-	LastUpdated      string `json:"last_updated"`                // ISO 8601 timestamp
+	TurnCount              int    `json:"current_turn_count"`            // user turn count
+	TotalRequests          int    `json:"agent_request_count"`           // total LLM requests
+	TotalCompact           int    `json:"compact_request_count"`         // number of compactions
+	SubAgentRequests       int    `json:"sub_agent_request_count"`       // sub-agent requests
+	InputTokens            int    `json:"total_input_tokens"`            // cumulative input
+	OutputTokens           int    `json:"total_output_tokens"`           // cumulative output
+	CacheRead              int    `json:"total_cache_read_tokens"`       // cumulative cache read
+	CacheWrite             int    `json:"total_cache_creation_tokens"`   // cumulative cache write
+	ContextTokens          int    `json:"current_context_tokens"`        // current context size
+	LastCallSpeedTokPerSec int    `json:"last_call_speed_tok_per_sec"`   // 最近一次 LLM call 输出速度
+	LastUpdated            string `json:"last_updated"`                  // ISO 8601 timestamp
 }
 
 // SessionRow session 列表行

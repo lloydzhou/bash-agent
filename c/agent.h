@@ -77,6 +77,8 @@ typedef struct {
     int last_output_tokens;
     int last_cache_read_tokens;
     int last_cache_creation_tokens;
+    long long last_start_ms;
+    long long last_end_ms;
     int active_task_count;
     int sub_agent_depth;      /* 主代理为 0，第一层子代理为 1 */
 

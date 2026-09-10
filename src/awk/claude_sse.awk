@@ -15,6 +15,8 @@ BEGIN {
     cache_read_input_tokens = 0
     cache_creation_input_tokens = 0
     pending_stop_reason = ""
+    timing_total = 0
+    timing_ttfb = 0
 }
 
 /^:/ { next }
@@ -120,6 +122,14 @@ BEGIN {
         pending_cache_creation_tokens = cache_creation_input_tokens
         pending_stop_reason = stop_reason
     }
+    else if (event == "timing") {
+        # Injected by curl -w at end of stream; survives http/transport layers
+        # speed 口径对齐 Go/Rust/C：读流开始→流结束（排除建连/TLS/TTFB）
+        tt = extract_num(json, "time_total", 1)
+        ts = extract_num(json, "time_starttransfer", 1)
+        if (tt != "") timing_total = tt + 0
+        if (ts != "") timing_ttfb = ts + 0
+    }
     else if (event == "error") {
         msg = extract_str(json, "message", 1)
         emit1("ERROR"); emit(msg); emit_flush()
@@ -130,7 +140,9 @@ BEGIN {
 
 END {
     if (pending_stop_reason != "") {
-        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_read_tokens + 0); emit(pending_cache_creation_tokens + 0); emit_flush()
+        gen = timing_total - timing_ttfb
+        speed = (gen > 0) ? int(pending_output_tokens / gen) : 0
+        emit1("USAGE"); emit(pending_input_tokens + 0); emit(pending_output_tokens + 0); emit(pending_cache_read_tokens + 0); emit(pending_cache_creation_tokens + 0); emit(speed + 0); emit_flush()
         emit1("STOP"); emit(pending_stop_reason); emit_flush()
     } else {
         # No message_stop received — emit an error STOP so the caller loop

@@ -29,6 +29,10 @@ BEGIN {
 # Pass through ERROR lines from http_stream.awk
 /^ERROR:/ { print; fflush(); next }
 
+# Pass through timing event from curl -w (captured by claude_sse.awk)
+/^event: timing$/ { print; fflush(); next }
+/^data: \{"time_total"/ { print; fflush(); next }
+
 # Handle curl retry: reset all state
 /^RETRY:/ {
     _sse_reset()

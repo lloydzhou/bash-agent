@@ -873,14 +873,14 @@ func TestResponsesTransportBodyAndSSE(t *testing.T) {
 	ch := make(chan Event, 8)
 	pending := map[int]*responsesPendingCall{}
 	indexes := map[string]int{}
-	if tr.handleResponsesEvent("response.output_item.added", `{"output_index":2,"item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"Read"}}`, ch, pending, indexes, new(bool), new(int), new(int), new(int)) {
+	if tr.handleResponsesEvent("response.output_item.added", `{"output_index":2,"item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"Read"}}`, ch, pending, indexes, new(bool), new(int), new(int), new(int), 0) {
 		t.Fatal("tool item must not terminate the stream")
 	}
-	if tr.handleResponsesEvent("response.function_call_arguments.delta", `{"item_id":"item_1","delta":"{\"path\":\"/tmp/a\"}"}`, ch, pending, indexes, new(bool), new(int), new(int), new(int)) {
+	if tr.handleResponsesEvent("response.function_call_arguments.delta", `{"item_id":"item_1","delta":"{\"path\":\"/tmp/a\"}"}`, ch, pending, indexes, new(bool), new(int), new(int), new(int), 0) {
 		t.Fatal("argument delta must not terminate the stream")
 	}
 	input, output, cached := 0, 0, 0
-	if !tr.handleResponsesEvent("response.completed", `{"response":{"usage":{"input_tokens":15,"output_tokens":8,"cached_tokens":4,"input_tokens_details":{"cached_tokens":6}}}}`, ch, pending, indexes, new(bool), &input, &output, &cached) {
+	if !tr.handleResponsesEvent("response.completed", `{"response":{"usage":{"input_tokens":15,"output_tokens":8,"cached_tokens":4,"input_tokens_details":{"cached_tokens":6}}}}`, ch, pending, indexes, new(bool), &input, &output, &cached, 0) {
 		t.Fatal("completed must terminate the stream")
 	}
 	close(ch)
@@ -894,7 +894,7 @@ func TestResponsesTransportBodyAndSSE(t *testing.T) {
 	}
 
 	failure := make(chan Event, 3)
-	if !tr.handleResponsesEvent("error", `{"reason":"upstream failed"}`, failure, map[int]*responsesPendingCall{}, map[string]int{}, new(bool), new(int), new(int), new(int)) {
+	if !tr.handleResponsesEvent("error", `{"reason":"upstream failed"}`, failure, map[int]*responsesPendingCall{}, map[string]int{}, new(bool), new(int), new(int), new(int), 0) {
 		t.Fatal("error must terminate the stream")
 	}
 	close(failure)
@@ -907,7 +907,7 @@ func TestResponsesTransportBodyAndSSE(t *testing.T) {
 	}
 
 	bare := make(chan Event, 3)
-	if !tr.handleResponsesEvent("error", `{}`, bare, map[int]*responsesPendingCall{}, map[string]int{}, new(bool), new(int), new(int), new(int)) {
+	if !tr.handleResponsesEvent("error", `{}`, bare, map[int]*responsesPendingCall{}, map[string]int{}, new(bool), new(int), new(int), new(int), 0) {
 		t.Fatal("bare error must terminate the stream")
 	}
 	close(bare)

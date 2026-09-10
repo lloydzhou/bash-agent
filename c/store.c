@@ -152,7 +152,7 @@ int store_session_init(const SessionPaths *p, int is_new) {
                    "\"total_input_tokens\":0,"
                    "\"total_output_tokens\":0,\"total_cache_read_tokens\":0,"
                    "\"total_cache_creation_tokens\":0,\"current_context_tokens\":0,"
-                   "\"last_updated\":\"\"}\n");
+                   "\"last_call_speed_tok_per_sec\":0,\"last_updated\":\"\"}\n");
         fclose(f);
 
         /* 写入 session_start 事件（与 bash 版对齐） */
@@ -543,6 +543,7 @@ static void stats_write_canonical(const char *path,
                                   int total_cache_read_tokens,
                                   int total_cache_creation_tokens,
                                   int current_context_tokens,
+                                  int last_call_speed_tok_per_sec,
                                   const char *last_updated) {
     StrBuf buf;
     sb_init(&buf);
@@ -550,11 +551,11 @@ static void stats_write_canonical(const char *path,
                "\"compact_request_count\":%d,\"sub_agent_request_count\":%d,"
                "\"total_input_tokens\":%d,\"total_output_tokens\":%d,"
                "\"total_cache_read_tokens\":%d,\"total_cache_creation_tokens\":%d,"
-               "\"current_context_tokens\":%d,\"last_updated\":",
+               "\"current_context_tokens\":%d,\"last_call_speed_tok_per_sec\":%d,\"last_updated\":",
                current_turn_count, agent_request_count, compact_request_count,
                sub_agent_request_count, total_input_tokens, total_output_tokens,
                total_cache_read_tokens, total_cache_creation_tokens,
-               current_context_tokens);
+               current_context_tokens, last_call_speed_tok_per_sec);
     sb_append_json_string(&buf, last_updated ? last_updated : "");
     sb_append(&buf, "}\n");
     util_write_file(path, buf.data);
@@ -617,6 +618,7 @@ void store_stats_set_int_file(const char *path, const char *key, int value) {
     int total_input_tokens = 0, total_output_tokens = 0;
     int total_cache_read_tokens = 0, total_cache_creation_tokens = 0;
     int current_context_tokens = 0;
+    int last_call_speed_tok_per_sec = 0;
 
     char *content = store_stats_read(path);
     if (content && content[0]) {
@@ -631,6 +633,7 @@ void store_stats_set_int_file(const char *path, const char *key, int value) {
             total_cache_read_tokens = json_get_int(jp.val, "total_cache_read_tokens");
             total_cache_creation_tokens = json_get_int(jp.val, "total_cache_creation_tokens");
             current_context_tokens = json_get_int(jp.val, "current_context_tokens");
+            last_call_speed_tok_per_sec = json_get_int(jp.val, "last_call_speed_tok_per_sec");
         }
     }
 
@@ -643,6 +646,7 @@ void store_stats_set_int_file(const char *path, const char *key, int value) {
     else if (strcmp(key, "total_cache_read_tokens") == 0) total_cache_read_tokens = value;
     else if (strcmp(key, "total_cache_creation_tokens") == 0) total_cache_creation_tokens = value;
     else if (strcmp(key, "current_context_tokens") == 0) current_context_tokens = value;
+    else if (strcmp(key, "last_call_speed_tok_per_sec") == 0) last_call_speed_tok_per_sec = value;
 
     time_t now = time(NULL);
     struct tm tm_buf;
@@ -653,7 +657,7 @@ void store_stats_set_int_file(const char *path, const char *key, int value) {
                           compact_request_count, sub_agent_request_count,
                           total_input_tokens, total_output_tokens,
                           total_cache_read_tokens, total_cache_creation_tokens,
-                          current_context_tokens, ts);
+                          current_context_tokens, last_call_speed_tok_per_sec, ts);
     if (content) {
         free(content);
     }

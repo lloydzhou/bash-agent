@@ -171,6 +171,9 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         if (evt->out_tokens > 0) sctx->accum.out_tokens = evt->out_tokens;
         if (evt->cache_read_tokens > 0) sctx->accum.cache_read_tokens = evt->cache_read_tokens;
         if (evt->cache_creation_tokens > 0) sctx->accum.cache_creation_tokens = evt->cache_creation_tokens;
+        sctx->accum.start_ms = evt->start_ms;
+        sctx->accum.end_ms = evt->end_ms;
+        sctx->accum.speed_ready = evt->speed_ready;
         break;
 
     case SSE_TOOL_CALL_START: {
@@ -222,6 +225,7 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         }
         sctx->accum.tool_count = 0;
         sctx->accum.stopped = 0;
+        sctx->accum.speed_ready = 0;
         if (sctx->accum.stop_reason) { free(sctx->accum.stop_reason); sctx->accum.stop_reason = NULL; }
         if (sctx->accum.error) { free(sctx->accum.error); sctx->accum.error = NULL; }
         sctx->accum.in_tokens = 0;
@@ -1001,6 +1005,8 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         agent->last_cache_creation_tokens = accum->cache_creation_tokens;
         agent->last_context_tokens = accum->in_tokens + accum->out_tokens +
             accum->cache_read_tokens + accum->cache_creation_tokens;
+        agent->last_start_ms = accum->start_ms;
+        agent->last_end_ms = accum->end_ms;
 
         if (accum->in_tokens > 0 || accum->out_tokens > 0) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
@@ -1027,9 +1033,17 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 store_stats_set_int_file(agent->paths.stats, "current_context_tokens",
                     agent->last_context_tokens);
             }
-            /* 对齐 bash 版 store_stats_update 末尾的 display_term_title */
-            agent_update_title(agent);
         }
+        /* 仅完整协议终结且 HTTP 成功后的最终 USAGE 才更新速度。
+         * 独立于正 token 守卫：零用量成功需要清零，失败和中断保留旧值。 */
+        if (accum->speed_ready && !accum->error && !agent->interrupted) {
+            long long dur = agent->last_end_ms - agent->last_start_ms;
+            int speed = (dur > 0) ? (int)((long long)agent->last_output_tokens * 1000LL / dur) : 0;
+            store_stats_set_int_file(agent->paths.stats, "last_call_speed_tok_per_sec", speed);
+        }
+        /* 对齐 bash 版 store_stats_update 末尾的 display_term_title */
+        if (accum->in_tokens > 0 || accum->out_tokens > 0 || accum->speed_ready)
+            agent_update_title(agent);
 
         /* ---- 执行工具调用 ---- */
         const char **result_ids = NULL;
@@ -3019,27 +3033,29 @@ void agent_update_title_status(Agent *agent, const char *status) {
     int ao = json_get_int(jp.val, "total_output_tokens");
     long long ll_cr = json_get_ll(jp.val, "total_cache_read_tokens");
     int ct = json_get_int(jp.val, "current_context_tokens");
+    int speed = json_get_int(jp.val, "last_call_speed_tok_per_sec");
 
-    /* 对齐 bash 版 term_title.awk: model T:turn R:req I:in+cr(pct) O:out C:ctx */
+    /* 对齐 bash 版 term_title.awk: model T:turn R:req I:in+cr(pct) O:out C:ctx S:speedtok/s */
     long long total_i = ll_ai + ll_cr;
     int pct = (total_i > 0) ? (int)((ll_cr * 100.0 / total_i) + 0.5) : 0;
     char pct_s[32];
     if (total_i > 0) snprintf(pct_s, sizeof(pct_s), "%d%%", pct);
     else snprintf(pct_s, sizeof(pct_s), "—");
 
-    char tc_s[32], ar_s[32], total_i_s[32], ao_s[32], ct_s[32];
+    char tc_s[32], ar_s[32], total_i_s[32], ao_s[32], ct_s[32], speed_s[32];
     format_int_commas(tc, tc_s, sizeof(tc_s));
     format_int_commas(ar, ar_s, sizeof(ar_s));
     format_ll_commas(total_i, total_i_s, sizeof(total_i_s));
     format_int_commas(ao, ao_s, sizeof(ao_s));
     format_int_commas(ct, ct_s, sizeof(ct_s));
+    format_int_commas(speed, speed_s, sizeof(speed_s));
 
     int idle = (status && strcmp(status, "idle") == 0 && agent->active_task_count <= 0);
     const char *prefix = idle ? "" : "\xe2\x8f\xb3 ";
     int progress = idle ? 0 : 3;
     FILE *err = agent->err ? agent->err : stderr;
-    fprintf(err, "\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\x07\x1b]9;4;%d\x07",
-            prefix, agent->model, tc_s, ar_s, total_i_s, pct_s, ao_s, ct_s, progress);
+    fprintf(err, "\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s S:%stok/s\x07\x1b]9;4;%d\x07",
+            prefix, agent->model, tc_s, ar_s, total_i_s, pct_s, ao_s, ct_s, speed_s, progress);
     fflush(err);
 
     free(stats_content);

@@ -718,7 +718,7 @@ test_agent_async_bash() {
     else
         red "Agent async bash"; echo "  Output: $output"; ((FAIL++)) || true
     fi
-    if printf '%s' "$output" | grep -q $'\033]0;⏳ test T:[0-9,]* R:[0-9,]* I:[0-9,]*(0%) O:[0-9,]* C:[0-9,]*\a\033]9;4;3\a'; then
+    if printf '%s' "$output" | grep -q $'\033]0;⏳ test T:[0-9,]* R:[0-9,]* I:[0-9,]*(0%) O:[0-9,]* C:[0-9,]* S:[0-9,]*tok/s\a\033]9;4;3\a'; then
         green "Agent async bash title keeps loading while pending"; ((PASS++)) || true
     else
         red "Agent async bash title keeps loading while pending"; echo "  Output: $output"; ((FAIL++)) || true
@@ -2517,7 +2517,7 @@ test_agent_compact_context() {
 
 # Test 40: stats.json structure completeness (S1/S2/S4)
 test_agent_stats_structure() {
-    info "Test 40: stats.json structure completeness (S1 sub_agent_request_count, S2 last_updated, S4 no trailing spaces)"
+    info "Test 40: stats.json structure completeness (S1 sub_agent_request_count, S3 last_call_speed_tok_per_sec, S2 last_updated, S4 no trailing spaces)"
     local home_dir stats_file
     home_dir=$(mktemp -d)
     BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'STATS_CHECK_MARKER' >/dev/null 2>&1 || true
@@ -2536,6 +2536,23 @@ test_agent_stats_structure() {
         green "stats structure: sub_agent_request_count field present"; ((PASS++)) || true
     else
         red "stats structure: sub_agent_request_count field MISSING"; echo "  Content: $content"; ((FAIL++)) || true
+    fi
+
+    # S3: last_call_speed_tok_per_sec must exist (introduced in PR #87)
+    if [[ "$content" == *"last_call_speed_tok_per_sec"* ]]; then
+        green "stats structure: last_call_speed_tok_per_sec field present"; ((PASS++)) || true
+    else
+        red "stats structure: last_call_speed_tok_per_sec field MISSING"; echo "  Content: $content"; ((FAIL++)) || true
+    fi
+
+    # S5: speed value must be positive after a real LLM call
+    # (guards against accumulator wiring bugs like cagent missing start_ms/end_ms)
+    local speed_val
+    speed_val=$(grep -o '"last_call_speed_tok_per_sec":[0-9-]*' "$stats_file" 2>/dev/null | grep -o '[0-9-]*$' | head -1)
+    if [[ "$speed_val" =~ ^[0-9]+$ ]] && (( speed_val > 0 )); then
+        green "stats structure: last_call_speed_tok_per_sec positive ($speed_val)"; ((PASS++)) || true
+    else
+        red "stats structure: last_call_speed_tok_per_sec not positive"; echo "  Value: $speed_val"; ((FAIL++)) || true
     fi
 
     # S2: last_updated must be non-empty (ISO timestamp like 2025-01-01T00:00:00Z)

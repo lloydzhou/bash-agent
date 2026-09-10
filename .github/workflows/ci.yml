@@ -92,16 +92,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build goagent (linux, Debian 11 container)
+      - name: Build goagent (linux, Ubuntu 20.04 container)
         if: matrix.goos == 'linux'
         run: |
-          docker run --rm -v /opt/hostedtoolcache:/opt/hostedtoolcache -v "$PWD":/github/workspace -w /github/workspace debian:11 \
+          docker run --rm -v /opt/hostedtoolcache:/opt/hostedtoolcache -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
               GO_BIN="$(ls -d /opt/hostedtoolcache/go/*/x64/bin | sort -V | tail -1)/go"
               export PATH="$(dirname "$GO_BIN"):$PATH"
               export GOCACHE="$PWD/go/.gocache" GOMODCACHE="$PWD/go/.gomodcache"
               go version
-              sed -i "s|deb.debian.org|deb.debian.org|g; s|security.debian.org/debian-security|security.debian.org/debian-security|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
               apt-get install -y --no-install-recommends gcc make libc6-dev
               mkdir -p dist
@@ -181,12 +180,11 @@ jobs:
           cd rust && cargo build --release --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/rustagent-${{ matrix.suffix }}${{ matrix.ext }}
 
-      - name: Build rustagent (linux, Debian 11 container)
+      - name: Build rustagent (linux, Ubuntu 20.04 container)
         if: matrix.runner == 'ubuntu-latest'
         run: |
-          docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:11 \
+          docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
-              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
               apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
               if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
@@ -257,12 +255,11 @@ jobs:
           cd webagent && cargo build --release --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/webagent-${{ matrix.suffix }}${{ matrix.ext }}
 
-      - name: Build webagent (linux, Debian 11 container)
+      - name: Build webagent (linux, Ubuntu 20.04 container)
         if: matrix.runner == 'ubuntu-latest'
         run: |
-          docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:11 \
+          docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
-              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
               apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
               if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
@@ -313,12 +310,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep gcc-aarch64-linux-gnu
 
-      - name: Build cagent (linux, Debian 11 container)
+      - name: Build cagent (linux, Ubuntu 20.04 container)
         if: runner.os == 'Linux'
         run: |
-          docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:11 \
+          docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
-              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update
               apt-get install -y --no-install-recommends gcc make xxd libc6-dev libcurl4-openssl-dev pkg-config
               mkdir -p dist

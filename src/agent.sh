@@ -565,7 +565,7 @@ store_session_list_rows() {
 
 # llm
 llm_stream_curl() {
-    exec 9< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
+    exec 9< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 -w '\nevent: timing\ndata: {"time_total":%{time_total},"time_starttransfer":%{time_starttransfer}}\n\n' "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
     curl_pid=$!
     echo "$curl_pid" > "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     util_awk_run -f "$AWK_DIR/http_stream.awk" <&9
@@ -1425,7 +1425,8 @@ agent_loop_stream() {
                     ;;
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
-                USAGE) _ctx_tokens=$(agent_record_usage "agent" agent_request_count false) ;;
+                USAGE) _ctx_tokens=$(agent_record_usage "agent" agent_request_count false)
+                       store_stats_update last_call_speed_tok_per_sec="${REPLY_MESSAGE[5]:-0}" current_context_tokens="${_ctx_tokens:-0}" ;;
             esac
         done
         exec 8<&-
@@ -1442,10 +1443,6 @@ agent_loop_stream() {
             store_conv_add_assistant "$text" "$thinking" "$tool_calls"
             if [[ -n "$tool_conv_results" ]]; then
                 store_conv_add_tool_results "$tool_conv_results"
-            fi
-            # Update context tokens from USAGE (used by next turn's compact check)
-            if [[ -n "$_ctx_tokens" && "$_ctx_tokens" -gt 0 ]]; then
-                store_stats_update current_context_tokens=${_ctx_tokens}
             fi
             # tool_use/tool_calls → loop continues; otherwise exit unless a sub-agent result arrived meanwhile
             if [[ "$stop" != "tool_use" && "$stop" != "tool_calls" ]]; then

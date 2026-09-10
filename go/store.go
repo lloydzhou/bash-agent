@@ -55,6 +55,21 @@ func (s *FileStore) UpdateStats(usage Usage, model string) error {
 	s.stats.OutputTokens += usage.OutputTokens
 	s.stats.CacheWrite += usage.CacheWrite
 	s.stats.CacheRead += usage.CacheRead
+	// 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0
+	// 且仅在流正常终结时更新（失败终态/中断 bash 不发 USAGE，保留旧值）
+	// 亚毫秒传输向上取整至少 1ms，避免整数截断导致 speed=0（对齐 bash awk 浮点行为）
+	if !usage.Stopped {
+		return s.flushStats()
+	}
+	dur := usage.EndMs - usage.StartMs
+	if dur <= 0 && usage.OutputTokens > 0 {
+		dur = 1
+	}
+	if dur > 0 {
+		s.stats.LastCallSpeedTokPerSec = usage.OutputTokens * 1000 / int(dur)
+	} else {
+		s.stats.LastCallSpeedTokPerSec = 0
+	}
 
 	return s.flushStats()
 }
@@ -799,7 +814,8 @@ func (s *FileStore) FormatTitle(model, status string) string {
 	if status == "idle" {
 		progress = 0
 	}
-	return fmt.Sprintf("\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\x07\x1b]9;4;%d\x07",
+	// 对齐 bash 版 term_title.awk：model T:turn R:req I:in+cr(pct) O:out C:ctx S:speedtok/s
+	return fmt.Sprintf("\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s S:%stok/s\x07\x1b]9;4;%d\x07",
 		prefix,
 		model,
 		fmtInt(st.TurnCount),
@@ -808,6 +824,7 @@ func (s *FileStore) FormatTitle(model, status string) string {
 		cachePct,
 		fmtInt(st.OutputTokens),
 		fmtInt(st.ContextTokens),
+		fmtInt(st.LastCallSpeedTokPerSec),
 		progress)
 }
 
