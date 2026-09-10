@@ -1379,7 +1379,7 @@ body[data-theme="light"] .pipe-step span {
       <div class="section-head">
         <div class="section-kicker" data-zh="快速开始" data-en="Quick start">快速开始</div>
         <h2 data-zh="一分钟启动，可以选脚本版或原生版。" data-en="Start in a minute with either the script or native binaries.">一分钟启动，可以选脚本版或原生版。</h2>
-        <p class="section-desc" data-zh="macOS 推荐 Homebrew；Arch Linux 保留 AUR 安装；只想验证 Bash 版时也可以直接下载单文件脚本。" data-en="Use Homebrew on macOS, AUR on Arch Linux, or download the single Bash script when you only need to try the baseline runtime.">macOS 推荐 Homebrew；Arch Linux 保留 AUR 安装；只想验证 Bash 版时也可以直接下载单文件脚本。</p>
+        <p class="section-desc" data-zh="macOS 推荐 Homebrew；Debian / Ubuntu 使用 APT；Arch Linux 使用 AUR。" data-en="Use Homebrew on macOS, APT on Debian / Ubuntu, or AUR on Arch Linux.">macOS 推荐 Homebrew；Debian / Ubuntu 使用 APT；Arch Linux 使用 AUR。</p>
       </div>
       <div class="install-grid">
         <div class="code-panel">
@@ -1395,14 +1395,12 @@ bash-agent "hello"</pre>
         </div>
         <div class="code-panel">
           <div class="code-panel-head">
-            <strong data-zh="单文件脚本" data-en="Single file">单文件脚本</strong>
-            <button class="copy-btn" type="button" data-copy="#single-code" data-zh="复制" data-en="Copy">复制</button>
+            <strong>Debian / Ubuntu (APT)</strong>
+            <button class="copy-btn" type="button" data-copy="#apt-code" data-zh="复制" data-en="Copy">复制</button>
           </div>
-          <pre id="single-code">curl -fsSL \
-  https://github.com/lloydzhou/bash-agent/releases/latest/download/agent.sh \
-  -o ~/.local/bin/bash-agent
-
-chmod +x ~/.local/bin/bash-agent</pre>
+          <pre id="apt-code">echo "deb [trusted=yes] https://lloydzhou.github.io/bash-agent/debian stable main" \
+  | sudo tee /etc/apt/sources.list.d/bash-agent.list
+sudo apt update &amp;&amp; sudo apt install bash-agent</pre>
         </div>
         <div class="code-panel">
           <div class="code-panel-head">
