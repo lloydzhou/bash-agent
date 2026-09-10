@@ -172,6 +172,50 @@ func NewHTTPTransport(cfg Config) *HTTPTransport {
 
 // parseSSEStream 从 HTTP response body 读取 SSE 流，解析为 Event
 func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response, ch chan<- Event) {
+	defer close(ch)
+	events := make(chan Event)
+	go t.decodeSSEStream(ctx, resp, events)
+
+	// 协议终态不代表 HTTP 已结束。暂存用量和停止事件，读完后再发布。
+	var pendingUsage *Usage
+	var pendingStop *Event
+	var failed bool
+	for ev := range events {
+		switch ev.Type {
+		case EventUsage:
+			u := ev.Payload.(Usage)
+			pendingUsage = &u
+		case EventStop:
+			stop := ev
+			pendingStop = &stop
+		case EventError:
+			failed = true
+			ch <- ev
+		case EventRetry:
+			pendingUsage = nil
+			pendingStop = nil
+			failed = false
+			ch <- ev
+		default:
+			ch <- ev
+		}
+	}
+	if ctx.Err() != nil {
+		failed = true
+	}
+	if pendingUsage != nil {
+		pendingUsage.EndMs = time.Now().UnixMilli()
+		pendingUsage.Stopped = pendingUsage.Stopped && !failed
+		ch <- Event{Type: EventUsage, Payload: *pendingUsage}
+	}
+	if failed {
+		ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
+	} else if pendingStop != nil {
+		ch <- *pendingStop
+	}
+}
+
+func (t *HTTPTransport) decodeSSEStream(ctx context.Context, resp *http.Response, ch chan<- Event) {
 	var stopEmitted bool
 	streamDone := make(chan struct{})
 	defer close(streamDone)
@@ -196,9 +240,8 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 		}
 	}()
 
-	// 对齐 bash 版 claude_sse.awk：流开始时刻记录 start_ms，结束时算 speed
+	// 起点保持在响应头之后，终点由 parseSSEStream 在 HTTP 读完后设置。
 	startMs := time.Now().UnixMilli()
-	endMs := func() int64 { return time.Now().UnixMilli() }
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -293,15 +336,14 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 
 			case "message_stop":
 				stopEmitted = true
-				// 发送 USAGE + STOP（对齐 bash 版：带 start_ms/end_ms 用于计算 tok/s）
+				// 交给外层暂存，等待完整 HTTP 结束后发布。
 				ch <- Event{Type: EventUsage, Payload: Usage{
-					Stopped: true,
+					Stopped:      true,
 					InputTokens:  inputTokens,
 					OutputTokens: outputTokens,
 					CacheRead:    cacheRead,
 					CacheWrite:   cacheCreate,
 					StartMs:      startMs,
-					EndMs:        endMs(),
 				}}
 				ch <- Event{Type: EventStop, Fields: []string{"STOP", stopReason}}
 
@@ -311,6 +353,8 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 
 			case "retry":
 				// 对齐 Rust/C: 重置所有累积状态
+				stopEmitted = false
+				eventType = ""
 				blockType = ""
 				toolName = ""
 				toolID = ""
@@ -328,6 +372,11 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 				ch <- Event{Type: EventRetry}
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		ch <- Event{Type: EventError, Fields: []string{"ERROR", err.Error()}}
+	} else if err := ctx.Err(); err != nil {
+		ch <- Event{Type: EventError, Fields: []string{"ERROR", err.Error()}}
 	}
 }
 
@@ -501,8 +550,7 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 			OutputTokens: *outputTokens,
 			CacheRead:    *cacheRead,
 			StartMs:      startMs,
-			EndMs:        time.Now().UnixMilli(),
-			Stopped:     true,
+			Stopped:      true,
 		}}
 		stopReason := "end_turn"
 		if hasTools {
@@ -543,8 +591,7 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 			OutputTokens: *outputTokens,
 			CacheRead:    *cacheRead,
 			StartMs:      startMs,
-			EndMs:        time.Now().UnixMilli(),
-			Stopped:     false,
+			Stopped:      false,
 		}}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
 		return true
@@ -596,8 +643,7 @@ func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
 			CacheRead:    *cacheRead,
 			CacheWrite:   *cacheCreate,
 			StartMs:      startMs,
-			EndMs:        time.Now().UnixMilli(),
-			Stopped:     true,
+			Stopped:      true,
 		}}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", sr}}
 		return

@@ -59,6 +59,8 @@ typedef struct {
     int openai_tool_cap;
     int responses_saw_text;
     int responses_terminal;
+    int protocol_complete;  /* 独立于提前发出的 STOP */
+    int openai_finished;
     int responses_input_tokens;
     int responses_output_tokens;
     int responses_cache_read_tokens;
@@ -132,7 +134,10 @@ static void streamctx_emit_openai_tool_calls(StreamCtx *sctx) {
 
 static void parse_openai_sse_event(StreamCtx *sctx, const char *data, size_t data_len) {
     if (data_len == 0) return;
-    if (strcmp(data, "[DONE]") == 0) return;
+    if (strcmp(data, "[DONE]") == 0) {
+        sctx->protocol_complete = sctx->openai_finished;
+        return;
+    }
 
     size_t pos = 0;
     JsonParse jp = json_parse(data, &pos);
@@ -195,6 +200,7 @@ static void parse_openai_sse_event(StreamCtx *sctx, const char *data, size_t dat
         /* 非标准 API 可能用空字符串 "" 代替 null（如 sensenova），
          * 空字符串不应触发 STOP */
         if (finish && finish[0]) {
+            sctx->openai_finished = 1;
             if (strcmp(finish, "tool_calls") == 0) {
                 streamctx_emit_openai_tool_calls(sctx);
                 emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "tool_use");
@@ -325,6 +331,7 @@ static void parse_responses_sse_event(StreamCtx *sctx, const char *event, const 
         responses_emit_usage(sctx);
         emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, has_tools ? "tool_use" : "end_turn");
         sctx->responses_terminal = 1;
+        sctx->protocol_complete = 1;
     } else if (strcmp(event, "response.failed") == 0 || strcmp(event, "response.incomplete") == 0 || strcmp(event, "error") == 0) {
         JsonVal response = json_get(root, "response");
         if (response.type == JSON_NULL) response = root;
@@ -340,6 +347,24 @@ static void parse_responses_sse_event(StreamCtx *sctx, const char *event, const 
         emit_simple_event(sctx->callback, sctx->ctx, SSE_STOP, "error");
         sctx->responses_terminal = 1;
     }
+}
+
+static void parse_claude_stream_event(StreamCtx *sctx, const char *data) {
+    size_t pos = 0;
+    JsonParse jp = json_parse(data, &pos);
+    if (!jp.error) {
+        char *type = json_get_string(jp.val, "type");
+        if (type && strcmp(type, "message_stop") == 0)
+            sctx->protocol_complete = 1;
+        FREE_PTR(type);
+    }
+    sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx, sctx->start_ms);
+}
+
+/* 每次重试重新初始化 StreamCtx，协议完成状态不会跨尝试继承。 */
+static int stream_speed_ready(const StreamCtx *sctx, CURLcode rc, long http_code) {
+    return rc == CURLE_OK && http_code >= 200 && http_code < 300 &&
+        !(sctx->cancelled && *sctx->cancelled) && sctx->protocol_complete;
 }
 
 static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
@@ -373,13 +398,13 @@ static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
                 const char *data = line + 6;
                 if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
                 else if (strcmp(sctx->provider, "responses") == 0) parse_responses_sse_event(sctx, sctx->event ? sctx->event : "", data, strlen(data));
-                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx, sctx->start_ms);
+                else parse_claude_stream_event(sctx, data);
             } else if (strncmp(line, "data:", 5) == 0) {
                 const char *data = line + 5;
                 while (*data == ' ') data++;
                 if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
                 else if (strcmp(sctx->provider, "responses") == 0) parse_responses_sse_event(sctx, sctx->event ? sctx->event : "", data, strlen(data));
-                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx, sctx->start_ms);
+                else parse_claude_stream_event(sctx, data);
             }
             /* 重置行缓冲 */
             sb_truncate(&sctx->line_buf, 0);
@@ -662,6 +687,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
                 SseEvent tevt;
                 memset(&tevt, 0, sizeof(tevt));
                 tevt.type = SSE_USAGE;
+                tevt.speed_ready = stream_speed_ready(&sctx, rc, http_code);
                 tevt.start_ms = 0;
                 /* 微秒向上取整到毫秒：亚毫秒传输至少 1ms，避免整数截断 speed=0 */
                 tevt.end_ms = (dur_us > 0) ? (long long)((dur_us + 999) / 1000) : 0;
@@ -1020,6 +1046,7 @@ void sse_accum_callback(void *ctx, const SseEvent *evt) {
         if (evt->cache_creation_tokens > 0) acc->cache_creation_tokens = evt->cache_creation_tokens;
         acc->start_ms = evt->start_ms;
         acc->end_ms = evt->end_ms;
+        acc->speed_ready = evt->speed_ready;
         break;
 
     case SSE_STOP:
@@ -1046,6 +1073,7 @@ void sse_accum_callback(void *ctx, const SseEvent *evt) {
         }
         acc->tool_count = 0;
         acc->stopped = 0;
+        acc->speed_ready = 0;
         FREE_PTR(acc->stop_reason);
         acc->in_tokens = 0;
         acc->out_tokens = 0;

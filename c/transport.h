@@ -36,6 +36,7 @@ typedef struct {
     int cache_creation_tokens; /* USAGE: 缓存创建 token */
     long long start_ms;      /* USAGE: 流开始时间戳（毫秒） */
     long long end_ms;        /* USAGE: 流结束时间戳（毫秒） */
+    int speed_ready;         /* 仅协议完整且 HTTP 成功结束后的最终 USAGE */
 } SseEvent;
 
 typedef void (*sse_callback_fn)(void *ctx, const SseEvent *evt);
@@ -110,6 +111,7 @@ typedef struct {
 
     /* 状态标记 */
     int stopped;            /* 收到 stop 事件 */
+    int speed_ready;         /* 最终 USAGE 允许更新速度，不等同于 stop */
 } SseAccumulator;
 
 /* 初始化/释放累积器 */

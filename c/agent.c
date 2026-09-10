@@ -173,6 +173,7 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         if (evt->cache_creation_tokens > 0) sctx->accum.cache_creation_tokens = evt->cache_creation_tokens;
         sctx->accum.start_ms = evt->start_ms;
         sctx->accum.end_ms = evt->end_ms;
+        sctx->accum.speed_ready = evt->speed_ready;
         break;
 
     case SSE_TOOL_CALL_START: {
@@ -224,6 +225,7 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         }
         sctx->accum.tool_count = 0;
         sctx->accum.stopped = 0;
+        sctx->accum.speed_ready = 0;
         if (sctx->accum.stop_reason) { free(sctx->accum.stop_reason); sctx->accum.stop_reason = NULL; }
         if (sctx->accum.error) { free(sctx->accum.error); sctx->accum.error = NULL; }
         sctx->accum.in_tokens = 0;
@@ -1031,16 +1033,17 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 store_stats_set_int_file(agent->paths.stats, "current_context_tokens",
                     agent->last_context_tokens);
             }
-            /* 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0
-             * 且仅在流正常终结（收到 stop）时更新——中断场景 bash 无 USAGE、保留旧值 */
-            if (accum->stopped) {
-                long long dur = agent->last_end_ms - agent->last_start_ms;
-                int speed = (dur > 0) ? (int)((long long)agent->last_output_tokens * 1000LL / dur) : 0;
-                store_stats_set_int_file(agent->paths.stats, "last_call_speed_tok_per_sec", speed);
-            }
-            /* 对齐 bash 版 store_stats_update 末尾的 display_term_title */
-            agent_update_title(agent);
         }
+        /* 仅完整协议终结且 HTTP 成功后的最终 USAGE 才更新速度。
+         * 独立于正 token 守卫：零用量成功需要清零，失败和中断保留旧值。 */
+        if (accum->speed_ready && !accum->error && !agent->interrupted) {
+            long long dur = agent->last_end_ms - agent->last_start_ms;
+            int speed = (dur > 0) ? (int)((long long)agent->last_output_tokens * 1000LL / dur) : 0;
+            store_stats_set_int_file(agent->paths.stats, "last_call_speed_tok_per_sec", speed);
+        }
+        /* 对齐 bash 版 store_stats_update 末尾的 display_term_title */
+        if (accum->in_tokens > 0 || accum->out_tokens > 0 || accum->speed_ready)
+            agent_update_title(agent);
 
         /* ---- 执行工具调用 ---- */
         const char **result_ids = NULL;

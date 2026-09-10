@@ -409,7 +409,7 @@ pub mod openai {
                     stopped: true,
                 });
                 pending_stop = Some(stop_reason.clone());
-                break;
+                continue;
             }
 
             let body: Value = serde_json::from_str(payload)?;
@@ -511,7 +511,9 @@ pub mod openai {
             }
         }
 
-        if let Some(usage) = pending_usage {
+        if let Some(mut usage) = pending_usage {
+            // 与 Bash 一致：终态只暂存用量，完整读流结束后才结束计时。
+            usage.end_ms = now_ms();
             emit(Event::Usage(usage))?;
         }
         if let Some(reason) = pending_stop {
@@ -573,6 +575,8 @@ pub mod responses {
         let mut calls: BTreeMap<i64, PendingCall> = BTreeMap::new();
         let mut item_indexes: BTreeMap<String, i64> = BTreeMap::new();
         let mut completed = false;
+        let mut pending_usage = None;
+        let mut pending_stop = None;
         let start_ms = now_ms();
         while {
             line.clear();
@@ -588,6 +592,8 @@ pub mod responses {
                 calls.clear();
                 item_indexes.clear();
                 completed = false;
+                pending_usage = None;
+                pending_stop = None;
                 emit(Event::Retry(RetryEvent {}))?;
                 continue;
             }
@@ -648,18 +654,18 @@ pub mod responses {
                     );
                     let has_tools = !calls.is_empty();
                     emit_calls(&mut calls, &mut emit)?;
-                    emit(Event::Usage(UsageEvent {
+                    pending_usage = Some(UsageEvent {
                         input_tokens,
                         output_tokens,
                         cache_read_input_tokens,
                         cache_creation_input_tokens: 0,
                         start_ms,
-                        end_ms: now_ms(),
+                        end_ms: 0,
                         stopped: true,
-                    }))?;
-                    emit(Event::Stop(StopEvent {
+                    });
+                    pending_stop = Some(StopEvent {
                         reason: if has_tools { "tool_use" } else { "end_turn" }.to_string(),
-                    }))?;
+                    });
                     completed = true;
                 }
                 "response.failed" | "response.incomplete" | "error" => {
@@ -702,6 +708,13 @@ pub mod responses {
                 }
                 _ => {}
             }
+        }
+        if let Some(mut usage) = pending_usage {
+            usage.end_ms = now_ms();
+            emit(Event::Usage(usage))?;
+        }
+        if let Some(stop) = pending_stop {
+            emit(Event::Stop(stop))?;
         }
         if !completed {
             emit(Event::Error(ErrorEvent {
