@@ -24,6 +24,11 @@ BEGIN {
 
 /^:/ { next }
 /^ERROR:/ { print; fflush(); next }
+
+# Pass through timing event from curl -w (captured by claude_sse.awk)
+/^event: timing$/ { print; fflush(); next }
+/^data: \{"time_total"/ { print; fflush(); next }
+
 /^RETRY:/ { _reset(); print; fflush(); next }
 /^event: / { event = substr($0, 8); next }
 

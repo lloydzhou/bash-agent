@@ -565,7 +565,7 @@ store_session_list_rows() {
 
 # llm
 llm_stream_curl() {
-    exec 9< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
+    exec 9< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 -w '\nevent: timing\ndata: {"time_total":%{time_total},"time_starttransfer":%{time_starttransfer}}\n\n' "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
     curl_pid=$!
     echo "$curl_pid" > "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     util_awk_run -f "$AWK_DIR/http_stream.awk" <&9
@@ -1426,8 +1426,7 @@ agent_loop_stream() {
                 STOP)  stop="${REPLY_MESSAGE[1]}" ;;
                 ERROR) loop_error="${REPLY_MESSAGE[1]}"; stop="error"; break ;;
                 USAGE) _ctx_tokens=$(agent_record_usage "agent" agent_request_count false)
-                       local _dur _speed; _dur=$((${REPLY_MESSAGE[6]:-0}-${REPLY_MESSAGE[5]:-0})); _speed=$((_dur>0?${REPLY_MESSAGE[2]:-0}*1000/_dur:0))
-                       store_stats_update last_call_speed_tok_per_sec="$_speed" current_context_tokens="${_ctx_tokens:-0}" ;;
+                       store_stats_update last_call_speed_tok_per_sec="${REPLY_MESSAGE[5]:-0}" current_context_tokens="${_ctx_tokens:-0}" ;;
             esac
         done
         exec 8<&-
