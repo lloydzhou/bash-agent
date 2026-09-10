@@ -101,7 +101,7 @@ jobs:
               export PATH="$(dirname "$GO_BIN"):$PATH"
               export GOCACHE="$PWD/go/.gocache" GOMODCACHE="$PWD/go/.gomodcache"
               go version
-              sed -i "s|deb.debian.org|deb.debian.org|g; s|security.debian.org/debian-security|security.debian.org/debian-security|g" /etc/apt/sources.list 2>/dev/null || true
+              sed -i "s|deb.debian.org|archive.debian.org|g; s|security.debian.org/debian-security|archive.debian.org/debian-security|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update -o Acquire::Check-Valid-Until=false
               apt-get install -y --no-install-recommends gcc make libc6-dev
               mkdir -p dist
@@ -186,7 +186,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:11 \
             bash -euxo pipefail -c '
-              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
+              sed -i "s|deb.debian.org|archive.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update -o Acquire::Check-Valid-Until=false
               apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
               if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
@@ -262,7 +262,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:11 \
             bash -euxo pipefail -c '
-              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
+              sed -i "s|deb.debian.org|archive.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update -o Acquire::Check-Valid-Until=false
               apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
               if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
@@ -318,7 +318,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:11 \
             bash -euxo pipefail -c '
-              sed -i "s|deb.debian.org|deb.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
+              sed -i "s|deb.debian.org|archive.debian.org|g" /etc/apt/sources.list 2>/dev/null || true
               apt-get update -o Acquire::Check-Valid-Until=false
               apt-get install -y --no-install-recommends gcc make xxd libc6-dev libcurl4-openssl-dev pkg-config
               mkdir -p dist
