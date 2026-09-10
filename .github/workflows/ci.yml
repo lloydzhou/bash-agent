@@ -95,7 +95,7 @@ jobs:
       - name: Build goagent (linux, Debian 11 container)
         if: matrix.goos == 'linux'
         run: |
-          docker run --rm -v /opt/hostedtoolcache:/opt/hostedtoolcache -v "$PWD":/github/workspace -w /github/workspace debian:12 \
+          docker run --rm -v /opt/hostedtoolcache:/opt/hostedtoolcache -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
               GO_BIN="$(ls -d /opt/hostedtoolcache/go/*/x64/bin | sort -V | tail -1)/go"
               export PATH="$(dirname "$GO_BIN"):$PATH"
@@ -183,7 +183,7 @@ jobs:
       - name: Build rustagent (linux, Debian 11 container)
         if: matrix.runner == 'ubuntu-latest'
         run: |
-          docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:12 \
+          docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
               apt-get update
               apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
@@ -258,7 +258,7 @@ jobs:
       - name: Build webagent (linux, Debian 11 container)
         if: matrix.runner == 'ubuntu-latest'
         run: |
-          docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:12 \
+          docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
               apt-get update
               apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config
@@ -313,7 +313,7 @@ jobs:
       - name: Build cagent (linux, Debian 11 container)
         if: runner.os == 'Linux'
         run: |
-          docker run --rm -v "$PWD":/github/workspace -w /github/workspace debian:12 \
+          docker run --rm -v "$PWD":/github/workspace -w /github/workspace ubuntu:20.04 \
             bash -euxo pipefail -c '
               apt-get update
               apt-get install -y --no-install-recommends gcc make xxd libc6-dev libcurl4-openssl-dev pkg-config
