@@ -288,6 +288,8 @@ struct Agent {
     last_output_tokens: usize,
     last_cache_read_tokens: usize,
     last_cache_creation_tokens: usize,
+    last_start_ms: i64,
+    last_end_ms: i64,
     msg_tx: Arc<Mutex<Option<mpsc::Sender<MainLoopMessage>>>>, // 主循环消息队列发送端（Arc<Mutex<Option>> 以便 readline 线程退出时主动 drop）
     msg_rx: mpsc::Receiver<MainLoopMessage>,                   // 主循环消息队列接收端
     sub_result_rx: mpsc::Receiver<MainLoopMessage>, // SubAgent 结果专用通道（对齐 NOTIFY_FIFO）
@@ -682,7 +684,7 @@ impl Agent {
             let mut f = std::fs::File::create(&paths.stats)?;
             write!(
                 f,
-                r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"sub_agent_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_updated":""}}{}"#,
+                r#"{{"current_turn_count":0,"agent_request_count":0,"compact_request_count":0,"sub_agent_request_count":0,"total_input_tokens":0,"total_output_tokens":0,"total_cache_read_tokens":0,"total_cache_creation_tokens":0,"current_context_tokens":0,"last_call_speed_tok_per_sec":0,"last_updated":""}}{}"#,
                 '\n'
             )?;
         }
@@ -726,6 +728,8 @@ impl Agent {
             last_output_tokens: 0,
             last_cache_read_tokens: 0,
             last_cache_creation_tokens: 0,
+            last_start_ms: 0,
+            last_end_ms: 0,
             msg_tx,
             msg_rx,
             sub_result_rx,
@@ -867,6 +871,8 @@ impl Agent {
                 last_output_tokens: 0,
                 last_cache_read_tokens: 0,
                 last_cache_creation_tokens: 0,
+                last_start_ms: 0,
+                last_end_ms: 0,
                 msg_tx: Arc::new(Mutex::new(Some(sub_msg_tx))),
                 msg_rx: _sub_msg_rx,
                 sub_result_rx: sub_rrx,
@@ -1823,6 +1829,8 @@ impl Agent {
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
+                start_ms,
+                end_ms,
             }) => {
                 self.emit_and_append_event(json!({
                     "type":"usage",
@@ -1841,6 +1849,8 @@ impl Agent {
                 self.last_output_tokens = *output_tokens as usize;
                 self.last_cache_read_tokens = *cache_read_input_tokens as usize;
                 self.last_cache_creation_tokens = *cache_creation_input_tokens as usize;
+                self.last_start_ms = *start_ms;
+                self.last_end_ms = *end_ms;
             }
             DisplayEvent::Stop(reason) => {
                 self.emit_and_append_event(json!({"type":"stop","reason":&reason}))?;
@@ -2216,6 +2226,14 @@ impl Agent {
             if ctx > 0 {
                 Self::set_stat_usize(stats, "current_context_tokens", ctx);
             }
+            // 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0
+            let speed = if self.last_end_ms > self.last_start_ms {
+                (self.last_output_tokens as i64 * 1000
+                    / (self.last_end_ms - self.last_start_ms)) as usize
+            } else {
+                0
+            };
+            Self::set_stat_usize(stats, "last_call_speed_tok_per_sec", speed);
             stats.insert(
                 "last_updated".to_string(),
                 Value::String(chrono_now_rfc3339()),
@@ -2264,6 +2282,7 @@ impl Agent {
         let ao = stats_get_f64(&stats, "total_output_tokens") as usize;
         let ctx = stats_get_f64(&stats, "current_context_tokens") as usize;
         let cr = stats_get_f64(&stats, "total_cache_read_tokens") as usize;
+        let speed = stats_get_f64(&stats, "last_call_speed_tok_per_sec") as usize;
         let cache_pct = {
             let total = ai + cr;
             if total > 0 {
@@ -2275,8 +2294,9 @@ impl Agent {
         let idle = status == "idle" && self.active_task_count == 0;
         let prefix = if idle { "" } else { "⏳ " };
         let progress = if idle { 0 } else { 3 };
+        // 对齐 bash 版 term_title.awk：model T:turn R:req I:in+cr(pct) O:out C:ctx S:speedtok/s
         let title = format!(
-            "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{}\x07\x1b]9;4;{}\x07",
+            "\x1b]0;{}{} T:{} R:{} I:{}({}) O:{} C:{} S:{}tok/s\x07\x1b]9;4;{}\x07",
             prefix,
             self.cfg.model,
             Self::fmt_num(tc),
@@ -2285,6 +2305,7 @@ impl Agent {
             cache_pct,
             Self::fmt_num(ao),
             Self::fmt_num(ctx),
+            Self::fmt_num(speed),
             progress
         );
         // 通过 display worker 序列化输出，避免与 text delta 交织

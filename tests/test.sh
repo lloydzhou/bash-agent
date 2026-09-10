@@ -2517,7 +2517,7 @@ test_agent_compact_context() {
 
 # Test 40: stats.json structure completeness (S1/S2/S4)
 test_agent_stats_structure() {
-    info "Test 40: stats.json structure completeness (S1 sub_agent_request_count, S2 last_updated, S4 no trailing spaces)"
+    info "Test 40: stats.json structure completeness (S1 sub_agent_request_count, S3 last_call_speed_tok_per_sec, S2 last_updated, S4 no trailing spaces)"
     local home_dir stats_file
     home_dir=$(mktemp -d)
     BASH_AGENT_HOME="$home_dir" "$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'STATS_CHECK_MARKER' >/dev/null 2>&1 || true
@@ -2536,6 +2536,13 @@ test_agent_stats_structure() {
         green "stats structure: sub_agent_request_count field present"; ((PASS++)) || true
     else
         red "stats structure: sub_agent_request_count field MISSING"; echo "  Content: $content"; ((FAIL++)) || true
+    fi
+
+    # S3: last_call_speed_tok_per_sec must exist (introduced in PR #87)
+    if [[ "$content" == *"last_call_speed_tok_per_sec"* ]]; then
+        green "stats structure: last_call_speed_tok_per_sec field present"; ((PASS++)) || true
+    else
+        red "stats structure: last_call_speed_tok_per_sec field MISSING"; echo "  Content: $content"; ((FAIL++)) || true
     fi
 
     # S2: last_updated must be non-empty (ISO timestamp like 2025-01-01T00:00:00Z)

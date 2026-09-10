@@ -55,6 +55,12 @@ func (s *FileStore) UpdateStats(usage Usage, model string) error {
 	s.stats.OutputTokens += usage.OutputTokens
 	s.stats.CacheWrite += usage.CacheWrite
 	s.stats.CacheRead += usage.CacheRead
+	// 对齐 bash 版：speed = output_tokens / (end_ms - start_ms) * 1000，duration > 0
+	if usage.EndMs > usage.StartMs {
+		s.stats.LastCallSpeedTokPerSec = usage.OutputTokens * 1000 / int(usage.EndMs-usage.StartMs)
+	} else {
+		s.stats.LastCallSpeedTokPerSec = 0
+	}
 
 	return s.flushStats()
 }
@@ -799,7 +805,8 @@ func (s *FileStore) FormatTitle(model, status string) string {
 	if status == "idle" {
 		progress = 0
 	}
-	return fmt.Sprintf("\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s\x07\x1b]9;4;%d\x07",
+	// 对齐 bash 版 term_title.awk：model T:turn R:req I:in+cr(pct) O:out C:ctx S:speedtok/s
+	return fmt.Sprintf("\x1b]0;%s%s T:%s R:%s I:%s(%s) O:%s C:%s S:%stok/s\x07\x1b]9;4;%d\x07",
 		prefix,
 		model,
 		fmtInt(st.TurnCount),
@@ -808,6 +815,7 @@ func (s *FileStore) FormatTitle(model, status string) string {
 		cachePct,
 		fmtInt(st.OutputTokens),
 		fmtInt(st.ContextTokens),
+		fmtInt(st.LastCallSpeedTokPerSec),
 		progress)
 }
 

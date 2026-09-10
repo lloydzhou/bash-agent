@@ -181,7 +181,7 @@ pub fn store_stats_write(stats_path: &Path, stats: &serde_json::Map<String, Valu
         .and_then(Value::as_str)
         .unwrap_or("");
     let line = format!(
-        "{{\"current_turn_count\":{},\"agent_request_count\":{},\"compact_request_count\":{},\"sub_agent_request_count\":{},\"total_input_tokens\":{},\"total_output_tokens\":{},\"total_cache_read_tokens\":{},\"total_cache_creation_tokens\":{},\"current_context_tokens\":{},\"last_updated\":{}}}\n",
+        "{{\"current_turn_count\":{},\"agent_request_count\":{},\"compact_request_count\":{},\"sub_agent_request_count\":{},\"total_input_tokens\":{},\"total_output_tokens\":{},\"total_cache_read_tokens\":{},\"total_cache_creation_tokens\":{},\"current_context_tokens\":{},\"last_call_speed_tok_per_sec\":{},\"last_updated\":{}}}\n",
         stats_num(stats, "current_turn_count"),
         stats_num(stats, "agent_request_count"),
         stats_num(stats, "compact_request_count"),
@@ -191,6 +191,7 @@ pub fn store_stats_write(stats_path: &Path, stats: &serde_json::Map<String, Valu
         stats_num(stats, "total_cache_read_tokens"),
         stats_num(stats, "total_cache_creation_tokens"),
         stats_num(stats, "current_context_tokens"),
+        stats_num(stats, "last_call_speed_tok_per_sec"),
         serde_json::to_string(last_updated)?,
     );
     fs::write(stats_path, line)?;
@@ -485,6 +486,10 @@ fn default_stats() -> serde_json::Map<String, Value> {
     );
     stats.insert(
         "current_context_tokens".to_string(),
+        Value::Number(0.into()),
+    );
+    stats.insert(
+        "last_call_speed_tok_per_sec".to_string(),
         Value::Number(0.into()),
     );
     stats.insert("last_updated".to_string(), Value::String(String::new()));

@@ -456,6 +456,8 @@ pub mod types {
         pub output_tokens: i64,
         pub cache_read_input_tokens: i64,
         pub cache_creation_input_tokens: i64,
+        pub start_ms: i64,
+        pub end_ms: i64,
     }
 
     #[derive(Debug, Clone)]
@@ -532,7 +534,7 @@ pub mod types {
 
     pub fn parse_usage_payload(payload: &str) -> Result<UsageEvent> {
         let parts: Vec<&str> = payload.split('\t').collect();
-        if parts.len() != 4 {
+        if parts.len() != 4 && parts.len() != 6 {
             bail!("invalid usage payload")
         }
         Ok(UsageEvent {
@@ -540,6 +542,8 @@ pub mod types {
             output_tokens: parts[1].parse()?,
             cache_read_input_tokens: parts[2].parse()?,
             cache_creation_input_tokens: parts[3].parse()?,
+            start_ms: parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0),
+            end_ms: parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(0),
         })
     }
 

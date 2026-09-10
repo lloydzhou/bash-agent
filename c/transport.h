@@ -34,6 +34,8 @@ typedef struct {
     int out_tokens;          /* USAGE: 输出 token */
     int cache_read_tokens;   /* USAGE: 缓存读取 token */
     int cache_creation_tokens; /* USAGE: 缓存创建 token */
+    long long start_ms;      /* USAGE: 流开始时间戳（毫秒） */
+    long long end_ms;        /* USAGE: 流结束时间戳（毫秒） */
 } SseEvent;
 
 typedef void (*sse_callback_fn)(void *ctx, const SseEvent *evt);
@@ -60,7 +62,8 @@ int http_post_sse(const char *url, const char **headers, int header_count,
 
 /* 解析 SSE 事件行（从 HTTP 响应体的 "data: ..." 行解析） */
 int sse_parse_event(const char *provider, const char *data, size_t data_len,
-                    sse_callback_fn callback, void *ctx);
+                    sse_callback_fn callback, void *ctx,
+                    long long start_ms);
 
 /* ============================================================
  * SSE 累积器 — 用于 agent_loop 中收集流式事件
@@ -94,6 +97,10 @@ typedef struct {
     int out_tokens;
     int cache_read_tokens;
     int cache_creation_tokens;
+
+    /* 流时间戳（毫秒），用于计算 tok/s */
+    long long start_ms;
+    long long end_ms;
 
     /* 停止原因 */
     char *stop_reason;

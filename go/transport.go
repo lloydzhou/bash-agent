@@ -196,6 +196,10 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 		}
 	}()
 
+	// 对齐 bash 版 claude_sse.awk：流开始时刻记录 start_ms，结束时算 speed
+	startMs := time.Now().UnixMilli()
+	endMs := func() int64 { return time.Now().UnixMilli() }
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
@@ -227,7 +231,8 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 
 			if t.cfg.Provider == "responses" && (strings.HasPrefix(eventType, "response.") || eventType == "error") {
 				if t.handleResponsesEvent(eventType, data, ch, responsesPendingCalls, responsesItemIndexes,
-					&responsesTextStarted, &inputTokens, &outputTokens, &cacheRead) {
+					&responsesTextStarted, &inputTokens, &outputTokens, &cacheRead,
+					startMs) {
 					stopEmitted = true
 				}
 				continue
@@ -239,7 +244,8 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 					openaiPendingCalls,
 					&openaiTextStarted,
 					&stopReason,
-					&inputTokens, &outputTokens, &cacheRead, &cacheCreate)
+					&inputTokens, &outputTokens, &cacheRead, &cacheCreate,
+					startMs)
 				if data == "[DONE]" {
 					stopEmitted = true
 				}
@@ -287,12 +293,14 @@ func (t *HTTPTransport) parseSSEStream(ctx context.Context, resp *http.Response,
 
 			case "message_stop":
 				stopEmitted = true
-				// 发送 USAGE + STOP
+				// 发送 USAGE + STOP（对齐 bash 版：带 start_ms/end_ms 用于计算 tok/s）
 				ch <- Event{Type: EventUsage, Payload: Usage{
 					InputTokens:  inputTokens,
 					OutputTokens: outputTokens,
 					CacheRead:    cacheRead,
 					CacheWrite:   cacheCreate,
+					StartMs:      startMs,
+					EndMs:        endMs(),
 				}}
 				ch <- Event{Type: EventStop, Fields: []string{"STOP", stopReason}}
 
@@ -360,7 +368,8 @@ func emitResponsesPendingCalls(ch chan<- Event, pending map[int]*responsesPendin
 // 返回 true 表示该事件已经终止当前响应。
 func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- Event,
 	pending map[int]*responsesPendingCall, itemIndexes map[string]int, textStarted *bool,
-	inputTokens, outputTokens, cacheRead *int) bool {
+	inputTokens, outputTokens, cacheRead *int,
+	startMs int64) bool {
 	var payload struct {
 		Delta       string `json:"delta"`
 		OutputIndex int    `json:"output_index"`
@@ -486,7 +495,13 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 		recordUsage()
 		hasTools := len(pending) > 0
 		emitResponsesPendingCalls(ch, pending)
-		ch <- Event{Type: EventUsage, Payload: Usage{InputTokens: *inputTokens, OutputTokens: *outputTokens, CacheRead: *cacheRead}}
+		ch <- Event{Type: EventUsage, Payload: Usage{
+			InputTokens:  *inputTokens,
+			OutputTokens: *outputTokens,
+			CacheRead:    *cacheRead,
+			StartMs:      startMs,
+			EndMs:        time.Now().UnixMilli(),
+		}}
 		stopReason := "end_turn"
 		if hasTools {
 			stopReason = "tool_use"
@@ -521,7 +536,13 @@ func (t *HTTPTransport) handleResponsesEvent(eventType, data string, ch chan<- E
 			}
 		}
 		ch <- Event{Type: EventError, Fields: []string{"ERROR", message}}
-		ch <- Event{Type: EventUsage, Payload: Usage{InputTokens: *inputTokens, OutputTokens: *outputTokens, CacheRead: *cacheRead}}
+		ch <- Event{Type: EventUsage, Payload: Usage{
+			InputTokens:  *inputTokens,
+			OutputTokens: *outputTokens,
+			CacheRead:    *cacheRead,
+			StartMs:      startMs,
+			EndMs:        time.Now().UnixMilli(),
+		}}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
 		return true
 	}
@@ -551,7 +572,8 @@ func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
 	pending map[int]*openAIPendingCall,
 	textStarted *bool,
 	stopReason *string,
-	inputTokens, outputTokens, cacheRead, cacheCreate *int) {
+	inputTokens, outputTokens, cacheRead, cacheCreate *int,
+	startMs int64) {
 
 	if data == "[DONE]" {
 		emitOpenAIPendingCalls(ch, pending)
@@ -570,6 +592,8 @@ func (t *HTTPTransport) handleOpenAIChunk(data string, ch chan<- Event,
 			OutputTokens: *outputTokens,
 			CacheRead:    *cacheRead,
 			CacheWrite:   *cacheCreate,
+			StartMs:      startMs,
+			EndMs:        time.Now().UnixMilli(),
 		}}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", sr}}
 		return

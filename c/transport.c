@@ -5,7 +5,14 @@
 #include <ctype.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/time.h>
 #include <curl/curl.h>
+
+static long long now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000;
+}
 
 /* ============================================================
  * libcurl 回调
@@ -59,6 +66,7 @@ typedef struct {
     int *responses_item_indexes;
     int responses_item_count;
     int responses_item_cap;
+    long long start_ms;     /* 流开始时间戳（毫秒），对齐 bash 版 */
 } StreamCtx;
 
 static void emit_simple_event(sse_callback_fn callback, void *ctx,
@@ -207,6 +215,8 @@ static void parse_openai_sse_event(StreamCtx *sctx, const char *data, size_t dat
         memset(&evt, 0, sizeof(evt));
         evt.type = SSE_USAGE;
         fill_openai_usage_event(&evt, usage);
+        evt.start_ms = sctx->start_ms;
+        evt.end_ms = now_ms();
         sctx->callback(sctx->ctx, &evt);
     }
 }
@@ -261,6 +271,8 @@ static void responses_emit_usage(StreamCtx *sctx) {
     evt.in_tokens = sctx->responses_input_tokens;
     evt.out_tokens = sctx->responses_output_tokens;
     evt.cache_read_tokens = sctx->responses_cache_read_tokens;
+    evt.start_ms = sctx->start_ms;
+    evt.end_ms = now_ms();
     sctx->callback(sctx->ctx, &evt);
 }
 
@@ -361,13 +373,13 @@ static size_t stream_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
                 const char *data = line + 6;
                 if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
                 else if (strcmp(sctx->provider, "responses") == 0) parse_responses_sse_event(sctx, sctx->event ? sctx->event : "", data, strlen(data));
-                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx);
+                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx, sctx->start_ms);
             } else if (strncmp(line, "data:", 5) == 0) {
                 const char *data = line + 5;
                 while (*data == ' ') data++;
                 if (strcmp(sctx->provider, "openai") == 0) parse_openai_sse_event(sctx, data, strlen(data));
                 else if (strcmp(sctx->provider, "responses") == 0) parse_responses_sse_event(sctx, sctx->event ? sctx->event : "", data, strlen(data));
-                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx);
+                else sse_parse_event(sctx->provider, data, strlen(data), sctx->callback, sctx->ctx, sctx->start_ms);
             }
             /* 重置行缓冲 */
             sb_truncate(&sctx->line_buf, 0);
@@ -510,6 +522,8 @@ static void process_residual_json(StreamCtx *sctx, const char *provider,
             evt.out_tokens = json_get_int(usage, "output_tokens");
             evt.cache_read_tokens = json_get_int(usage, "cache_read_input_tokens");
             evt.cache_creation_tokens = json_get_int(usage, "cache_creation_input_tokens");
+            evt.start_ms = sctx->start_ms;
+            evt.end_ms = now_ms();
             callback(ctx, &evt);
         }
     } else {
@@ -563,6 +577,8 @@ static void process_residual_json(StreamCtx *sctx, const char *provider,
             memset(&evt, 0, sizeof(evt));
             evt.type = SSE_USAGE;
             fill_openai_usage_event(&evt, usage);
+            evt.start_ms = sctx->start_ms;
+            evt.end_ms = now_ms();
             callback(ctx, &evt);
         }
     }
@@ -580,6 +596,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
 
     struct timespec start_ts;
     clock_gettime(CLOCK_MONOTONIC, &start_ts);
+    long long start_ms = now_ms();
 
     struct curl_slist *hdrs = NULL;
     for (int i = 0; i < header_count; i++) {
@@ -600,6 +617,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
         sb_init(&sctx.line_buf);
         sctx.cancelled = cancelled;
         sctx.provider = (char *)provider;
+        sctx.start_ms = start_ms;
 
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -716,7 +734,8 @@ static char *dup_and_free(char *s) {
 #endif
 
 int sse_parse_event(const char *provider, const char *data, size_t data_len,
-                    sse_callback_fn callback, void *ctx) {
+                    sse_callback_fn callback, void *ctx,
+                    long long start_ms) {
     if (data_len == 0) return 0;
     if (strcmp(data, "[DONE]") == 0) {
         if (strcmp(provider, "claude") == 0) emit_simple_event(callback, ctx, SSE_STOP, "end_turn");
@@ -796,6 +815,8 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                 if (it > 0) evt.in_tokens = it;
                 if (cr > 0) evt.cache_read_tokens = cr;
                 if (cc > 0) evt.cache_creation_tokens = cc;
+                evt.start_ms = start_ms;
+                evt.end_ms = now_ms();
                 callback(ctx, &evt);
             }
         } else if (strcmp(type, "message_start") == 0) {
@@ -808,6 +829,8 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
                 evt.in_tokens = json_get_int(usage, "input_tokens");
                 evt.cache_read_tokens = json_get_int(usage, "cache_read_input_tokens");
                 evt.cache_creation_tokens = json_get_int(usage, "cache_creation_input_tokens");
+                evt.start_ms = start_ms;
+                evt.end_ms = now_ms();
                 callback(ctx, &evt);
             }
         } else if (strcmp(type, "error") == 0) {
@@ -979,6 +1002,8 @@ void sse_accum_callback(void *ctx, const SseEvent *evt) {
         if (evt->out_tokens > 0) acc->out_tokens = evt->out_tokens;
         if (evt->cache_read_tokens > 0) acc->cache_read_tokens = evt->cache_read_tokens;
         if (evt->cache_creation_tokens > 0) acc->cache_creation_tokens = evt->cache_creation_tokens;
+        acc->start_ms = evt->start_ms;
+        acc->end_ms = evt->end_ms;
         break;
 
     case SSE_STOP:
