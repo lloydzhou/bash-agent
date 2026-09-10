@@ -1099,11 +1099,14 @@ char *build_claude_request(const char *model, const char *system_prompt,
     sb_append(&buf, "{\"max_tokens\":");
     sb_appendf(&buf, "%d", max_tokens);
 
-    /* messages */
+    /* messages：与 Bash store_conv_get_messages 对齐，跳过空物理行。 */
     sb_append(&buf, ",\"messages\":[");
+    int first_message = 1;
     for (int i = 0; i < conv_line_count; i++) {
-        if (i > 0) sb_append(&buf, ",");
+        if (!conv_lines[i] || conv_lines[i][0] == '\0') continue;
+        if (!first_message) sb_append(&buf, ",");
         sb_append(&buf, conv_lines[i]);
+        first_message = 0;
     }
     sb_append(&buf, "]");
 

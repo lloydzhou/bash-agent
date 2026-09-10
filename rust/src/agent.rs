@@ -673,6 +673,7 @@ impl Agent {
             .unwrap_or(true);
         for f in [
             &paths.conversation,
+            &paths.archive,
             &paths.events,
             &paths.summary,
             &paths.plan,

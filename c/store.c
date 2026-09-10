@@ -17,6 +17,7 @@ void store_session_paths_free(SessionPaths *p) {
     FREE_PTR(p->base_dir);
     FREE_PTR(p->session_dir);
     FREE_PTR(p->conversation);
+    FREE_PTR(p->archive);
     FREE_PTR(p->events);
     FREE_PTR(p->stats);
     FREE_PTR(p->summary);
@@ -95,6 +96,10 @@ SessionPaths store_session_paths_for(const char *home, const char *cwd, const ch
     p.conversation = util_strdup(buf.data);
 
     sb_truncate(&buf, 0);
+    sb_appendf(&buf, "%s/conversation-archive.jsonl", p.session_dir);
+    p.archive = util_strdup(buf.data);
+
+    sb_truncate(&buf, 0);
     sb_appendf(&buf, "%s/events.jsonl", p.session_dir);
     p.events = util_strdup(buf.data);
 
@@ -138,6 +143,7 @@ int store_session_init(const SessionPaths *p, int is_new) {
     if (util_mkdirs(p->session_dir, 0755) != 0) return -1;
     mkdir(store_session_image_dir(p), 0755);
     touch_file(p->conversation);
+    touch_file(p->archive);
     touch_file(p->events);
     touch_file(p->summary);
     touch_file(p->plan);
@@ -186,6 +192,9 @@ int store_session_fork(const SessionPaths *parent, const SessionPaths *child) {
     char *parent_conv = util_read_file(parent->conversation);
     if (parent_conv && strlen(parent_conv) > 0) util_write_file(child->conversation, parent_conv);
     free(parent_conv);
+    char *parent_archive = util_read_file(parent->archive);
+    if (parent_archive && strlen(parent_archive) > 0) util_write_file(child->archive, parent_archive);
+    free(parent_archive);
     char *parent_summary = util_read_file(parent->summary);
     if (parent_summary && strlen(parent_summary) > 0) util_write_file(child->summary, parent_summary);
     free(parent_summary);
@@ -433,13 +442,11 @@ int store_conv_line_count(const char *path, char ***out, int *out_count) {
     ssize_t read_len;
     if (!lines) goto fail;
 
-    /* getline 会按真实换行符扩容，不能将超长 JSONL 记录误当成多行。 */
+    /* 与 Bash 的 wc -l 对齐：每个以 LF 结尾的物理行都是一条记录。
+     * 保留 CR，避免 CRLF 会话在后续裁剪前被规范化。 */
     while ((read_len = getline(&line, &line_cap, f)) != -1) {
-        /* 去除尾部换行 */
-        size_t len = (size_t)read_len;
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-            line[--len] = '\0';
-        if (len == 0) continue;
+        if (read_len == 0 || line[read_len - 1] != '\n') continue;
+        line[read_len - 1] = '\0';
 
         if (count >= cap) {
             int new_cap = cap * 2;
@@ -467,30 +474,59 @@ fail:
     return -1;
 }
 
+static size_t conv_line_end_offset(const char *data, size_t len, int lines) {
+    if (lines <= 0) return 0;
+    int seen = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (data[i] == '\n' && ++seen == lines) return i + 1;
+    }
+    return len;
+}
+
 int store_conv_trim_tail(const char *path, int keep_lines) {
-    char **lines = NULL;
-    int count = 0;
-    if (store_conv_line_count(path, &lines, &count) != 0) return -1;
-    if (keep_lines >= count) {
-        for (int i = 0; i < count; i++) free(lines[i]);
-        free(lines);
+    char *data = util_read_file(path);
+    if (!data) return -1;
+
+    size_t len = strlen(data);
+    int total_lines = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (data[i] == '\n') total_lines++;
+    }
+    if (keep_lines >= total_lines) {
+        free(data);
         return 0;
     }
 
-    /* 重写文件，只保留最后 keep_lines 行 */
-    FILE *f = fopen(path, "w");
+    size_t split_at = conv_line_end_offset(data, len, total_lines - keep_lines);
+
+    /* 先按原始字节追加被裁剪的物理行；归档失败不阻止 Bash 同样会执行的裁剪。 */
+    char *session_dir = util_strdup(path);
+    char *slash = strrchr(session_dir, '/');
+    if (slash) {
+        *slash = '\0';
+        char *archive = util_path_join(session_dir, "conversation-archive.jsonl");
+        FILE *archive_file = fopen(archive, "ab");
+        if (archive_file) {
+            (void)fwrite(data, 1, split_at, archive_file);
+            fclose(archive_file);
+        }
+        free(archive);
+    }
+    free(session_dir);
+
+    FILE *f = fopen(path, "wb");
     if (!f) {
-        for (int i = 0; i < count; i++) free(lines[i]);
-        free(lines);
+        free(data);
         return -1;
     }
-    int start = count - keep_lines;
-    for (int i = start; i < count; i++) {
-        fprintf(f, "%s\n", lines[i]);
+    size_t kept = len - split_at;
+    if (kept > 0 && fwrite(data + split_at, 1, kept, f) != kept) {
+        fclose(f);
+        free(data);
+        return -1;
     }
     fclose(f);
-    for (int i = 0; i < count; i++) free(lines[i]);
-    free(lines);
+    free(data);
     return 0;
 }
 

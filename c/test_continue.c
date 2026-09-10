@@ -107,6 +107,112 @@ static void test_explicit_sub_session_paths_remain_available(void) {
     free(home);
 }
 
+static void test_conv_trim_archives_and_appends(void) {
+    char *dir = make_temp_dir("conv-archive");
+    char *conversation = util_path_join(dir, "conversation.jsonl");
+    char *archive = util_path_join(dir, "conversation-archive.jsonl");
+    util_write_file(conversation,
+                    "{\"role\":\"user\",\"content\":\"first\"}\n"
+                    "{\"role\":\"assistant\",\"content\":\"second\"}\n"
+                    "{\"role\":\"user\",\"content\":\"third\"}\n");
+
+    int first_trim = store_conv_trim_tail(conversation, 2) == 0;
+    char *archive_data = util_read_file(archive);
+    char *conversation_data = util_read_file(conversation);
+    check(first_trim && archive_data && strstr(archive_data, "first")
+          && !strstr(archive_data, "second") && conversation_data
+          && !strstr(conversation_data, "first") && strstr(conversation_data, "second")
+          && strstr(conversation_data, "third"),
+          "trim archives dropped JSONL before retaining the tail");
+    free(archive_data);
+    free(conversation_data);
+
+    FILE *f = fopen(conversation, "a");
+    if (f) {
+        fprintf(f, "{\"role\":\"assistant\",\"content\":\"fourth\"}\n");
+        fclose(f);
+    }
+    int second_trim = f && store_conv_trim_tail(conversation, 2) == 0;
+    archive_data = util_read_file(archive);
+    check(second_trim && archive_data
+          && strcmp(archive_data,
+                    "{\"role\":\"user\",\"content\":\"first\"}\n"
+                    "{\"role\":\"assistant\",\"content\":\"second\"}\n") == 0,
+          "repeated trims append newly dropped JSONL to the archive");
+
+    free(archive_data);
+    unlink(archive);
+    unlink(conversation);
+    free(archive);
+    free(conversation);
+    rmdir(dir);
+    free(dir);
+}
+
+static void test_conv_trim_preserves_raw_bytes(void) {
+    char *dir = make_temp_dir("conv-archive-raw");
+    char *conversation = util_path_join(dir, "conversation.jsonl");
+    char *archive = util_path_join(dir, "conversation-archive.jsonl");
+    const char *input = "{\"role\":\"user\",\"content\":\"first\"}\r\n\r\n"
+                        "{\"role\":\"assistant\",\"content\":\"second\"}\r\n"
+                        "{\"role\":\"user\",\"content\":\"third\"}\r\n";
+    const char *dropped = "{\"role\":\"user\",\"content\":\"first\"}\r\n\r\n";
+    const char *kept = "{\"role\":\"assistant\",\"content\":\"second\"}\r\n"
+                       "{\"role\":\"user\",\"content\":\"third\"}\r\n";
+    util_write_file(conversation, input);
+
+    int trimmed = store_conv_trim_tail(conversation, 2) == 0;
+    char *archive_data = util_read_file(archive);
+    char *conversation_data = util_read_file(conversation);
+    check(trimmed && archive_data && conversation_data
+          && strcmp(archive_data, dropped) == 0 && strcmp(conversation_data, kept) == 0,
+          "trim preserves dropped and retained JSONL bytes including CRLF and blank lines");
+
+    free(conversation_data);
+    free(archive_data);
+    unlink(archive);
+    unlink(conversation);
+    free(archive);
+    free(conversation);
+    rmdir(dir);
+    free(dir);
+}
+
+static void test_session_fork_copies_archive(void) {
+    char *home = make_temp_dir("fork-archive");
+    char *cwd = util_path_join(home, "project");
+    util_mkdirs(cwd, 0755);
+    SessionPaths parent = store_session_paths_for(home, cwd, "parent");
+    SessionPaths child = store_session_paths_for(home, cwd, "child");
+
+    int initialized = store_session_init(&parent, 1) == 0;
+    int archive_created = initialized && access(parent.archive, F_OK) == 0;
+    util_write_file(parent.conversation, "conversation\n");
+    util_write_file(parent.archive, "archive\n");
+    util_write_file(parent.summary, "summary\n");
+    util_write_file(parent.plan, "plan\n");
+
+    int forked = initialized && store_session_fork(&parent, &child) == 0;
+    char *conversation = util_read_file(child.conversation);
+    char *archive = util_read_file(child.archive);
+    char *summary = util_read_file(child.summary);
+    char *plan = util_read_file(child.plan);
+    check(archive_created && forked && conversation && archive && summary && plan
+          && strcmp(conversation, "conversation\n") == 0
+          && strcmp(archive, "archive\n") == 0
+          && strcmp(summary, "summary\n") == 0 && strcmp(plan, "plan\n") == 0,
+          "session fork copies archive with conversation, summary, and plan");
+
+    free(plan);
+    free(summary);
+    free(archive);
+    free(conversation);
+    store_session_paths_free(&child);
+    store_session_paths_free(&parent);
+    free(cwd);
+    free(home);
+}
+
 static void test_conv_long_line_survives_trim(void) {
     char *dir = make_temp_dir("conv-long-line");
     char *path = util_path_join(dir, "conversation.jsonl");
@@ -162,6 +268,9 @@ int main(void) {
     test_continue_skips_sub_sessions();
     test_continue_rejects_only_sub_sessions();
     test_explicit_sub_session_paths_remain_available();
+    test_conv_trim_archives_and_appends();
+    test_conv_trim_preserves_raw_bytes();
+    test_session_fork_copies_archive();
     test_conv_long_line_survives_trim();
     return failures == 0 ? 0 : 1;
 }

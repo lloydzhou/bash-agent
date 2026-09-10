@@ -2011,6 +2011,7 @@ test_agent_fork_session() {
     mkdir -p "$src_dir/images"
     printf '{"role":"user","content":"original question"}\n{"role":"assistant","content":"original answer"}\n' > "$src_dir/conversation.jsonl"
     printf 'original summary' > "$src_dir/summary.txt"
+    printf '{"role":"user","content":"archived message"}\n' > "$src_dir/conversation-archive.jsonl"
     printf '# original plan' > "$src_dir/plan.md"
     printf '{"type":"session_start","session_id":"%s"}\n' "$src_id" > "$src_dir/events.jsonl"
 
@@ -2045,6 +2046,13 @@ test_agent_fork_session() {
         green "fork: events.jsonl is fresh (no source events leaked)"; ((PASS++)) || true
     else
         red "fork: source events leaked into forked session"; ((FAIL++)) || true
+    fi
+
+    # 验证：归档文件继承
+    if grep -q "archived message" "$proj_dir/$new_id/conversation-archive.jsonl" 2>/dev/null; then
+        green "fork: conversation archive inherited"; ((PASS++)) || true
+    else
+        red "fork: conversation archive NOT inherited"; ((FAIL++)) || true
     fi
 
     # 验证：源 session conversation 未被修改
@@ -2473,6 +2481,14 @@ test_agent_compact_context() {
         green "agent_compact_context: conv trimmed ($original_lines -> $post_lines lines)"; ((PASS++)) || true
     else
         red "agent_compact_context: conv NOT trimmed ($original_lines -> $post_lines lines)"; echo "  Output: $output"; ((FAIL++)) || true
+    fi
+
+    # Verify: archive contains exactly the dropped original messages
+    local archive_file="${session_dir}/conversation-archive.jsonl"
+    if [[ -s "$archive_file" ]] && grep -q '"step 1 of compact test' "$archive_file" && ! grep -q '"step 20 of compact test' "$archive_file"; then
+        green "agent_compact_context: archive contains dropped messages"; ((PASS++)) || true
+    else
+        red "agent_compact_context: archive missing or contains wrong messages"; echo "  Archive: $(cat "$archive_file" 2>/dev/null || echo 'N/A')"; ((FAIL++)) || true
     fi
 
     # Verify: summary file created with expected content

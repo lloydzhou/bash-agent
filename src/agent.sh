@@ -354,7 +354,7 @@ store_session_init() {
     PLAN_DRAFT_FILE="${session_dir}/plan.draft"
     STATS_FILE="${session_dir}/stats.json"
     [[ ! -s "$SESSION_EVENT_FILE" ]] && new_session=true
-    touch "$CONV_FILE" "$SESSION_EVENT_FILE" "$CONTEXT_SUMMARY_FILE" "$PLAN_FILE" "$PLAN_DRAFT_FILE" "$STATS_FILE"
+    touch "$CONV_FILE" "$SESSION_EVENT_FILE" "$CONTEXT_SUMMARY_FILE" "$PLAN_FILE" "$PLAN_DRAFT_FILE" "$STATS_FILE" "${session_dir}/conversation-archive.jsonl"
     mkdir -p "${session_dir}/images" 2>/dev/null || true
     if [[ "$new_session" == true ]]; then
         store_event_append "{\"type\":\"session_start\",\"session_id\":\"$(util_json_escape "$SESSION_ID")\"}"
@@ -371,7 +371,7 @@ store_session_init() {
 store_session_fork() {
     local parent_dir="$1" child_dir="$2"
     mkdir -p "$child_dir"
-    cp "$parent_dir"/{conversation.jsonl,summary.txt,plan.md} "$child_dir/" 2>/dev/null || true
+    cp "$parent_dir"/{conversation.jsonl,conversation-archive.jsonl,summary.txt,plan.md} "$child_dir/" 2>/dev/null || true
 }
 
 store_session_get_dir() {
@@ -489,6 +489,7 @@ store_conv_head_to() { head -n "$1" "$CONV_FILE" > "$2"; } # $1=lines, $2=outfil
 store_conv_trim_tail() {
     # $1=lines to keep from tail
     local tmp; tmp=$(mktemp "${TMPDIR:-/tmp}/conv_trim.XXXXXX")
+    head -n "$(( $(store_conv_line_count) - $1 ))" "$CONV_FILE" >> "${CONV_FILE%/*}/conversation-archive.jsonl"
     tail -n "$1" "$CONV_FILE" > "$tmp"
     mv "$tmp" "$CONV_FILE"
 }

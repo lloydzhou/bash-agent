@@ -26,6 +26,7 @@ type FileStore struct {
 
 	// 文件路径（Init 后填充）
 	convFile      string
+	archiveFile   string
 	eventFile     string
 	summaryFile   string
 	planFile      string
@@ -171,6 +172,7 @@ func (s *FileStore) Init(sessionID string) error {
 	}
 
 	s.convFile = filepath.Join(dir, "conversation.jsonl")
+	s.archiveFile = filepath.Join(dir, "conversation-archive.jsonl")
 	s.eventFile = filepath.Join(dir, "events.jsonl")
 	s.summaryFile = filepath.Join(dir, "summary.txt")
 	s.planFile = filepath.Join(dir, "plan.md")
@@ -182,7 +184,7 @@ func (s *FileStore) Init(sessionID string) error {
 	if fi, err := os.Stat(s.eventFile); err != nil || fi.Size() == 0 {
 		newSession = true
 	}
-	for _, f := range []string{s.convFile, s.eventFile, s.summaryFile, s.planFile, s.planDraftFile} {
+	for _, f := range []string{s.convFile, s.archiveFile, s.eventFile, s.summaryFile, s.planFile, s.planDraftFile} {
 		file, err := os.OpenFile(f, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			return fmt.Errorf("touch %s: %w", f, err)
@@ -212,7 +214,7 @@ func (s *FileStore) Init(sessionID string) error {
 
 func (s *FileStore) Fork(parentDir, childDir string) error {
 	os.MkdirAll(childDir, 0755)
-	for _, name := range []string{"conversation.jsonl", "summary.txt", "plan.md"} {
+	for _, name := range []string{"conversation.jsonl", "conversation-archive.jsonl", "summary.txt", "plan.md"} {
 		src := filepath.Join(parentDir, name)
 		dst := filepath.Join(childDir, name)
 		data, err := os.ReadFile(src)
@@ -418,7 +420,7 @@ func (s *FileStore) ConvLineCount() (int, error) {
 	if err != nil {
 		return 0, nil
 	}
-	return len(splitNonEmpty(string(data))), nil
+	return strings.Count(string(data), "\n"), nil
 }
 
 func (s *FileStore) ConvHeadTo(n int) (string, error) {
@@ -426,11 +428,7 @@ func (s *FileStore) ConvHeadTo(n int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	lines := splitNonEmpty(string(data))
-	if n > len(lines) {
-		n = len(lines)
-	}
-	return strings.Join(lines[:n], "\n") + "\n", nil
+	return string(data[:lineEndOffset(data, n)]), nil
 }
 
 func (s *FileStore) ConvTrimTail(n int) error {
@@ -438,12 +436,19 @@ func (s *FileStore) ConvTrimTail(n int) error {
 	if err != nil {
 		return err
 	}
-	lines := splitNonEmpty(string(data))
-	if n > len(lines) {
-		n = len(lines)
+	totalLines := strings.Count(string(data), "\n")
+	if n >= totalLines {
+		return nil
 	}
-	keep := lines[len(lines)-n:]
-	return os.WriteFile(s.convFile, []byte(strings.Join(keep, "\n")+"\n"), 0644)
+
+	splitAt := lineEndOffset(data, totalLines-n)
+	archive, err := os.OpenFile(s.archiveFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err == nil {
+		_, _ = archive.Write(data[:splitAt])
+		_ = archive.Close()
+	}
+
+	return os.WriteFile(s.convFile, data[splitAt:], 0644)
 }
 
 func (s *FileStore) ConvUserTurnCount() (int, error) {
@@ -1041,6 +1046,22 @@ func splitNonEmpty(s string) []string {
 		}
 	}
 	return result
+}
+
+func lineEndOffset(data []byte, lines int) int {
+	if lines <= 0 {
+		return 0
+	}
+	seen := 0
+	for i, b := range data {
+		if b == '\n' {
+			seen++
+			if seen == lines {
+				return i + 1
+			}
+		}
+	}
+	return len(data)
 }
 
 func pathToProjectKey(absPath string) string {

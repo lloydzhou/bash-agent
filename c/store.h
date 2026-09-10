@@ -22,6 +22,7 @@ typedef struct {
     char *base_dir;         /* ~/.bash-agent/projects/<key>/ */
     char *session_dir;      /* base_dir/<session-id>/ */
     char *conversation;     /* session_dir/conversation.jsonl */
+    char *archive;          /* session_dir/conversation-archive.jsonl */
     char *events;           /* session_dir/events.jsonl */
     char *stats;            /* session_dir/stats.json */
     char *summary;          /* session_dir/summary.md */
