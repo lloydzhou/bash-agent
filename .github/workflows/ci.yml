@@ -532,6 +532,9 @@ jobs:
             dist/bash-agent_*_amd64.deb
             dist/bash-agent_*_arm64.deb
 
+      - name: Fetch mcpc/oapi debs for aggregate apt repo
+        run: bash scripts/apt/fetch-debs.sh dist lloydzhou/mcpc lloydzhou/oapi
+
       - name: Build APT repository and site
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -540,7 +543,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq gnupg 2>&1 | tail -1
-          bash scripts/build-apt-repo.sh "${{ github.ref_name }}" dist apt-repo
+          bash scripts/apt/build-apt-repo.sh "${{ github.ref_name }}" dist apt-repo
           # 组装 Pages 站点根：官网（site/）+ apt 仓库（debian/）+ install.sh
           cp -r site/. apt-repo/
           cp scripts/install-apt.sh apt-repo/install.sh

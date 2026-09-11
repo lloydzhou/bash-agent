@@ -1,0 +1,61 @@
+name: APT Republish
+
+# 手动重发 apt 源：聚合 bash-agent / mcpc / oapi 三个仓库最新 release 的
+# deb，全量重建 APT 仓库并部署到 GitHub Pages（lloydzhou.github.io/bash-agent）。
+#
+# 使用场景：mcpc / oapi 发新版本后，手动跑一次本 workflow 即可刷新源内
+# 对应包（bash-agent 自身发版走 ci.yml release job，已含聚合逻辑）。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 与 ci.yml release job 的 Pages 部署互斥，避免互相覆盖
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  republish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch latest debs from all repos
+        run: bash scripts/apt/fetch-debs.sh dist
+
+      - name: Build APT repository and site
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gnupg 2>&1 | tail -1
+          # 版本号仅作 control 缺 Version 字段时的兜底，实际以 deb 内 control 为准
+          version="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+          bash scripts/apt/build-apt-repo.sh "$version" dist apt-repo
+          # 组装 Pages 站点根：官网（site/）+ apt 仓库（debian/）+ install.sh
+          cp -r site/. apt-repo/
+          cp scripts/install-apt.sh apt-repo/install.sh
+          find apt-repo -maxdepth 2 | sort
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apt-repo
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
