@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# 从 dist/ 目录中的 .deb 构建标准 apt 仓库，输出到 apt-repo/。
-# 用法：scripts/build-apt-repo.sh <version> [deb_dir] [out_dir] [repo_slug]
+# 从 deb_dir 中的 .deb 构建标准 apt 仓库，输出到 out_dir。
+# 用法：scripts/apt/build-apt-repo.sh <version> [deb_dir] [out_dir] [repo_slug]
+#
+# 聚合模式：收集目录下所有 *_amd64.deb / *_arm64.deb（bash-agent + mcpc +
+# oapi，由 scripts/apt/fetch-debs.sh 下载或 CI 本地构建产物提供）。
 #
 # .deb 文件存放于仓库内 pool/ 目录（部署走 Pages artifact，不进任何 git 分支）。
 # Packages 索引的 Filename 字段使用相对路径（apt 所有版本均不支持绝对 URL，
@@ -32,9 +35,9 @@ REPO_DIR="$OUT_DIR/debian"
 rm -rf "$OUT_DIR"
 mkdir -p "$REPO_DIR/dists/stable"
 
-# 收集 .deb 文件名（只收架构包）
+# 收集 .deb 文件名（只收架构包，任意来源：bash-agent / mcpc / oapi）
 shopt -s nullglob
-debs=( "$DEB_DIR"/bash-agent_*_amd64.deb "$DEB_DIR"/bash-agent_*_arm64.deb )
+debs=( "$DEB_DIR"/*_amd64.deb "$DEB_DIR"/*_arm64.deb )
 shopt -u nullglob
 if (( ${#debs[@]} == 0 ));then
   echo "错误：$DEB_DIR 中没有架构 .deb 文件（*_amd64.deb / *_arm64.deb）" >&2

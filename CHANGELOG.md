@@ -7,8 +7,12 @@
 ## [Unreleased]
 
 > **conversation 归档**：compact 裁剪的对话行落盘 `conversation-archive.jsonl`，SubAgent fork 一并继承；四个运行时同步实现。
+>
+> **APT 源聚合**：源内新增 mcpc / oapi 两个包（deb 由各自仓库发布），新增手动 republish workflow。
 
 ### Added
+
+- **APT 源聚合三仓库**：`scripts/build-apt-repo.sh` 迁移至 `scripts/apt/build-apt-repo.sh` 并泛化为收集目录下全部 `*_{amd64,arm64}.deb`；新增 `scripts/apt/fetch-debs.sh` 从 lloydzhou/{bash-agent,mcpc,oapi} 最新 release 下载 deb（公开仓库匿名 API，任一仓库缺 deb 资产即中止，防止发布缺包的源）。ci.yml release job 构建源前先拉取 mcpc/oapi deb；新增 `.github/workflows/apt-republish.yml`（仅 `workflow_dispatch`），聚合三仓库全量重建并部署 Pages——mcpc/oapi 发新版后手动跑一次即可刷新源。
 
 - **conversation 归档**（PR #90）：`store_conv_trim_tail` 在裁剪前把被丢弃的 conversation 行追加到 `session_dir/conversation-archive.jsonl`；session 初始化时 touch 归档文件，SubAgent fork 时随 conversation/summary/plan 一并拷贝。Bash / C / Go / Rust 四版本同步。
 - **测试**：bash e2e 新增 fork 归档继承与 compact 归档内容断言；C `test-continue` 扩展至 9 例（重复 trim 追加、CRLF/空行字节保真、>64KiB 大记录不拆行、fork 拷贝）；Go 单测扩展归档场景。
