@@ -2,25 +2,23 @@ Origin: bash-agent
 Label: bash-agent
 Suite: stable
 Codename: stable
-Date: Sat, 15 Aug 2026 13:31:59 UTC
 Architectures: amd64 arm64
 Components: main
 Description: bash-agent APT repository
+Date: Sat, 12 Sep 2026 03:46:04 UTC
 
 MD5Sum:
-  54732ce4f236d5a9902ae779ff7b11fd         547 main/binary-amd64/Packages
-  33652079780f9deaa99868b54539c976         404 main/binary-amd64/Packages.gz
-  50b081a9021a140828886821dd5b4c03         547 main/binary-arm64/Packages
-  b06bd64f987c8735d7a4145895f00ace         404 main/binary-arm64/Packages.gz
-
+  d5d5c0b7a91437cf309983b43830ff19         1421 main/binary-amd64/Packages
+  424a5229b8b72d0479afc14f64ff8d34         727 main/binary-amd64/Packages.gz
+  d74d0960d0bc5d2a696a9973d53ee28c         1421 main/binary-arm64/Packages
+  bca3c2223579d46b719a256e9e8af1dd         726 main/binary-arm64/Packages.gz
 SHA1:
-  0340c5c052c83443d87c91468d2ccd43d838fb49         547 main/binary-amd64/Packages
-  d985c55d066360f9353d0e7ee11b24e53a3783a8         404 main/binary-amd64/Packages.gz
-  e4a4cb633559c2f1fc3c6b8c461daba68e793cd3         547 main/binary-arm64/Packages
-  8084235bb5bf85ec9e1568beb8be752006c70abf         404 main/binary-arm64/Packages.gz
-
+  98dc991fc0ae80162510c63f9b900118705c767e         1421 main/binary-amd64/Packages
+  d84b7518a8029f0f53d200aedb68575d58d3b46c         727 main/binary-amd64/Packages.gz
+  e69c9527a3c2a1c5f2e0f15170ba0ff2f2647acc         1421 main/binary-arm64/Packages
+  78cc01bc1ad002e0401567277a15822a6a151095         726 main/binary-arm64/Packages.gz
 SHA256:
-  b560317955fe8e5dfcf3fa8869e2550463e25200d779d411db6628ddd7f68f25         547 main/binary-amd64/Packages
-  f4e482e640d1d28138b150d8abb74690f768f9a10f4edcc1d870ca9d389d8379         404 main/binary-amd64/Packages.gz
-  a62e9743d02e750f9b29066bd27ef23755f454d99cd2febfd581ed5de11590d0         547 main/binary-arm64/Packages
-  1a837e17e292e643d10e62ba6884a14eda873714cb15fa6a183a64a31b4562d8         404 main/binary-arm64/Packages.gz
+  52ac328e710fee5584cbf7de6c89020651947c5ecbf7ee03d4d784792d744edd         1421 main/binary-amd64/Packages
+  3aaa41c27e4b7bc833fe3f3dd2bda23cc12163b423ff532cc91ccf805ba6371d         727 main/binary-amd64/Packages.gz
+  719447eb6b6694b00fa0fffa197aaf6983345cf7cfe97c4856060f928c6d1fbd         1421 main/binary-arm64/Packages
+  b32325d8b7e809cd15e4f499fbde4e310524a71a6d183c9ab240ab79ced3d303         726 main/binary-arm64/Packages.gz

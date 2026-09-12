@@ -10,3 +10,27 @@ MD5sum: 6fcc5bd3a845568a997e1b89bfcf0dde
 SHA1: 667d825d3c575c2cc1a7a5c460aae3376cebb57a
 SHA256: dcf8f7b995f207680396dfef26a5e60336db76753b673988ebf02dfdb0c923b8
 
+Package: mcpc
+Version: 0.2.0
+Architecture: amd64
+Depends: ca-certificates
+Maintainer: Lloyd Zhou <lloydzhou@qq.com>
+Description: MCP client CLI with daemon-held sessions
+Filename: https://github.com/lloydzhou/mcpc/releases/download/v0.2.0/mcpc_0.2.0_amd64.deb
+Size: 1624028
+MD5sum: 29efed9c0c9eb218ea26fb3917fdc54d
+SHA1: 8b1a698655d717ecd8a95a312797c53579ab1bc1
+SHA256: 98f79777e10101deff3ed1b48aad77f2eae6d65642e86d3acf309bc10e1d8c10
+
+Package: oapi
+Version: 0.1.2
+Architecture: amd64
+Depends: ca-certificates
+Maintainer: Lloyd Zhou <lloydzhou@qq.com>
+Description: OpenAPI command-line client written in Rust
+Filename: https://github.com/lloydzhou/oapi/releases/download/v0.1.2/oapi_0.1.2_amd64.deb
+Size: 922972
+MD5sum: e4ffe726a9e6c113c6c1f45f3b2498de
+SHA1: 920431ffc8be5ea29992a712f9c50515cc90abc9
+SHA256: 55a97306721d45705ec8241ce72a1f1fbc30d47cd55d3c00b25a70ff5fb29cf6
+
