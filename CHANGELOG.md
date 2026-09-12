@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+---
+
+## [4.3.8] - 2026-09-12
+
 > **conversation 归档**：compact 裁剪的对话行落盘 `conversation-archive.jsonl`，SubAgent fork 一并继承；四个运行时同步实现。
 >
 > **APT 源聚合**：源内新增 mcpc / oapi 两个包（deb 由各自仓库发布），新增手动 republish workflow。
@@ -1612,7 +1616,8 @@
 
 ---
 
-[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.3...HEAD
+[Unreleased]: https://github.com/lloydzhou/bash-agent/compare/v4.3.8...HEAD
+[4.3.8]: https://github.com/lloydzhou/bash-agent/compare/v4.3.7...v4.3.8
 [4.3.3]: https://github.com/lloydzhou/bash-agent/compare/v4.3.2...v4.3.3
 [4.3.2]: https://github.com/lloydzhou/bash-agent/compare/v4.3.1...v4.3.2
 [4.3.1]: https://github.com/lloydzhou/bash-agent/compare/v4.3.0...v4.3.1
