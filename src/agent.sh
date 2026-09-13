@@ -581,56 +581,7 @@ llm_vision_body() {
     local body="$1" refs converted path marker dir root relative
     root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
     dir=$(mktemp -d) || return 1
-    local vision_awk
-    read -r -d '' vision_awk <<'VISION_AWK' || true
-{ raw = raw $0 }
-END {
-    messages = extract_value(raw, "messages")
-    n = split_top_level_objects(messages, msgs)
-    result = "["
-    for (i = 1; i <= n; i++) {
-        msg = msgs[i]
-        content = extract_value(msg, "content")
-        content_pos = JSON_VALUE_END - length(content) + 1
-        text = ""
-        if (substr(content, 1, 1) == "\"") text = unescape_json_string(substr(content, 2, length(content) - 2))
-        else {
-            count = split_top_level_objects(content, blocks)
-            for (j = 1; j <= count; j++)
-                if (extract_str(blocks[j], "type") == "text") text = text "\n" extract_str(blocks[j], "text")
-        }
-        images = ""
-        while (start = index(text, "<attached-images>\n")) {
-            text = substr(text, start + length("<attached-images>\n"))
-            stop = index(text, "</attached-images>")
-            if (!stop) break
-            section = substr(text, 1, stop - 1)
-            text = substr(text, stop + length("</attached-images>"))
-            lines = split(section, mapping, "\n")
-            for (j = 1; j <= lines; j++) {
-                if (mapping[j] !~ /^\[Image #[0-9]+\] => \/.*\/images\/[0-9]+\.png$/) continue
-                path = mapping[j]
-                sub(/^\[Image #[0-9]+\] => /, "", path)
-                marker = prefix (++image_count) "~"
-                print marker "\t" path
-                images = images ",{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"" marker "\"}}"
-            }
-        }
-        if (images != "") {
-            replacement = content
-            if (substr(content, 1, 1) == "\"") replacement = "[{\"type\":\"text\",\"text\":" content "}]"
-            replacement = substr(replacement, 1, length(replacement) - 1) images "]"
-            pos = content_pos
-            msg = substr(msg, 1, pos - 1) replacement substr(msg, pos + length(content))
-        }
-        result = result (i > 1 ? "," : "") msg
-    }
-    pos = index(raw, messages)
-    print substr(raw, 1, pos - 1) result "]" substr(raw, pos + length(messages)) > (prefix "body")
-}
-VISION_AWK
-    if ! refs=$(printf '%s' "$body" | util_awk_run -v prefix="$dir/" "${_AWK_JSON:-$(cat "$AWK_DIR/json.awk")}
-$vision_awk"); then
+    if ! refs=$(printf '%s' "$body" | util_awk_run -v prefix="$dir/" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk"); then
         rm -rf "$dir"
         return 1
     fi
