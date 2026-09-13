@@ -21,6 +21,7 @@ VERBOSE=false
 : "${BASH_AGENT_BASH_MODE:=0467}"  # system external network workspace; octal rwx bits per scope
 : "${EFFORT:=high}"           # thinking effort: low|medium|high|xhigh|max
 : "${THINKING:=adaptive}"     # thinking mode: adaptive|enabled|disabled
+: "${AGENT_VISION:=off}"      # native image payloads are opt-in
 : "${SUB_AGENT_DEPTH:=0}"    # 主代理为 0，第一层子代理为 1
 
 # Internal Runtime State
@@ -574,6 +575,85 @@ llm_stream_curl() {
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
 }
 
+# 仅视觉请求使用短占位编码，协议转换完成后才读取并编码图片。
+llm_vision_body() {
+    local LC_ALL=C
+    local body="$1" refs converted path marker dir root relative
+    root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
+    dir=$(mktemp -d) || return 1
+    local vision_awk
+    read -r -d '' vision_awk <<'VISION_AWK' || true
+{ raw = raw $0 }
+END {
+    messages = extract_value(raw, "messages")
+    n = split_top_level_objects(messages, msgs)
+    result = "["
+    for (i = 1; i <= n; i++) {
+        msg = msgs[i]
+        content = extract_value(msg, "content")
+        content_pos = JSON_VALUE_END - length(content) + 1
+        text = ""
+        if (substr(content, 1, 1) == "\"") text = unescape_json_string(substr(content, 2, length(content) - 2))
+        else {
+            count = split_top_level_objects(content, blocks)
+            for (j = 1; j <= count; j++)
+                if (extract_str(blocks[j], "type") == "text") text = text "\n" extract_str(blocks[j], "text")
+        }
+        images = ""
+        while (start = index(text, "<attached-images>\n")) {
+            text = substr(text, start + length("<attached-images>\n"))
+            stop = index(text, "</attached-images>")
+            if (!stop) break
+            section = substr(text, 1, stop - 1)
+            text = substr(text, stop + length("</attached-images>"))
+            lines = split(section, mapping, "\n")
+            for (j = 1; j <= lines; j++) {
+                if (mapping[j] !~ /^\[Image #[0-9]+\] => \/.*\/images\/[0-9]+\.png$/) continue
+                path = mapping[j]
+                sub(/^\[Image #[0-9]+\] => /, "", path)
+                marker = prefix (++image_count) "~"
+                print marker "\t" path
+                images = images ",{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"" marker "\"}}"
+            }
+        }
+        if (images != "") {
+            replacement = content
+            if (substr(content, 1, 1) == "\"") replacement = "[{\"type\":\"text\",\"text\":" content "}]"
+            replacement = substr(replacement, 1, length(replacement) - 1) images "]"
+            pos = content_pos
+            msg = substr(msg, 1, pos - 1) replacement substr(msg, pos + length(content))
+        }
+        result = result (i > 1 ? "," : "") msg
+    }
+    pos = index(raw, messages)
+    print substr(raw, 1, pos - 1) result "]" substr(raw, pos + length(messages)) > (prefix "body")
+}
+VISION_AWK
+    if ! refs=$(printf '%s' "$body" | util_awk_run -v prefix="$dir/" "${_AWK_JSON:-$(cat "$AWK_DIR/json.awk")}
+$vision_awk"); then
+        rm -rf "$dir"
+        return 1
+    fi
+    converted=$(util_body_convert on < "$dir/body") || { rm -rf "$dir"; return 1; }
+    while IFS=$'\t' read -r marker path; do
+        [[ -n "$marker" ]] || continue
+        relative=${path#"$root/"}
+        if [[ "$path" != "$root/"* || "$relative" == ../* || "$relative" == ./* || ! "$relative" =~ ^[^/]+/images/[0-9]+\.png$ || -L "$root/${relative%%/*}" || ! -f "$path" || ! -r "$path" || -L "$path" || -L "${path%/*}" ]] ||
+            [[ "$(od -An -tx1 -N8 "$path" 2>/dev/null | tr -d ' \n')" != 89504e470d0a1a0a ]]; then
+            printf '无法读取有效的 PNG 附件：%s\n' "$path" >&2
+            rm -rf "$dir"
+            return 1
+        fi
+        if [[ "$converted" == *"$marker"* ]]; then
+            printf '%s' "${converted%%"$marker"*}"
+            (set -o pipefail; base64 < "$path" | tr -d '\r\n') || { rm -rf "$dir"; return 1; }
+            converted=${converted#*"$marker"}
+        fi
+    done <<< "$refs"
+    printf '%s' "$converted"
+    rm -rf "$dir"
+}
+
 llm_call() {
     local messages="$1" max_tokens="${2:-$MAX_TOKENS}" use_thinking="${3:-$THINKING}" body system_prompt
     system_prompt=$(agent_build_prompt)
@@ -587,6 +667,11 @@ llm_call() {
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
     body+="}"
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %s...\033[0m\n' "$((${#body} / 1024))" "${body:0:200}" >&2
+    if [[ "$AGENT_VISION" == on ]]; then
+        body=$(llm_vision_body "$body") || { printf '图片请求构建失败\n' >&2; return 1; }
+        printf '%s' "$body" | llm_stream_curl | sse_convert | sse_parse
+        return
+    fi
     printf '%s' "$body" | util_body_convert | llm_stream_curl | sse_convert | sse_parse
 }
 
@@ -1521,6 +1606,7 @@ Usage: agent.sh [options] [prompt]
 Options:
   -p, --provider PROV     LLM provider: claude | openai | responses (default: claude)
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
+  --vision on|off        Native PNG attachments (default: off; AGENT_VISION)
   --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
@@ -1560,6 +1646,7 @@ parse_args() {
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
             -m|--model)      MODEL="$2"; shift 2 ;;
+            --vision)       [[ $# -ge 2 ]] || util_die 'Missing --vision value'; AGENT_VISION="$2"; shift 2 ;;
             --max-tokens)    MAX_TOKENS=$(util_parse_size "$2") || { util_die "Invalid --max-tokens: $2"; }; shift 2 ;;
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
@@ -1623,6 +1710,7 @@ list_sessions() {
 }
 
 validate_config() {
+    case "$AGENT_VISION" in on|off) ;; *) util_die "Invalid vision setting: $AGENT_VISION (expected on|off)" ;; esac
     # Resolve the selected provider's environment configuration first. Model defaults and
     # transport settings are applied only after DeepSeek fallback selects the final provider.
     case "$PROVIDER" in
@@ -1680,13 +1768,13 @@ validate_config() {
                 openai)
                     : "${MODEL:=gpt-4o}"
                     API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
-                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk" vision="${1:-off}"; }
                     sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
                     ;;
                 responses)
                     : "${MODEL:=deepseek-v4-flash}"
                     API_URL="${BASE_URL:-https://api.deepseek.com}/responses"
-                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"; }
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk" vision="${1:-off}"; }
                     sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"; }
                     ;;
             esac

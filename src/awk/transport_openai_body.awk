@@ -87,6 +87,8 @@ function convert_messages(msgs_json,    inner, n, msgs, result, i, msg, role, co
             result = result _convert_assistant_msg(msg)
         } else if (has_tr) {
             result = result _convert_tool_result_msg(msg)
+        } else if (vision == "on" && role == "user" && substr(content_val, 1, 1) == "[") {
+            result = result "{\"role\":\"user\",\"content\":" convert_images(content_val) "}"
         } else {
             result = result msg
         }
@@ -155,6 +157,9 @@ function _convert_tool_result_msg(json,    content_val, n, i, block, tid, rc, ms
                 }
                 if (msgs != "") msgs = msgs ","
                 msgs = msgs "{\"role\":\"tool\",\"tool_call_id\":\"" tid "\",\"content\":\"" escape_json_string(rc) "\"}"
+            } else if (vision == "on" && extract_str(block, "type") == "image") {
+                if (msgs != "") msgs = msgs ","
+                msgs = msgs "{\"role\":\"user\",\"content\":" convert_images("[" block "]") "}"
             }
         }
     }
@@ -194,4 +199,17 @@ function convert_tools(tools_json,    n, tdefs, result, i, td, name, desc, param
     }
     result = result "]"
     return result
+}
+
+function convert_images(content,    n, blocks, i, source, result) {
+    n = split_top_level_objects(content, blocks)
+    result = "["
+    for (i = 1; i <= n; i++) {
+        if (extract_str(blocks[i], "type") == "image") {
+            source = extract_value(blocks[i], "source")
+            blocks[i] = "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:" extract_str(source, "media_type") ";base64," extract_str(source, "data") "\"}}"
+        }
+        result = result (i > 1 ? "," : "") blocks[i]
+    }
+    return result "]"
 }
