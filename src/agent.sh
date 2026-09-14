@@ -452,16 +452,23 @@ store_conv_add_tool_results() {
     printf '{"role":"user","content":%s}\n' "$content" >> "$CONV_FILE"
 }
 
-store_conv_get_messages() {
-    local input="${1:-$(<"$CONV_FILE")}" result="[" first=true
-    while IFS= read -r msg; do
-        [[ -z "$msg" ]] && continue
-        $first || result+=","
-        first=false
-        result+="$msg"
-    done <<< "$input"
-    printf '%s]' "$result"
-}
+# 子 shell 隔离临时环境与清理钩子；直接交给 awk 单遍读取，不先累积整份历史。
+store_conv_get_messages() (
+    local LC_ALL=C dir root
+    if [[ "$AGENT_VISION" == on ]]; then
+        root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
+        dir=$(mktemp -d) || return 1
+        trap 'rm -rf "$dir"' EXIT
+        export AGENT_IMAGE_ROOT="$root" AGENT_IMAGE_WORK="$dir" AGENT_IMAGE_BASH="$BASH"
+        { declare -f llm_vision_valid_png store_conv_encode_image; printf '\nstore_conv_encode_image\n'; } > "$dir/encode.sh" || return 1
+    fi
+    # 保持旧接口语义：显式非空参数优先，空参数仍回退到会话文件。
+    if [[ -n "${1:-}" ]]; then
+        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" <<< "$1"
+    else
+        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" < "$CONV_FILE"
+    fi
+)
 
 store_summary_set() {
     local text="$1"
@@ -575,35 +582,23 @@ llm_stream_curl() {
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
 }
 
+# 仅接受物理会话根目录内固定层级的附件，逐层拒绝符号链接并核对 PNG 签名。
 llm_vision_valid_png() {
     local root="$1" path="$2" relative="${2#"$1/"}"
     [[ "$path" == "$root/"* && "$relative" != ../* && "$relative" != ./* && "$relative" =~ ^[^/]+/images/[0-9]+\.png$ && ! -L "$root/${relative%%/*}" && -f "$path" && -r "$path" && ! -L "$path" && ! -L "${path%/*}" ]] &&
         [[ "$(od -An -tx1 -N8 "$path" 2>/dev/null | tr -d ' \n')" == 89504e470d0a1a0a ]]
 }
 
-# 仅视觉请求使用短占位编码，协议转换完成后才读取并编码图片。
-llm_vision_body() (
-    local LC_ALL=C
-    local body="$1" refs converted path marker dir root
-    root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
-    dir=$(mktemp -d) || return 1
-    trap 'rm -rf "$dir"' EXIT
-    refs=$(printf '%s' "$body" | util_awk_run -v prefix="$dir/" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk") || return 1
-    converted=$(util_body_convert on < "$dir/body") || return 1
-    while IFS=$'\t' read -r marker path; do
-        [[ -n "$marker" ]] || continue
-        if ! llm_vision_valid_png "$root" "$path"; then
-            printf '无法读取有效的 PNG 附件：%s\n' "$path" >&2
-            return 1
-        fi
-        if [[ "$converted" == *"$marker"* ]]; then
-            printf '%s' "${converted%%"$marker"*}"
-            (set -o pipefail; base64 < "$path" | tr -d '\r\n') || return 1
-            converted=${converted#*"$marker"}
-        fi
-    done <<< "$refs"
-    printf '%s' "$converted"
-)
+# 附件路径仅从数据文件读取，绝不作为命令字符串执行。
+store_conv_encode_image() {
+    local LC_ALL=C path root="$AGENT_IMAGE_ROOT"
+    path=$(<"$AGENT_IMAGE_WORK/path")
+    if ! llm_vision_valid_png "$root" "$path"; then
+        printf '无法读取有效的 PNG 附件：%s\n' "$path" >&2
+        return 1
+    fi
+    (set -o pipefail; base64 < "$path" | tr -d '\r\n')
+}
 
 llm_call() {
     local messages="$1" max_tokens="${2:-$MAX_TOKENS}" use_thinking="${3:-$THINKING}" body system_prompt
@@ -618,17 +613,12 @@ llm_call() {
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
     body+="}"
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %s...\033[0m\n' "$((${#body} / 1024))" "${body:0:200}" >&2
-    if [[ "$AGENT_VISION" == on ]]; then
-        body=$(llm_vision_body "$body") || { printf '图片请求构建失败\n' >&2; return 1; }
-        printf '%s' "$body" | llm_stream_curl | sse_convert | sse_parse
-        return
-    fi
-    printf '%s' "$body" | util_body_convert | llm_stream_curl | sse_convert | sse_parse
+    printf '%s' "$body" | util_body_convert "$AGENT_VISION" | llm_stream_curl | sse_convert | sse_parse
 }
 
 llm_summary_call() {
     local dropped_messages="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
-    messages=$(store_conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(util_json_escape "$summary_instruction")\"}")
+    messages=$(store_conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(util_json_escape "$summary_instruction")\"}") || return 1
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
@@ -1431,8 +1421,11 @@ agent_loop_stream() {
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
-        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(store_conv_get_messages)" >&2
-        exec 8< <(llm_call "$(store_conv_get_messages)")
+        # 先完整读取并检查状态，再启动发送；失败时丢弃已输出的半截数组。
+        local messages
+        messages=$(store_conv_get_messages) || { util_write_msg "ERROR" "图片请求构建失败"; return 1; }
+        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$messages" >&2
+        exec 8< <(llm_call "$messages")
         while util_read_msg <&8; do
             if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
