@@ -452,16 +452,29 @@ store_conv_add_tool_results() {
     printf '{"role":"user","content":%s}\n' "$content" >> "$CONV_FILE"
 }
 
-# 子 shell 隔离临时环境与清理钩子；直接交给 awk 单遍读取，不先累积整份历史。
-store_conv_get_messages() (
-    local LC_ALL=C dir root
+store_conv_get_messages() {
     if [[ "$AGENT_VISION" == on ]]; then
-        root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
-        dir=$(mktemp -d) || return 1
-        trap 'rm -rf "$dir"' EXIT
-        export AGENT_IMAGE_ROOT="$root" AGENT_IMAGE_WORK="$dir" AGENT_IMAGE_BASH="$BASH"
-        { declare -f llm_vision_valid_png store_conv_encode_image; printf '\nstore_conv_encode_image\n'; } > "$dir/encode.sh" || return 1
+        store_conv_get_vision_messages "$@"
+        return $?
     fi
+    local input="${1:-$(<"$CONV_FILE")}" result="[" first=true
+    while IFS= read -r msg; do
+        [[ -z "$msg" ]] && continue
+        $first || result+=","
+        first=false
+        result+="$msg"
+    done <<< "$input"
+    printf '%s]' "$result"
+}
+
+# 子 shell 隔离临时环境与清理钩子；直接交给 awk 单遍读取，不先累积整份历史。
+store_conv_get_vision_messages() (
+    local LC_ALL=C dir root
+    root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
+    dir=$(mktemp -d) || return 1
+    trap 'rm -rf "$dir"' EXIT
+    export AGENT_IMAGE_ROOT="$root" AGENT_IMAGE_WORK="$dir" AGENT_IMAGE_BASH="$BASH"
+    { declare -f llm_vision_valid_png store_conv_encode_image; printf '\nstore_conv_encode_image\n'; } > "$dir/encode.sh" || return 1
     # 保持旧接口语义：显式非空参数优先，空参数仍回退到会话文件。
     if [[ -n "${1:-}" ]]; then
         util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" <<< "$1"
