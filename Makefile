@@ -51,7 +51,8 @@ build-deb:
 
 test: test-bash test-go test-rust test-c-e2e
 
-test-bash:
+test-bash: build-bash
+	python3 tests/test_vision.py
 	bash tests/test.sh
 
 test-go:

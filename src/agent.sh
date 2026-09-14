@@ -575,35 +575,35 @@ llm_stream_curl() {
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
 }
 
+llm_vision_valid_png() {
+    local root="$1" path="$2" relative="${2#"$1/"}"
+    [[ "$path" == "$root/"* && "$relative" != ../* && "$relative" != ./* && "$relative" =~ ^[^/]+/images/[0-9]+\.png$ && ! -L "$root/${relative%%/*}" && -f "$path" && -r "$path" && ! -L "$path" && ! -L "${path%/*}" ]] &&
+        [[ "$(od -An -tx1 -N8 "$path" 2>/dev/null | tr -d ' \n')" == 89504e470d0a1a0a ]]
+}
+
 # 仅视觉请求使用短占位编码，协议转换完成后才读取并编码图片。
-llm_vision_body() {
+llm_vision_body() (
     local LC_ALL=C
-    local body="$1" refs converted path marker dir root relative
+    local body="$1" refs converted path marker dir root
     root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
     dir=$(mktemp -d) || return 1
-    if ! refs=$(printf '%s' "$body" | util_awk_run -v prefix="$dir/" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk"); then
-        rm -rf "$dir"
-        return 1
-    fi
-    converted=$(util_body_convert on < "$dir/body") || { rm -rf "$dir"; return 1; }
+    trap 'rm -rf "$dir"' EXIT
+    refs=$(printf '%s' "$body" | util_awk_run -v prefix="$dir/" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk") || return 1
+    converted=$(util_body_convert on < "$dir/body") || return 1
     while IFS=$'\t' read -r marker path; do
         [[ -n "$marker" ]] || continue
-        relative=${path#"$root/"}
-        if [[ "$path" != "$root/"* || "$relative" == ../* || "$relative" == ./* || ! "$relative" =~ ^[^/]+/images/[0-9]+\.png$ || -L "$root/${relative%%/*}" || ! -f "$path" || ! -r "$path" || -L "$path" || -L "${path%/*}" ]] ||
-            [[ "$(od -An -tx1 -N8 "$path" 2>/dev/null | tr -d ' \n')" != 89504e470d0a1a0a ]]; then
+        if ! llm_vision_valid_png "$root" "$path"; then
             printf '无法读取有效的 PNG 附件：%s\n' "$path" >&2
-            rm -rf "$dir"
             return 1
         fi
         if [[ "$converted" == *"$marker"* ]]; then
             printf '%s' "${converted%%"$marker"*}"
-            (set -o pipefail; base64 < "$path" | tr -d '\r\n') || { rm -rf "$dir"; return 1; }
+            (set -o pipefail; base64 < "$path" | tr -d '\r\n') || return 1
             converted=${converted#*"$marker"}
         fi
     done <<< "$refs"
     printf '%s' "$converted"
-    rm -rf "$dir"
-}
+)
 
 llm_call() {
     local messages="$1" max_tokens="${2:-$MAX_TOKENS}" use_thinking="${3:-$THINKING}" body system_prompt

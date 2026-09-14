@@ -142,9 +142,9 @@ function _convert_assistant_msg(json,    content_val, text_parts, reasoning, too
     return result_msg
 }
 
-function _convert_tool_result_msg(json,    content_val, n, i, block, tid, rc, msgs) {
+function _convert_tool_result_msg(json,    content_val, n, i, block, tid, rc, msgs, images) {
     content_val = extract_value(json, "content")
-    msgs = ""
+    msgs = images = ""
     if (substr(content_val, 1, 1) == "[") {
         n = split_top_level_objects(content_val, _BODY_BLKS)
         for (i = 1; i <= n; i++) {
@@ -158,11 +158,11 @@ function _convert_tool_result_msg(json,    content_val, n, i, block, tid, rc, ms
                 if (msgs != "") msgs = msgs ","
                 msgs = msgs "{\"role\":\"tool\",\"tool_call_id\":\"" tid "\",\"content\":\"" escape_json_string(rc) "\"}"
             } else if (vision == "on" && extract_str(block, "type") == "image") {
-                if (msgs != "") msgs = msgs ","
-                msgs = msgs "{\"role\":\"user\",\"content\":" convert_images("[" block "]") "}"
+                images = images (images != "" ? "," : "") block
             }
         }
     }
+    if (images != "") msgs = msgs (msgs != "" ? "," : "") "{\"role\":\"user\",\"content\":" convert_images("[" images "]") "}"
     return msgs
 }
 
