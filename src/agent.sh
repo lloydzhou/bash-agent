@@ -21,6 +21,7 @@ VERBOSE=false
 : "${BASH_AGENT_BASH_MODE:=0467}"  # system external network workspace; octal rwx bits per scope
 : "${EFFORT:=high}"           # thinking effort: low|medium|high|xhigh|max
 : "${THINKING:=adaptive}"     # thinking mode: adaptive|enabled|disabled
+: "${AGENT_VISION:=off}"      # native image payloads are opt-in
 : "${SUB_AGENT_DEPTH:=0}"    # 主代理为 0，第一层子代理为 1
 
 # Internal Runtime State
@@ -452,6 +453,10 @@ store_conv_add_tool_results() {
 }
 
 store_conv_get_messages() {
+    if [[ "$AGENT_VISION" == on ]]; then
+        store_conv_get_vision_messages "$@"
+        return $?
+    fi
     local input="${1:-$(<"$CONV_FILE")}" result="[" first=true
     while IFS= read -r msg; do
         [[ -z "$msg" ]] && continue
@@ -461,6 +466,36 @@ store_conv_get_messages() {
     done <<< "$input"
     printf '%s]' "$result"
 }
+
+# 子 shell 隔离：编码命令与根目录经环境变量交给 awk，单遍读取，不落任何中间文件。
+store_conv_get_vision_messages() (
+    local LC_ALL=C root
+    root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
+    VISION_ENCODE_CODE=$(cat <<'VISION_ENC'
+export LC_ALL=C
+root="$1" path="$2"
+# 校验规则与原 llm_vision_valid_png 完全一致：固定层级、拒绝符号链接、核对 PNG 签名。
+llm_vision_valid_png() {
+    local root="$1" path="$2" relative="${2#"$1/"}"
+    [[ "$path" == "$root/"* && "$relative" != ../* && "$relative" != ./* && "$relative" =~ ^[^/]+/images/[0-9]+\.png$ && ! -L "$root/${relative%%/*}" && -f "$path" && -r "$path" && ! -L "$path" && ! -L "${path%/*}" ]] &&
+        [[ "$(od -An -tx1 -N8 "$path" 2>/dev/null | tr -d ' \n')" == 89504e470d0a1a0a ]]
+}
+# root/path 非空守卫：防止 root 为空时前缀检查退化为 /*。
+if [[ -z "$root" || -z "$path" ]] || ! llm_vision_valid_png "$root" "$path"; then
+    printf '无法读取有效的 PNG 附件：%s\n' "$path" >&2
+    exit 1
+fi
+(set -o pipefail; base64 < "$path" | tr -d '\r\n')
+VISION_ENC
+)
+    export VISION_ENCODE_CODE VISION_ROOT="$root"
+    # 保持旧接口语义：显式非空参数优先，空参数仍回退到会话文件。
+    if [[ -n "${1:-}" ]]; then
+        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" <<< "$1"
+    else
+        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" < "$CONV_FILE"
+    fi
+)
 
 store_summary_set() {
     local text="$1"
@@ -587,12 +622,12 @@ llm_call() {
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
     body+="}"
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %s...\033[0m\n' "$((${#body} / 1024))" "${body:0:200}" >&2
-    printf '%s' "$body" | util_body_convert | llm_stream_curl | sse_convert | sse_parse
+    printf '%s' "$body" | util_body_convert "$AGENT_VISION" | llm_stream_curl | sse_convert | sse_parse
 }
 
 llm_summary_call() {
     local dropped_messages="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
-    messages=$(store_conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(util_json_escape "$summary_instruction")\"}")
+    messages=$(store_conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(util_json_escape "$summary_instruction")\"}") || return 1
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
@@ -1395,8 +1430,11 @@ agent_loop_stream() {
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
-        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(store_conv_get_messages)" >&2
-        exec 8< <(llm_call "$(store_conv_get_messages)")
+        # 先完整读取并检查状态，再启动发送；失败时丢弃已输出的半截数组。
+        local messages
+        messages=$(store_conv_get_messages) || { util_write_msg "ERROR" "图片请求构建失败"; return 1; }
+        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$messages" >&2
+        exec 8< <(llm_call "$messages")
         while util_read_msg <&8; do
             if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
@@ -1521,6 +1559,7 @@ Usage: agent.sh [options] [prompt]
 Options:
   -p, --provider PROV     LLM provider: claude | openai | responses (default: claude)
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
+  --vision on|off        Native PNG attachments (default: off; AGENT_VISION)
   --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
@@ -1560,6 +1599,7 @@ parse_args() {
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
             -m|--model)      MODEL="$2"; shift 2 ;;
+            --vision)       [[ $# -ge 2 ]] || util_die 'Missing --vision value'; AGENT_VISION="$2"; shift 2 ;;
             --max-tokens)    MAX_TOKENS=$(util_parse_size "$2") || { util_die "Invalid --max-tokens: $2"; }; shift 2 ;;
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
@@ -1623,6 +1663,7 @@ list_sessions() {
 }
 
 validate_config() {
+    case "$AGENT_VISION" in on|off) ;; *) util_die "Invalid vision setting: $AGENT_VISION (expected on|off)" ;; esac
     # Resolve the selected provider's environment configuration first. Model defaults and
     # transport settings are applied only after DeepSeek fallback selects the final provider.
     case "$PROVIDER" in
@@ -1680,13 +1721,13 @@ validate_config() {
                 openai)
                     : "${MODEL:=gpt-4o}"
                     API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
-                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk" vision="${1:-off}"; }
                     sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
                     ;;
                 responses)
                     : "${MODEL:=deepseek-v4-flash}"
                     API_URL="${BASE_URL:-https://api.deepseek.com}/responses"
-                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"; }
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk" vision="${1:-off}"; }
                     sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"; }
                     ;;
             esac

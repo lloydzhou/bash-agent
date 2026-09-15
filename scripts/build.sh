@@ -59,6 +59,7 @@ def find_function_end(content, start):
 awk_files = {
     "json": ("json.awk", "_AWK_JSON"),
     "json_cli": ("json_cli.awk", "_AWK_JSON_CLI"),
+    "vision_body": ("vision_body.awk", "_AWK_VISION_BODY"),
     "protocol": ("protocol.awk", "_AWK_PROTOCOL"),
     "todo_protocol": ("todo_protocol.awk", "_AWK_TODO_PROTOCOL"),
     "http_stream": ("http_stream.awk", "_AWK_HTTP_STREAM"),
@@ -166,6 +167,7 @@ content = content.replace('AWK_DIR=""\n', "")
 content = content.replace('util_awk_run -f "$AWK_DIR/skill_summary.awk" "$skill_file"', 'util_awk_run "${_AWK_SKILL_SUMMARY}" "$skill_file"')
 content = content.replace('util_awk_run -f "$AWK_DIR/http_stream.awk" <&9', 'util_awk_run "${_AWK_HTTP_STREAM}" <&9')
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/edit_file.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_EDIT_FILE}"')
+content = content.replace('-f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk"', '"${_AWK_JSON}\n${_AWK_VISION_BODY}"')
 # --- Inline transport awk references in validate_config ---
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_BODY}"')
 content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_TRANSPORT_OPENAI_SSE}"')

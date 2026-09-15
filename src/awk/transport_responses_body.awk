@@ -72,6 +72,10 @@ function convert_user(content,    n, blocks, i, block, result, type, value, call
             if (substr(value, 1, 1) == "\"") value = unescape_json_string(substr(value, 2, length(value) - 2))
             if (result != "") result = result ","
             result = result "{\"type\":\"function_call_output\",\"call_id\":\"" escape_json_string(call_id) "\",\"output\":\"" escape_json_string(value) "\"}"
+        } else if (vision == "on" && type == "image") {
+            value = extract_value(block, "source")
+            if (result != "") result = result ","
+            result = result "{\"role\":\"user\",\"content\":[{\"type\":\"input_image\",\"image_url\":\"data:" extract_str(value, "media_type") ";base64," extract_str(value, "data") "\"}]}"
         } else if (type == "text") {
             value = extract_value(block, "text")
             if (result != "") result = result ","
