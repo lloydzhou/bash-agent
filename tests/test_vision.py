@@ -173,6 +173,19 @@ assert run.returncode == 0, run.stderr
 assert not (root / 'injected').exists()
 assert base64.b64decode(json.loads(run.stdout)['messages'][0]['content'][0]['source']['data']) == images[0].read_bytes()
 print('附件路径与命令隔离：通过')
+# 目录名含单引号、空格、反引号时路径仍只作数据读取，且编码结果正确。
+for source in ['src/agent.sh', 'dist/agent.sh']:
+    (root / 'library.sh').write_text((repo / source).read_text().rsplit('main "$@"', 1)[0])
+    for weird in ["quo'te", 'has space', 'back`touch injected2`tick']:
+        weird_path = root / weird / 'images' / '1.png'
+        weird_path.parent.mkdir(parents=True, exist_ok=True)
+        weird_path.write_bytes(images[0].read_bytes())
+        (root / 'body').write_text(json.dumps(dict(body, messages=[{'role': 'user', 'content': text.replace(str(images[0]), str(weird_path))}])))
+        run = subprocess.run(['bash', '-c', script], cwd=root, capture_output=True, timeout=20)
+        assert run.returncode == 0, (source, weird, run.stderr)
+        assert base64.b64decode(json.loads(run.stdout)['messages'][0]['content'][0]['source']['data']) == images[0].read_bytes(), (source, weird)
+assert not (root / 'injected2').exists()
+print('单引号、空格、反引号目录名编码与命令隔离：通过')
 # 使用真实转换器验证工具回复不会被图片打断。
 image = {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'aGVsbG8='}}
 mixed = [{'type': 'tool_result', 'tool_use_id': 'a', 'content': 'first'}, image,

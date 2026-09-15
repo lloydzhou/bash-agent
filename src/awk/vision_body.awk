@@ -28,8 +28,10 @@ function convert_text(text,    rest, cleaned, start, stop, section, lines, mappi
 BEGIN {
     first = 1
     printf "["
-    encoder = "\"$AGENT_IMAGE_BASH\" \"$AGENT_IMAGE_WORK/encode.sh\""
-    path_file = ENVIRON["AGENT_IMAGE_WORK"] "/path"
+    # 固定命令，仅经 shell 展开环境变量；root 只作位置参数，先做单引号转义。
+    encoder = "bash -c \"$VISION_ENCODE_CODE\" _ "
+    root = ENVIRON["VISION_ROOT"]
+    qroot = shq(root)
 }
 length($0) {
     msg = $0
@@ -72,16 +74,25 @@ length($0) {
 }
 END { if (!failed) printf "]" }
 
-function encode_image(path,    data, status, rc) {
-    # 固定命令通过环境变量定位辅助脚本，附件路径只写入数据文件。
-    printf "%s", path > path_file
-    close(path_file)
+function encode_image(path,    data, cmd, status, rc) {
+    # 附件路径被单引号包裹后仅作为位置参数，绝不进入命令语法位置。
+    cmd = encoder qroot " " shq(path)
     # 读到数据不代表编码成功：还须检查子进程退出状态，防止发送截断图片。
-    status = (encoder | getline data)
-    rc = close(encoder)
+    status = (cmd | getline data)
+    rc = close(cmd)
     if (status != 1 || rc != 0 || data == "") {
         failed = 1
         exit 1
     }
     return data
+}
+
+# 将任意字符串安全包裹为单引号字面量：内嵌单引号替换为 '\''，shell 元字符全部字面化。
+function shq(s,    t, head) {
+    t = ""
+    while ((head = index(s, "'"))) {
+        t = t substr(s, 1, head - 1) "'\\''"
+        s = substr(s, head + 1)
+    }
+    return "'" t s "'"
 }
