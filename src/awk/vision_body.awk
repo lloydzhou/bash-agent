@@ -1,4 +1,4 @@
-# 每条会话记录只读取一次；编码后的图片不再进入本层结构解析。
+# Each conversation record is read once; encoded images never re-enter this layer's parsing.
 function convert_text(text,    rest, cleaned, start, stop, section, lines, mapping, j, path, encoded, found, before) {
     rest = text
     cleaned = ""
@@ -28,8 +28,9 @@ function convert_text(text,    rest, cleaned, start, stop, section, lines, mappi
 BEGIN {
     first = 1
     printf "["
-    # 固定命令，路径仅作位置参数：pipefail 保证 base64 读失败（不存在/不可读/IO 错）
-    # 时退出码非 0，存在性与可读性由此隐式判定；.png 后缀已由映射行正则限定。
+    # Fixed command; the path is a positional argument only. pipefail makes base64 read
+    # failures (missing/unreadable/IO error) exit non-zero, covering existence and
+    # readability implicitly; the .png suffix is already enforced by the mapping regex.
     encoder = "bash -c 'set -o pipefail; base64 < \"$1\" | tr -d \"\\r\\n\"' _ "
 }
 length($0) {
@@ -74,9 +75,9 @@ length($0) {
 END { if (!failed) printf "]" }
 
 function encode_image(path,    data, cmd, status, rc) {
-    # 附件路径被单引号包裹后仅作为位置参数，绝不进入命令语法位置。
+    # Path is single-quoted into a positional argument only, never in command syntax position.
     cmd = encoder shq(path)
-    # 读到数据不代表编码成功：还须检查子进程退出状态，防止发送截断或空文件。
+    # Data alone is not success: the exit status must also be checked to avoid truncated or empty payloads.
     status = (cmd | getline data)
     rc = close(cmd)
     if (status != 1 || rc != 0 || data == "") {
@@ -86,7 +87,7 @@ function encode_image(path,    data, cmd, status, rc) {
     return data
 }
 
-# 将任意字符串安全包裹为单引号字面量：内嵌单引号替换为 '\''，shell 元字符全部字面化。
+# Safely wrap any string as a single-quoted literal: embedded single quotes become '\'', shell metacharacters stay literal.
 function shq(s,    t, head) {
     t = ""
     while ((head = index(s, "'"))) {
