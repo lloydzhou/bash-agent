@@ -289,6 +289,7 @@ Agent *agent_create(const char *provider, const char *model,
     }
     a->thinking = util_strdup(util_env("THINKING", "adaptive"));
     a->effort = util_strdup(util_env("EFFORT", "high"));
+    a->vision = util_strdup(util_env("AGENT_VISION", "off"));
 
     /* DP Compact 配置（启动时初始化一次） */
     a->dp_cfg = dp_config_init(a->max_context_tokens);
@@ -356,6 +357,7 @@ void agent_destroy(Agent *agent) {
     FREE_PTR(agent->session_id);
     FREE_PTR(agent->thinking);
     FREE_PTR(agent->effort);
+    FREE_PTR(agent->vision);
     if (agent->skill_names) {
         for (int i = 0; i < agent->skill_count; i++) FREE_PTR(agent->skill_names[i]);
         free(agent->skill_names);
@@ -888,7 +890,19 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         char *claude_body = build_claude_request(agent->model, system_prompt,
                                                  tools_json, lines, line_count,
                                                  agent->max_tokens,
-                                                 agent->thinking, agent->effort);
+                                                 agent->thinking, agent->effort,
+                                                 agent->vision);
+        if (!claude_body) {
+            /* 附件读取失败：与 Bash 版一致，报错并终止本轮，不发送请求 */
+            free(system_prompt);
+            DisplayMessage *dm_err = malloc(sizeof(DisplayMessage));
+            *dm_err = display_msg_error("Failed to build messages");
+            push_display_event(&agent->paths, agent->display_queue, dm_err);
+            DisplayMessage *dm_stop = malloc(sizeof(DisplayMessage));
+            *dm_stop = display_msg_stop("error");
+            push_display_event(&agent->paths, agent->display_queue, dm_stop);
+            return -1;
+        }
         char *body = claude_body;
         if (strcmp(agent->provider, "openai") == 0) {
             body = convert_to_openai(claude_body);
@@ -2851,10 +2865,11 @@ int agent_compact_context(Agent *agent, const char *trigger) {
     char *summary_body = build_claude_request(
         agent->model, system_prompt, embedded_tools_json,
         summary_lines, summary_line_count,
-        agent->max_tokens, "disabled", agent->effort);
+        agent->max_tokens, "disabled", agent->effort, agent->vision);
     free(system_prompt);
     free(instr_line.data);
     free(summary_lines);
+    if (!summary_body) return -1;
 
     if (strcmp(agent->provider, "openai") == 0) {
         char *openai_body = convert_to_openai(summary_body);

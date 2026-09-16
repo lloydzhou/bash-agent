@@ -40,6 +40,7 @@ static void usage(const char *prog) {
     fprintf(stderr, "  --continue                 Continue last session\n");
     fprintf(stderr, "  --fork                     When resuming, create a new forked session (use with --session or --continue)\n");
     fprintf(stderr, "  --interactive              Force interactive mode\n");
+    fprintf(stderr, "  --vision [on]             Native PNG attachments (default: off; AGENT_VISION)\n");
     fprintf(stderr, "  --verbose                  Verbose logging\n");
     fprintf(stderr, "  --output human|stream-json Output format\n");
     fprintf(stderr, "  -h, --help                 Show this help\n");
@@ -82,6 +83,7 @@ int main(int argc, char *argv[]) {
     const char *max_turns_str = NULL;
     const char *effort_str = NULL;
     const char *thinking_str = NULL;
+    const char *vision_str = NULL;
     const char *tool_timeout_str = NULL;
     int do_continue = 0;
     int do_fork = 0;
@@ -139,6 +141,13 @@ int main(int argc, char *argv[]) {
             effort_str = argv[++i];
         } else if (strcmp(argv[i], "--thinking") == 0 && i + 1 < argc) {
             thinking_str = argv[++i];
+        } else if (strcmp(argv[i], "--vision") == 0) {
+            /* 无值形式等价 --vision on；非 on 值一律归一为 off（对齐 Bash 版） */
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                vision_str = argv[++i];
+            } else {
+                vision_str = "on";
+            }
         } else if (strcmp(argv[i], "--tool-timeout") == 0 && i + 1 < argc) {
             tool_timeout_str = argv[++i];
         } else if (strcmp(argv[i], "--list-sessions") == 0) {
@@ -326,6 +335,7 @@ int main(int argc, char *argv[]) {
         }
         if (effort_str) { free(agent->effort); agent->effort = util_strdup(effort_str); }
         if (thinking_str) { free(agent->thinking); agent->thinking = util_strdup(thinking_str); }
+        if (vision_str) { free(agent->vision); agent->vision = util_strdup(strcmp(vision_str, "on") == 0 ? "on" : "off"); }
     }
 
     /* 设置 --max-context（已在参数解析阶段校验） */

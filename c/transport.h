@@ -121,11 +121,12 @@ void sse_accum_free(SseAccumulator *acc);
 /* SSE 回调 — 累积事件到 SseAccumulator */
 void sse_accum_callback(void *ctx, const SseEvent *evt);
 
-/* 构建请求体 */
+/* 构建请求体；vision=on 时展开附件映射，任一附件读取失败返回 NULL */
 char *build_claude_request(const char *model, const char *system_prompt,
                            const char *tools_json,
                            char **conv_lines, int conv_line_count,
-                           int max_tokens, const char *thinking, const char *effort);
+                           int max_tokens, const char *thinking, const char *effort,
+                           const char *vision);
 
 /* 将 Claude 请求体转换为 OpenAI 格式 */
 char *convert_to_openai(const char *claude_body);

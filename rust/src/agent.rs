@@ -1888,7 +1888,10 @@ impl Agent {
     }
 
     fn llm_stream(&self) -> Result<LlmStream> {
-        let lines = self.conv.lines()?;
+        let mut lines = self.conv.lines()?;
+        if self.cfg.vision {
+            crate::vision::expand_vision_messages(&mut lines)?;
+        }
         let system_prompt = self.build_system_prompt()?;
 
         let claude_body = build_claude_request(
@@ -2032,6 +2035,9 @@ impl Agent {
         let summary_instruction = "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:";
         let mut messages: Vec<Value> = dropped_lines.to_vec();
         messages.push(json!({"role":"user","content":summary_instruction}));
+        if self.cfg.vision {
+            crate::vision::expand_vision_messages(&mut messages)?;
+        }
 
         let system_prompt = self.build_system_prompt()?;
 

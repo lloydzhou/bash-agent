@@ -57,6 +57,7 @@ typedef struct {
     int owns_err;
     char *thinking;
     char *effort;
+    char *vision;
 
     /* DP Compact 配置 */
     DPConfig dp_cfg;

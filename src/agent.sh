@@ -21,6 +21,7 @@ VERBOSE=false
 : "${BASH_AGENT_BASH_MODE:=0467}"  # system external network workspace; octal rwx bits per scope
 : "${EFFORT:=high}"           # thinking effort: low|medium|high|xhigh|max
 : "${THINKING:=adaptive}"     # thinking mode: adaptive|enabled|disabled
+: "${AGENT_VISION:=off}"      # native image payloads are opt-in
 : "${SUB_AGENT_DEPTH:=0}"    # 主代理为 0，第一层子代理为 1
 
 # Internal Runtime State
@@ -452,13 +453,17 @@ store_conv_add_tool_results() {
 }
 
 store_conv_get_messages() {
-    local input="${1:-$(<"$CONV_FILE")}" result="[" first=true
+    if [[ "$AGENT_VISION" == on ]]; then
+        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" < "${1:-$CONV_FILE}"
+        return $?
+    fi
+    local msg result="[" first=true
     while IFS= read -r msg; do
         [[ -z "$msg" ]] && continue
         $first || result+=","
         first=false
         result+="$msg"
-    done <<< "$input"
+    done < "${1:-$CONV_FILE}"
     printf '%s]' "$result"
 }
 
@@ -587,12 +592,13 @@ llm_call() {
     [[ -n "$TOOL_DEF_JSON" ]] && body+=",\"tools\":${TOOL_DEF_JSON}"
     body+="}"
     $VERBOSE && printf '\033[90m[verbose] Request body (%dKB): %s...\033[0m\n' "$((${#body} / 1024))" "${body:0:200}" >&2
-    printf '%s' "$body" | util_body_convert | llm_stream_curl | sse_convert | sse_parse
+    printf '%s' "$body" | util_body_convert "$AGENT_VISION" | llm_stream_curl | sse_convert | sse_parse
 }
 
 llm_summary_call() {
-    local dropped_messages="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
-    messages=$(store_conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(util_json_escape "$summary_instruction")\"}")
+    local dropped_file="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
+    printf '{"role":"user","content":"%s"}\n' "$(util_json_escape "$summary_instruction")" >> "$dropped_file"
+    messages=$(store_conv_get_messages "$dropped_file") || return 1
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
@@ -1178,7 +1184,7 @@ display_term_title() {
 display_stream() { while util_read_msg; do display_message; done; }
 
 agent_compact_context() {
-    local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped dropped_messages summary_response
+    local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped summary_response
 
     # 始终先算 DP 决策（经济最优）— 直接调用 store 层
     keep_lines=$(store_conv_dp_decision \
@@ -1201,9 +1207,8 @@ agent_compact_context() {
     drop=$(( total_lines - keep_lines ))
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     store_conv_head_to "$drop" "$tmp_dropped"
-    dropped_messages=$(<"$tmp_dropped")
 
-    summary_response=$(llm_summary_call "$dropped_messages")
+    summary_response=$(llm_summary_call "$tmp_dropped")
     store_summary_set "$summary_response"
     if (( keep_lines < total_lines )); then
         store_conv_trim_tail "$keep_lines"
@@ -1386,7 +1391,7 @@ agent_drain_notify_buf() {
 }
 
 agent_loop_stream() {
-    local user_input="$1" turn=0
+    local user_input="$1" turn=0 messages
     # Trap SIGINT: close pipe FD to unblock read
     trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
     while (( turn < MAX_TURNS )); do
@@ -1395,8 +1400,9 @@ agent_loop_stream() {
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
-        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$(store_conv_get_messages)" >&2
-        exec 8< <(llm_call "$(store_conv_get_messages)")
+        messages=$(store_conv_get_messages) || { util_write_msg "ERROR" "Failed to build messages"; return 1; }
+        [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$messages" >&2
+        exec 8< <(llm_call "$messages")
         while util_read_msg <&8; do
             if [[ "$INTERRUPT_REQUESTED" == true ]]; then
                 stop="interrupted"
@@ -1521,6 +1527,7 @@ Usage: agent.sh [options] [prompt]
 Options:
   -p, --provider PROV     LLM provider: claude | openai | responses (default: claude)
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
+  --vision [on]          Native PNG attachments (default: off; AGENT_VISION)
   --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
@@ -1560,6 +1567,7 @@ parse_args() {
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
             -m|--model)      MODEL="$2"; shift 2 ;;
+            --vision)       AGENT_VISION=on; [[ $# -ge 2 && "$2" != -* ]] && { AGENT_VISION="$2"; shift; }; [[ "$AGENT_VISION" == "on" ]] || AGENT_VISION=off; shift ;;
             --max-tokens)    MAX_TOKENS=$(util_parse_size "$2") || { util_die "Invalid --max-tokens: $2"; }; shift 2 ;;
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
@@ -1680,13 +1688,13 @@ validate_config() {
                 openai)
                     : "${MODEL:=gpt-4o}"
                     API_URL="${BASE_URL:-https://api.openai.com/v1}/chat/completions"
-                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk"; }
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_body.awk" vision="${1:-off}"; }
                     sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_openai_sse.awk"; }
                     ;;
                 responses)
                     : "${MODEL:=deepseek-v4-flash}"
                     API_URL="${BASE_URL:-https://api.deepseek.com}/responses"
-                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk"; }
+                    util_body_convert() { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_body.awk" vision="${1:-off}"; }
                     sse_convert()  { util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/transport_responses_sse.awk"; }
                     ;;
             esac

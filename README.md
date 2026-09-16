@@ -187,14 +187,26 @@ tcode goagent -p openai -m gpt-4o
 
 ## 图片粘贴
 
-终端交互模式下 **Ctrl+V** 从剪贴板粘贴图片，自动插入 `[Image #N]` 占位符并缓存到 session。发送消息时保留占位符原位置，并追加 `<attached-images>` 本地绝对路径映射；需要理解图片时，由模型从 `skill-index` 选择可用视觉 Skill 并传入对应路径。
+终端交互模式下 **Ctrl+V** 从剪贴板粘贴图片，自动插入 `[Image #N]` 占位符并保存到会话的 `images/` 目录。默认关闭原生视觉：请求中提供本地图片路径，由模型选择可用视觉技能处理。
 
 支持平台：
 - **macOS**: `osascript`（内置）
 - **Linux Wayland**: `wl-paste`
 - **Linux X11**: `xclip`
 
-运行时不自动读取或描述图片，也不绑定特定视觉服务；视觉能力由外部 Skill 按需提供。
+### Bash 原生视觉（草稿审阅实现）
+
+```bash
+./dist/agent.sh --vision on
+AGENT_VISION=on ./dist/agent.sh
+./dist/agent.sh --vision off   # 命令行优先于环境变量；默认 off
+```
+
+- 支持 Claude、Chat Completions、Responses；需要自行选择支持图片的模型，不按模型名称自动探测。
+- 仅在发送请求前读取原有 `attached-images` 映射中的会话 PNG，保留原文并追加图片块；不扫描普通文本路径。图片必须保留在原位置，缺失、文件头不是 PNG 或附件路径含符号链接时报错。
+- 关闭时沿用原请求路径；图片保存、占位符、会话历史、恢复、分叉、子代理和压缩流程均不改动，编码不写入会话。图片尺寸和请求大小限制由服务端决定。
+- 会话目录与附件映射须可信，不防御本机进程并发替换附件。
+- **仅供 Bash 草稿审阅，尚未同步 Go/Rust/C，不可直接合入或发布。** 共享系统提示和工具定义未改动。
 
 ## 环境变量
 
