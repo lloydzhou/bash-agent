@@ -453,29 +453,20 @@ store_conv_add_tool_results() {
 }
 
 store_conv_get_messages() {
+    # 参数为 JSONL 文件路径，缺省读会话文件；compact 摘要传被丢弃消息的临时文件。
     if [[ "$AGENT_VISION" == on ]]; then
-        store_conv_get_vision_messages "$@"
+        local LC_ALL=C
+        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" < "${1:-$CONV_FILE}"
         return $?
     fi
-    local input="${1:-$(<"$CONV_FILE")}" result="[" first=true
+    local msg result="[" first=true
     while IFS= read -r msg; do
         [[ -z "$msg" ]] && continue
         $first || result+=","
         first=false
         result+="$msg"
-    done <<< "$input"
+    done < "${1:-$CONV_FILE}"
     printf '%s]' "$result"
-}
-
-# 单遍读取，编码命令固定内联在 vision_body.awk，不落任何中间文件。
-store_conv_get_vision_messages() {
-    local LC_ALL=C
-    # 保持旧接口语义：显式非空参数优先，空参数仍回退到会话文件。
-    if [[ -n "${1:-}" ]]; then
-        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" <<< "$1"
-    else
-        util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" < "$CONV_FILE"
-    fi
 }
 
 store_summary_set() {
@@ -607,8 +598,9 @@ llm_call() {
 }
 
 llm_summary_call() {
-    local dropped_messages="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
-    messages=$(store_conv_get_messages "${dropped_messages}"$'\n'"{\"role\":\"user\",\"content\":\"$(util_json_escape "$summary_instruction")\"}") || return 1
+    local dropped_file="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
+    printf '{"role":"user","content":"%s"}\n' "$(util_json_escape "$summary_instruction")" >> "$dropped_file"
+    messages=$(store_conv_get_messages "$dropped_file") || return 1
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
@@ -1194,7 +1186,7 @@ display_term_title() {
 display_stream() { while util_read_msg; do display_message; done; }
 
 agent_compact_context() {
-    local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped dropped_messages summary_response
+    local trigger=${1:-auto} total_lines keep_lines drop tmp_dropped summary_response
 
     # 始终先算 DP 决策（经济最优）— 直接调用 store 层
     keep_lines=$(store_conv_dp_decision \
@@ -1217,9 +1209,8 @@ agent_compact_context() {
     drop=$(( total_lines - keep_lines ))
     tmp_dropped=$(mktemp "${TMPDIR:-/tmp}/dropped.XXXXXX")
     store_conv_head_to "$drop" "$tmp_dropped"
-    dropped_messages=$(<"$tmp_dropped")
 
-    summary_response=$(llm_summary_call "$dropped_messages")
+    summary_response=$(llm_summary_call "$tmp_dropped")
     store_summary_set "$summary_response"
     if (( keep_lines < total_lines )); then
         store_conv_trim_tail "$keep_lines"

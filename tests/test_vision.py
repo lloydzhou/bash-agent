@@ -120,8 +120,9 @@ CONV_FILE='{root}/conv.jsonl'
 store_session_get_dir() {{ printf '%s' '{root}'; }}
 """
         for mode in ['on', 'off']:
+            (root / 'conv-alt.jsonl').write_text(original_conv)
             outputs = []
-            for invocation in ['store_conv_get_messages', 'store_conv_get_messages "$(cat "$CONV_FILE")"', 'store_conv_get_messages ""']:
+            for invocation in ['store_conv_get_messages', 'store_conv_get_messages "$CONV_FILE"', f"store_conv_get_messages '{root}/conv-alt.jsonl'"]:
                 run = subprocess.run(['bash', '-c', setup + f'AGENT_VISION={mode}\n' + invocation], capture_output=True, timeout=40)
                 assert run.returncode == 0, run.stderr
                 outputs.append(json.loads(run.stdout))
