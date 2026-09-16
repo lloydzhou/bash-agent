@@ -1411,8 +1411,7 @@ agent_loop_stream() {
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
         agent_compact_context auto && util_write_msg "CONTEXT_UPDATE" "compact" "auto"
         local text="" thinking="" tool_calls="" stop="" loop_error="" tool_conv_results="" _ctx_tokens=""
-        # 先构建消息数组并检查退出码：失败时输出可能是未闭合的不完整 JSON，不得发起请求。
-        messages=$(store_conv_get_messages) || { util_write_msg "ERROR" "消息构建失败"; return 1; }
+        messages=$(store_conv_get_messages) || { util_write_msg "ERROR" "Failed to build messages"; return 1; }
         [[ "$VERBOSE" == true ]] && printf '[debug] messages: %.500s...\n' "$messages" >&2
         exec 8< <(llm_call "$messages")
         while util_read_msg <&8; do
