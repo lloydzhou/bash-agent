@@ -434,252 +434,19 @@ html[data-theme=light] .diff .dl.del .ln { background:
 </style>
 </head>
 <body>
-<div id="app">
-  <header>
-    <div class="brand"><img src="/icon.svg" alt="">webagent</div>
-    <div class="spacer"></div>
-    <button id="theme" class="iconbtn" title="切换主题" aria-label="切换主题"></button>
-    <span id="status"><span class="dot"></span><span id="status-text">connecting…</span></span>
-  </header>
+<div id="mount"></div>
 
-  <div id="scroll">
-    <div id="flow"></div>
-    <div class="hero">
-      <img src="/icon.svg" alt="">
-      <h1>bash-agent</h1>
-      <p>输入提示词开始对话 · Enter 发送 · Shift+Enter 换行</p>
-    </div>
-    <div id="tobottom-wrap"><button id="tobottom" aria-label="跳到底部">
-      <svg viewBox="0 0 16 16" fill="none"><path d="M8 3v10M4 9l4 4 4-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </button></div>
-  </div>
-
-  <div class="composer-stack">
-    <div id="todoPanel" hidden></div>
-    <div class="composer">
-      <textarea id="input" placeholder="给 bash-agent 发送消息…" rows="1" autofocus></textarea>
-      <div class="composer-row">
-        <input type="file" id="filepick" accept="image/png,image/jpeg,image/webp" hidden>
-        <button id="attach" aria-label="上传图片" title="上传图片">
-          <svg viewBox="0 0 24 24" fill="none"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <span class="hint" id="hint">Enter 发送 · Shift+Enter 换行</span>
-        <button id="send" aria-label="发送">
-          <svg viewBox="0 0 16 16" fill="none"><path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-      </div>
-    </div>
-    <div id="statsline"></div>
-  </div>
-</div>
+<script id="mooxkit-runtime">
+let context=[];const queue=new Set;let isFlushing=!1;const p=Promise.resolve();function queueJob(e){queue.add(e),isFlushing||(isFlushing=!0,p.then(()=>{try{queue.forEach(e=>e())}finally{isFlushing=!1,queue.clear()}}))}function untrack(e){const t=context;context=[];const n=e();return context=t,n}function cleanup(e){for(const t of e.dependencies)t.delete(e);e.dependencies.clear()}function subscribe(e,t){t.add(e),e.dependencies.add(t)}function createSignal(e){const t=new Set;return[()=>{const n=context[context.length-1];return n&&subscribe(n,t),e},n=>{e=n;for(const e of[...t])e.execute()}]}function createEffect(e,t={}){const n={execute(){t.scheduler?t.scheduler(o):o()},dependencies:new Set};function o(){cleanup(n),context.push(n);try{e()}finally{context.pop()}}return o(),n}function createMemo(e){const[t,n]=createSignal();return createEffect(()=>n(e())),t}let currentInstance=null;function setCurrentInstance(e){currentInstance=e}function createLifecycleMethod(e){return t=>{currentInstance&&(currentInstance[e]||(currentInstance[e]=[])).push(t)}}const onBeforeMount=createLifecycleMethod("_bm"),onMounted=createLifecycleMethod("_m"),onBeforeUpdate=createLifecycleMethod("_bu"),onUpdated=createLifecycleMethod("_u"),onUnmounted=createLifecycleMethod("_um");function handleComponent(e,t,n,o,c=!1){const r=e.t.setup||e.t;let s=n.instance;if(!s||n.t!==e.t){const o={value:Object.assign({children:e.c},e.p)},d=new Proxy({},{get:(e,t)=>o.value&&o.value[t]});let i;s={propsHolder:o,mounted:!1,vnode:e,parentDom:t,oldChildVNode:n.childVNode||{},_bm:[],_m:[],_bu:[],_u:[],_um:[],isSvg:c||"svg"===e.t},setCurrentInstance(s);try{i=r(d)}finally{setCurrentInstance(null)}s.renderFn="function"==typeof i?i:()=>i,s._bm.forEach(e=>e());const u=()=>{s.mounted&&s._bu.forEach(e=>e());const e=s.renderFn();s.oldChildVNode=render(e,s.parentDom,s.oldChildVNode,void 0,s.isSvg),s.mounted?s._u.forEach(e=>e()):(s.mounted=!0,s._m.forEach(e=>e()))};s.update=u,s.effect=createEffect(u,{scheduler:queueJob})}else s.propsHolder.value=Object.assign({children:e.c},e.p),s.vnode=e,s.parentDom=t,s.update();return e.instance=s,n.instance=s,n.childVNode=s.oldChildVNode,e.d=s.oldChildVNode&&s.oldChildVNode.d,n.d=e.d,e.isSvg=s.isSvg,n.isSvg=s.isSvg,Object.assign(n,e)}function defineComponent(e){return{isComponent:!0,setup:e,name:e.name,handle:handleComponent}}const h=(e,t,...n)=>({t:e,p:t,c:n.flat(1/0),k:t&&t.key});function render(e,t,n=t.t||(t.t={}),o,c=!1){if(Array.isArray(e))return e.map((e,o)=>render(e,t,n.o&&n.o[o],o,c));if(e.t&&e.t.handle)return e.t.handle(e,t,n,o,c);if("function"==typeof e.t)return handleComponent(e,t,n,o,c);if(void 0===e.t||""===e.t){const t=void 0!==e.p&&null!==e.p?String(e.p):"",o=n.d||new Text(t);o.data!==t&&(o.data=t),e.d=o}else{const t=c||"svg"===e.t||!0===n.isSvg,o="http://www.w3.org/2000/svg",r=n.d||(t?document.createElementNS(o,e.t):document.createElement(e.t));e.d=r;const s=n.p||{},d=e.p||{};for(const e in s)if(!(e in d))if(e.startsWith("on")){const t=e.substring(2).toLowerCase();r.removeEventListener(t,s[e])}else r.removeAttribute(e);for(const e in d){const t=s[e],n=d[e];if(t!==n)if(e.startsWith("on")){const o=e.substring(2).toLowerCase();t&&r.removeEventListener(o,t),n&&r.addEventListener(o,n)}else null==n||!1===n?r.removeAttribute(e):r.setAttribute(e,n)}}const r=e.c||[],s=(n.o||[]).slice(),d=[];if(r.forEach((t,n)=>{const o=!t||void 0===t.t&&"object"==typeof t?h("",String(t)):"object"==typeof t?t:h("",t);let r=-1,i=s.find((e,t)=>!(!e||e.t!==o.t||e.k!==o.k)&&(r=t,!0));i?s[r]=null:i={},d[n]=render(o,e.d,i,n,c||"svg"===e.t)}),e.o=d,void 0!==o){const n=t.childNodes[o];e.d!==n&&t.insertBefore(e.d,n||null)}else n.d||t.appendChild(e.d);return s.forEach(e=>{if(e){const t=e.instance&&e.instance.oldChildVNode&&e.instance.oldChildVNode.d||e.d;t&&t.remove(),e.instance&&(e.instance._um.forEach(e=>e()),e.instance.effect&&cleanup(e.instance.effect))}}),Object.assign(n,e)}
+</script>
 
 <script>
 // webagent 启动注入的配置（model / max_context）；serve 时替换占位符
 var CFG = __WEBAGENT_CONFIG__;
+
+
 (function () {
-  // 用 window.innerHeight 驱动布局高度：浏览器内和 PWA standalone 都返回真实可视区域，
-  // 键盘弹出/导航栏出现时自动缩小，header 固定、composer 不被遮挡。
-  function syncHeight() {
-    document.documentElement.style.setProperty('--app-h', window.innerHeight + 'px');
-  }
-  window.addEventListener('resize', syncHeight);
-  window.addEventListener('orientationchange', syncHeight);
-  if (window.visualViewport) { window.visualViewport.addEventListener('resize', syncHeight); }
-  syncHeight();
-
-  var flow = document.getElementById('flow');
-  var scrollEl = document.getElementById('scroll');
-  var statusEl = document.getElementById('status');
-  var statusText = document.getElementById('status-text');
-  var statsline = document.getElementById('statsline');
-  var toBottom = document.getElementById('tobottom');
-  var ta = document.getElementById('input');
-  var sendBtn = document.getElementById('send');
-  var themeBtn = document.getElementById('theme');
-  var hintEl = document.getElementById('hint');
-  var ws = null;
-
-  /* ------------------------------------------------------------ 主题 */
-  var SUN = '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.2v1.8M8 13v1.8M1.2 8H3M13 8h1.8M3.2 3.2l1.3 1.3M11.5 11.5l1.3 1.3M12.8 3.2l-1.3 1.3M4.5 11.5l-1.3 1.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-  var MOON = '<svg viewBox="0 0 16 16" fill="none"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8 5.6 5.6 0 1 0 13.2 9.6Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
-  function applyTheme(t) {
-    document.documentElement.setAttribute('data-theme', t);
-    themeBtn.innerHTML = t === 'light' ? MOON : SUN;
-    try { localStorage.setItem('webagent-theme', t); } catch (e) {}
-  }
-  var savedTheme = null;
-  try { savedTheme = localStorage.getItem('webagent-theme'); } catch (e) {}
-  applyTheme(savedTheme === 'light' || savedTheme === 'dark'
-    ? savedTheme
-    : (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
-  themeBtn.addEventListener('click', function () {
-    applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
-  });
-
-  /* ------------------------------------------------------------ 滚动策略 */
-  var stickBottom = true;
-  function nearBottom() { return scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 120; }
-  function autoScroll(force) {
-    if (force || stickBottom) scrollEl.scrollTop = scrollEl.scrollHeight;
-  }
-  scrollEl.addEventListener('scroll', function () {
-    stickBottom = nearBottom();
-    toBottom.classList.toggle('show', !stickBottom);
-  });
-  toBottom.addEventListener('click', function () {
-    stickBottom = true; toBottom.classList.remove('show');
-    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' });
-  });
-
-  /* ------------------------------------------------------------ HUD 统计 */
-  var H = { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, ctx: 0, busy: false };
-  var MAXCTX = (CFG && CFG.max_context) || 200000;
-  var MODEL = (CFG && CFG.model) || '';
-  function fmtK(n) {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + 'K';
-    return '' + n;
-  }
-  function hudSeg(text, cls, key, full, short) {
-    var s = document.createElement('span'); s.className = 'seg' + (cls ? ' ' + cls : '');
-    if (key) s.setAttribute('data-k', key);
-    if (full !== undefined) {
-      var f = document.createElement('span'); f.className = 'hud-full'; f.textContent = full;
-      var h = document.createElement('span'); h.className = 'hud-short'; h.textContent = short;
-      s.appendChild(f); s.appendChild(h);
-    } else s.textContent = text;
-    return s;
-  }
-  function renderHud() {
-    var ie = H.tin + H.cr;
-    var pct = ie > 0 ? Math.round(H.cr / ie * 100) + '%' : '—';
-    statsline.textContent = '';
-    if (MODEL) statsline.appendChild(hudSeg(MODEL, 'model', 'model'));
-    // 上下文占用 = 最近一次请求的 input+cache_read+cache_creation+output
-    var seg = hudSeg('', '', 'ctx',
-      '上下文 ' + fmtK(H.ctx) + '/' + fmtK(MAXCTX) + ' · ' +
-        (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—'),
-      fmtK(H.ctx) + ' · ' + (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—'));
-    var bar = document.createElement('span'); bar.id = 'ctxbar';
-    var fill = document.createElement('i'); bar.appendChild(fill);
-    var ratio = H.ctx / MAXCTX;
-    fill.style.width = Math.min(100, Math.round(ratio * 100)) + '%';
-    if (ratio >= 0.9) bar.className = 'full'; else if (ratio >= 0.8) bar.className = 'warn';
-    seg.appendChild(bar); statsline.appendChild(seg);
-    statsline.appendChild(hudSeg('输入 ' + fmtK(ie) + '（缓存 ' + pct + '）', '', 'in'));
-    statsline.appendChild(hudSeg('输出 ' + fmtK(H.tout), '', 'out'));
-    statsline.appendChild(hudSeg('', '', 'turn',
-      '对话 ' + H.turn + ' 轮 · ' + H.req + ' 请求', H.turn + '轮·' + H.req + 'req'));
-    if (H.cc > 0) statsline.appendChild(hudSeg('压缩 ' + fmtK(H.cc), '', 'cc'));
-  }
-  function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; H.ctx = 0; renderHud(); }
-
-  /* ------------------------------------------------------------ TodoPanel（composer 上部计划条，对齐 DSH TodoPanel） */
-  var todoPanel = document.getElementById('todoPanel');
-  var todos = [];            // 最新一次 TodoWrite 快照
-  var todoCollapsed = true;  // 默认收起
-  var SVGNS = 'http://www.w3.org/2000/svg';
-  function svgEl(tag, attrs) {
-    var n = document.createElementNS(SVGNS, tag);
-    for (var k in attrs) n.setAttribute(k, attrs[k]);
-    return n;
-  }
-  // 三态 glyph（DSH figma 14×14）：completed 实线圈+勾 / in_progress 旋转弧环 / pending 虚线圈
-  function todoGlyph(status) {
-    var s = svgEl('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', 'aria-hidden': 'true' });
-    if (status === 'completed') {
-      s.appendChild(svgEl('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', 'stroke-width': 1.2 }));
-      var p = svgEl('path', { fill: 'currentColor', d: 'M10.96 5.71L7.70 8.98c-.22.22-.42.42-.61.57-.2.16-.43.3-.73.35-.16.03-.32.03-.48 0-.3-.05-.53-.19-.73-.35-.18-.15-.38-.35-.6-.57L3.04 7.46l.93-.93 1.51 1.52c.24.24.39.38.5.48.11.09.13.09.19.02.03.01.06 0 .13-.06.11-.09.26-.23.5-.48l3.26-3.26.93.93z' });
-      s.appendChild(p);
-    } else if (status === 'in_progress') {
-      s.appendChild(svgEl('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', 'stroke-width': 1.2, 'stroke-dasharray': '4 3.2' }));
-    } else {
-      s.appendChild(svgEl('circle', { cx: 7, cy: 7, r: 6.4, stroke: 'currentColor', 'stroke-width': 1.2, 'stroke-dasharray': '2.4 2.4' }));
-    }
-    return s;
-  }
-  function todoProgressLabel(list) {
-    var done = 0, active = 0;
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].status === 'completed') done++;
-      else if (list[i].status === 'in_progress') active++;
-    }
-    var pending = list.length - done - active;
-    var segs = [];
-    if (done > 0) segs.push(done + ' 完成');
-    if (active > 0) segs.push(active + ' 进行');
-    if (pending > 0) segs.push(pending + ' 待办');
-    return segs.join('\u2002·\u2002');
-  }
-  function renderTodoPanel() {
-    if (!todos.length) { todoPanel.hidden = true; todoPanel.textContent = ''; return; }
-    todoPanel.hidden = false;
-    todoPanel.className = todoCollapsed ? '' : 'open';
-    todoPanel.textContent = '';
-    var body = el('div', 'tpbody');
-    var head = el('button', 'tphead');
-    head.type = 'button';
-    head.setAttribute('aria-expanded', todoCollapsed ? 'false' : 'true');
-    var lead = el('span', 'lead');
-    lead.appendChild(svgEl('svg', {
-      width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none',
-      stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true'
-    }, ));
-    lead.firstChild.appendChild(svgEl('path', { d: 'M2.5 4.2l1.3 1.3 2.2-2.5' }));
-    lead.firstChild.appendChild(svgEl('path', { d: 'M8.5 4.3h5' }));
-    lead.firstChild.appendChild(svgEl('circle', { cx: 3.1, cy: 8.5, r: .8, fill: 'currentColor', stroke: 'none' }));
-    lead.firstChild.appendChild(svgEl('path', { d: 'M8.5 8.5h5' }));
-    lead.firstChild.appendChild(svgEl('circle', { cx: 3.1, cy: 12.7, r: .8, fill: 'currentColor', stroke: 'none' }));
-    lead.firstChild.appendChild(svgEl('path', { d: 'M8.5 12.7h5' }));
-    var title = el('span', 'tptitle'); title.textContent = '任务清单';
-    var prog = el('span', 'tpprog'); prog.textContent = todoProgressLabel(todos);
-    var chev = el('span', 'tpchev');
-    head.appendChild(lead); head.appendChild(title); head.appendChild(prog); head.appendChild(chev);
-    head.addEventListener('click', function () {
-      todoCollapsed = !todoCollapsed;
-      renderTodoPanel();
-    });
-    body.appendChild(head);
-    if (!todoCollapsed) {
-      var ul = el('ul', 'tplist');
-      for (var i = 0; i < todos.length; i++) {
-        var it = todos[i] || {};
-        var li = el('li', 'tpli' + (it.status === 'completed' ? ' done' : ''));
-        li.setAttribute('data-status', it.status || 'pending');
-        var g = el('span', 'glyph');
-        var gc = it.status === 'completed' ? 'g-done' : (it.status === 'in_progress' ? 'g-prog' : 'g-pend');
-        var gw = el('span', gc); gw.appendChild(todoGlyph(it.status || 'pending'));
-        g.appendChild(gw);
-        var ct = el('span', 'tpct'); ct.textContent = it.content || '';
-        li.appendChild(g); li.appendChild(ct);
-        ul.appendChild(li);
-      }
-      body.appendChild(ul);
-    }
-    todoPanel.appendChild(body);
-  }
-  function setTodos(list) {
-    todos = Array.isArray(list) ? list : [];
-    renderTodoPanel();
-  }
-
-  /* ------------------------------------------------------------ 运行状态行（shimmer） */
-  var turnStatus = null;
-  function setWorking(text) {
-    H.busy = true;
-    if (!turnStatus) { turnStatus = document.createElement('div'); turnStatus.className = 'turnstatus'; }
-    turnStatus.textContent = text;
-    flow.appendChild(turnStatus);
-    sendBtn.innerHTML = '<span class="pending"></span>';
-    autoScroll();
-  }
-  function setIdle() {
-    H.busy = false;
-    if (turnStatus && turnStatus.parentNode) turnStatus.parentNode.removeChild(turnStatus);
-    turnStatus = null;
-    sendBtn.innerHTML = '<svg viewBox="0 0 16 16" fill="none"><path d="M8 13V3M4 7l4-4 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  }
-
+  /* Markdown、数学、代码行号和差异的构造均限定在 ContentSlot 管理的挂载点中。 */
   /* ------------------------------------------------------------ 剥离 ANSI 转义序列 */
   function stripAnsi(s) {
     var o = '', i = 0;
@@ -1032,85 +799,7 @@ var CFG = __WEBAGENT_CONFIG__;
     return s.split('|');
   }
 
-  /* ------------------------------------------------------------ 消息渲染 */
-  function addUserRow(content) {
-    var row = el('div', 'msg-user');
-    var b = el('div', 'bubble'); b.textContent = content;
-    row.appendChild(b); flow.appendChild(row); autoScroll();
-  }
 
-  // 流式状态：同一消息的连续 text / thinking 分片聚合到同一元素
-  var stream = { kind: null, el: null, buf: '', raf: 0 };
-  function renderStreamNow() {
-    // 同步落地 pending 的 markdown（replay 时事件密集，stop/user_input
-    // 会在 rAF 触发前到来，此时必须 flush 而不是丢弃，否则整条消息丢失）
-    if (stream.kind === 'text' && stream.el && stream.buf) {
-      var md = renderMd(stream.buf);
-      stream.el.textContent = '';
-      while (md.firstChild) stream.el.appendChild(md.firstChild);
-    }
-  }
-  function resetStream() {
-    if (stream.raf) cancelAnimationFrame(stream.raf);
-    renderStreamNow();
-    stream = { kind: null, el: null, buf: '', raf: 0 };
-  }
-  function appendText(content) {
-    if (stream.kind !== 'text') {
-      // 从 thinking / 其他类型切换过来：先落地旧流，再开新 markdown 块
-      resetStream();
-      stream.kind = 'text';
-      stream.el = el('div', 'md');
-      flow.appendChild(stream.el);
-    }
-    stream.buf += content;
-    // rAF 合并同帧多次分片的重复渲染
-    if (!stream.raf) stream.raf = requestAnimationFrame(function () {
-      if (stream.raf) { stream.raf = 0; }
-      if (!stream.el || stream.kind !== 'text') return;
-      var md = renderMd(stream.buf);
-      stream.el.textContent = '';
-      while (md.firstChild) stream.el.appendChild(md.firstChild);
-      autoScroll();
-    });
-  }
-  function appendThinking(content) {
-    // 大块视为回放（历史会话），直接落地为完成态；小块视为实时流式
-    var replay = content.length > 400;
-    if (stream.kind !== 'thinking' || !stream.el) {
-      resetStream();
-      var det = el('details', 'row');
-      det.setAttribute('data-kind', 'thinking');
-      det.setAttribute('data-state', replay ? 'done' : 'running');
-      det.open = !replay;
-      var s = el('summary');
-      var line = el('div', 'rowline');
-      var lead = el('span', 'lead'); lead.appendChild(el('span', 'ringicon'));
-      var t = el('span', 'rtitle'); t.textContent = '思考过程';
-      var sep = el('span', 'rsep');
-      var sum = el('span', 'rsummary');
-      var chev = el('span', 'chev');
-      line.appendChild(lead); line.appendChild(t); line.appendChild(sep);
-      line.appendChild(sum); line.appendChild(chev);
-      s.appendChild(line); det.appendChild(s);
-      var body = el('div', 'thinkbody'); det.appendChild(body);
-      flow.appendChild(det);
-      stream = { kind: 'thinking', el: det, buf: '', raf: 0, body: body, sum: sum, replay: replay };
-    }
-    stream.buf += content;
-    stream.body.textContent = stream.buf;
-    // 重连/回放后继续收到实时分片：恢复运行态（合并大块落地时是 done）
-    stream.el.setAttribute('data-state', replay ? 'done' : 'running');
-    var oneLine = stream.buf.replace(/\s+/g, ' ').trim();
-    stream.sum.textContent = oneLine.slice(-60);
-    autoScroll();
-  }
-  function finishThinking() {
-    if (stream.kind === 'thinking' && stream.el) {
-      stream.el.setAttribute('data-state', 'done');
-      stream.el.open = false; // 完成后自动折叠（对齐 DSH 行为）
-    }
-  }
 
   // 对齐 display 侧 build_tool_call_summary：折叠态只显示关键参数摘要
   function toolSummary(name, input) {
@@ -1220,296 +909,543 @@ var CFG = __WEBAGENT_CONFIG__;
     return wrap;
   }
 
-  var openTool = null; // 最近一个尚未收到结果的工具卡片（顺序配对）
-  function addToolCall(name, raw) {
-    var inputObj = (typeof raw === 'string') ? null : raw;
-    var args = (typeof raw === 'string') ? raw : JSON.stringify(raw, null, 2);
-    var det = el('details', 'row');
-    det.setAttribute('data-kind', 'tool');
-    det.setAttribute('data-state', 'running');
-    var s = el('summary');
-    var line = el('div', 'rowline');
-    var lead = el('span', 'lead'); lead.appendChild(el('span', 'doticon'));
-    var t = el('span', 'rtitle'); t.textContent = name || 'Tool';
-    var sep = el('span', 'rsep');
-    var full = toolSummary(name, inputObj);
-    var label = full.slice(full.indexOf('(') + 1, -1);
-    var sum = el('span', 'rsummary'); sum.textContent = label;
-    var st = el('span', 'rs-status'); st.textContent = '运行中';
-    var chev = el('span', 'chev');
-    line.appendChild(lead); line.appendChild(t); line.appendChild(sep);
-    line.appendChild(sum); line.appendChild(st); line.appendChild(chev);
-    s.appendChild(line); det.appendChild(s);
-    var card = el('div', 'iocard'); var sc = el('div', 'ioscroll'); card.appendChild(sc);
-    det.appendChild(card);
-    // Write 的输入展示为绿色新增行号块（对齐 diff 展示）；其余工具展示参数 JSON
-    if (name === 'Write' && inputObj && typeof inputObj.content === 'string') {
-      addIoSection(card, '内容', null, false, renderCodeBlock(inputObj.content, 1, true));
-    } else if (args) {
-      addIoSection(card, '输入', args);
-    }
-    flow.appendChild(det);
-    openTool = { el: det, card: card, status: st, input: inputObj };
-    autoScroll();
+
+
+  function newHud() { return { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, ctx: 0, speed: 0 }; }
+  var MAXCTX = (CFG && CFG.max_context) || 200000;
+  var MODEL = (CFG && CFG.model) || '';
+  var contentSeq = 0;
+
+  function fmtK(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1) + 'K';
+    return '' + n;
   }
-  function appendOrphanResult(name, text, isError, node) {
-      var det = el('details', 'row');
-      det.setAttribute('data-kind', 'tool'); det.setAttribute('data-state', 'done');
-      var s = el('summary');
-      var line = el('div', 'rowline');
-      var lead = el('span', 'lead'); lead.appendChild(el('span', 'doticon'));
-      var t = el('span', 'rtitle'); t.textContent = name || 'Result';
-      var sep = el('span', 'rsep');
-      var sum = el('span', 'rsummary');
-      if (isError) sum.setAttribute('data-error', '');
-      sum.textContent = text.replace(/\s+/g, ' ').slice(0, 80);
-      var st = el('span', 'rs-status'); st.textContent = isError ? '失败' : '完成';
-      if (isError) st.setAttribute('data-error', '');
-      var chev = el('span', 'chev');
-      line.appendChild(lead); line.appendChild(t); line.appendChild(sep);
-      line.appendChild(sum); line.appendChild(st); line.appendChild(chev);
-      s.appendChild(line); det.appendChild(s);
-      var card = el('div', 'iocard'); var sc = el('div', 'ioscroll'); card.appendChild(sc);
-      det.appendChild(card);
-      addIoSection(card, '输出', text, isError, node);
-      flow.appendChild(det);
-    autoScroll();
+  function nextId(prefix) { contentSeq += 1; return prefix + '-' + contentSeq; }
+  function stringify(value) {
+    if (typeof value === 'string') return value;
+    try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); }
+  }
+  function plainText(value) { return typeof value === 'string' ? value : stringify(value); }
+  function icon(children, attrs) {
+    var props = Object.assign({ viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' }, attrs || {});
+    return h('svg', props, children);
+  }
+  function sendIcon() {
+    return icon(h('path', { d: 'M8 13V3M4 7l4-4 4 4', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  }
+  function downIcon() {
+    return icon(h('path', { d: 'M8 3v10M4 9l4 4 4-4', stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  }
+  function sunIcon() {
+    return icon([
+      h('circle', { cx: 8, cy: 8, r: '3.2', stroke: 'currentColor', 'stroke-width': '1.5' }),
+      h('path', { d: 'M8 1.2v1.8M8 13v1.8M1.2 8H3M13 8h1.8M3.2 3.2l1.3 1.3M11.5 11.5l1.3 1.3M12.8 3.2l-1.3 1.3M4.5 11.5l-1.3 1.3', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round' })
+    ]);
+  }
+  function moonIcon() {
+    return icon(h('path', { d: 'M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8 5.6 5.6 0 1 0 13.2 9.6Z', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linejoin': 'round' }));
+  }
+  function attachIcon() {
+    return h('svg', { viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': 'true' }, h('path', { d: 'M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
   }
 
-  function addToolResult(name, content, isError) {
-    var text = (typeof content === 'string') ? content : JSON.stringify(content);
-    if (text.length > 40000) text = text.slice(0, 40000) + '\n…（截断）';
-    var inputObj = openTool ? openTool.input : null;
-    if (!isError && name === 'Edit' && text.indexOf('@@') !== -1) {
-      addToolOutputSectionDone(name, text, isError, renderDiffBlock(stripAnsi(text)));
-    } else if (!isError && name === 'Read') {
-      var start = (inputObj && inputObj.offset && inputObj.offset > 1) ? inputObj.offset : 1;
-      addToolOutputSectionDone(name, text, isError, renderCodeBlock(stripAnsi(text), start, false));
-    } else {
-      addToolOutputSectionDone(name, text, isError, null);
-    }
-  }
-  function addToolOutputSectionDone(name, text, isError, node) {
-    if (openTool) {
-      addIoSection(openTool.card, '输出', text, isError, node);
-      openTool.el.setAttribute('data-state', 'done');
-      openTool.status.textContent = isError ? '失败' : '完成';
-      if (isError) openTool.status.setAttribute('data-error', '');
-      openTool = null;
-    } else {
-      appendOrphanResult(name, text, isError, node);
-    }
-  }
-
-  function addSysRow(tag, msg, cls) {
-    var row = el('div', 'sysrow' + (cls ? ' ' + cls : ''));
-    var t = el('span', 'tag'); t.textContent = tag;
-    var m = el('span', 'sysmsg'); m.textContent = msg;
-    row.appendChild(t); row.appendChild(m);
-    flow.appendChild(row); autoScroll();
-  }
-  function addErrorRow(title, msg) {
-    var row = el('div', 'errorrow');
-    var d = el('span', 'dot');
-    var body = el('div');
-    var t = el('span', 'etitle'); t.textContent = title;
-    var m = el('span', 'emsg'); m.textContent = msg;
-    body.appendChild(t); body.appendChild(m);
-    row.appendChild(d); row.appendChild(body);
-    flow.appendChild(row); autoScroll();
-  }
-
-  /* ------------------------------------------------------------ 事件分发 */
-  function handleLine(raw) {
-    if (!raw || !raw.trim()) return;
-    var evt;
-    try { evt = JSON.parse(raw); } catch (e) { addSysRow('', raw); return; }
-    switch (evt.type) {
-      case 'session_start':
-        finishStreamForNewTurn(); hudReset(); setIdle(); openTool = null; break;
-      case 'user_input':
-      case 'user_message':
-        finishStreamForNewTurn();
-        var uin = (evt.content !== undefined && evt.content !== null) ? evt.content : evt.input;
-        addUserRow(typeof uin === 'string' ? uin : JSON.stringify(uin));
-        H.turn++;
-        renderHud();
-        setWorking('思考中');
-        break;
-      case 'thinking':
-        if (!evt.content) break;
-        finishTextIfNeeded();
-        appendThinking(evt.content);
-        setWorking('深度思考');
-        break;
-      case 'text':
-        finishThinking();
-        appendText(evt.content);
-        setWorking('回复中');
-        break;
-      case 'tool_call': {
-        finishThinking(); finishTextIfNeeded();
-        setWorking('执行 ' + (evt.name || '工具'));
-        var rawIn = evt.input !== undefined ? evt.input : (evt.arguments || evt.args || '');
-        addToolCall(evt.name, rawIn);
-        // TodoWrite：最新快照驱动 composer 上部的任务清单面板
-        if (evt.name === 'TodoWrite' && rawIn && typeof rawIn === 'object' && Array.isArray(rawIn.todos)) {
-          setTodos(rawIn.todos);
-        }
-        break;
+  /* 运行时只管理 vnode；富文本挂载点仅写入自身的受控子树。 */
+  var ContentSlot = defineComponent(function ContentSlot(props) {
+    var lastSignature = null;
+    function paint() {
+      var signature = String(props.kind || '') + '\u0000' + String(props.text || '') + '\u0000' + String(props.start || '') + '\u0000' + String(props.add || '');
+      if (signature === lastSignature) return;
+      var target = document.getElementById(props.id);
+      if (!target) { requestAnimationFrame(paint); return; }
+      target.textContent = '';
+      var rendered;
+      if (props.kind === 'markdown') {
+        rendered = renderMd(String(props.text || ''));
+        while (rendered.firstChild) target.appendChild(rendered.firstChild);
+      } else if (props.kind === 'code') {
+        rendered = renderCodeBlock(String(props.text || ''), props.start || 1, !!props.add);
+        while (rendered.firstChild) target.appendChild(rendered.firstChild);
+      } else if (props.kind === 'diff') {
+        rendered = renderDiffBlock(String(props.text || ''));
+        while (rendered.firstChild) target.appendChild(rendered.firstChild);
+      } else {
+        target.textContent = String(props.text || '');
       }
-      case 'tool_result': {
-        setWorking('处理结果');
-        var content = (typeof evt.content === 'string') ? evt.content : JSON.stringify(evt.content);
-        var tname = evt.name || evt.tool_name || 'Result';
-        addToolResult(tname, content, !!evt.is_error);
-        break;
-      }
-      case 'usage':
-        // 只累计主 agent 用量（skip sub_agent）
-        if (evt.kind === undefined || evt.kind === 'agent') {
-          H.req++;
-          H.tin += (evt.input_tokens || 0);
-          H.tout += (evt.output_tokens || 0);
-          H.cr += (evt.cache_read_input_tokens || 0);
-          H.cc += (evt.cache_creation_input_tokens || 0);
-          // 当前上下文实际占用：本次请求的全部输入（含缓存）+ 输出（compact 后会回落）
-          H.ctx = (evt.input_tokens || 0) + (evt.cache_read_input_tokens || 0)
-            + (evt.cache_creation_input_tokens || 0) + (evt.output_tokens || 0);
-          renderHud();
-        }
-        break;
-      case 'context_update':
-        finishStreamForNewTurn();
-        addSysRow('上下文', '已压缩 · ' + (evt.trigger || ''), 'compact'); break;
-      case 'sub_agent_start':
-        finishStreamForNewTurn();
-        addSysRow('子任务', evt.description || evt.prompt || '', 'subagent'); break;
-      case 'stderr': {
-        var vis = stripAnsi(evt.content || '').trim();
-        if (vis) addSysRow('', vis, 'stderr');
-        break;
-      }
-      case 'process_exit':
-        finishStreamForNewTurn(); setIdle(); break;
-      case 'error':
-        finishStreamForNewTurn(); setIdle();
-        addErrorRow('错误', evt.message || ''); break;
-      case 'stop':
-        finishStreamForNewTurn(); setIdle(); break;
-      default:
-        addSysRow('', raw);
+      lastSignature = signature;
     }
-  }
-
-  // 新 turn 开始 / 流结束：把聚合流落地
-  function finishTextIfNeeded() { if (stream.kind === 'text') resetStream(); }
-  function finishStreamForNewTurn() {
-    if (stream.kind === 'thinking') finishThinking();
-    resetStream();
-    openTool = null;
-  }
-
-  /* ------------------------------------------------------------ WebSocket */
-  function reconnect() {
-    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
-    var proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    ws = new WebSocket(proto + '://' + location.host + '/ws');
-    ws.onopen = function () {
-      // 重连会收到完整 replay，先清空 DOM + HUD 状态，避免重复堆积
-      flow.textContent = '';
-      resetStream(); openTool = null; turnStatus = null;
-      setTodos([]); // replay 中的 TodoWrite 会重建快照
-      hudReset(); setIdle();
-      statusEl.className = 'ok'; statusText.textContent = '已连接';
-      stickBottom = true; toBottom.classList.remove('show');
+    onMounted(paint);
+    onUpdated(paint);
+    return function () {
+      return h('div', { id: props.id, class: props.className || '', key: props.key });
     };
-    ws.onmessage = function (ev) { handleLine(ev.data); };
-    ws.onclose = function () {
-      statusEl.className = ''; statusText.textContent = '已断开 · 重连中';
-      setTimeout(reconnect, 1500);
+  });
+
+  var Header = defineComponent(function Header(props) {
+    return function () {
+      return h('header', {}, [
+        h('div', { class: 'brand' }, [h('img', { src: '/icon.svg', alt: '' }), 'webagent']),
+        h('div', { class: 'spacer' }),
+        h('button', { id: 'theme', class: 'iconbtn', title: '切换主题', 'aria-label': '切换主题', onClick: props.onToggleTheme }, props.theme === 'light' ? moonIcon() : sunIcon()),
+        h('span', { id: 'status', class: props.connection === 'connected' ? 'ok' : '' }, [
+          h('span', { class: 'dot' }),
+          h('span', { id: 'status-text' }, props.connection === 'connected' ? '已连接' : (props.connection === 'reconnecting' ? '已断开 · 重连中' : '连接中…'))
+        ])
+      ]);
     };
-    ws.onerror = function () { ws.close(); };
-  }
-  reconnect();
+  });
 
-  /* ------------------------------------------------------------ 输入 */
-  function grow() {
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
-  }
-  function sendMsg() {
-    var v = ta.value.trim();
-    if (!v || !ws || ws.readyState !== 1) { if (!v) ta.focus(); return; }
-    ws.send(v);
-    setTodos([]); // 对齐 DSH：下一轮 turn 开始时清空任务清单快照
-    ta.value = ''; grow();
-    ta.focus();
-  }
-  sendBtn.addEventListener('click', sendMsg);
-  ta.addEventListener('input', grow);
+  var HudSeg = defineComponent(function HudSeg(props) {
+    return function () {
+      var children = [];
+      if (props.full !== undefined) {
+        children.push(h('span', { class: 'hud-full' }, props.full));
+        children.push(h('span', { class: 'hud-short' }, props.short));
+      } else children.push(props.text || '');
+      if (props.children && props.children.length) children = children.concat(props.children);
+      return h('span', { class: 'seg' + (props.className ? ' ' + props.className : ''), 'data-k': props.dataKey || '' }, children);
+    };
+  });
 
-  /* ------------------------------------------------------------ 图片上传（对齐 CLI [Image #N] 机制） */
-  var attachBtn = document.getElementById('attach');
-  var filepick = document.getElementById('filepick');
-  var hintEl = document.getElementById('hint');
-  var HINT_DEFAULT = hintEl.textContent;
-  function insertAtCursor(text) {
-    var s = ta.selectionStart, e = ta.selectionEnd, v = ta.value;
-    ta.value = v.slice(0, s) + text + v.slice(e);
-    ta.selectionStart = ta.selectionEnd = s + text.length;
-    grow(); ta.focus();
+  var Hud = defineComponent(function Hud(props) {
+    return function () {
+      var H = props.hud;
+      var ie = H.tin + H.cr;
+      var pct = ie > 0 ? Math.round(H.cr / ie * 100) + '%' : '—';
+      var ratio = H.ctx / MAXCTX;
+      var barClass = ratio >= 0.9 ? 'full' : (ratio >= 0.8 ? 'warn' : '');
+      var parts = [];
+      if (MODEL) parts.push(h(HudSeg, { key: 'model', text: MODEL, className: 'model', dataKey: 'model' }));
+      parts.push(h(HudSeg, {
+        key: 'ctx', dataKey: 'ctx', full: '上下文 ' + fmtK(H.ctx) + '/' + fmtK(MAXCTX) + ' · ' + (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—'),
+        short: fmtK(H.ctx) + ' · ' + (H.ctx > 0 ? Math.round(H.ctx / MAXCTX * 100) + '%' : '—')
+      }, h('span', { id: 'ctxbar', class: barClass }, h('i', { style: 'width:' + Math.min(100, Math.round(ratio * 100)) + '%' }))));
+      parts.push(h(HudSeg, { key: 'in', text: '输入 ' + fmtK(ie) + '（缓存 ' + pct + '）', dataKey: 'in' }));
+      parts.push(h(HudSeg, { key: 'out', text: '输出 ' + fmtK(H.tout), dataKey: 'out' }));
+      if (H.speed > 0) parts.push(h(HudSeg, { key: 'speed', text: '速度 ' + fmtK(H.speed) + ' tok/s', dataKey: 'speed' }));
+      parts.push(h(HudSeg, { key: 'turn', dataKey: 'turn', full: '对话 ' + H.turn + ' 轮 · ' + H.req + ' 请求', short: H.turn + '轮·' + H.req + 'req' }));
+      if (H.cc > 0) parts.push(h(HudSeg, { key: 'cc', text: '压缩 ' + fmtK(H.cc), dataKey: 'cc' }));
+      return h('div', { id: 'statsline' }, parts);
+    };
+  });
+
+  function todoGlyph(status) {
+    var common = { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', 'aria-hidden': 'true' };
+    if (status === 'completed') return h('svg', common, [
+      h('circle', { cx: 7, cy: 7, r: '6.4', stroke: 'currentColor', 'stroke-width': '1.2' }),
+      h('path', { fill: 'currentColor', d: 'M10.96 5.71L7.70 8.98c-.22.22-.42.42-.61.57-.2.16-.43.3-.73.35-.16.03-.32.03-.48 0-.3-.05-.53-.19-.73-.35-.18-.15-.38-.35-.6-.57L3.04 7.46l.93-.93 1.51 1.52c.24.24.39.38.5.48.11.09.13.09.19.02.03.01.06 0 .13-.06.11-.09.26-.23.5-.48l3.26-3.26.93.93z' })
+    ]);
+    return h('svg', common, h('circle', { cx: 7, cy: 7, r: '6.4', stroke: 'currentColor', 'stroke-width': '1.2', 'stroke-dasharray': status === 'in_progress' ? '4 3.2' : '2.4 2.4' }));
   }
-  function uploadImage(file) {
-    if (!file) return;
-    if (!/^image\//.test(file.type)) { addErrorRow('上传失败', '仅支持 PNG / JPEG / WebP 图片'); return; }
-    if (file.size > 8 * 1024 * 1024) { addErrorRow('上传失败', '图片超过 8MB 限制'); return; }
-    attachBtn.disabled = true; attachBtn.classList.add('spin');
-    hintEl.textContent = '上传 ' + (file.name || '图片') + '…';
-    fetch('/upload', { method: 'POST', body: file })
-      .then(function (r) {
-        return r.text().then(function (t) {
-          if (!r.ok) throw new Error(t.replace(/^"|"$/g, '') || ('HTTP ' + r.status));
-          try { return JSON.parse(t).placeholder; } catch (e) { throw new Error('bad response'); }
-        });
-      })
-      .then(function (ph) { insertAtCursor(ph + ' '); })
-      .catch(function (e) { addErrorRow('上传失败', String(e.message || e)); })
-      .finally(function () {
-        attachBtn.disabled = false; attachBtn.classList.remove('spin');
-        hintEl.textContent = HINT_DEFAULT;
+  function todoProgressLabel(list) {
+    var done = 0, active = 0;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].status === 'completed') done++;
+      else if (list[i].status === 'in_progress') active++;
+    }
+    var pending = list.length - done - active, result = [];
+    if (done) result.push(done + ' 完成');
+    if (active) result.push(active + ' 进行');
+    if (pending) result.push(pending + ' 待办');
+    return result.join('\u2002·\u2002');
+  }
+  function todoListIcon() {
+    return h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' }, [
+      h('path', { d: 'M2.5 4.2l1.3 1.3 2.2-2.5' }), h('path', { d: 'M8.5 4.3h5' }),
+      h('circle', { cx: '3.1', cy: '8.5', r: '.8', fill: 'currentColor', stroke: 'none' }), h('path', { d: 'M8.5 8.5h5' }),
+      h('circle', { cx: '3.1', cy: '12.7', r: '.8', fill: 'currentColor', stroke: 'none' }), h('path', { d: 'M8.5 12.7h5' })
+    ]);
+  }
+  var TodoItem = defineComponent(function TodoItem(props) {
+    return function () {
+      var item = props.item || {};
+      var status = item.status || 'pending';
+      var glyphClass = status === 'completed' ? 'g-done' : (status === 'in_progress' ? 'g-prog' : 'g-pend');
+      return h('li', { class: 'tpli' + (status === 'completed' ? ' done' : ''), 'data-status': status, key: props.itemKey }, [
+        h('span', { class: 'glyph' }, h('span', { class: glyphClass }, todoGlyph(status))),
+        h('span', { class: 'tpct' }, item.content || '')
+      ]);
+    };
+  });
+  var TodoPanel = defineComponent(function TodoPanel(props) {
+    return function () {
+      var todos = props.todos || [];
+      if (!todos.length) return h('div', { id: 'todoPanel', hidden: true });
+      var collapsed = !!props.collapsed;
+      var children = [h('button', { class: 'tphead', type: 'button', 'aria-expanded': collapsed ? 'false' : 'true', onClick: props.onToggle }, [
+        h('span', { class: 'lead' }, todoListIcon()), h('span', { class: 'tptitle' }, '任务清单'),
+        h('span', { class: 'tpprog' }, todoProgressLabel(todos)), h('span', { class: 'tpchev' })
+      ])];
+      if (!collapsed) children.push(h('ul', { class: 'tplist' }, todos.map(function (item, index) {
+        return h(TodoItem, { key: (item && item.id) || ('todo-' + index), itemKey: (item && item.id) || ('todo-' + index), item: item });
+      })));
+      return h('div', { id: 'todoPanel', class: collapsed ? '' : 'open' }, h('div', { class: 'tpbody' }, children));
+    };
+  });
+
+  var WorkingStatus = defineComponent(function WorkingStatus(props) {
+    return function () { return h('div', { class: 'turnstatus' }, props.text); };
+  });
+
+  function ioSection(key, label, item) {
+    var children = [h('span', { class: 'iolabel' }, label)];
+    if (item.kind === 'code' || item.kind === 'diff') {
+      children.push(h(ContentSlot, { key: key + '-slot', id: item.slotId, className: item.kind === 'code' ? 'codelines' + (item.add ? ' add' : '') : 'diffwrap', kind: item.kind, text: item.text, start: item.start, add: item.add }));
+    } else {
+      children.push(h('p', { class: 'iotext', 'data-error': item.error ? '' : null }, item.text));
+    }
+    return h('div', { class: 'iosection', key: key }, children);
+  }
+  var ToolCard = defineComponent(function ToolCard(props) {
+    return function () {
+      var message = props.message;
+      var input = message.input;
+      var args = typeof input === 'string' ? input : stringify(input);
+      var sections = [];
+      if (message.name === 'Write' && input && typeof input === 'object' && typeof input.content === 'string') {
+        sections.push(ioSection(message.id + '-input', '内容', { kind: 'code', text: input.content, start: 1, add: true, slotId: message.id + '-input' }));
+      } else if (args) {
+        sections.push(ioSection(message.id + '-input', '输入', { kind: 'text', text: args, error: false }));
+      }
+      (message.outputs || []).forEach(function (output, index) {
+        if (sections.length) sections.push(h('div', { class: 'iodivider', key: message.id + '-divider-' + index }));
+        sections.push(ioSection(message.id + '-output-' + index, '输出', output));
       });
-  }
-  attachBtn.addEventListener('click', function () { filepick.click(); });
-  filepick.addEventListener('change', function () {
-    uploadImage(filepick.files && filepick.files[0]);
-    filepick.value = '';
-  });
-  ta.addEventListener('paste', function (e) {
-    var files = e.clipboardData && e.clipboardData.files;
-    if (files && files.length && /^image\//.test(files[0].type)) {
-      e.preventDefault();
-      uploadImage(files[0]);
-    }
-  });
-  ta.addEventListener('dragover', function (e) { e.preventDefault(); });
-  ta.addEventListener('drop', function (e) {
-    e.preventDefault();
-    var files = e.dataTransfer && e.dataTransfer.files;
-    if (files && files.length) uploadImage(files[0]);
+      var summary = toolSummary(message.name, typeof input === 'string' ? null : input);
+      var label = summary.slice(summary.indexOf('(') + 1, -1);
+      var failed = message.status === 'failed';
+      return h('details', { class: 'row', 'data-kind': 'tool', 'data-state': message.status === 'running' ? 'running' : 'done', key: message.id }, [
+        h('summary', {}, h('div', { class: 'rowline' }, [
+          h('span', { class: 'lead' }, h('span', { class: 'doticon' })), h('span', { class: 'rtitle' }, message.name || 'Tool'), h('span', { class: 'rsep' }),
+          h('span', { class: 'rsummary', 'data-error': failed ? '' : null }, label), h('span', { class: 'rs-status', 'data-error': failed ? '' : null }, message.status === 'running' ? '运行中' : (failed ? '失败' : '完成')), h('span', { class: 'chev' })
+        ])),
+        h('div', { class: 'iocard' }, h('div', { class: 'ioscroll' }, sections))
+      ]);
+    };
   });
 
-  ta.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') {
-      if (e.shiftKey || e.ctrlKey || e.metaKey) { return; } // allow newline
-      e.preventDefault(); sendMsg();
-    }
+  var MessageRow = defineComponent(function MessageRow(props) {
+    return function () {
+      var message = props.message;
+      if (message.type === 'user') return h('div', { class: 'msg-user', key: message.id }, h('div', { class: 'bubble' }, message.content));
+      if (message.type === 'text') return h(ContentSlot, { key: message.id, id: message.id + '-content', className: 'md', kind: 'markdown', text: message.content });
+      if (message.type === 'thinking') {
+        var oneLine = String(message.content || '').replace(/\s+/g, ' ').trim();
+        return h('details', { class: 'row', 'data-kind': 'thinking', 'data-state': message.status === 'running' ? 'running' : 'done', open: message.status === 'running' && !message.replay ? true : null, key: message.id }, [
+          h('summary', {}, h('div', { class: 'rowline' }, [
+            h('span', { class: 'lead' }, h('span', { class: 'ringicon' })), h('span', { class: 'rtitle' }, '思考过程'), h('span', { class: 'rsep' }), h('span', { class: 'rsummary' }, oneLine.slice(-60)), h('span', { class: 'chev' })
+          ])), h('div', { class: 'thinkbody' }, message.content || '')
+        ]);
+      }
+      if (message.type === 'tool') return h(ToolCard, { key: message.id, message: message });
+      if (message.type === 'error') return h('div', { class: 'errorrow', key: message.id }, [
+        h('span', { class: 'dot' }), h('div', {}, [h('span', { class: 'etitle' }, message.title), h('span', { class: 'emsg' }, message.content)])
+      ]);
+      return h('div', { class: 'sysrow' + (message.className ? ' ' + message.className : ''), key: message.id }, [h('span', { class: 'tag' }, message.tag || ''), h('span', { class: 'sysmsg' }, message.content || '')]);
+    };
   });
-  setInterval(function () {
-    if (ws && ws.readyState === 1) { return; }
-    reconnect();
-  }, 3000);
+
+  var ChatTranscript = defineComponent(function ChatTranscript(props) {
+    return function () {
+      var rows = (props.messages || []).map(function (message) { return h(MessageRow, { key: message.id, message: message }); });
+      if (props.working) rows.push(h(WorkingStatus, { key: 'working-status', text: props.working }));
+      return h('div', { id: 'flow' }, rows);
+    };
+  });
+
+  var Composer = defineComponent(function Composer(props) {
+    return function () {
+      var hint = props.uploadName ? '上传 ' + props.uploadName + '…' : 'Enter 发送 · Shift+Enter 换行';
+      return h('div', { class: 'composer' }, [
+        h('textarea', { id: 'input', placeholder: '给 bash-agent 发送消息…', rows: '1', autofocus: true, onInput: props.onGrow, onKeydown: props.onKeydown, onPaste: props.onPaste, onDragover: props.onDragover, onDrop: props.onDrop }),
+        h('div', { class: 'composer-row' }, [
+          h('input', { type: 'file', id: 'filepick', accept: 'image/png,image/jpeg,image/webp', hidden: true, onChange: props.onFileChange }),
+          h('button', { id: 'attach', 'aria-label': '上传图片', title: '上传图片', disabled: props.uploadName ? true : null, class: props.uploadName ? 'spin' : '', onClick: props.onAttach }, attachIcon()),
+          h('span', { class: 'hint', id: 'hint' }, hint),
+          h('button', { id: 'send', 'aria-label': '发送', onClick: props.onSend }, props.working ? h('span', { class: 'pending' }) : sendIcon())
+        ])
+      ]);
+    };
+  });
+
+  var WebAgentApp = defineComponent(function WebAgentApp() {
+    var savedTheme = null;
+    try { savedTheme = localStorage.getItem('webagent-theme'); } catch (e) {}
+    var initialTheme = savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : ((window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark');
+    var stateSignal = createSignal({ theme: initialTheme, hud: newHud(), messages: [], todos: [], todoCollapsed: true, working: null, connection: 'connecting', toBottom: false, uploadName: '' });
+    var getState = stateSignal[0], setState = stateSignal[1];
+    var ws = null, reconnectTimer = 0, connectionTimer = 0, active = true, stickBottom = true;
+    var pending = { kind: null, id: null, buffer: '', raf: 0 };
+
+    function patch(change) { setState(Object.assign({}, change)); }
+    function replaceMessages(change) {
+      var state = getState();
+      patch(Object.assign({}, state, { messages: change(state.messages) }));
+    }
+    function addMessage(message) { replaceMessages(function (all) { return all.concat([message]); }); scheduleScroll(); }
+    function updateMessage(id, change) {
+      replaceMessages(function (all) { return all.map(function (message) { return message.id === id ? Object.assign({}, message, change(message)) : message; }); });
+    }
+    function scheduleScroll(force) {
+      requestAnimationFrame(function () {
+        var scroll = document.getElementById('scroll');
+        if (scroll && (force || stickBottom)) scroll.scrollTop = scroll.scrollHeight;
+      });
+    }
+    function nearBottom() {
+      var scroll = document.getElementById('scroll');
+      return !scroll || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
+    }
+    function syncBottomButton() {
+      stickBottom = nearBottom();
+      var state = getState();
+      if (state.toBottom === !stickBottom) return;
+      patch(Object.assign({}, state, { toBottom: !stickBottom }));
+    }
+    function toggleTheme() {
+      var state = getState();
+      patch(Object.assign({}, state, { theme: state.theme === 'light' ? 'dark' : 'light' }));
+    }
+    function updateHud(change) {
+      var state = getState();
+      patch(Object.assign({}, state, { hud: Object.assign({}, state.hud, change) }));
+    }
+    function setTodos(list) {
+      var state = getState(), valid = Array.isArray(list);
+      patch(Object.assign({}, state, { todos: valid ? list : [], todoCollapsed: valid && list.length ? state.todoCollapsed : true }));
+    }
+    function setWorking(text) {
+      var state = getState();
+      patch(Object.assign({}, state, { working: text || null }));
+    }
+    function addSystem(tag, content, className) { addMessage({ id: nextId('system'), type: 'system', tag: tag, content: content, className: className || '' }); }
+    function addError(title, content) { addMessage({ id: nextId('error'), type: 'error', title: title, content: content }); }
+
+    function flushPending() {
+      if (!pending.id) return;
+      if (pending.raf) cancelAnimationFrame(pending.raf);
+      var id = pending.id, content = pending.buffer;
+      pending = { kind: null, id: null, buffer: '', raf: 0 };
+      updateMessage(id, function () { return { content: content }; });
+    }
+    function queuePendingPaint() {
+      if (pending.raf) return;
+      pending.raf = requestAnimationFrame(function () {
+        var id = pending.id, content = pending.buffer;
+        if (!id) return;
+        pending.raf = 0;
+        updateMessage(id, function () { return { content: content }; });
+        scheduleScroll();
+      });
+    }
+    function finishThinking() {
+      if (pending.kind !== 'thinking') return;
+      var id = pending.id;
+      flushPending();
+      updateMessage(id, function () { return { status: 'done' }; });
+    }
+    function finishText() { if (pending.kind === 'text') flushPending(); }
+    function finishStream() { if (pending.kind === 'thinking') finishThinking(); else finishText(); }
+    function appendText(content) {
+      if (!content) return;
+      if (pending.kind !== 'text') {
+        finishStream();
+        var id = nextId('text');
+        addMessage({ id: id, type: 'text', content: '' });
+        pending = { kind: 'text', id: id, buffer: '', raf: 0 };
+      }
+      pending.buffer += content;
+      queuePendingPaint();
+    }
+    function appendThinking(content) {
+      if (!content) return;
+      if (pending.kind !== 'thinking') {
+        finishStream();
+        var replay = content.length > 400, id = nextId('thinking');
+        addMessage({ id: id, type: 'thinking', content: '', status: replay ? 'done' : 'running', replay: replay });
+        pending = { kind: 'thinking', id: id, buffer: '', raf: 0 };
+      }
+      pending.buffer += content;
+      queuePendingPaint();
+    }
+    function addToolCall(name, input) {
+      finishStream();
+      var id = nextId('tool');
+      addMessage({ id: id, type: 'tool', name: name || 'Tool', input: input, status: 'running', outputs: [] });
+      return id;
+    }
+    var openToolId = null;
+    function outputFor(name, text, isError, input) {
+      if (!isError && name === 'Edit' && text.indexOf('@@') !== -1) return { kind: 'diff', text: stripAnsi(text), error: false, slotId: nextId('diff') };
+      if (!isError && name === 'Read') return { kind: 'code', text: stripAnsi(text), start: input && input.offset > 1 ? input.offset : 1, add: false, error: false, slotId: nextId('code') };
+      return { kind: 'text', text: text, error: !!isError };
+    }
+    function addToolResult(name, content, isError) {
+      var text = plainText(content);
+      if (text.length > 40000) text = text.slice(0, 40000) + '\n…（截断）';
+      var target = openToolId;
+      if (target) {
+        var current = getState().messages.filter(function (message) { return message.id === target; })[0];
+        var output = outputFor(name, text, isError, current && current.input);
+        updateMessage(target, function (message) { return { status: isError ? 'failed' : 'done', outputs: (message.outputs || []).concat([output]) }; });
+        openToolId = null;
+      } else {
+        var id = nextId('tool');
+        addMessage({ id: id, type: 'tool', name: name || 'Result', input: '', status: isError ? 'failed' : 'done', outputs: [outputFor(name, text, isError, null)] });
+      }
+      scheduleScroll();
+    }
+
+    function handleLine(raw) {
+      if (!raw || !raw.trim()) return;
+      var event;
+      try { event = JSON.parse(raw); } catch (e) { addSystem('', raw); return; }
+      switch (event.type) {
+        case 'session_start':
+          finishStream(); updateHud(newHud()); setWorking(null); openToolId = null; break;
+        case 'user_input':
+        case 'user_message': {
+          finishStream();
+          var input = event.content !== undefined && event.content !== null ? event.content : event.input;
+          addMessage({ id: nextId('user'), type: 'user', content: plainText(input) });
+          updateHud({ turn: getState().hud.turn + 1 });
+          setWorking('思考中');
+          break;
+        }
+        case 'thinking':
+          appendThinking(event.content); setWorking('深度思考'); break;
+        case 'text':
+          finishThinking(); appendText(event.content); setWorking('回复中'); break;
+        case 'tool_call': {
+          finishStream();
+          var rawInput = event.input !== undefined ? event.input : (event.arguments || event.args || '');
+          setWorking('执行 ' + (event.name || '工具'));
+          openToolId = addToolCall(event.name, rawInput);
+          if (event.name === 'TodoWrite' && rawInput && typeof rawInput === 'object' && Array.isArray(rawInput.todos)) setTodos(rawInput.todos);
+          break;
+        }
+        case 'tool_result':
+          setWorking('处理结果'); addToolResult(event.name || event.tool_name || 'Result', event.content, !!event.is_error); break;
+        case 'usage':
+          if (event.kind === undefined || event.kind === 'agent') {
+            var hud = getState().hud;
+            updateHud({ req: hud.req + 1, tin: hud.tin + (event.input_tokens || 0), tout: hud.tout + (event.output_tokens || 0), cr: hud.cr + (event.cache_read_input_tokens || 0), cc: hud.cc + (event.cache_creation_input_tokens || 0), ctx: (event.input_tokens || 0) + (event.cache_read_input_tokens || 0) + (event.cache_creation_input_tokens || 0) + (event.output_tokens || 0), speed: event.speed_tok_per_sec !== undefined ? event.speed_tok_per_sec : hud.speed });
+          }
+          break;
+        case 'context_update': finishStream(); addSystem('上下文', '已压缩 · ' + (event.trigger || ''), 'compact'); break;
+        case 'sub_agent_start': finishStream(); addSystem('子任务', event.description || event.prompt || '', 'subagent'); break;
+        case 'stderr': {
+          var visible = stripAnsi(event.content || '').trim();
+          if (visible) addSystem('', visible, 'stderr');
+          break;
+        }
+        case 'process_exit': finishStream(); setWorking(null); break;
+        case 'error': finishStream(); setWorking(null); addError('错误', event.message || ''); break;
+        case 'stop': finishStream(); setWorking(null); break;
+        default: addSystem('', raw);
+      }
+    }
+
+    function reconnect() {
+      if (!active || (ws && (ws.readyState === 0 || ws.readyState === 1))) return;
+      var proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(proto + '://' + location.host + '/ws');
+      ws.onopen = function () {
+        if (!active) return;
+        if (pending.raf) cancelAnimationFrame(pending.raf);
+        pending = { kind: null, id: null, buffer: '', raf: 0 }; openToolId = null; stickBottom = true;
+        var state = getState();
+        patch(Object.assign({}, state, { messages: [], todos: [], todoCollapsed: true, hud: newHud(), working: null, connection: 'connected', toBottom: false }));
+        scheduleScroll(true);
+      };
+      ws.onmessage = function (event) { handleLine(event.data); };
+      ws.onclose = function () {
+        if (!active) return;
+        patch(Object.assign({}, getState(), { connection: 'reconnecting' }));
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(reconnect, 1500);
+      };
+      ws.onerror = function () { if (ws) ws.close(); };
+    }
+
+    function grow() {
+      var input = document.getElementById('input');
+      if (!input) return;
+      input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    }
+    function sendMessage() {
+      var input = document.getElementById('input');
+      if (!input) return;
+      var value = input.value.trim();
+      if (!value || !ws || ws.readyState !== 1) { if (!value) input.focus(); return; }
+      ws.send(value); setTodos([]); input.value = ''; grow(); input.focus();
+    }
+    function insertAtCursor(text) {
+      var input = document.getElementById('input');
+      if (!input) return;
+      var start = input.selectionStart, end = input.selectionEnd, value = input.value;
+      input.value = value.slice(0, start) + text + value.slice(end);
+      input.selectionStart = input.selectionEnd = start + text.length;
+      grow(); input.focus();
+    }
+    function uploadImage(file) {
+      if (!file) return;
+      if (!/^image\//.test(file.type)) { addError('上传失败', '仅支持 PNG / JPEG / WebP 图片'); return; }
+      if (file.size > 8 * 1024 * 1024) { addError('上传失败', '图片超过 8MB 限制'); return; }
+      patch(Object.assign({}, getState(), { uploadName: file.name || '图片' }));
+      fetch('/upload', { method: 'POST', body: file })
+        .then(function (response) { return response.text().then(function (body) { if (!response.ok) throw new Error(body.replace(/^"|"$/g, '') || ('HTTP ' + response.status)); try { return JSON.parse(body).placeholder; } catch (e) { throw new Error('响应无效'); } }); })
+        .then(function (placeholder) { insertAtCursor(placeholder + ' '); })
+        .catch(function (error) { addError('上传失败', String(error.message || error)); })
+        .finally(function () { patch(Object.assign({}, getState(), { uploadName: '' })); });
+    }
+    function onKeydown(event) { if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) { event.preventDefault(); sendMessage(); } }
+    function onPaste(event) { var files = event.clipboardData && event.clipboardData.files; if (files && files.length && /^image\//.test(files[0].type)) { event.preventDefault(); uploadImage(files[0]); } }
+    function onDrop(event) { event.preventDefault(); var files = event.dataTransfer && event.dataTransfer.files; if (files && files.length) uploadImage(files[0]); }
+    function onFileChange(event) { var file = event.target.files && event.target.files[0]; uploadImage(file); event.target.value = ''; }
+
+    createEffect(function () {
+      var theme = getState().theme;
+      document.documentElement.setAttribute('data-theme', theme);
+      try { localStorage.setItem('webagent-theme', theme); } catch (e) {}
+    });
+    var syncHeight = function () { document.documentElement.style.setProperty('--app-h', window.innerHeight + 'px'); };
+    onMounted(function () {
+      window.addEventListener('resize', syncHeight); window.addEventListener('orientationchange', syncHeight);
+      if (window.visualViewport) window.visualViewport.addEventListener('resize', syncHeight);
+      syncHeight(); reconnect(); connectionTimer = setInterval(reconnect, 3000);
+    });
+    onUnmounted(function () {
+      active = false; clearTimeout(reconnectTimer); clearInterval(connectionTimer);
+      if (pending.raf) cancelAnimationFrame(pending.raf);
+      if (ws) ws.close();
+      window.removeEventListener('resize', syncHeight); window.removeEventListener('orientationchange', syncHeight);
+      if (window.visualViewport) window.visualViewport.removeEventListener('resize', syncHeight);
+    });
+
+    return function () {
+      var state = getState();
+      return h('div', { id: 'app' }, [
+        h(Header, { key: 'header', theme: state.theme, connection: state.connection, onToggleTheme: toggleTheme }),
+        h('div', { id: 'scroll', onScroll: syncBottomButton }, [
+          h(ChatTranscript, { key: 'transcript', messages: state.messages, working: state.working }),
+          h('div', { class: 'hero' }, [h('img', { src: '/icon.svg', alt: '' }), h('h1', {}, 'bash-agent'), h('p', {}, '输入提示词开始对话 · Enter 发送 · Shift+Enter 换行')]),
+          h('div', { id: 'tobottom-wrap' }, h('button', { id: 'tobottom', class: state.toBottom ? 'show' : '', 'aria-label': '跳到底部', onClick: function () { stickBottom = true; patch(Object.assign({}, getState(), { toBottom: false })); var scroll = document.getElementById('scroll'); if (scroll) scroll.scrollTo({ top: scroll.scrollHeight, behavior: 'smooth' }); } }, downIcon()))
+        ]),
+        h('div', { class: 'composer-stack' }, [
+          h(TodoPanel, { key: 'todos', todos: state.todos, collapsed: state.todoCollapsed, onToggle: function () { var state = getState(); patch(Object.assign({}, state, { todoCollapsed: !state.todoCollapsed })); } }),
+          h(Composer, { key: 'composer', working: state.working, uploadName: state.uploadName, onGrow: grow, onKeydown: onKeydown, onPaste: onPaste, onDragover: function (event) { event.preventDefault(); }, onDrop: onDrop, onAttach: function () { var picker = document.getElementById('filepick'); if (picker) picker.click(); }, onFileChange: onFileChange, onSend: sendMessage }),
+          h(Hud, { key: 'hud', hud: state.hud })
+        ])
+      ]);
+    };
+  });
+
+  var mount = document.getElementById('mount');
+  var appVNode = render(h(WebAgentApp, { key: 'webagent' }), mount);
+  mount.t = appVNode;
 })();
+
 </script>
 </body>
 </html>
