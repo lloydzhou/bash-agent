@@ -532,7 +532,7 @@ var CFG = __WEBAGENT_CONFIG__;
   });
 
   /* ------------------------------------------------------------ HUD 统计 */
-  var H = { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, ctx: 0, busy: false };
+  var H = { turn: 0, req: 0, tin: 0, tout: 0, cr: 0, cc: 0, ctx: 0, speed: 0, busy: false };
   var MAXCTX = (CFG && CFG.max_context) || 200000;
   var MODEL = (CFG && CFG.model) || '';
   function fmtK(n) {
@@ -568,11 +568,12 @@ var CFG = __WEBAGENT_CONFIG__;
     seg.appendChild(bar); statsline.appendChild(seg);
     statsline.appendChild(hudSeg('输入 ' + fmtK(ie) + '（缓存 ' + pct + '）', '', 'in'));
     statsline.appendChild(hudSeg('输出 ' + fmtK(H.tout), '', 'out'));
+    if (H.speed > 0) statsline.appendChild(hudSeg('速度 ' + fmtK(H.speed) + ' tok/s', '', 'speed'));
     statsline.appendChild(hudSeg('', '', 'turn',
       '对话 ' + H.turn + ' 轮 · ' + H.req + ' 请求', H.turn + '轮·' + H.req + 'req'));
     if (H.cc > 0) statsline.appendChild(hudSeg('压缩 ' + fmtK(H.cc), '', 'cc'));
   }
-  function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; H.ctx = 0; renderHud(); }
+  function hudReset() { H.turn = 0; H.req = 0; H.tin = 0; H.tout = 0; H.cr = 0; H.cc = 0; H.ctx = 0; H.speed = 0; renderHud(); }
 
   /* ------------------------------------------------------------ TodoPanel（composer 上部计划条，对齐 DSH TodoPanel） */
   var todoPanel = document.getElementById('todoPanel');
@@ -1373,6 +1374,7 @@ var CFG = __WEBAGENT_CONFIG__;
           H.tout += (evt.output_tokens || 0);
           H.cr += (evt.cache_read_input_tokens || 0);
           H.cc += (evt.cache_creation_input_tokens || 0);
+          if (evt.speed_tok_per_sec !== undefined) H.speed = evt.speed_tok_per_sec;
           // 当前上下文实际占用：本次请求的全部输入（含缓存）+ 输出（compact 后会回落）
           H.ctx = (evt.input_tokens || 0) + (evt.cache_read_input_tokens || 0)
             + (evt.cache_creation_input_tokens || 0) + (evt.output_tokens || 0);

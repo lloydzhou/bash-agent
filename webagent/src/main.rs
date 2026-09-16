@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::json;
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -47,6 +48,14 @@ fn events_path_for(home: &Path, cwd: &Path, session_id: &str) -> PathBuf {
         .join(project_key(cwd))
         .join(session_id)
         .join("events.jsonl")
+}
+
+/// 从 events.jsonl 同目录的 stats.json 读取最近一次调用速度。
+fn read_speed_from_stats(events_path: &Path) -> Option<i64> {
+    let stats_path = events_path.parent()?.join("stats.json");
+    let content = fs::read_to_string(&stats_path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    v.get("last_call_speed_tok_per_sec")?.as_i64()
 }
 
 /// --continue 模式下扫描项目目录，找最近活跃的 session（对齐 continue_session）。
@@ -155,7 +164,8 @@ fn run_turn(
     let stderr = child.stderr.take().expect("stderr piped");
     CURRENT_PID.store(pid, Ordering::SeqCst);
 
-    // stdout 线程：逐行原样转发；看到 session_start 时动态设置 events.jsonl 路径
+    // stdout 线程：逐行原样转发；看到 session_start 时动态设置 events.jsonl 路径；
+    // 收到 usage 事件时，从 stats.json 读取 speed 并注入 speed_tok_per_sec 字段。
     let h_out = hub.clone();
     let ep_out = events_path.clone();
     let home_out = home.to_path_buf();
@@ -178,7 +188,25 @@ fn run_turn(
                             *guard = Some(events_path_for(&home_out, &cwd_out, sid));
                         }
                     }
-                    emit(&h_out, line);
+                    let out_line = if let Ok(mut evt) = serde_json::from_str::<serde_json::Value>(line) {
+                        if evt.get("type").and_then(|v| v.as_str()) == Some("usage") {
+                            if let Some(ep) = ep_out.lock().unwrap().as_ref() {
+                                if let Some(s) = read_speed_from_stats(ep) {
+                                    evt["speed_tok_per_sec"] = json!(s);
+                                    evt.to_string()
+                                } else {
+                                    line.to_string()
+                                }
+                            } else {
+                                line.to_string()
+                            }
+                        } else {
+                            line.to_string()
+                        }
+                    } else {
+                        line.to_string()
+                    };
+                    emit(&h_out, &out_line);
                 }
                 Err(_) => break,
             }
@@ -223,7 +251,7 @@ fn usage() {
     eprintln!("webagent — WebSocket 桥：每条输入 spawn 一个 agent 子进程，输出转发给浏览器");
     eprintln!();
     eprintln!("Usage:");
-    eprintln!("  webagent [options] <agent> [agent args...]");
+    eprintln!("  webagent [options] [agent] [agent args...]");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --bind ADDR      bind address (default 127.0.0.1)");
@@ -231,7 +259,9 @@ fn usage() {
     eprintln!("  --agent PATH     agent binary (default: resolve <agent> from dist/ or PATH)");
     eprintln!("  -h, --help       show this help");
     eprintln!();
-    eprintln!("<agent>: {}", AGENT_NAMES.join(" | "));
+    eprintln!("<agent>: {} (default: cagent)", AGENT_NAMES.join(" | "));
+    eprintln!("If the first positional arg is not one of the above agents,");
+    eprintln!("it is treated as an argument for cagent.");
     eprintln!("Remaining args are passed through to the agent on every spawn, plus");
     eprintln!("a per-input prompt positional and --output-format stream-json.");
 }
@@ -327,12 +357,16 @@ fn main() -> Result<()> {
         Some(ap) => (resolve_agent(&ap), pos),
         None => {
             if pos.is_empty() {
-                usage();
-                std::process::exit(0);
+                // 未指定 agent 时默认使用 cagent
+                (resolve_agent("cagent"), Vec::new())
+            } else if AGENT_NAMES.contains(&pos[0].as_str()) {
+                let mut it = pos.into_iter();
+                let name = it.next().unwrap();
+                (resolve_agent(&name), it.collect())
+            } else {
+                // 首个位置参数不是已知 agent 名时，默认 cagent 并把全部参数透传
+                (resolve_agent("cagent"), pos)
             }
-            let mut it = pos.into_iter();
-            let name = it.next().unwrap();
-            (resolve_agent(&name), it.collect())
         }
     };
 
