@@ -131,6 +131,13 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, system
 	msgs = append(msgs, instrMsg)
 
 	messagesJSON, _ := json.Marshal(msgs)
+	if t.cfg.VisionMode == "on" {
+		expanded, err := ExpandVisionMessages(string(messagesJSON))
+		if err != nil {
+			return "", Usage{}, err
+		}
+		messagesJSON = []byte(expanded)
+	}
 
 	ch, err := t.Call(ctx, string(messagesJSON), systemPrompt, toolDefs, t.cfg.MaxTokens, "disabled")
 	if err != nil {
@@ -1008,6 +1015,17 @@ func (t *HTTPTransport) convertResponsesMessage(raw json.RawMessage) []json.RawM
 				value, _ := extractJSONString(block, "content")
 				item, _ := json.Marshal(map[string]interface{}{"type": "function_call_output", "call_id": callID, "output": value})
 				out = append(out, item)
+			case "image":
+				var source map[string]json.RawMessage
+				if err := json.Unmarshal(block["source"], &source); err == nil {
+					media, _ := extractJSONString(source, "media_type")
+					data, _ := extractJSONString(source, "data")
+					item, _ := json.Marshal(map[string]interface{}{
+						"role":    "user",
+						"content": []map[string]interface{}{{"type": "input_image", "image_url": "data:" + media + ";base64," + data}},
+					})
+					out = append(out, item)
+				}
 			case "text":
 				value, _ := extractJSONString(block, "text")
 				item, _ := json.Marshal(map[string]interface{}{"role": "user", "content": value})
@@ -1098,10 +1116,49 @@ func (t *HTTPTransport) convertMessage(raw json.RawMessage) json.RawMessage {
 						return t.convertToolResultMsg(arr)
 					}
 				}
+				// 含 image 块时逐块转换（对齐 Bash convert_images）；否则整条原样
+				return convertImageBlocks(raw, msg, arr)
 			}
 		}
 	}
 	return raw
+}
+
+// convertImageBlocks 将 user content 数组中的 image 块转为 OpenAI image_url 形态，
+// 其余块原样保留；无 image 块时返回原消息字节。
+func convertImageBlocks(raw json.RawMessage, msg map[string]json.RawMessage, arr []json.RawMessage) json.RawMessage {
+	hasImage := false
+	for _, item := range arr {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(item, &m) == nil {
+			if tp, _ := extractJSONString(m, "type"); tp == "image" {
+				hasImage = true
+				break
+			}
+		}
+	}
+	if !hasImage {
+		return raw
+	}
+	parts := make([]string, 0, len(arr))
+	for _, item := range arr {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(item, &m) == nil {
+			if tp, _ := extractJSONString(m, "type"); tp == "image" {
+				var source map[string]json.RawMessage
+				if err := json.Unmarshal(m["source"], &source); err == nil {
+					media, _ := extractJSONString(source, "media_type")
+					data, _ := extractJSONString(source, "data")
+					parts = append(parts, `{"type":"image_url","image_url":{"url":"data:`+media+`;base64,`+data+`"}}`)
+					continue
+				}
+			}
+		}
+		parts = append(parts, string(item))
+	}
+	msg["content"] = json.RawMessage("[" + strings.Join(parts, ",") + "]")
+	nb, _ := json.Marshal(msg)
+	return nb
 }
 
 func (t *HTTPTransport) convertAssistantMsg(msg map[string]json.RawMessage) json.RawMessage {

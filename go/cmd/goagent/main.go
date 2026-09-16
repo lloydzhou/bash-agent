@@ -59,6 +59,7 @@ func main() {
 		interactive  bool
 		effort       string
 		thinking     string
+		vision       string
 	)
 
 	flag.StringVar(&provider, "provider", "claude", "LLM provider: claude | openai | responses")
@@ -76,6 +77,7 @@ func main() {
 	flag.BoolVar(&printMode, "print", false, "Alias for --output-format stream-json")
 	flag.StringVar(&effort, "effort", "", "Thinking effort: low|medium|high|xhigh|max")
 	flag.StringVar(&thinking, "thinking", "", "Thinking mode: adaptive|enabled|disabled")
+	flag.StringVar(&vision, "vision", "", "Native PNG attachments (optional value: on; default off; AGENT_VISION)")
 	flag.StringVar(&session, "session", "", "Use named session")
 	flag.BoolVar(&cont, "continue", false, "Continue most recent session")
 	flag.BoolVar(&fork, "fork", false, "When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)")
@@ -128,6 +130,13 @@ Examples:
 	cfg.MaxTurns = maxTurns
 	cfg.SkillNames = []string(skills)
 	applyThinkingOptions(&cfg, thinking, effort)
+	if vision != "" {
+		if vision == "on" {
+			cfg.VisionMode = "on"
+		} else {
+			cfg.VisionMode = "off"
+		}
+	}
 
 	// 解析 size 参数
 	if mt, err := agent.UtilParseSize(maxTokens); err == nil {
@@ -467,6 +476,16 @@ func normalizeSessionArgs(args []string) []string {
 	out := make([]string, 0, len(args)+1)
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if arg == "--vision" {
+			// 无值形式等价 --vision on（对齐 Bash 版可选值语义）
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				out = append(out, arg, args[i+1])
+				i++
+			} else {
+				out = append(out, arg, "on")
+			}
+			continue
+		}
 		if arg == "--session" {
 			out = append(out, arg)
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {

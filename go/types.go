@@ -33,6 +33,7 @@ type Config struct {
 	ToolResultMaxBytes int      // 工具结果最大字节数
 	Thinking           string   // thinking 模式: adaptive|enabled|disabled
 	Effort             string   // thinking effort: low|medium|high|xhigh|max
+	VisionMode         string   // 原生图片附件: on | off
 	SkillNames         []string // 加载的 skill 列表
 
 	// DP Compact 配置
@@ -66,6 +67,7 @@ func DefaultConfig() Config {
 		ToolResultMaxBytes: 100000,
 		Thinking:           "adaptive",
 		Effort:             "high",
+		VisionMode:         visionModeFromEnv(),
 		DPBaselineE:        8,
 		DPVPrefix:          5000,
 		DPSummaryLen:       500,
@@ -84,6 +86,14 @@ func DefaultConfig() Config {
 		cfg.Effort = value
 	}
 	return cfg
+}
+
+// visionModeFromEnv 与 Bash 版运行时语义一致：仅精确 on 才开启。
+func visionModeFromEnv() string {
+	if os.Getenv("AGENT_VISION") == "on" {
+		return "on"
+	}
+	return "off"
 }
 
 // ─── 核心消息类型 ───

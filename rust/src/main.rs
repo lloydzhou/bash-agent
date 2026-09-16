@@ -117,6 +117,16 @@ fn parse_args(args: Vec<String>) -> Result<Config> {
                     i += 1;
                 }
             }
+            "--vision" => {
+                // 无值形式等价 --vision on（对齐 Bash 版可选值语义）
+                if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                    cfg.vision = args[i + 1] == "on";
+                    i += 2;
+                } else {
+                    cfg.vision = true;
+                    i += 1;
+                }
+            }
             "--continue" => {
                 cfg.session_mode = true;
                 cfg.continue_session = true;
@@ -187,6 +197,7 @@ fn print_usage() {
     println!("  --output-format FMT     Output format: human | stream-json");
     println!("  --print                 Alias for --output-format stream-json");
     println!("  --session [NAME]        Use named session");
+    println!("  --vision [on]           Native PNG attachments (default: off; AGENT_VISION)");
     println!("  --continue              Continue most recent session");
     println!(
         "  --fork                   When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)"

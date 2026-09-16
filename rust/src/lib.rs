@@ -5,6 +5,7 @@ pub mod store;
 pub mod tools;
 pub mod transport;
 pub mod util;
+pub mod vision;
 
 pub const TOOLS_JSON: &str = include_str!("tools.json");
 
@@ -47,6 +48,7 @@ pub mod config {
         pub skills: Vec<String>,
         pub thinking: String,
         pub effort: String,
+        pub vision: bool,
         pub interactive: bool,
         pub session_mode: bool,
         pub session_id: String,
@@ -86,6 +88,7 @@ pub mod config {
                 skills: Vec::new(),
                 thinking: "adaptive".to_string(),
                 effort: "high".to_string(),
+                vision: false,
                 interactive: false,
                 session_mode: false,
                 session_id: String::new(),
@@ -112,6 +115,10 @@ pub mod config {
         }
         if let Ok(v) = std::env::var("EFFORT") {
             cfg.effort = v;
+        }
+        // 与 Bash 版运行时语义一致：仅精确 on 才开启
+        if let Ok(v) = std::env::var("AGENT_VISION") {
+            cfg.vision = v == "on";
         }
         if let Ok(v) = std::env::var("DP_P_INPUT") {
             if let Ok(f) = v.parse::<f64>() {

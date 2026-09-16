@@ -727,11 +727,19 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 				a.EmitDisplay(Event{Type: EventContextUpdate, Fields: []string{"CONTEXT_UPDATE", "compact", "auto"}})
 			}
 
-			// 获取 messages
+			// 获取 messages（vision=on 时展开附件映射，失败则不发送）
 			messages, err := a.store.GetMessages()
 			if err != nil {
 				phaseFatalErr = fmt.Errorf("get messages: %w", err)
 				break TurnLoop
+			}
+			if a.cfg.VisionMode == "on" {
+				messages, err = ExpandVisionMessages(messages)
+				if err != nil {
+					a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", "Failed to build messages"}})
+					phaseFatalErr = err
+					break TurnLoop
+				}
 			}
 			systemPrompt := a.BuildPrompt()
 

@@ -266,6 +266,12 @@ fn convert_messages_to_responses(messages: &[Value]) -> Vec<Value> {
             for block in content.as_array().into_iter().flatten() {
                 match block.get("type").and_then(Value::as_str) {
                     Some("tool_result") => result.push(json!({"type":"function_call_output", "call_id":block.get("tool_use_id").and_then(Value::as_str).unwrap_or(""), "output":block.get("content").and_then(Value::as_str).unwrap_or("")})),
+                    Some("image") => {
+                        let source = block.get("source").cloned().unwrap_or_else(|| json!({}));
+                        let media = source.get("media_type").and_then(Value::as_str).unwrap_or("image/png");
+                        let data = source.get("data").and_then(Value::as_str).unwrap_or("");
+                        result.push(json!({"role":"user","content":[{"type":"input_image","image_url":format!("data:{};base64,{}", media, data)}]}));
+                    }
                     Some("text") => result.push(json!({"role":"user", "content":block.get("text").and_then(Value::as_str).unwrap_or("")})),
                     _ => {}
                 }
@@ -299,6 +305,26 @@ fn convert_messages_to_openai(messages: &[Value]) -> Result<Vec<Value>> {
             let tool_msgs = convert_tool_result_messages(&content)?;
             if !tool_msgs.is_empty() {
                 result.extend(tool_msgs);
+                continue;
+            }
+            // 含 image 块时逐块转换（对齐 Bash convert_images）；否则整条原样
+            let has_image = content.as_array().is_some_and(|a| {
+                a.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("image"))
+            });
+            if has_image {
+                let blocks: Vec<Value> = content.as_array().unwrap().iter().map(|b| {
+                    if b.get("type").and_then(Value::as_str) == Some("image") {
+                        let source = b.get("source").cloned().unwrap_or_else(|| json!({}));
+                        let media = source.get("media_type").and_then(Value::as_str).unwrap_or("image/png");
+                        let data = source.get("data").and_then(Value::as_str).unwrap_or("");
+                        json!({"type":"image_url","image_url":{"url":format!("data:{};base64,{}", media, data)}})
+                    } else {
+                        b.clone()
+                    }
+                }).collect();
+                let mut m = msg.clone();
+                m["content"] = Value::Array(blocks);
+                result.push(m);
                 continue;
             }
         }

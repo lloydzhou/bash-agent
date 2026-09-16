@@ -345,3 +345,55 @@ int util_write_file(const char *path, const char *content) {
     fclose(f);
     return (nw == len) ? 0 : -1;
 }
+
+/* 二进制安全读文件：返回 malloc 缓冲（不含 NUL 追加），长度写入 *out_len。
+ * 与 util_read_file 的区别：内容可含 \0（PNG 数据），不以 strlen 计长。 */
+char *util_read_file_len(const char *path, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = malloc(sz > 0 ? (size_t)sz : 1);
+    if (!buf) { fclose(f); return NULL; }
+    if (sz > 0 && fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
+        free(buf); fclose(f); return NULL;
+    }
+    fclose(f);
+    *out_len = (size_t)sz;
+    return buf;
+}
+
+/* 标准 base64 编码（单行、无换行），返回 NUL 结尾的 malloc 字符串。 */
+char *util_base64_encode(const unsigned char *data, size_t len) {
+    static const char tbl[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t out_len = ((len + 2) / 3) * 4;
+    char *out = malloc(out_len + 1);
+    if (!out) return NULL;
+    size_t o = 0, i = 0;
+    while (i + 3 <= len) {
+        unsigned v = ((unsigned)data[i] << 16) | ((unsigned)data[i+1] << 8) | data[i+2];
+        out[o++] = tbl[(v >> 18) & 63];
+        out[o++] = tbl[(v >> 12) & 63];
+        out[o++] = tbl[(v >> 6) & 63];
+        out[o++] = tbl[v & 63];
+        i += 3;
+    }
+    if (len - i == 1) {
+        unsigned v = (unsigned)data[i] << 16;
+        out[o++] = tbl[(v >> 18) & 63];
+        out[o++] = tbl[(v >> 12) & 63];
+        out[o++] = '=';
+        out[o++] = '=';
+    } else if (len - i == 2) {
+        unsigned v = ((unsigned)data[i] << 16) | ((unsigned)data[i+1] << 8);
+        out[o++] = tbl[(v >> 18) & 63];
+        out[o++] = tbl[(v >> 12) & 63];
+        out[o++] = tbl[(v >> 6) & 63];
+        out[o++] = '=';
+    }
+    out[o] = '\0';
+    return out;
+}

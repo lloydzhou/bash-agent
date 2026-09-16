@@ -80,6 +80,8 @@ char *util_rtrim(char *s);
 
 /* 读取整个文件到字符串 */
 char *util_read_file(const char *path);
+char *util_read_file_len(const char *path, size_t *out_len);
+char *util_base64_encode(const unsigned char *data, size_t len);
 
 /* 写入整个文件 */
 int util_write_file(const char *path, const char *content);
