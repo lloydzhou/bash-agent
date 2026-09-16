@@ -107,15 +107,15 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph mod_2["启动与配置"]
-    f_main["main<br/>第 1764 行"]
-    f_parse_args["parse_args<br/>第 1566 行"]
-    f_usage["usage<br/>第 1524 行"]
-    f_validate_config["validate_config<br/>第 1634 行"]
+    f_main["main<br/>第 1763 行"]
+    f_parse_args["parse_args<br/>第 1565 行"]
+    f_usage["usage<br/>第 1523 行"]
+    f_validate_config["validate_config<br/>第 1633 行"]
     f_util_find_awk_dir["util_find_awk_dir<br/>第 318 行"]
     f_util_load_tool_defs["util_load_tool_defs<br/>第 333 行"]
-    f_list_sessions["list_sessions<br/>第 1619 行"]
-    f_interactive_mode["interactive_mode<br/>第 1716 行"]
-    f_agent_user_inject_readline["agent_user_inject_readline<br/>第 1710 行"]
+    f_list_sessions["list_sessions<br/>第 1618 行"]
+    f_interactive_mode["interactive_mode<br/>第 1715 行"]
+    f_agent_user_inject_readline["agent_user_inject_readline<br/>第 1709 行"]
   end
   f_agent_main_loop["agent_main_loop<br/>见 M09"]
   f_display_stream["display_stream<br/>见 M10"]
@@ -181,17 +181,17 @@ flowchart LR
     f_store_conv_add_assistant["store_conv_add_assistant<br/>第 436 行"]
     f_store_conv_add_tool_results["store_conv_add_tool_results<br/>第 442 行"]
     f_store_conv_get_messages["store_conv_get_messages<br/>第 455 行"]
-    f_store_conv_line_count["store_conv_line_count<br/>第 491 行"]
-    f_store_conv_head_to["store_conv_head_to<br/>第 493 行"]
-    f_store_conv_trim_tail["store_conv_trim_tail<br/>第 495 行"]
-    f_store_conv_user_turn_count["store_conv_user_turn_count<br/>第 503 行"]
-    f_store_summary_set["store_summary_set<br/>第 471 行"]
-    f_store_summary_get["store_summary_get<br/>第 543 行"]
-    f_store_plan_confirm["store_plan_confirm<br/>第 535 行"]
-    f_store_plan_clear["store_plan_clear<br/>第 537 行"]
-    f_store_plan_read["store_plan_read<br/>第 539 行"]
-    f_store_plan_draft_has["store_plan_draft_has<br/>第 541 行"]
-    f_store_session_list_rows["store_session_list_rows<br/>第 556 行"]
+    f_store_conv_line_count["store_conv_line_count<br/>第 490 行"]
+    f_store_conv_head_to["store_conv_head_to<br/>第 492 行"]
+    f_store_conv_trim_tail["store_conv_trim_tail<br/>第 494 行"]
+    f_store_conv_user_turn_count["store_conv_user_turn_count<br/>第 502 行"]
+    f_store_summary_set["store_summary_set<br/>第 470 行"]
+    f_store_summary_get["store_summary_get<br/>第 542 行"]
+    f_store_plan_confirm["store_plan_confirm<br/>第 534 行"]
+    f_store_plan_clear["store_plan_clear<br/>第 536 行"]
+    f_store_plan_read["store_plan_read<br/>第 538 行"]
+    f_store_plan_draft_has["store_plan_draft_has<br/>第 540 行"]
+    f_store_session_list_rows["store_session_list_rows<br/>第 555 行"]
   end
   f_store_event_append["store_event_append<br/>见 M10"]
   f_util_awk_run["util_awk_run<br/>见 M01"]
@@ -220,14 +220,14 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph mod_4["提示词与技能"]
-    f_agent_build_prompt["agent_build_prompt<br/>第 1224 行"]
+    f_agent_build_prompt["agent_build_prompt<br/>第 1223 行"]
     f_util_find_skill_dirs["util_find_skill_dirs<br/>第 185 行"]
     f_util_load_skill_content["util_load_skill_content<br/>第 200 行"]
     f_util_build_skill_index["util_build_skill_index<br/>第 215 行"]
     f_util_build_skills_section["util_build_skills_section<br/>第 236 行"]
     f_util_find_instruction_file["util_find_instruction_file<br/>第 249 行"]
     f_util_build_instructions_section["util_build_instructions_section<br/>第 266 行"]
-    f_tool_skill["tool_skill<br/>第 975 行"]
+    f_tool_skill["tool_skill<br/>第 974 行"]
   end
   f_store_plan_read["store_plan_read<br/>见 M03"]
   f_store_summary_get["store_summary_get<br/>见 M03"]
@@ -274,15 +274,15 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph mod_6["请求与压缩"]
-    f_llm_call["llm_call<br/>第 583 行"]
+    f_llm_call["llm_call<br/>第 582 行"]
     f_util_body_convert["util_body_convert<br/>第 1715 / 1728 / 1734 行"]
-    f_llm_stream_curl["llm_stream_curl<br/>第 574 行"]
+    f_llm_stream_curl["llm_stream_curl<br/>第 573 行"]
     f_sse_convert["sse_convert<br/>第 1716 / 1729 / 1735 行"]
-    f_sse_parse["sse_parse<br/>第 1706 行"]
-    f_llm_summary_call["llm_summary_call<br/>第 599 行"]
-    f_agent_compact_context["agent_compact_context<br/>第 1187 行"]
-    f_store_conv_dp_decision["store_conv_dp_decision<br/>第 507 行"]
-    f_store_conv_turn_keep["store_conv_turn_keep<br/>第 518 行"]
+    f_sse_parse["sse_parse<br/>第 1705 行"]
+    f_llm_summary_call["llm_summary_call<br/>第 598 行"]
+    f_agent_compact_context["agent_compact_context<br/>第 1186 行"]
+    f_store_conv_dp_decision["store_conv_dp_decision<br/>第 506 行"]
+    f_store_conv_turn_keep["store_conv_turn_keep<br/>第 517 行"]
   end
   f_agent_build_prompt["agent_build_prompt<br/>见 M04"]
   f_agent_record_usage["agent_record_usage<br/>见 M10"]
@@ -329,22 +329,22 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph mod_7["工具分派与文件操作"]
-    f_tool_dispatch["tool_dispatch<br/>第 616 行"]
-    f_tool_param_keys["tool_param_keys<br/>第 637 行"]
-    f_tool_args_from_msg["tool_args_from_msg<br/>第 652 行"]
-    f_tool_call_summary["tool_call_summary<br/>第 673 行"]
-    f_tool_format_result["tool_format_result<br/>第 706 行"]
-    f_tool_file_summary["tool_file_summary<br/>第 722 行"]
-    f_tool_emit_result["tool_emit_result<br/>第 735 行"]
-    f_tool_read["tool_read<br/>第 880 行"]
-    f_tool_write["tool_write<br/>第 892 行"]
-    f_tool_edit["tool_edit<br/>第 900 行"]
-    f_tool_bash["tool_bash<br/>第 922 行"]
-    f_tool_glob["tool_glob<br/>第 954 行"]
-    f_tool_grep["tool_grep<br/>第 963 行"]
-    f_tool_plan_confirm["tool_plan_confirm<br/>第 984 行"]
-    f_tool_plan_clear["tool_plan_clear<br/>第 996 行"]
-    f_tool_sub_agent["tool_sub_agent<br/>第 1004 行"]
+    f_tool_dispatch["tool_dispatch<br/>第 615 行"]
+    f_tool_param_keys["tool_param_keys<br/>第 636 行"]
+    f_tool_args_from_msg["tool_args_from_msg<br/>第 651 行"]
+    f_tool_call_summary["tool_call_summary<br/>第 672 行"]
+    f_tool_format_result["tool_format_result<br/>第 705 行"]
+    f_tool_file_summary["tool_file_summary<br/>第 721 行"]
+    f_tool_emit_result["tool_emit_result<br/>第 734 行"]
+    f_tool_read["tool_read<br/>第 879 行"]
+    f_tool_write["tool_write<br/>第 891 行"]
+    f_tool_edit["tool_edit<br/>第 899 行"]
+    f_tool_bash["tool_bash<br/>第 921 行"]
+    f_tool_glob["tool_glob<br/>第 953 行"]
+    f_tool_grep["tool_grep<br/>第 962 行"]
+    f_tool_plan_confirm["tool_plan_confirm<br/>第 983 行"]
+    f_tool_plan_clear["tool_plan_clear<br/>第 995 行"]
+    f_tool_sub_agent["tool_sub_agent<br/>第 1003 行"]
   end
   f_agent_compact_context["agent_compact_context<br/>见 M06"]
   f_agent_loop["agent_loop<br/>见 M09"]
@@ -407,15 +407,15 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph mod_8["工具权限分类"]
-    f_tool_bash_mode_normalize["tool_bash_mode_normalize<br/>第 745 行"]
-    f_tool_bash_add_mode["tool_bash_add_mode<br/>第 756 行"]
-    f_tool_bash_add_path["tool_bash_add_path<br/>第 761 行"]
-    f_tool_bash_scan_segment["tool_bash_scan_segment<br/>第 785 行"]
-    f_tool_bash_scan_script["tool_bash_scan_script<br/>第 820 行"]
-    f_tool_classify_bash_required_mode["tool_classify_bash_required_mode<br/>第 835 行"]
-    f_tool_bash_mode_allows["tool_bash_mode_allows<br/>第 847 行"]
-    f_tool_bash_mode_guard["tool_bash_mode_guard<br/>第 854 行"]
-    f_tool_native_file_mode_guard["tool_native_file_mode_guard<br/>第 865 行"]
+    f_tool_bash_mode_normalize["tool_bash_mode_normalize<br/>第 744 行"]
+    f_tool_bash_add_mode["tool_bash_add_mode<br/>第 755 行"]
+    f_tool_bash_add_path["tool_bash_add_path<br/>第 760 行"]
+    f_tool_bash_scan_segment["tool_bash_scan_segment<br/>第 784 行"]
+    f_tool_bash_scan_script["tool_bash_scan_script<br/>第 819 行"]
+    f_tool_classify_bash_required_mode["tool_classify_bash_required_mode<br/>第 834 行"]
+    f_tool_bash_mode_allows["tool_bash_mode_allows<br/>第 846 行"]
+    f_tool_bash_mode_guard["tool_bash_mode_guard<br/>第 853 行"]
+    f_tool_native_file_mode_guard["tool_native_file_mode_guard<br/>第 864 行"]
   end
   f_tool_bash_add_path --> f_tool_bash_add_mode
   f_tool_bash_scan_segment --> f_tool_bash_add_mode
@@ -436,13 +436,13 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph mod_9["主循环与异步通知"]
-    f_agent_main_loop["agent_main_loop<br/>第 1298 行"]
-    f_agent_run_loop["agent_run_loop<br/>第 1276 行"]
-    f_agent_loop["agent_loop<br/>第 1471 行"]
-    f_agent_loop_stream["agent_loop_stream<br/>第 1394 行"]
-    f_agent_drain_notify_buf["agent_drain_notify_buf<br/>第 1368 行"]
-    f_store_sub_send_result["store_sub_send_result<br/>第 526 行"]
-    f_cleanup_all_pipes["cleanup_all_pipes<br/>第 1289 行"]
+    f_agent_main_loop["agent_main_loop<br/>第 1297 行"]
+    f_agent_run_loop["agent_run_loop<br/>第 1275 行"]
+    f_agent_loop["agent_loop<br/>第 1470 行"]
+    f_agent_loop_stream["agent_loop_stream<br/>第 1393 行"]
+    f_agent_drain_notify_buf["agent_drain_notify_buf<br/>第 1367 行"]
+    f_store_sub_send_result["store_sub_send_result<br/>第 525 行"]
+    f_cleanup_all_pipes["cleanup_all_pipes<br/>第 1288 行"]
   end
   f_agent_compact_context["agent_compact_context<br/>见 M06"]
   f_agent_record_usage["agent_record_usage<br/>见 M10"]
@@ -514,17 +514,17 @@ flowchart LR
 flowchart LR
   subgraph mod_10["事件统计与显示"]
     f_store_event_append["store_event_append<br/>第 426 行"]
-    f_store_stats_update["store_stats_update<br/>第 478 行"]
-    f_store_stats_get["store_stats_get<br/>第 484 行"]
-    f_store_stats_format_title["store_stats_format_title<br/>第 523 行"]
-    f_store_event_recent_turn_lines["store_event_recent_turn_lines<br/>第 547 行"]
-    f_agent_record_usage["agent_record_usage<br/>第 1261 行"]
-    f_display_ensure_newline["display_ensure_newline<br/>第 1040 行"]
-    f_display_human_text["display_human_text<br/>第 1047 行"]
-    f_display_sub_agent_result["display_sub_agent_result<br/>第 1058 行"]
-    f_display_message["display_message<br/>第 1078 行"]
-    f_display_term_title["display_term_title<br/>第 1178 行"]
-    f_display_stream["display_stream<br/>第 1185 行"]
+    f_store_stats_update["store_stats_update<br/>第 477 行"]
+    f_store_stats_get["store_stats_get<br/>第 483 行"]
+    f_store_stats_format_title["store_stats_format_title<br/>第 522 行"]
+    f_store_event_recent_turn_lines["store_event_recent_turn_lines<br/>第 546 行"]
+    f_agent_record_usage["agent_record_usage<br/>第 1260 行"]
+    f_display_ensure_newline["display_ensure_newline<br/>第 1039 行"]
+    f_display_human_text["display_human_text<br/>第 1046 行"]
+    f_display_sub_agent_result["display_sub_agent_result<br/>第 1057 行"]
+    f_display_message["display_message<br/>第 1077 行"]
+    f_display_term_title["display_term_title<br/>第 1177 行"]
+    f_display_stream["display_stream<br/>第 1184 行"]
   end
   f_tool_call_summary["tool_call_summary<br/>见 M07"]
   f_util_awk_run["util_awk_run<br/>见 M01"]
@@ -589,78 +589,78 @@ flowchart LR
 | `store_conv_add_assistant` | [`src/agent.sh:436`](../src/agent.sh#L436) | M03 | 文本、思考、调用 | 无正文返回 | 追加助手 JSONL |
 | `store_conv_add_tool_results` | [`src/agent.sh:442`](../src/agent.sh#L442) | M03 | 标识与已转义结果列表 | 无正文返回 | 追加用户角色结果数组 |
 | `store_conv_get_messages` | [`src/agent.sh:455`](../src/agent.sh#L455) | M03 | JSONL 文件路径（缺省会话文件）、视觉开关 | 消息 JSON 数组或失败 | 关闭时逐行拼接；开启时内嵌单遍 awk 展开附件；compact 摘要直接传被丢弃消息的临时文件 |
-| `store_summary_set` | [`src/agent.sh:471`](../src/agent.sh#L471) | M03 | 非空摘要 | 退出状态 | 覆盖摘要文件，空内容不写 |
-| `store_stats_update` | [`src/agent.sh:478`](../src/agent.sh#L478) | M10 | 键值覆盖或累加参数 | 标题输出 | 解析器更新 stats.json |
-| `store_stats_get` | [`src/agent.sh:484`](../src/agent.sh#L484) | M10 | 统计键 | 数值 | 读取 stats.json |
-| `store_conv_line_count` | [`src/agent.sh:491`](../src/agent.sh#L491) | M03 | CONV_FILE | 行数 | 读对话文件 |
-| `store_conv_head_to` | [`src/agent.sh:493`](../src/agent.sh#L493) | M03 | 行数、目标文件 | 退出状态 | 对话头部写入目标文件 |
-| `store_conv_trim_tail` | [`src/agent.sh:495`](../src/agent.sh#L495) | M03 | 保留行数 | 退出状态 | 先归档丢弃头部，再用尾部临时文件替换对话 |
-| `store_conv_user_turn_count` | [`src/agent.sh:503`](../src/agent.sh#L503) | M03 | CONV_FILE | 字符串用户消息计数 | 主脚本未发现调用 |
-| `store_conv_dp_decision` | [`src/agent.sh:507`](../src/agent.sh#L507) | M06 | 统计与经济参数 | 建议保留行数 | 调用动态规划解析器读取对话 |
-| `store_conv_turn_keep` | [`src/agent.sh:518`](../src/agent.sh#L518) | M06 | 保留比例与对话 | 按轮边界的保留行数 | 调用回退解析器 |
-| `store_stats_format_title` | [`src/agent.sh:523`](../src/agent.sh#L523) | M10 | 模型与状态 | 终端标题转义序列 | 读取统计 |
-| `store_sub_send_result` | [`src/agent.sh:526`](../src/agent.sh#L526) | M09 | 子会话标识、状态、目标 | AGENT_RESULT 帧写目标 | 解析子会话末条助手结果与统计 |
-| `store_plan_confirm` | [`src/agent.sh:535`](../src/agent.sh#L535) | M03 | 非空草稿 | 成功或失败 | 移动为正式计划并重新创建空草稿 |
-| `store_plan_clear` | [`src/agent.sh:537`](../src/agent.sh#L537) | M03 | 正式计划 | 退出状态 | 清空非空正式计划 |
-| `store_plan_read` | [`src/agent.sh:539`](../src/agent.sh#L539) | M03 | 正式计划 | 非空正文 | 读取文件 |
-| `store_plan_draft_has` | [`src/agent.sh:541`](../src/agent.sh#L541) | M03 | 草稿路径 | 存在且非空的条件状态 | 无 |
-| `store_summary_get` | [`src/agent.sh:543`](../src/agent.sh#L543) | M03 | 摘要文件 | 非空摘要正文 | 读取文件 |
-| `store_event_recent_turn_lines` | [`src/agent.sh:547`](../src/agent.sh#L547) | M10 | 轮数及事件文件 | 从选中 user_input 起的事件行 | 用于交互重放 |
-| `store_session_list_rows` | [`src/agent.sh:556`](../src/agent.sh#L556) | M03 | 项目目录 | 按时间倒序的制表符行 | 读取各会话元数据与摘要首行 |
-| `llm_stream_curl` | [`src/agent.sh:574`](../src/agent.sh#L574) | M06 | 请求标准输入、请求头、API_URL | 过滤后的 SSE | 启动 curl，写入并删除临时进程号文件 |
-| `llm_call` | [`src/agent.sh:583`](../src/agent.sh#L583) | M06 | 消息、可选输出上限与思考模式 | 统一 RESP 响应流 | 构建提示词与请求，发起网络调用 |
-| `llm_summary_call` | [`src/agent.sh:599`](../src/agent.sh#L599) | M06 | 被丢弃消息临时文件 | 摘要正文 | 摘要指令追加到该文件后经 store_conv_get_messages 构建，复用 llm_call，记录压缩用量 |
-| `tool_dispatch` | [`src/agent.sh:616`](../src/agent.sh#L616) | M07 | 名称与位置参数 | 工具输出或错误 | 按工具分支执行，未知名称失败 |
-| `tool_param_keys` | [`src/agent.sh:637`](../src/agent.sh#L637) | M07 | 工具名称 | 参数键顺序 | 无 |
-| `tool_args_from_msg` | [`src/agent.sh:652`](../src/agent.sh#L652) | M07 | 名称及 REPLY_MESSAGE | _TOOL_ARGS 数组 | 缺失键填空串 |
-| `tool_call_summary` | [`src/agent.sh:673`](../src/agent.sh#L673) | M07 | 名称及键值 | 短调用描述 | 命令折行并限制长度 |
-| `tool_format_result` | [`src/agent.sh:706`](../src/agent.sh#L706) | M07 | 输出文本 | 截短或原始文本 | 保留头尾，实际使用 shell 字符长度 |
-| `tool_file_summary` | [`src/agent.sh:722`](../src/agent.sh#L722) | M07 | 类型、路径、范围 | 文件行数字节数摘要 | 读取文件统计 |
-| `tool_emit_result` | [`src/agent.sh:735`](../src/agent.sh#L735) | M07 | 标识、名称、输出及原消息 | TOOL_RESULT 帧 | 透传 checklist 与 summary |
-| `tool_bash_mode_normalize` | [`src/agent.sh:745`](../src/agent.sh#L745) | M08 | 四位八进制字符串 | 规范值或 0000 | 无 |
-| `tool_bash_add_mode` | [`src/agent.sh:756`](../src/agent.sh#L756) | M08 | 范围位与权限位 | TOOL_BASH_REQUIRED_MASK | 按位合并 |
-| `tool_bash_add_path` | [`src/agent.sh:761`](../src/agent.sh#L761) | M08 | 路径与权限 | 累计权限掩码 | 分类系统、外部、网络、工作区及临时路径 |
-| `tool_bash_scan_segment` | [`src/agent.sh:785`](../src/agent.sh#L785) | M08 | 命令片段 | 累计权限掩码 | 启发式检测命令与重定向 |
-| `tool_bash_scan_script` | [`src/agent.sh:820`](../src/agent.sh#L820) | M08 | 命令文本 | 累计权限掩码 | 按连接符拆分片段，不是完整 shell 语法解析 |
-| `tool_classify_bash_required_mode` | [`src/agent.sh:835`](../src/agent.sh#L835) | M08 | 命令 | 四位所需权限及全局变量 | 小写化、扫描、默认工作区读权限 |
-| `tool_bash_mode_allows` | [`src/agent.sh:847`](../src/agent.sh#L847) | M08 | 允许值与所需值 | 位包含条件状态 | 无 |
-| `tool_bash_mode_guard` | [`src/agent.sh:854`](../src/agent.sh#L854) | M08 | 命令与允许配置 | 通过或拒绝文本 | 写权限分类全局状态 |
-| `tool_native_file_mode_guard` | [`src/agent.sh:865`](../src/agent.sh#L865) | M08 | 工具名称、路径、模式 | 通过或拒绝 | 构造读写探针交给同一权限检查 |
-| `tool_read` | [`src/agent.sh:880`](../src/agent.sh#L880) | M07 | 路径、偏移、上限 | 文件行文本或错误 | sed 读取，不添加行号 |
-| `tool_write` | [`src/agent.sh:892`](../src/agent.sh#L892) | M07 | 路径、内容 | 写入字节数提示 | 创建父目录并覆盖文件 |
-| `tool_edit` | [`src/agent.sh:900`](../src/agent.sh#L900) | M07 | 路径、旧串、新串 | 差异与行数提示或错误 | 解析器生成临时替换结果，非空才覆盖原文件 |
-| `tool_bash` | [`src/agent.sh:922`](../src/agent.sh#L922) | M07 | 命令、超时、后台标志 | 同步输出或任务标识 | 安全检查，前台超时，后台通知 |
-| `tool_glob` | [`src/agent.sh:954`](../src/agent.sh#L954) | M07 | 模式、路径 | 匹配文件名 | 依赖 rg，忽略其非零退出码 |
-| `tool_grep` | [`src/agent.sh:963`](../src/agent.sh#L963) | M07 | 正则、路径、文件筛选、上下文 | 带行号搜索结果 | 依赖 rg，忽略其非零退出码 |
-| `tool_skill` | [`src/agent.sh:975`](../src/agent.sh#L975) | M04 | 技能名称 | 技能全文或错误 | 读取技能但不修改 SKILL_NAMES |
-| `tool_plan_confirm` | [`src/agent.sh:984`](../src/agent.sh#L984) | M07 | 草稿状态 | 确认文本 | 先压缩后移动草稿 |
-| `tool_plan_clear` | [`src/agent.sh:996`](../src/agent.sh#L996) | M07 | 当前计划 | 完成文本 | 先压缩再清空计划 |
-| `tool_sub_agent` | [`src/agent.sh:1004`](../src/agent.sh#L1004) | M07 | 提示词、描述、派生标志 | 子会话标识与进程号 | 限制一层，创建隔离会话，后台运行并通知 |
-| `display_ensure_newline` | [`src/agent.sh:1040`](../src/agent.sh#L1040) | M10 | 显示末字符 | 必要换行 | 更新显示状态 |
-| `display_human_text` | [`src/agent.sh:1047`](../src/agent.sh#L1047) | M10 | 文本 | 终端文本 | 更新末字符 |
-| `display_sub_agent_result` | [`src/agent.sh:1058`](../src/agent.sh#L1058) | M10 | 子会话状态、用量、思考、正文 | 完成或失败摘要 | 思考与正文各最多显示 120 字符 |
-| `display_message` | [`src/agent.sh:1078`](../src/agent.sh#L1078) | M10 | REPLY_MESSAGE | 人类可读输出 | 按类型着色及维护显示状态，错误写标准错误 |
-| `display_term_title` | [`src/agent.sh:1178`](../src/agent.sh#L1178) | M10 | 状态、活跃任务数 | 标题序列 | 活跃任务存在时抑制空闲状态 |
-| `display_stream` | [`src/agent.sh:1185`](../src/agent.sh#L1185) | M10 | 标准输入 RESP | 连续终端输出 | 循环读取并显示 |
-| `agent_compact_context` | [`src/agent.sh:1187`](../src/agent.sh#L1187) | M06 | 触发原因、统计、对话 | 成功或不压缩状态 | 决策后生成摘要、写摘要、归档裁剪 |
-| `agent_build_prompt` | [`src/agent.sh:1224`](../src/agent.sh#L1224) | M04 | 环境、规则、指令、技能、计划、摘要 | 拼接后的系统提示词 | 读取动态文件，不包含草稿正文 |
-| `agent_record_usage` | [`src/agent.sh:1261`](../src/agent.sh#L1261) | M10 | REPLY_MESSAGE 用量与计数键 | 四类 token 总和 | 按开关写用量事件，并累加统计 |
-| `agent_run_loop` | [`src/agent.sh:1276`](../src/agent.sh#L1276) | M09 | 输入与轮类型 | 末尾条件语句状态，不透传内部循环退出码 | 运行后更新空闲标题与交互提示 |
-| `cleanup_all_pipes` | [`src/agent.sh:1289`](../src/agent.sh#L1289) | M09 | 已打开描述符 | 无 | 按 4、5、3、6、7、8 顺序关闭 |
-| `agent_main_loop` | [`src/agent.sh:1298`](../src/agent.sh#L1298) | M09 | 输入 FIFO 与通知 FIFO | 会话运行 | 创建显示及通知进程，分派输入，结束后清理 |
-| `agent_drain_notify_buf` | [`src/agent.sh:1368`](../src/agent.sh#L1368) | M09 | 通知缓冲 | 显示帧及有无注入状态 | 先移动缓冲快照，再追加合并用户消息 |
-| `agent_loop_stream` | [`src/agent.sh:1394`](../src/agent.sh#L1394) | M09 | 输入与持久对话 | RESP 事件流 | 每轮排空通知、压缩、请求、立即执行工具、持久化 |
-| `agent_loop` | [`src/agent.sh:1471`](../src/agent.sh#L1471) | M09 | 输入、轮类型 | 成功或失败及显示事件 | 记录输入、附件映射、统计、事件，信号中断处理 |
-| `usage` | [`src/agent.sh:1524`](../src/agent.sh#L1524) | M02 | 无 | 帮助文本 | 退出当前 shell |
-| `parse_args` | [`src/agent.sh:1566`](../src/agent.sh#L1566) | M02 | 参数数组 | 配置全局变量 | 帮助或列表分支提前退出 |
-| `list_sessions` | [`src/agent.sh:1619`](../src/agent.sh#L1619) | M02 | 项目目录 | 会话列表 | 读取目录及摘要 |
-| `validate_config` | [`src/agent.sh:1634`](../src/agent.sh#L1634) | M02 | 配置与服务商环境变量 | 模型、地址、请求头 | 动态定义三个协议函数 |
-| `util_body_convert` | [`src/agent.sh:1679`](../src/agent.sh#L1679)、[`src/agent.sh:1724`](../src/agent.sh#L1724)、[`src/agent.sh:1730`](../src/agent.sh#L1730) | M06 | 统一请求、视觉开关 | 服务商请求 JSON | 配置阶段按服务商重定义 |
-| `sse_convert` | [`src/agent.sh:1680`](../src/agent.sh#L1680)、[`src/agent.sh:1725`](../src/agent.sh#L1725)、[`src/agent.sh:1731`](../src/agent.sh#L1731) | M06 | 服务商 SSE | Claude 形式 SSE | 配置阶段按服务商重定义 |
-| `sse_parse` | [`src/agent.sh:1706`](../src/agent.sh#L1706) | M06 | 统一 SSE | RESP 事件 | 统一解析文本、工具、停止、用量 |
-| `agent_user_inject_readline` | [`src/agent.sh:1710`](../src/agent.sh#L1710) | M02 | READLINE_LINE | USER_NOTIFY 帧 | 写通知描述符并清空编辑行 |
-| `interactive_mode` | [`src/agent.sh:1716`](../src/agent.sh#L1716) | M02 | 历史、终端输入、旧事件 | USER_INPUT 或 SESSION_END 帧 | 历史追加、键绑定、后台输入进程 |
-| `main` | [`src/agent.sh:1764`](../src/agent.sh#L1764) | M02 | 命令行及标准输入 | 会话执行结果 | 初始化并选择交互或单次模式 |
+| `store_summary_set` | [`src/agent.sh:470`](../src/agent.sh#L470) | M03 | 非空摘要 | 退出状态 | 覆盖摘要文件，空内容不写 |
+| `store_stats_update` | [`src/agent.sh:477`](../src/agent.sh#L477) | M10 | 键值覆盖或累加参数 | 标题输出 | 解析器更新 stats.json |
+| `store_stats_get` | [`src/agent.sh:483`](../src/agent.sh#L483) | M10 | 统计键 | 数值 | 读取 stats.json |
+| `store_conv_line_count` | [`src/agent.sh:490`](../src/agent.sh#L490) | M03 | CONV_FILE | 行数 | 读对话文件 |
+| `store_conv_head_to` | [`src/agent.sh:492`](../src/agent.sh#L492) | M03 | 行数、目标文件 | 退出状态 | 对话头部写入目标文件 |
+| `store_conv_trim_tail` | [`src/agent.sh:494`](../src/agent.sh#L494) | M03 | 保留行数 | 退出状态 | 先归档丢弃头部，再用尾部临时文件替换对话 |
+| `store_conv_user_turn_count` | [`src/agent.sh:502`](../src/agent.sh#L502) | M03 | CONV_FILE | 字符串用户消息计数 | 主脚本未发现调用 |
+| `store_conv_dp_decision` | [`src/agent.sh:506`](../src/agent.sh#L506) | M06 | 统计与经济参数 | 建议保留行数 | 调用动态规划解析器读取对话 |
+| `store_conv_turn_keep` | [`src/agent.sh:517`](../src/agent.sh#L517) | M06 | 保留比例与对话 | 按轮边界的保留行数 | 调用回退解析器 |
+| `store_stats_format_title` | [`src/agent.sh:522`](../src/agent.sh#L522) | M10 | 模型与状态 | 终端标题转义序列 | 读取统计 |
+| `store_sub_send_result` | [`src/agent.sh:525`](../src/agent.sh#L525) | M09 | 子会话标识、状态、目标 | AGENT_RESULT 帧写目标 | 解析子会话末条助手结果与统计 |
+| `store_plan_confirm` | [`src/agent.sh:534`](../src/agent.sh#L534) | M03 | 非空草稿 | 成功或失败 | 移动为正式计划并重新创建空草稿 |
+| `store_plan_clear` | [`src/agent.sh:536`](../src/agent.sh#L536) | M03 | 正式计划 | 退出状态 | 清空非空正式计划 |
+| `store_plan_read` | [`src/agent.sh:538`](../src/agent.sh#L538) | M03 | 正式计划 | 非空正文 | 读取文件 |
+| `store_plan_draft_has` | [`src/agent.sh:540`](../src/agent.sh#L540) | M03 | 草稿路径 | 存在且非空的条件状态 | 无 |
+| `store_summary_get` | [`src/agent.sh:542`](../src/agent.sh#L542) | M03 | 摘要文件 | 非空摘要正文 | 读取文件 |
+| `store_event_recent_turn_lines` | [`src/agent.sh:546`](../src/agent.sh#L546) | M10 | 轮数及事件文件 | 从选中 user_input 起的事件行 | 用于交互重放 |
+| `store_session_list_rows` | [`src/agent.sh:555`](../src/agent.sh#L555) | M03 | 项目目录 | 按时间倒序的制表符行 | 读取各会话元数据与摘要首行 |
+| `llm_stream_curl` | [`src/agent.sh:573`](../src/agent.sh#L573) | M06 | 请求标准输入、请求头、API_URL | 过滤后的 SSE | 启动 curl，写入并删除临时进程号文件 |
+| `llm_call` | [`src/agent.sh:582`](../src/agent.sh#L582) | M06 | 消息、可选输出上限与思考模式 | 统一 RESP 响应流 | 构建提示词与请求，发起网络调用 |
+| `llm_summary_call` | [`src/agent.sh:598`](../src/agent.sh#L598) | M06 | 被丢弃消息临时文件 | 摘要正文 | 摘要指令追加到该文件后经 store_conv_get_messages 构建，复用 llm_call，记录压缩用量 |
+| `tool_dispatch` | [`src/agent.sh:615`](../src/agent.sh#L615) | M07 | 名称与位置参数 | 工具输出或错误 | 按工具分支执行，未知名称失败 |
+| `tool_param_keys` | [`src/agent.sh:636`](../src/agent.sh#L636) | M07 | 工具名称 | 参数键顺序 | 无 |
+| `tool_args_from_msg` | [`src/agent.sh:651`](../src/agent.sh#L651) | M07 | 名称及 REPLY_MESSAGE | _TOOL_ARGS 数组 | 缺失键填空串 |
+| `tool_call_summary` | [`src/agent.sh:672`](../src/agent.sh#L672) | M07 | 名称及键值 | 短调用描述 | 命令折行并限制长度 |
+| `tool_format_result` | [`src/agent.sh:705`](../src/agent.sh#L705) | M07 | 输出文本 | 截短或原始文本 | 保留头尾，实际使用 shell 字符长度 |
+| `tool_file_summary` | [`src/agent.sh:721`](../src/agent.sh#L721) | M07 | 类型、路径、范围 | 文件行数字节数摘要 | 读取文件统计 |
+| `tool_emit_result` | [`src/agent.sh:734`](../src/agent.sh#L734) | M07 | 标识、名称、输出及原消息 | TOOL_RESULT 帧 | 透传 checklist 与 summary |
+| `tool_bash_mode_normalize` | [`src/agent.sh:744`](../src/agent.sh#L744) | M08 | 四位八进制字符串 | 规范值或 0000 | 无 |
+| `tool_bash_add_mode` | [`src/agent.sh:755`](../src/agent.sh#L755) | M08 | 范围位与权限位 | TOOL_BASH_REQUIRED_MASK | 按位合并 |
+| `tool_bash_add_path` | [`src/agent.sh:760`](../src/agent.sh#L760) | M08 | 路径与权限 | 累计权限掩码 | 分类系统、外部、网络、工作区及临时路径 |
+| `tool_bash_scan_segment` | [`src/agent.sh:784`](../src/agent.sh#L784) | M08 | 命令片段 | 累计权限掩码 | 启发式检测命令与重定向 |
+| `tool_bash_scan_script` | [`src/agent.sh:819`](../src/agent.sh#L819) | M08 | 命令文本 | 累计权限掩码 | 按连接符拆分片段，不是完整 shell 语法解析 |
+| `tool_classify_bash_required_mode` | [`src/agent.sh:834`](../src/agent.sh#L834) | M08 | 命令 | 四位所需权限及全局变量 | 小写化、扫描、默认工作区读权限 |
+| `tool_bash_mode_allows` | [`src/agent.sh:846`](../src/agent.sh#L846) | M08 | 允许值与所需值 | 位包含条件状态 | 无 |
+| `tool_bash_mode_guard` | [`src/agent.sh:853`](../src/agent.sh#L853) | M08 | 命令与允许配置 | 通过或拒绝文本 | 写权限分类全局状态 |
+| `tool_native_file_mode_guard` | [`src/agent.sh:864`](../src/agent.sh#L864) | M08 | 工具名称、路径、模式 | 通过或拒绝 | 构造读写探针交给同一权限检查 |
+| `tool_read` | [`src/agent.sh:879`](../src/agent.sh#L879) | M07 | 路径、偏移、上限 | 文件行文本或错误 | sed 读取，不添加行号 |
+| `tool_write` | [`src/agent.sh:891`](../src/agent.sh#L891) | M07 | 路径、内容 | 写入字节数提示 | 创建父目录并覆盖文件 |
+| `tool_edit` | [`src/agent.sh:899`](../src/agent.sh#L899) | M07 | 路径、旧串、新串 | 差异与行数提示或错误 | 解析器生成临时替换结果，非空才覆盖原文件 |
+| `tool_bash` | [`src/agent.sh:921`](../src/agent.sh#L921) | M07 | 命令、超时、后台标志 | 同步输出或任务标识 | 安全检查，前台超时，后台通知 |
+| `tool_glob` | [`src/agent.sh:953`](../src/agent.sh#L953) | M07 | 模式、路径 | 匹配文件名 | 依赖 rg，忽略其非零退出码 |
+| `tool_grep` | [`src/agent.sh:962`](../src/agent.sh#L962) | M07 | 正则、路径、文件筛选、上下文 | 带行号搜索结果 | 依赖 rg，忽略其非零退出码 |
+| `tool_skill` | [`src/agent.sh:974`](../src/agent.sh#L974) | M04 | 技能名称 | 技能全文或错误 | 读取技能但不修改 SKILL_NAMES |
+| `tool_plan_confirm` | [`src/agent.sh:983`](../src/agent.sh#L983) | M07 | 草稿状态 | 确认文本 | 先压缩后移动草稿 |
+| `tool_plan_clear` | [`src/agent.sh:995`](../src/agent.sh#L995) | M07 | 当前计划 | 完成文本 | 先压缩再清空计划 |
+| `tool_sub_agent` | [`src/agent.sh:1003`](../src/agent.sh#L1003) | M07 | 提示词、描述、派生标志 | 子会话标识与进程号 | 限制一层，创建隔离会话，后台运行并通知 |
+| `display_ensure_newline` | [`src/agent.sh:1039`](../src/agent.sh#L1039) | M10 | 显示末字符 | 必要换行 | 更新显示状态 |
+| `display_human_text` | [`src/agent.sh:1046`](../src/agent.sh#L1046) | M10 | 文本 | 终端文本 | 更新末字符 |
+| `display_sub_agent_result` | [`src/agent.sh:1057`](../src/agent.sh#L1057) | M10 | 子会话状态、用量、思考、正文 | 完成或失败摘要 | 思考与正文各最多显示 120 字符 |
+| `display_message` | [`src/agent.sh:1077`](../src/agent.sh#L1077) | M10 | REPLY_MESSAGE | 人类可读输出 | 按类型着色及维护显示状态，错误写标准错误 |
+| `display_term_title` | [`src/agent.sh:1177`](../src/agent.sh#L1177) | M10 | 状态、活跃任务数 | 标题序列 | 活跃任务存在时抑制空闲状态 |
+| `display_stream` | [`src/agent.sh:1184`](../src/agent.sh#L1184) | M10 | 标准输入 RESP | 连续终端输出 | 循环读取并显示 |
+| `agent_compact_context` | [`src/agent.sh:1186`](../src/agent.sh#L1186) | M06 | 触发原因、统计、对话 | 成功或不压缩状态 | 决策后生成摘要、写摘要、归档裁剪 |
+| `agent_build_prompt` | [`src/agent.sh:1223`](../src/agent.sh#L1223) | M04 | 环境、规则、指令、技能、计划、摘要 | 拼接后的系统提示词 | 读取动态文件，不包含草稿正文 |
+| `agent_record_usage` | [`src/agent.sh:1260`](../src/agent.sh#L1260) | M10 | REPLY_MESSAGE 用量与计数键 | 四类 token 总和 | 按开关写用量事件，并累加统计 |
+| `agent_run_loop` | [`src/agent.sh:1275`](../src/agent.sh#L1275) | M09 | 输入与轮类型 | 末尾条件语句状态，不透传内部循环退出码 | 运行后更新空闲标题与交互提示 |
+| `cleanup_all_pipes` | [`src/agent.sh:1288`](../src/agent.sh#L1288) | M09 | 已打开描述符 | 无 | 按 4、5、3、6、7、8 顺序关闭 |
+| `agent_main_loop` | [`src/agent.sh:1297`](../src/agent.sh#L1297) | M09 | 输入 FIFO 与通知 FIFO | 会话运行 | 创建显示及通知进程，分派输入，结束后清理 |
+| `agent_drain_notify_buf` | [`src/agent.sh:1367`](../src/agent.sh#L1367) | M09 | 通知缓冲 | 显示帧及有无注入状态 | 先移动缓冲快照，再追加合并用户消息 |
+| `agent_loop_stream` | [`src/agent.sh:1393`](../src/agent.sh#L1393) | M09 | 输入与持久对话 | RESP 事件流 | 每轮排空通知、压缩、请求、立即执行工具、持久化 |
+| `agent_loop` | [`src/agent.sh:1470`](../src/agent.sh#L1470) | M09 | 输入、轮类型 | 成功或失败及显示事件 | 记录输入、附件映射、统计、事件，信号中断处理 |
+| `usage` | [`src/agent.sh:1523`](../src/agent.sh#L1523) | M02 | 无 | 帮助文本 | 退出当前 shell |
+| `parse_args` | [`src/agent.sh:1565`](../src/agent.sh#L1565) | M02 | 参数数组 | 配置全局变量 | 帮助或列表分支提前退出 |
+| `list_sessions` | [`src/agent.sh:1618`](../src/agent.sh#L1618) | M02 | 项目目录 | 会话列表 | 读取目录及摘要 |
+| `validate_config` | [`src/agent.sh:1633`](../src/agent.sh#L1633) | M02 | 配置与服务商环境变量 | 模型、地址、请求头 | 动态定义三个协议函数 |
+| `util_body_convert` | [`src/agent.sh:1678`](../src/agent.sh#L1678)、[`src/agent.sh:1724`](../src/agent.sh#L1724)、[`src/agent.sh:1730`](../src/agent.sh#L1730) | M06 | 统一请求、视觉开关 | 服务商请求 JSON | 配置阶段按服务商重定义 |
+| `sse_convert` | [`src/agent.sh:1679`](../src/agent.sh#L1679)、[`src/agent.sh:1725`](../src/agent.sh#L1725)、[`src/agent.sh:1731`](../src/agent.sh#L1731) | M06 | 服务商 SSE | Claude 形式 SSE | 配置阶段按服务商重定义 |
+| `sse_parse` | [`src/agent.sh:1705`](../src/agent.sh#L1705) | M06 | 统一 SSE | RESP 事件 | 统一解析文本、工具、停止、用量 |
+| `agent_user_inject_readline` | [`src/agent.sh:1709`](../src/agent.sh#L1709) | M02 | READLINE_LINE | USER_NOTIFY 帧 | 写通知描述符并清空编辑行 |
+| `interactive_mode` | [`src/agent.sh:1715`](../src/agent.sh#L1715) | M02 | 历史、终端输入、旧事件 | USER_INPUT 或 SESSION_END 帧 | 历史追加、键绑定、后台输入进程 |
+| `main` | [`src/agent.sh:1763`](../src/agent.sh#L1763) | M02 | 命令行及标准输入 | 会话执行结果 | 初始化并选择交互或单次模式 |
 
 ## 6. 三协议、视觉与外部进程
 
@@ -814,7 +814,7 @@ flowchart LR
 
 ## 10. 入口、动态调用与未确定关系
 
-- 顶层 `main "$@"` 是脚本入口（第 1764 行）。三个传输函数在 `validate_config` 执行时按服务商定义，定义不是调用；`llm_call` 才调用它们。
+- 顶层 `main "$@"` 是脚本入口（第 1763 行）。三个传输函数在 `validate_config` 执行时按服务商定义，定义不是调用；`llm_call` 才调用它们。
 - `interactive_mode` 用 `bind -x` 绑定图片粘贴与用户注入回调。它们不应因缺少普通调用语句被算作未使用。
 - 视觉编码命令以固定字符串内联在 `vision_body.awk` 中，遇图后经单引号转义的路径作位置参数执行；文件不存在、不可读或编码失败由退出码与非空数据判定，不构成主 shell 的普通函数调用。
 - 退出及中断陷阱调用清理或子结果发送。`util_run_timeout` 执行参数指定命令；`tool_bash` 执行模型提供的 shell 文本，无法静态穷举其中的命令与网络目的地。

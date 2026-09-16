@@ -453,7 +453,6 @@ store_conv_add_tool_results() {
 }
 
 store_conv_get_messages() {
-    # 参数为 JSONL 文件路径，缺省读会话文件；compact 摘要传被丢弃消息的临时文件。
     if [[ "$AGENT_VISION" == on ]]; then
         util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" < "${1:-$CONV_FILE}"
         return $?
