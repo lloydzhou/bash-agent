@@ -107,15 +107,15 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph mod_2["启动与配置"]
-    f_main["main<br/>第 1765 行"]
+    f_main["main<br/>第 1764 行"]
     f_parse_args["parse_args<br/>第 1566 行"]
     f_usage["usage<br/>第 1524 行"]
     f_validate_config["validate_config<br/>第 1634 行"]
     f_util_find_awk_dir["util_find_awk_dir<br/>第 318 行"]
     f_util_load_tool_defs["util_load_tool_defs<br/>第 333 行"]
     f_list_sessions["list_sessions<br/>第 1619 行"]
-    f_interactive_mode["interactive_mode<br/>第 1717 行"]
-    f_agent_user_inject_readline["agent_user_inject_readline<br/>第 1711 行"]
+    f_interactive_mode["interactive_mode<br/>第 1716 行"]
+    f_agent_user_inject_readline["agent_user_inject_readline<br/>第 1710 行"]
   end
   f_agent_main_loop["agent_main_loop<br/>见 M09"]
   f_display_stream["display_stream<br/>见 M10"]
@@ -278,7 +278,7 @@ flowchart LR
     f_util_body_convert["util_body_convert<br/>第 1715 / 1728 / 1734 行"]
     f_llm_stream_curl["llm_stream_curl<br/>第 574 行"]
     f_sse_convert["sse_convert<br/>第 1716 / 1729 / 1735 行"]
-    f_sse_parse["sse_parse<br/>第 1707 行"]
+    f_sse_parse["sse_parse<br/>第 1706 行"]
     f_llm_summary_call["llm_summary_call<br/>第 599 行"]
     f_agent_compact_context["agent_compact_context<br/>第 1187 行"]
     f_store_conv_dp_decision["store_conv_dp_decision<br/>第 507 行"]
@@ -655,12 +655,12 @@ flowchart LR
 | `parse_args` | [`src/agent.sh:1566`](../src/agent.sh#L1566) | M02 | 参数数组 | 配置全局变量 | 帮助或列表分支提前退出 |
 | `list_sessions` | [`src/agent.sh:1619`](../src/agent.sh#L1619) | M02 | 项目目录 | 会话列表 | 读取目录及摘要 |
 | `validate_config` | [`src/agent.sh:1634`](../src/agent.sh#L1634) | M02 | 配置与服务商环境变量 | 模型、地址、请求头 | 动态定义三个协议函数 |
-| `util_body_convert` | [`src/agent.sh:1680`](../src/agent.sh#L1680)、[`src/agent.sh:1724`](../src/agent.sh#L1724)、[`src/agent.sh:1730`](../src/agent.sh#L1730) | M06 | 统一请求、视觉开关 | 服务商请求 JSON | 配置阶段按服务商重定义 |
-| `sse_convert` | [`src/agent.sh:1681`](../src/agent.sh#L1681)、[`src/agent.sh:1725`](../src/agent.sh#L1725)、[`src/agent.sh:1731`](../src/agent.sh#L1731) | M06 | 服务商 SSE | Claude 形式 SSE | 配置阶段按服务商重定义 |
-| `sse_parse` | [`src/agent.sh:1707`](../src/agent.sh#L1707) | M06 | 统一 SSE | RESP 事件 | 统一解析文本、工具、停止、用量 |
-| `agent_user_inject_readline` | [`src/agent.sh:1711`](../src/agent.sh#L1711) | M02 | READLINE_LINE | USER_NOTIFY 帧 | 写通知描述符并清空编辑行 |
-| `interactive_mode` | [`src/agent.sh:1717`](../src/agent.sh#L1717) | M02 | 历史、终端输入、旧事件 | USER_INPUT 或 SESSION_END 帧 | 历史追加、键绑定、后台输入进程 |
-| `main` | [`src/agent.sh:1765`](../src/agent.sh#L1765) | M02 | 命令行及标准输入 | 会话执行结果 | 初始化并选择交互或单次模式 |
+| `util_body_convert` | [`src/agent.sh:1679`](../src/agent.sh#L1679)、[`src/agent.sh:1724`](../src/agent.sh#L1724)、[`src/agent.sh:1730`](../src/agent.sh#L1730) | M06 | 统一请求、视觉开关 | 服务商请求 JSON | 配置阶段按服务商重定义 |
+| `sse_convert` | [`src/agent.sh:1680`](../src/agent.sh#L1680)、[`src/agent.sh:1725`](../src/agent.sh#L1725)、[`src/agent.sh:1731`](../src/agent.sh#L1731) | M06 | 服务商 SSE | Claude 形式 SSE | 配置阶段按服务商重定义 |
+| `sse_parse` | [`src/agent.sh:1706`](../src/agent.sh#L1706) | M06 | 统一 SSE | RESP 事件 | 统一解析文本、工具、停止、用量 |
+| `agent_user_inject_readline` | [`src/agent.sh:1710`](../src/agent.sh#L1710) | M02 | READLINE_LINE | USER_NOTIFY 帧 | 写通知描述符并清空编辑行 |
+| `interactive_mode` | [`src/agent.sh:1716`](../src/agent.sh#L1716) | M02 | 历史、终端输入、旧事件 | USER_INPUT 或 SESSION_END 帧 | 历史追加、键绑定、后台输入进程 |
+| `main` | [`src/agent.sh:1764`](../src/agent.sh#L1764) | M02 | 命令行及标准输入 | 会话执行结果 | 初始化并选择交互或单次模式 |
 
 ## 6. 三协议、视觉与外部进程
 
@@ -814,7 +814,7 @@ flowchart LR
 
 ## 10. 入口、动态调用与未确定关系
 
-- 顶层 `main "$@"` 是脚本入口（第 1765 行）。三个传输函数在 `validate_config` 执行时按服务商定义，定义不是调用；`llm_call` 才调用它们。
+- 顶层 `main "$@"` 是脚本入口（第 1764 行）。三个传输函数在 `validate_config` 执行时按服务商定义，定义不是调用；`llm_call` 才调用它们。
 - `interactive_mode` 用 `bind -x` 绑定图片粘贴与用户注入回调。它们不应因缺少普通调用语句被算作未使用。
 - 视觉编码命令以固定字符串内联在 `vision_body.awk` 中，遇图后经单引号转义的路径作位置参数执行；文件不存在、不可读或编码失败由退出码与非空数据判定，不构成主 shell 的普通函数调用。
 - 退出及中断陷阱调用清理或子结果发送。`util_run_timeout` 执行参数指定命令；`tool_bash` 执行模型提供的 shell 文本，无法静态穷举其中的命令与网络目的地。

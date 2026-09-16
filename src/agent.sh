@@ -1632,7 +1632,6 @@ list_sessions() {
 }
 
 validate_config() {
-    case "$AGENT_VISION" in on|off) ;; *) util_die "Invalid vision setting: $AGENT_VISION (expected on|off)" ;; esac
     # Resolve the selected provider's environment configuration first. Model defaults and
     # transport settings are applied only after DeepSeek fallback selects the final provider.
     case "$PROVIDER" in
