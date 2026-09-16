@@ -58,6 +58,23 @@ fn read_speed_from_stats(events_path: &Path) -> Option<i64> {
     v.get("last_call_speed_tok_per_sec")?.as_i64()
 }
 
+/// usage 事件可能先于 agent 将本次速度写入 stats.json。
+/// 等待一小段时间，以读取到本次调用的速度而非上一轮的值。
+fn wait_for_speed_from_stats(events_path: &Path, previous_speed: Option<i64>) -> Option<i64> {
+    const RETRIES: usize = 20;
+    const INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+    for attempt in 0..=RETRIES {
+        let speed = read_speed_from_stats(events_path);
+        if speed.is_some_and(|speed| speed > 0 && Some(speed) != previous_speed) {
+            return speed;
+        }
+        if attempt < RETRIES {
+            std::thread::sleep(INTERVAL);
+        }
+    }
+    None
+}
+
 /// --continue 模式下扫描项目目录，找最近活跃的 session（对齐 continue_session）。
 fn resolve_latest_session(home: &Path, cwd: &Path) -> Option<String> {
     let dir = home.join(".bash-agent/projects").join(project_key(cwd));
@@ -172,6 +189,7 @@ fn run_turn(
     let cwd_out = cwd.to_path_buf();
     let out_thread = std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
+        let mut previous_speed = None;
         loop {
             let mut buf = String::new();
             match reader.read_line(&mut buf) {
@@ -188,12 +206,18 @@ fn run_turn(
                             *guard = Some(events_path_for(&home_out, &cwd_out, sid));
                         }
                     }
-                    let out_line = if let Ok(mut evt) = serde_json::from_str::<serde_json::Value>(line) {
-                        if evt.get("type").and_then(|v| v.as_str()) == Some("usage") {
-                            if let Some(ep) = ep_out.lock().unwrap().as_ref() {
-                                if let Some(s) = read_speed_from_stats(ep) {
-                                    evt["speed_tok_per_sec"] = json!(s);
-                                    evt.to_string()
+                    let out_line =
+                        if let Ok(mut evt) = serde_json::from_str::<serde_json::Value>(line) {
+                            if evt.get("type").and_then(|v| v.as_str()) == Some("usage") {
+                                let events_file = ep_out.lock().unwrap().clone();
+                                if let Some(ep) = events_file.as_deref() {
+                                    if let Some(s) = wait_for_speed_from_stats(ep, previous_speed) {
+                                        previous_speed = Some(s);
+                                        evt["speed_tok_per_sec"] = json!(s);
+                                        evt.to_string()
+                                    } else {
+                                        line.to_string()
+                                    }
                                 } else {
                                     line.to_string()
                                 }
@@ -202,10 +226,7 @@ fn run_turn(
                             }
                         } else {
                             line.to_string()
-                        }
-                    } else {
-                        line.to_string()
-                    };
+                        };
                     emit(&h_out, &out_line);
                 }
                 Err(_) => break,
@@ -236,7 +257,10 @@ fn run_turn(
     let _ = err_thread.join();
 
     let code = status.ok().and_then(|s| s.code());
-    emit(&hub, &json!({"type":"process_exit","code":code}).to_string());
+    emit(
+        &hub,
+        &json!({"type":"process_exit","code":code}).to_string(),
+    );
     if code != Some(0) {
         emit(
             &hub,
@@ -274,10 +298,16 @@ fn build_config_json(args: &[String]) -> String {
     let mut max_context: Option<&str> = None;
     for (i, a) in args.iter().enumerate() {
         let a = a.as_str();
-        for (key, slot) in [("--model", &mut model), ("--provider", &mut provider), ("--max-context-tokens", &mut max_context)] {
+        for (key, slot) in [
+            ("--model", &mut model),
+            ("--provider", &mut provider),
+            ("--max-context-tokens", &mut max_context),
+        ] {
             if let Some(v) = a.strip_prefix(&format!("{key}=")) {
                 *slot = Some(v);
-            } else if a == key && let Some(v) = args.get(i + 1) {
+            } else if a == key
+                && let Some(v) = args.get(i + 1)
+            {
                 *slot = Some(v.as_str());
             }
         }

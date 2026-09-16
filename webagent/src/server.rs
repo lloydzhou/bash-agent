@@ -221,8 +221,8 @@ fn client_loop(
     // 兜底：合并后的逻辑事件再按 REPLAY_MAX_EVENTS 从尾部截断。
     const REPLAY_TURNS: usize = 5;
     const REPLAY_MAX_EVENTS: usize = 2000;
-    if let Some(p) = events_path.lock().unwrap().as_ref()
-        && let Ok(h) = fs::read_to_string(p)
+    if let Some(p) = events_path.lock().unwrap().clone()
+        && let Ok(h) = fs::read_to_string(&p)
     {
         let lines: Vec<&str> = h.lines().collect();
         // 从尾往前找第 REPLAY_TURNS 个 user_input / user_message 锚点
@@ -239,9 +239,13 @@ fn client_loop(
                 }
             }
         }
+        // events.jsonl 不含 WebAgent 临时注入的速度字段；重放时从同目录 stats.json
+        // 取最近一次速度补回 usage 事件，重连后的 HUD 才能与实时流保持一致。
+        let replay_speed = super::read_speed_from_stats(&p);
         let merged = merge_replay(lines[anchor..].iter().copied(), usize::MAX);
         for line in merged.iter().rev().take(REPLAY_MAX_EVENTS).rev() {
-            if ws.send(Message::Text(line.to_string())).is_err() {
+            let line = inject_speed_into_usage(line, replay_speed);
+            if ws.send(Message::Text(line)).is_err() {
                 return Ok(());
             }
         }
@@ -285,18 +289,17 @@ fn merge_replay<'a, I: Iterator<Item = &'a str>>(lines: I, max_lines: usize) -> 
         if count > max_lines {
             break;
         }
-        let piece: Option<(&'static str, String)> =
-            serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .and_then(|v| {
-                    let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-                    let c = v.get("content").and_then(|x| x.as_str()).unwrap_or("");
-                    match t {
-                        "thinking" => Some(("thinking", c.to_string())),
-                        "text" => Some(("text", c.to_string())),
-                        _ => None,
-                    }
-                });
+        let piece: Option<(&'static str, String)> = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .and_then(|v| {
+                let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                let c = v.get("content").and_then(|x| x.as_str()).unwrap_or("");
+                match t {
+                    "thinking" => Some(("thinking", c.to_string())),
+                    "text" => Some(("text", c.to_string())),
+                    _ => None,
+                }
+            });
         match piece {
             Some((t, c)) => {
                 if cur_type == Some(t) {
@@ -317,16 +320,61 @@ fn merge_replay<'a, I: Iterator<Item = &'a str>>(lines: I, max_lines: usize) -> 
     out
 }
 
-fn flush_piece(
-    out: &mut Vec<String>,
-    cur_type: &mut Option<&'static str>,
-    cur_buf: &mut String,
-) {
+fn flush_piece(out: &mut Vec<String>, cur_type: &mut Option<&'static str>, cur_buf: &mut String) {
     if let Some(t) = cur_type.take() {
-        out.push(
-            serde_json::json!({"type": t, "content": cur_buf.as_str()}).to_string(),
-        );
+        out.push(serde_json::json!({"type": t, "content": cur_buf.as_str()}).to_string());
         cur_buf.clear();
+    }
+}
+
+/// 重放 events.jsonl 时恢复 WebAgent 在实时流中注入的速度字段。
+fn inject_speed_into_usage(line: &str, speed: Option<i64>) -> String {
+    let Some(speed) = speed else {
+        return line.to_string();
+    };
+    let Ok(mut event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return line.to_string();
+    };
+    if event.get("type").and_then(|value| value.as_str()) != Some("usage") {
+        return line.to_string();
+    }
+    event["speed_tok_per_sec"] = serde_json::json!(speed);
+    event.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{inject_speed_into_usage, merge_replay};
+
+    #[test]
+    fn usage_replay_includes_saved_speed() {
+        let line = r#"{"type":"usage","output_tokens":42}"#;
+        let event: serde_json::Value =
+            serde_json::from_str(&inject_speed_into_usage(line, Some(321)))
+                .expect("usage replay must remain valid JSON");
+        assert_eq!(event["speed_tok_per_sec"], 321);
+    }
+
+    #[test]
+    fn non_usage_replay_remains_unchanged() {
+        let line = r#"{"type":"text","content":"hello"}"#;
+        assert_eq!(inject_speed_into_usage(line, Some(321)), line);
+    }
+
+    #[test]
+    fn replay_merges_streaming_text_before_speed_injection() {
+        let lines = [
+            r#"{"type":"text","content":"hel"}"#,
+            r#"{"type":"text","content":"lo"}"#,
+            r#"{"type":"usage","output_tokens":42}"#,
+        ];
+        let merged = merge_replay(lines.into_iter(), usize::MAX);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0], r#"{"content":"hello","type":"text"}"#);
+        let event: serde_json::Value =
+            serde_json::from_str(&inject_speed_into_usage(&merged[1], Some(321)))
+                .expect("usage replay must remain valid JSON");
+        assert_eq!(event["speed_tok_per_sec"], 321);
     }
 }
 
@@ -466,7 +514,7 @@ fn handle_upload(
                     500,
                     &serde_json::json!({"error": format!("create image: {e}")}).to_string(),
                     "application/json",
-                )
+                );
             }
         }
     }
