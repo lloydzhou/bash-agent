@@ -1528,7 +1528,7 @@ Usage: agent.sh [options] [prompt]
 Options:
   -p, --provider PROV     LLM provider: claude | openai | responses (default: claude)
   -m, --model MODEL       Model name (default: claude-sonnet-4-20250514)
-  --vision on|off        Native PNG attachments (default: off; AGENT_VISION)
+  --vision [on]          Native PNG attachments (default: off; AGENT_VISION)
   --max-tokens N          Max output tokens (default: 16384)
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
@@ -1568,7 +1568,7 @@ parse_args() {
         case "$1" in
             -p|--provider)   PROVIDER="$2"; shift 2 ;;
             -m|--model)      MODEL="$2"; shift 2 ;;
-            --vision)       [[ $# -ge 2 ]] || util_die 'Missing --vision value'; AGENT_VISION="$2"; shift 2 ;;
+            --vision)       AGENT_VISION=on; [[ $# -ge 2 && "$2" != -* ]] && { AGENT_VISION="$2"; shift; }; [[ "$AGENT_VISION" == "on" ]] || AGENT_VISION=off; shift ;;
             --max-tokens)    MAX_TOKENS=$(util_parse_size "$2") || { util_die "Invalid --max-tokens: $2"; }; shift 2 ;;
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
