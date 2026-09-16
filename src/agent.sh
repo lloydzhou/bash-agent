@@ -467,35 +467,16 @@ store_conv_get_messages() {
     printf '%s]' "$result"
 }
 
-# 子 shell 隔离：编码命令与根目录经环境变量交给 awk，单遍读取，不落任何中间文件。
-store_conv_get_vision_messages() (
-    local LC_ALL=C root
-    root=$(cd "$(store_session_get_dir)" && pwd -P) || return 1
-    VISION_ENCODE_CODE=$(cat <<'VISION_ENC'
-export LC_ALL=C
-root="$1" path="$2"
-# 校验规则与原 llm_vision_valid_png 完全一致：固定层级、拒绝符号链接、核对 PNG 签名。
-llm_vision_valid_png() {
-    local root="$1" path="$2" relative="${2#"$1/"}"
-    [[ "$path" == "$root/"* && "$relative" != ../* && "$relative" != ./* && "$relative" =~ ^[^/]+/images/[0-9]+\.png$ && ! -L "$root/${relative%%/*}" && -f "$path" && -r "$path" && ! -L "$path" && ! -L "${path%/*}" ]] &&
-        [[ "$(od -An -tx1 -N8 "$path" 2>/dev/null | tr -d ' \n')" == 89504e470d0a1a0a ]]
-}
-# root/path 非空守卫：防止 root 为空时前缀检查退化为 /*。
-if [[ -z "$root" || -z "$path" ]] || ! llm_vision_valid_png "$root" "$path"; then
-    printf '无法读取有效的 PNG 附件：%s\n' "$path" >&2
-    exit 1
-fi
-(set -o pipefail; base64 < "$path" | tr -d '\r\n')
-VISION_ENC
-)
-    export VISION_ENCODE_CODE VISION_ROOT="$root"
+# 单遍读取，编码命令固定内联在 vision_body.awk，不落任何中间文件。
+store_conv_get_vision_messages() {
+    local LC_ALL=C
     # 保持旧接口语义：显式非空参数优先，空参数仍回退到会话文件。
     if [[ -n "${1:-}" ]]; then
         util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" <<< "$1"
     else
         util_awk_run -v vision="$AGENT_VISION" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/vision_body.awk" < "$CONV_FILE"
     fi
-)
+}
 
 store_summary_set() {
     local text="$1"

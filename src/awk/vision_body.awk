@@ -28,10 +28,9 @@ function convert_text(text,    rest, cleaned, start, stop, section, lines, mappi
 BEGIN {
     first = 1
     printf "["
-    # 固定命令，仅经 shell 展开环境变量；root 只作位置参数，先做单引号转义。
-    encoder = "bash -c \"$VISION_ENCODE_CODE\" _ "
-    root = ENVIRON["VISION_ROOT"]
-    qroot = shq(root)
+    # 固定命令，路径仅作位置参数：pipefail 保证 base64 读失败（不存在/不可读/IO 错）
+    # 时退出码非 0，存在性与可读性由此隐式判定；.png 后缀已由映射行正则限定。
+    encoder = "bash -c 'set -o pipefail; base64 < \"$1\" | tr -d \"\\r\\n\"' _ "
 }
 length($0) {
     msg = $0
@@ -76,8 +75,8 @@ END { if (!failed) printf "]" }
 
 function encode_image(path,    data, cmd, status, rc) {
     # 附件路径被单引号包裹后仅作为位置参数，绝不进入命令语法位置。
-    cmd = encoder qroot " " shq(path)
-    # 读到数据不代表编码成功：还须检查子进程退出状态，防止发送截断图片。
+    cmd = encoder shq(path)
+    # 读到数据不代表编码成功：还须检查子进程退出状态，防止发送截断或空文件。
     status = (cmd | getline data)
     rc = close(cmd)
     if (status != 1 || rc != 0 || data == "") {

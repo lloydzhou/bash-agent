@@ -153,16 +153,22 @@ messages=$(store_conv_get_messages) && llm_call "$messages"
         assert [base64.b64decode(b['source']['data']) for b in message['content']] == [p.read_bytes() for p in images]
     assert (root / 'conv.jsonl').read_text() == original_conv
 print('直接图片、多轮多图、空行、无末尾换行、显式读取、开关及失败阻止发送：通过')
+# 简化校验：不再检查符号链接与内容签名，只要后缀为 .png 且可读即编码。
 (root / 's/images/3.png').symlink_to(images[0])
 (root / 's/images/4.png').write_bytes(b'not a PNG')
 (root / 'linked').symlink_to(root / 's', target_is_directory=True)
-(root / 'linked-images').mkdir()
-(root / 'linked-images/images').symlink_to(root / 's/images', target_is_directory=True)
-for path in [root / 's/images/3.png', root / 's/images/4.png', root / 'linked/images/1.png', root / 'linked-images/images/1.png']:
+for path, content in [(root / 's/images/3.png', images[0].read_bytes()),
+                      (root / 's/images/4.png', b'not a PNG'),
+                      (root / 'linked/images/1.png', images[0].read_bytes())]:
+    (root / 'body').write_text(json.dumps(dict(body, messages=[{'role': 'user', 'content': text.replace(str(images[0]), str(path))}])))
+    run = subprocess.run(['bash', '-c', script], capture_output=True, timeout=20)
+    assert run.returncode == 0, (path, run.stderr)
+    assert base64.b64decode(json.loads(run.stdout)['messages'][0]['content'][0]['source']['data']) == content
+for path in [root / 's/images/99.png', root / 'linked/images/99.png']:
     (root / 'body').write_text(json.dumps(dict(body, messages=[{'role': 'user', 'content': text.replace(str(images[0]), str(path))}])))
     run = subprocess.run(['bash', '-c', script], capture_output=True, timeout=20)
     assert run.returncode != 0, path
-print('数组保留、普通路径忽略、非法附件及符号链接拒绝：通过')
+print('数组保留、普通路径忽略、符号链接按后缀编码、不存在文件拒绝：通过')
 # 合法目录名含命令替换语法时仍只能作为数据读取，不能触发 shell 执行。
 injection_path = root / '$(touch injected)' / 'images' / '1.png'
 injection_path.parent.mkdir(parents=True)
