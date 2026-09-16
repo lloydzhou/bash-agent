@@ -196,15 +196,15 @@ fn run_turn(
                 Ok(0) => break,
                 Ok(_) => {
                     let line = buf.trim_end();
-                    // 首次 session_start：如果 events_path 尚未设置，用 session_id 构造路径
+                    // 每次 session_start 都以当前 session_id 更新 events.jsonl 路径。
                     if let Ok(evt) = serde_json::from_str::<serde_json::Value>(line)
                         && evt.get("type").and_then(|v| v.as_str()) == Some("session_start")
                         && let Some(sid) = evt.get("session_id").and_then(|v| v.as_str())
                     {
+                        // 每轮未指定 --session 时都会创建新会话，必须用当前 session_id
+                        // 覆盖旧路径，避免速度读取和重连回放落到上一轮会话。
                         let mut guard = ep_out.lock().unwrap();
-                        if guard.is_none() {
-                            *guard = Some(events_path_for(&home_out, &cwd_out, sid));
-                        }
+                        *guard = Some(events_path_for(&home_out, &cwd_out, sid));
                     }
                     let out_line =
                         if let Ok(mut evt) = serde_json::from_str::<serde_json::Value>(line) {
