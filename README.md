@@ -157,6 +157,7 @@ cd rust && cargo build --release && cp target/release/rustagent ~/.local/bin/rus
 | `--continue` | 继续最近 session | - |
 | `--fork` | 从源 session 派生新 session（配合 `--session` 或 `--continue`） | - |
 | `--list-sessions` | 列出当前项目 session | - |
+| `--watch SESSION` | 实时跟踪 session 的 events.jsonl（session_id / 目录 / events.jsonl 路径） | - |
 | `-i` | 交互模式 | - |
 | `--output-format FMT` | 输出格式：`human` 或 `stream-json` | `human` |
 | `-v` | 详细日志 | - |

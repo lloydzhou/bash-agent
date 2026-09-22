@@ -156,6 +156,7 @@ Pre-built binaries (C / Go / Rust) are available on [Releases](https://github.co
 | `--continue` | continue the latest session | - |
 | `--fork` | fork a new session from source (with `--session` or `--continue`) | - |
 | `--list-sessions` | list sessions for the current project | - |
+| `--watch SESSION` | Watch a session's events.jsonl in real time (session_id / dir / events.jsonl path) | - |
 | `-i` | interactive mode | - |
 | `--output-format FMT` | output format: `human` or `stream-json` | `human` |
 | `-v` | verbose logging | - |
