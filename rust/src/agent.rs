@@ -1033,6 +1033,10 @@ impl Agent {
                     unsafe {
                         *libc::__error() = 0
                     };
+                    #[cfg(target_os = "android")]
+                    unsafe {
+                        *libc::__errno() = 0
+                    };
                     #[cfg(target_os = "linux")]
                     unsafe {
                         *libc::__errno_location() = 0
@@ -1085,6 +1089,8 @@ impl Agent {
                             let err = unsafe { *libc::__error() };
                             #[cfg(target_os = "linux")]
                             let err = unsafe { *libc::__errno_location() };
+                            #[cfg(target_os = "android")]
+                            let err = unsafe { *libc::__errno() };
                             if err == libc::EAGAIN {
                                 break Err(ffi::LineError::Interrupted);
                             }
