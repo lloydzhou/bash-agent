@@ -2396,6 +2396,9 @@ char *agent_build_prompt(Agent *agent) {
         sb_free(&skills);
     }
 
+    /* 10.5 current-goal — bash parity: 槽位常驻；<not set> 占位直到 c 端实现 --goal（ref #96） */
+    prompt_append_section(&buf, "current-goal", "<not set>", NULL);
+
     /* 11. current-plan */
     {
         char *plan = util_read_file(agent->paths.plan);
