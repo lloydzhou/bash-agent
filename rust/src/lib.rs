@@ -1331,6 +1331,8 @@ pub mod prompt {
             if let Some(s) = self.build_selected_skills_section()? {
                 sections.push(wrap_section("selected-skills", &s, None));
             }
+            // current goal — bash parity: 槽位常驻；<not set> 占位直到 rust 端实现 --goal（ref #96）
+            sections.push(wrap_section("current-goal", "<not set>", None));
             if let Some(s) = read_optional_file(&self.plan_file)? {
                 sections.push(wrap_section(
                     "current-plan",
