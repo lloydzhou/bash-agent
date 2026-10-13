@@ -291,6 +291,7 @@ html[data-theme=light] .diff .dl.del .ln { background:
 .sysrow .sysmsg { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .sysrow.stderr .sysmsg { font-family: var(--font-code); font-size: 12px; line-height: 18px;
   color: var(--label-tertiary); }
+.sysrow.goal .tag, .sysrow.goal-done .tag { color: var(--brand); }
 
 /* 错误行（对齐 turnErrorRow） */
 .errorrow { display: grid; grid-template-columns: 10px minmax(0,1fr); column-gap: 8px;
@@ -1332,7 +1333,11 @@ var CFG = __WEBAGENT_CONFIG__;
             updateHud({ req: hud.req + 1, tin: hud.tin + (event.input_tokens || 0), tout: hud.tout + (event.output_tokens || 0), cr: hud.cr + (event.cache_read_input_tokens || 0), cc: hud.cc + (event.cache_creation_input_tokens || 0), ctx: (event.input_tokens || 0) + (event.cache_read_input_tokens || 0) + (event.cache_creation_input_tokens || 0) + (event.output_tokens || 0), speed: event.speed_tok_per_sec !== undefined ? event.speed_tok_per_sec : hud.speed });
           }
           break;
-        case 'context_update': finishStream(); addSystem('上下文', '已压缩 · ' + (event.trigger || ''), 'compact'); break;
+        case 'context_update':
+          finishStream();
+          if (event.kind === 'goal') { addSystem('目标', '未完成，继续执行', 'goal'); }
+          else { addSystem('上下文', '已压缩 · ' + (event.trigger || ''), 'compact'); }
+          break;
         case 'sub_agent_start': finishStream(); addSystem('子任务', event.description || event.prompt || '', 'subagent'); break;
         case 'stderr': {
           var visible = stripAnsi(event.content || '').trim();
@@ -1341,7 +1346,10 @@ var CFG = __WEBAGENT_CONFIG__;
         }
         case 'process_exit': finishStream(); setWorking(null); break;
         case 'error': finishStream(); setWorking(null); addError('错误', event.message || ''); break;
-        case 'stop': finishStream(); setWorking(null); break;
+        case 'stop':
+          finishStream(); setWorking(null);
+          if (event.reason === 'goal_done') addSystem('目标', '已达成', 'goal-done');
+          break;
         default: addSystem('', raw);
       }
     }

@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`--goal` 目标驱动循环（Bash 版）**：`--goal "<目标>"` 让 loop 绕过 `MAX_TURNS` 持续运行，模型每次想停下时由裁判调用（`llm_goal_call`）判定——输出 `DONE` 则以 `STOP goal_done` 结束，否则其输出作为续跑指令注入为下一轮 user 消息（reflexion 模式）。裁判调用与主循环共享 system prompt + conversation 前缀（缓存对齐，同 compact 设计）；新增通用 `llm_side_call` 与 `llm_summary_call` 共用流消费/记账路径；system prompt 新增常驻 `current-goal` 槽位（未设置时 `<not set>` 占位）。裁判失败按错误退出，Ctrl+C / LLM error / max_tokens 仍为硬退出。Go/Rust/C 端将随后跟进。
+
 ---
 
 ## [4.3.8] - 2026-09-12

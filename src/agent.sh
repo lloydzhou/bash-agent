@@ -13,6 +13,7 @@ BASE_URL=""
 USER_INPUT=""
 MAX_TOKENS=16384
 MAX_TURNS=1000
+GOAL=""
 MAX_CONTEXT_TOKENS=200000
 TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
@@ -595,21 +596,49 @@ llm_call() {
     printf '%s' "$body" | util_body_convert "$AGENT_VISION" | llm_stream_curl | sse_convert | sse_parse
 }
 
-llm_summary_call() {
-    local dropped_file="$1" text="" last_error="" stop_reason="" messages summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
-    printf '{"role":"user","content":"%s"}\n' "$(util_json_escape "$summary_instruction")" >> "$dropped_file"
-    messages=$(store_conv_get_messages "$dropped_file") || return 1
+# 通用 side-call：拷贝 src_file → 末尾追加指令行 → LLM 调用（thinking disabled）。
+# 用于 compact / goal 等不走主循环的辅助调用。文本输出到 stdout；空响应 return 1。
+# 拷贝而非原地追加：goal 的 src_file 是真实 CONV_FILE，指令不能持久化进会话。
+llm_side_call() {
+    local src_file="$1" usage_kind="$2" counter_key="$3" max_tokens="$4" instruction="$5"
+    local tmp text="" last_error="" stop_reason="" messages
+    tmp=$(mktemp "${TMPDIR:-/tmp}/agent_side_call.XXXXXX") || return 1
+    cat "$src_file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    printf '{"role":"user","content":"%s"}\n' "$(util_json_escape "$instruction")" >> "$tmp"
+    messages=$(store_conv_get_messages "$tmp") || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
     while util_read_msg; do
         case "${REPLY_MESSAGE[0]}" in
             TEXT)  text+="${REPLY_MESSAGE[1]}" ;;
             THINKING) ;;
-            USAGE) agent_record_usage "compact" compact_request_count >/dev/null ;;
+            USAGE) agent_record_usage "$usage_kind" "$counter_key" >/dev/null ;;
             ERROR) last_error="${REPLY_MESSAGE[1]}" ;;
             STOP)  stop_reason="${REPLY_MESSAGE[1]}" ;;
         esac
-    done < <(llm_call "$messages" "" disabled)
-    [[ -n "$text" ]] || util_die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
+    done < <(llm_call "$messages" "$max_tokens" disabled)
+    [[ -n "$text" ]] || {
+        printf '[side-call] empty response (stop_reason=%s, error=%s)\n' "${stop_reason:-none}" "${last_error:-none}" >&2
+        return 1
+    }
     printf '%s' "$text"
+}
+
+llm_summary_call() {
+    local dropped_file="$1" text summary_instruction=$'The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:'
+    text=$(llm_side_call "$dropped_file" compact compact_request_count "" "$summary_instruction") \
+        || util_die "Failed to generate context summary: empty text response"
+    printf '%s' "$text"
+}
+
+# goal 裁判调用：输出 DONE（达成）或续跑指令（未达成，原样作为下一轮 user 消息）。
+# 与主循环共享 system prompt + conversation 前缀，缓存对齐（同 summary 的设计）。
+llm_goal_call() {
+    local text norm goal_instruction
+    goal_instruction=$'You are the goal-completion judge for an autonomous agent session. Review the conversation above against the goal below, then reply with EXACTLY one of:\n- The single word DONE — if the goal has been fully achieved\n- Otherwise: one short, concrete, actionable instruction describing what remains and the next step. It will be sent to the agent as its next task; no chat, no commentary, no markdown.\nNever output anything else.\n\nGoal: '"$GOAL"
+    text=$(llm_side_call "$CONV_FILE" goal goal_request_count 200 "$goal_instruction") || return 1
+    # 归一化匹配：去空白与标点 + 大写后精确等于 DONE；其余一切输出视为续跑指令
+    norm=$(printf '%s' "$text" | tr -d '[:space:][:punct:]' | tr '[:lower:]' '[:upper:]')
+    [[ "$norm" == "DONE" ]] && printf 'DONE' || printf '%s' "$text"
 }
 # tool
 tool_dispatch() {
@@ -1221,7 +1250,7 @@ agent_compact_context() {
 
 # agent
 agent_build_prompt() {
-    local output="" agent_identity environment core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
+    local output="" agent_identity environment core_rules tool_guidance todo_guidance plan_lifecycle_guidance goal_section instruction_files skill_index selected_skills plan stable_context locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
     locale="${locale%%.*}"
     agent_identity='You are bash-agent, a lightweight coding agent that works in a terminal.'
     [[ "$locale" == zh* ]] && agent_identity='你是 bash-agent，一个在终端中运行的轻量级编码智能体。'
@@ -1233,6 +1262,10 @@ agent_build_prompt() {
     sub_agent_guidance=$'- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n- **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.\n- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.\n- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.'
     todo_guidance=$'- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n- Keep the checklist short, concrete, and actionable.\n- Prefer exactly one in_progress item when work is actively underway.\n- Mark items completed immediately after finishing them, and remove stale items that no longer matter.'
     plan_lifecycle_guidance=$'- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n- **Files**: PLAN_DRAFT_FILE: '"${PLAN_DRAFT_FILE:-<not set>}"$' | PLAN_FILE: '"${PLAN_FILE:-<not set>}"$'\n- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n  Every user reply MUST be classified as exactly ONE of:\n  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.'
+
+    # goal 槽位常驻（<not set> 占位），goal 模式下附驱动指令
+    goal_section="<not set>"
+    [[ -n "$GOAL" ]] && goal_section=$'You are running in goal-driven mode. Work autonomously toward the goal below and do not stop until it is fully achieved. When you believe the goal is fully achieved, reply with DONE as your entire final message.\n\nGoal: '"$GOAL"
 
     instruction_files=$(util_build_instructions_section)
     skill_index=$(util_build_skill_index)
@@ -1250,6 +1283,7 @@ agent_build_prompt() {
     util_append_section output "instruction-files" "$instruction_files"
     util_append_section output "skill-index" "$skill_index"
     util_append_section output "selected-skills" "$selected_skills"
+    util_append_section output "current-goal" "$goal_section"
     util_append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     util_append_section output "context-snapshot" "$stable_context"
     util_append_section output "output-language" "$output_language_reaffirm"
@@ -1394,7 +1428,8 @@ agent_loop_stream() {
     local user_input="$1" turn=0 messages
     # Trap SIGINT: close pipe FD to unblock read
     trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
-    while (( turn < MAX_TURNS )); do
+    # goal 模式不受 MAX_TURNS 约束：循环持续到裁判输出 DONE（硬退出只剩 DONE/中断/error/max_tokens）
+    while (( turn < MAX_TURNS )) || [[ -n "$GOAL" ]]; do
         (( turn++ )) || true
         agent_drain_notify_buf || true
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
@@ -1454,6 +1489,19 @@ agent_loop_stream() {
             # tool_use/tool_calls → loop continues; otherwise exit unless a sub-agent result arrived meanwhile
             if [[ "$stop" != "tool_use" && "$stop" != "tool_calls" ]]; then
                 agent_drain_notify_buf && continue
+                # goal 模式：模型想停时先由裁判判定；未达成则把续跑指令注入为下一轮 user 消息
+                if [[ -n "$GOAL" ]]; then
+                    local goal_result
+                    goal_result=$(llm_goal_call) || { util_write_msg "ERROR" "Goal check failed"; return 1; }
+                    [[ "$INTERRUPT_REQUESTED" == true ]] && { util_write_msg "STOP" "interrupted"; break; }
+                    if [[ "$goal_result" == "DONE" ]]; then
+                        util_write_msg "STOP" "goal_done"
+                        break
+                    fi
+                    store_conv_add_user "$goal_result"
+                    util_write_msg "CONTEXT_UPDATE" "goal" "continue"
+                    continue
+                fi
                 util_write_msg "STOP" "$stop"
                 break
             fi
@@ -1462,7 +1510,7 @@ agent_loop_stream() {
             break
         fi
     done
-    if (( turn >= MAX_TURNS )); then
+    if [[ -z "$GOAL" ]] && (( turn >= MAX_TURNS )); then
         util_write_msg "ERROR" "Max turns ($MAX_TURNS) reached"
     fi
 }
@@ -1532,6 +1580,7 @@ Options:
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
   --max-turns N           Max agent turns (default: 1000)
+  --goal TEXT             Goal-driven mode: loop until the judge outputs DONE (bypasses --max-turns)
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
@@ -1572,6 +1621,7 @@ parse_args() {
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
+            --goal)          GOAL="$2"; shift 2 ;;
             --max-context)
                 MAX_CONTEXT_TOKENS=$(util_parse_size "$2") || util_die "Invalid --max-context: $2"
                 shift 2
@@ -1762,6 +1812,8 @@ interactive_mode() {
 
 main() {
     parse_args "$@"
+    # --goal 且未提供 prompt（stdin 为 tty）时，以 goal 作为初始任务
+    [[ -z "${USER_INPUT:-}" && -n "$GOAL" && -t 0 ]] && USER_INPUT="$GOAL"
     util_find_awk_dir
     validate_config
     [[ "${FORK:-}" == true ]] && { local _fs="$(store_session_get_dir)/${SESSION_ID}"; SESSION_ID="$(util_new_session_id)"; store_session_fork "$_fs" "$(store_session_get_dir)/${SESSION_ID}"; }

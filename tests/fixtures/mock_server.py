@@ -71,6 +71,22 @@ class H(http.server.BaseHTTPRequestHandler):
                 ]:
                     w.write(('event: ' + event + '\ndata: ' + json.dumps(data) + '\n\n').encode()); w.flush()
             return
+        # --- Goal judge mock: first call returns a continuation instruction,
+        # second call (conversation already contains it) returns DONE ---
+        if b'goal-completion judge' in body and path.startswith('/v1/messages'):
+            if b'GOAL_CONT_STEP' in body:
+                goal_text = 'DONE'
+            else:
+                goal_text = 'GOAL_CONT_STEP: write the report file'
+            for c in [
+                'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_goal","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':goal_text}}) + '\n\n',
+                'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+                'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            ]: w.write(c.encode()); w.flush()
+            return
         if path.startswith('/responses') and b'WRITE_FILE_MARKER' not in body:
             for event, data in [
                 ('response.reasoning_text.delta', {'delta':'mock reasoning'}),

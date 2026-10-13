@@ -78,6 +78,9 @@ Use this fixture skill only for system prompt parity tests.
 Base path token: __PROJECT__/skills/parity-skill
 </skill>
 </selected-skills>
+<current-goal>
+<not set>
+</current-goal>
 <current-plan name="__HOME__/.bash-agent/projects/__PROJECT_KEY__/system-prompt-parity/plan.md">
 1. Keep the fixture plan stable.
 2. Compare generated system prompts exactly.
