@@ -1413,8 +1413,7 @@ agent_loop_stream() {
     local user_input="$1" turn=0 messages
     # Trap SIGINT: close pipe FD to unblock read
     trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
-    # goal 模式不受 MAX_TURNS 约束：循环持续到裁判输出 DONE（硬退出只剩 DONE/中断/error/max_tokens）
-    while (( turn < MAX_TURNS )) || [[ -n "$GOAL" ]]; do
+    while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
         agent_drain_notify_buf || true
         # Compact before each LLM call: uses ctx_tokens from previous call's USAGE
@@ -1474,15 +1473,6 @@ agent_loop_stream() {
             # tool_use/tool_calls → loop continues; otherwise exit unless a sub-agent result arrived meanwhile
             if [[ "$stop" != "tool_use" && "$stop" != "tool_calls" ]]; then
                 agent_drain_notify_buf && continue
-                # goal 模式：裁判判定，未达成则把续跑指令注入为下一轮 user 消息（ref #96）
-                if [[ -n "$GOAL" ]]; then
-                    local gr
-                    gr=$(llm_goal_call) || { util_write_msg "ERROR" "Goal check failed"; return 1; }
-                    if [[ "$gr" == "DONE" ]]; then util_write_msg "STOP" "goal_done"; break; fi
-                    store_conv_add_user "$gr"
-                    util_write_msg "CONTEXT_UPDATE" "goal" "continue"
-                    continue
-                fi
                 util_write_msg "STOP" "$stop"
                 break
             fi
@@ -1491,13 +1481,13 @@ agent_loop_stream() {
             break
         fi
     done
-    if [[ -z "$GOAL" ]] && (( turn >= MAX_TURNS )); then
+    if (( turn >= MAX_TURNS )); then
         util_write_msg "ERROR" "Max turns ($MAX_TURNS) reached"
     fi
 }
 
 agent_loop() {
-    local user_input="$1" turn_kind="${2:-user_input}" _type="" _reason="" had_error=false
+    local user_input="$1" turn_kind="${2:-user_input}" _type="" _reason="" had_error=false gr=""
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     # events 保留原始占位符；conversation/LLM 追加占位符到本地图片绝对路径的映射。
@@ -1542,6 +1532,22 @@ agent_loop() {
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
+    # goal 模式（ref #96）：本轮停止后裁判判定（此时会话已完整持久化）。
+    # DONE → 以 goal_done 终止；否则续跑指令经 INPUT_FIFO 重新入队为新输入，
+    # 由 agent_main_loop 开启新一轮——原 agent_loop_stream 循环零改动。
+    if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
+        gr=$(llm_goal_call) || {
+            store_event_append '{"type":"error","message":"goal check failed"}'
+            util_write_msg "ERROR" "Goal check failed"
+            return 1
+        }
+        if [[ "$gr" == "DONE" ]]; then
+            store_event_append '{"type":"stop","reason":"goal_done"}'
+            util_is_stream_json || ( util_write_msg "STOP" "goal_done" ) >&4 2>/dev/null || true
+        else
+            util_write_msg "USER_INPUT" "0" "$gr" >&5
+        fi
+    fi
     exec 7<&-
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     $had_error && return 1

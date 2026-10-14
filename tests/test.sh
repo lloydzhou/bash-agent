@@ -2748,8 +2748,8 @@ test_agent_goal_loop() {
     conv_file="$session_dir/conversation.jsonl"
     output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session goal-demo --goal "GOAL_TEST_MARKER finish the report" 'start working' 2>&1) || true
     if echo "$output" | grep -q '"reason":"goal_done"' && \
-       grep -q '"type":"context_update","kind":"goal","trigger":"continue"' "$event_file" && \
        grep -q 'GOAL_CONT_STEP: write the report file' "$conv_file" && \
+       [[ $(grep -c '"type":"user_input"' "$event_file") -ge 2 ]] && \
        [[ $(grep -c '"type":"text"' "$event_file") -ge 2 ]]; then
         green "Agent --goal driven loop"; ((PASS++)) || true
     else
