@@ -117,18 +117,10 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 
 // ─── SummaryCall: 压缩用的摘要调用（返回纯文本）───
 
-func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, systemPrompt, toolDefs string) (string, Usage, error) {
-	// 将 JSONL 转成 JSON 数组，并追加 summary instruction
-	summaryInstruction := "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:"
-
-	lines := splitNonEmpty(droppedMessages)
-	msgs := make([]json.RawMessage, 0, len(lines)+1)
-	for _, line := range lines {
-		msgs = append(msgs, json.RawMessage(line))
-	}
-	// 追加 summary instruction 作为用户消息（手动拼接保持 role→content 顺序）
-	instrMsg := []byte(`{"role":"user","content":"` + UtilJSONEscape(summaryInstruction) + `"}`)
-	msgs = append(msgs, instrMsg)
+// sideCall：messages（JSON 数组）末尾追加指令 user 消息 → thinking disabled 调用。
+// 供 compact / goal 等不走主循环的辅助调用复用；空响应返回 error。
+func (t *HTTPTransport) sideCall(ctx context.Context, msgs []json.RawMessage, systemPrompt, toolDefs, instruction string, maxTokens int) (string, Usage, error) {
+	msgs = append(msgs, json.RawMessage(`{"role":"user","content":"` + UtilJSONEscape(instruction) + `"}`))
 
 	messagesJSON, _ := json.Marshal(msgs)
 	if t.cfg.VisionMode == "on" {
@@ -139,7 +131,7 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, system
 		messagesJSON = []byte(expanded)
 	}
 
-	ch, err := t.Call(ctx, string(messagesJSON), systemPrompt, toolDefs, t.cfg.MaxTokens, "disabled")
+	ch, err := t.Call(ctx, string(messagesJSON), systemPrompt, toolDefs, maxTokens, "disabled")
 	if err != nil {
 		return "", Usage{}, err
 	}
@@ -163,9 +155,33 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, system
 		}
 	}
 	if text == "" {
-		return "", usage, fmt.Errorf("empty summary response (error=%s)", lastError)
+		return "", usage, fmt.Errorf("empty response (error=%s)", lastError)
 	}
 	return text, usage, nil
+}
+
+func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, systemPrompt, toolDefs string) (string, Usage, error) {
+	// 将 JSONL 转成 JSON 数组，并追加 summary instruction
+	summaryInstruction := "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:"
+
+	lines := splitNonEmpty(droppedMessages)
+	msgs := make([]json.RawMessage, 0, len(lines)+1)
+	for _, line := range lines {
+		msgs = append(msgs, json.RawMessage(line))
+	}
+	return t.sideCall(ctx, msgs, systemPrompt, toolDefs, summaryInstruction, t.cfg.MaxTokens)
+}
+
+// GoalCall goal 裁判（ref #96）：DONE=达成（归一化精确匹配由调用方处理）；
+// 否则输出续跑指令。读取完整会话，缓存对齐同 summary。
+func (t *HTTPTransport) GoalCall(ctx context.Context, conversation, systemPrompt, toolDefs, goal string) (string, Usage, error) {
+	instruction := "You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token GOAL_DONE — exactly as written (uppercase, with the underscore).. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: " + goal
+	lines := splitNonEmpty(conversation)
+	msgs := make([]json.RawMessage, 0, len(lines)+1)
+	for _, line := range lines {
+		msgs = append(msgs, json.RawMessage(line))
+	}
+	return t.sideCall(ctx, msgs, systemPrompt, toolDefs, instruction, 200)
 }
 
 func NewHTTPTransport(cfg Config) *HTTPTransport {

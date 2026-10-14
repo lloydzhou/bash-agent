@@ -58,6 +58,7 @@ typedef struct {
     char *thinking;
     char *effort;
     char *vision;
+    char *goal;             /* goal-driven 模式目标（ref #96），NULL/空 = 未启用 */
 
     /* DP Compact 配置 */
     DPConfig dp_cfg;

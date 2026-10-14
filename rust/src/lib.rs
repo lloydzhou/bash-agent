@@ -32,6 +32,7 @@ pub mod config {
         pub base_url: String,
         pub prompt: String,
         pub max_turns: i32,
+        pub goal: String,
         pub max_context_tokens: usize,
         pub dp_p_input: f64,
         pub dp_p_cache: f64,
@@ -63,6 +64,7 @@ pub mod config {
                 provider: "claude".to_string(),
                 model: String::new(),
                 max_tokens: 16384,
+                goal: String::new(),
                 tool_timeout_secs: 600,
                 tool_result_max_bytes: 100_000,
                 file_write_max_bytes: 1_048_576,
@@ -579,6 +581,7 @@ pub mod types {
         pub base_url: String,
         pub prompt: String,
         pub max_turns: i32,
+        pub goal: String,
         pub max_context_tokens: usize,
         pub dp_p_input: f64,
         pub dp_p_cache: f64,
@@ -1239,6 +1242,7 @@ pub mod prompt {
         pub summary_file: PathBuf,
         pub plan_file: PathBuf,
         pub plan_draft_file: PathBuf,
+        pub goal: String,
     }
 
     impl Builder {
@@ -1331,6 +1335,16 @@ pub mod prompt {
             if let Some(s) = self.build_selected_skills_section()? {
                 sections.push(wrap_section("selected-skills", &s, None));
             }
+            // current goal — bash parity（ref #96）
+            let goal_section = if self.goal.is_empty() {
+                "Goal: <not set>".to_string()
+            } else {
+                format!(
+                    "Goal: {} — goal-driven mode: keep working autonomously until the goal is fully achieved; do not stop early",
+                    self.goal
+                )
+            };
+            sections.push(wrap_section("current-goal", &goal_section, None));
             if let Some(s) = read_optional_file(&self.plan_file)? {
                 sections.push(wrap_section(
                     "current-plan",

@@ -13,6 +13,7 @@ BASE_URL=""
 USER_INPUT=""
 MAX_TOKENS=16384
 MAX_TURNS=1000
+GOAL=""
 MAX_CONTEXT_TOKENS=200000
 TOOL_TIMEOUT_SECS=600
 OUTPUT_FORMAT="human"
@@ -610,6 +611,14 @@ llm_summary_call() {
     done < <(llm_call "$messages" "" disabled)
     [[ -n "$text" ]] || util_die "Failed to generate context summary: empty text response (stop_reason=${stop_reason:-none}, error=${last_error:-none})"
     printf '%s' "$text"
+}
+
+llm_goal_call() {
+    local t="" messages ins="You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token GOAL_DONE — exactly as written (uppercase, with the underscore).. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: $GOAL"
+    messages=$(store_conv_get_messages) || return 1
+    while util_read_msg; do case "${REPLY_MESSAGE[0]}" in TEXT) t+="${REPLY_MESSAGE[1]}" ;; USAGE) agent_record_usage goal goal_request_count >/dev/null ;; esac; done < <(llm_call "${messages%]}, {\"role\":\"user\",\"content\":\"$(util_json_escape "$ins")\"}]" 200 disabled)
+    local n; n=$(printf '%s' "$t" | tr -d '[:space:][:punct:]' | tr '[:lower:]' '[:upper:]')
+    [[ "$n" == "GOAL_DONE" ]] && printf 'GOAL_DONE' || printf '%s' "$t"
 }
 # tool
 tool_dispatch() {
@@ -1250,6 +1259,7 @@ agent_build_prompt() {
     util_append_section output "instruction-files" "$instruction_files"
     util_append_section output "skill-index" "$skill_index"
     util_append_section output "selected-skills" "$selected_skills"
+    util_append_section output "current-goal" "Goal: ${GOAL:-<not set>}${GOAL:+ — goal-driven mode: keep working autonomously until the goal is fully achieved; do not stop early}"
     util_append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     util_append_section output "context-snapshot" "$stable_context"
     util_append_section output "output-language" "$output_language_reaffirm"
@@ -1468,7 +1478,7 @@ agent_loop_stream() {
 }
 
 agent_loop() {
-    local user_input="$1" turn_kind="${2:-user_input}" _type="" _reason="" had_error=false
+    local user_input="$1" turn_kind="${2:-user_input}" _type="" _reason="" had_error=false gr=""
     INTERRUPT_REQUESTED=false
     [[ "$turn_kind" == user_input ]] && store_event_append "{\"type\":\"user_input\",\"content\":\"$(util_json_escape "$user_input")\"}"
     # events 保留原始占位符；conversation/LLM 追加占位符到本地图片绝对路径的映射。
@@ -1513,6 +1523,16 @@ agent_loop() {
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
+    if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
+        gr=$(llm_goal_call) || { store_event_append '{"type":"error","message":"goal check failed"}'; return 1; }
+        if [[ "$gr" == "GOAL_DONE" ]]; then
+            GOAL=""   # 目标达成：清空，后续输入回归普通模式
+            store_event_append '{"type":"stop","reason":"goal_done"}'
+        else
+            util_write_msg "USER_NOTIFY" "$gr" >> "$NOTIFY_BUF"
+            util_write_msg "NOTIFY_PENDING" >&5 2>/dev/null || true
+        fi
+    fi
     exec 7<&-
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
     $had_error && return 1
@@ -1532,6 +1552,7 @@ Options:
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
   --max-turns N           Max agent turns (default: 1000)
+  --goal TEXT             Goal-driven mode: loop until the judge outputs GOAL_DONE (bypasses --max-turns)
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)
@@ -1572,6 +1593,7 @@ parse_args() {
             --tool-timeout)  TOOL_TIMEOUT_SECS="$2"; shift 2 ;;
             --skill)         SKILL_NAMES+=("$2"); shift 2 ;;
             --max-turns)     MAX_TURNS="$2"; shift 2 ;;
+            --goal)          GOAL="$2"; shift 2 ;;
             --max-context)
                 MAX_CONTEXT_TOKENS=$(util_parse_size "$2") || util_die "Invalid --max-context: $2"
                 shift 2
@@ -1762,6 +1784,7 @@ interactive_mode() {
 
 main() {
     parse_args "$@"
+    [[ -z "${USER_INPUT:-}" && -n "$GOAL" && -t 0 ]] && USER_INPUT="$GOAL"
     util_find_awk_dir
     validate_config
     [[ "${FORK:-}" == true ]] && { local _fs="$(store_session_get_dir)/${SESSION_ID}"; SESSION_ID="$(util_new_session_id)"; store_session_fork "$_fs" "$(store_session_get_dir)/${SESSION_ID}"; }

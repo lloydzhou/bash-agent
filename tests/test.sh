@@ -2728,6 +2728,32 @@ print('yes' if h.get('x-app') == 'cli' or h.get('X-App') == 'cli' or h.get('X-ap
     rm -rf "$home_dir"
 }
 
+# Test 45b: --goal 目标驱动循环
+# 裁判第 1 次调用返回续跑指令（GOAL_CONT_STEP），注入为下一轮 user 消息；
+# 第 2 次调用（会话已含该消息）返回 DONE → STOP goal_done。
+test_agent_goal_loop() {
+    info "Test 45b: Agent --goal driven loop"
+    local home_dir output session_dir event_file conv_file
+    home_dir=$(mktemp -d)
+    session_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)/goal-demo"
+    event_file="$session_dir/events.jsonl"
+    conv_file="$session_dir/conversation.jsonl"
+    output=$(cd "$ROOT_DIR" && BASH_AGENT_HOME="$home_dir" HOME="$home_dir" "$AGENT" --print -p claude --base-url "$BASE/v1" -m test --api-key test --session goal-demo --goal "GOAL_TEST_MARKER finish the report" 'start working' 2>&1) || true
+    if echo "$output" | grep -q '"reason":"goal_done"' && \
+       grep -q 'GOAL_CONT_STEP: write the report file' "$conv_file" && \
+       [[ $(grep -c '"kind":"goal"' "$event_file") -ge 2 ]] && \
+       [[ $(grep -c '"type":"text"' "$event_file") -ge 2 ]]; then
+        green "Agent --goal driven loop"; ((PASS++)) || true
+    else
+        red "Agent --goal driven loop"
+        echo "  Output: $output"
+        echo "  Events: $(cat "$event_file" 2>/dev/null || true)"
+        echo "  Conv: $(cat "$conv_file" 2>/dev/null || true)"
+        ((FAIL++)) || true
+    fi
+    rm -rf "$home_dir"
+}
+
 # Test 46: PlanConfirm mv draft→plan (PL2)
 test_agent_plan_confirm_mv() {
     info "Test 46: PlanConfirm moves draft to plan (PL2)"
@@ -3093,6 +3119,7 @@ test_agent_bash_device_write_block
 test_agent_thinking_format
 test_agent_xapp_header
 test_agent_plan_confirm_mv
+test_agent_goal_loop
 test_agent_system_prompt_format
 test_agent_model_arg
 test_agent_max_tokens_suffix

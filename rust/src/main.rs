@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow, bail};
+use std::io::IsTerminal;
 use rustagent::agent::agent_run;
 use rustagent::config::{Config, OutputFormat, apply_provider_defaults, parse_size_bytes};
 use rustagent::store;
@@ -36,6 +37,11 @@ fn run() -> Result<()> {
     if cfg.list_sessions {
         list_sessions(&home, &cwd)?;
         return Ok(());
+    }
+
+    // --goal 且未提供 prompt（stdin 为 tty）时，以 goal 作为初始任务（对齐 bash 版）
+    if cfg.prompt.is_empty() && !cfg.goal.is_empty() && std::io::stdin().is_terminal() {
+        cfg.prompt = cfg.goal.clone();
     }
 
     apply_provider_defaults(&mut cfg)?;
@@ -79,6 +85,10 @@ fn parse_args(args: Vec<String>) -> Result<Config> {
             }
             "--max-turns" => {
                 cfg.max_turns = require_value(&args, i)?.parse()?;
+                i += 2;
+            }
+            "--goal" => {
+                cfg.goal = require_value(&args, i)?;
                 i += 2;
             }
             "--max-context" => {

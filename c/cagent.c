@@ -82,6 +82,7 @@ int main(int argc, char *argv[]) {
     const char *max_tokens_str = NULL;
     const char *max_turns_str = NULL;
     const char *effort_str = NULL;
+    const char *goal_str = NULL;
     const char *thinking_str = NULL;
     const char *vision_str = NULL;
     const char *tool_timeout_str = NULL;
@@ -137,6 +138,8 @@ int main(int argc, char *argv[]) {
             max_tokens_str = argv[++i];
         } else if (strcmp(argv[i], "--max-turns") == 0 && i + 1 < argc) {
             max_turns_str = argv[++i];
+        } else if (strcmp(argv[i], "--goal") == 0 && i + 1 < argc) {
+            goal_str = argv[++i];
         } else if (strcmp(argv[i], "--effort") == 0 && i + 1 < argc) {
             effort_str = argv[++i];
         } else if (strcmp(argv[i], "--thinking") == 0 && i + 1 < argc) {
@@ -249,6 +252,10 @@ int main(int argc, char *argv[]) {
     const char *home = (env_home && env_home[0]) ? env_home : util_env("HOME", util_home_dir());
 
     /* 判断交互模式 */
+    /* --goal 且未提供 prompt（stdin 是终端）时，以 goal 作为初始任务（对齐 bash 版） */
+    if (!prompt && goal_str && goal_str[0] && isatty(STDIN_FILENO)) {
+        prompt = goal_str;
+    }
     int interactive = force_interactive ||
         (!prompt && isatty(STDIN_FILENO));
 
@@ -336,6 +343,7 @@ int main(int argc, char *argv[]) {
         if (effort_str) { free(agent->effort); agent->effort = util_strdup(effort_str); }
         if (thinking_str) { free(agent->thinking); agent->thinking = util_strdup(thinking_str); }
         if (vision_str) { free(agent->vision); agent->vision = util_strdup(strcmp(vision_str, "on") == 0 ? "on" : "off"); }
+        if (goal_str) { free(agent->goal); agent->goal = util_strdup(goal_str); }
     }
 
     /* 设置 --max-context（已在参数解析阶段校验） */

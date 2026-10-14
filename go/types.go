@@ -25,6 +25,7 @@ type Config struct {
 	BaseURL            string   // API 基础 URL
 	MaxTokens          int      // 最大输出 token
 	MaxTurns           int      // 最大轮次
+	Goal               string   // goal-driven 模式目标（ref #96）
 	MaxContextTokens   int      // 上下文窗口上限
 	ToolTimeoutSecs    int      // 工具超时（秒）
 	OutputFormat       string   // human | stream-json
@@ -249,6 +250,7 @@ type Transport interface {
 	Call(ctx context.Context, messages, systemPrompt, toolDefs string, maxTokens int, thinking string) (<-chan Event, error)
 	// SummaryCall 压缩用的摘要调用
 	SummaryCall(ctx context.Context, droppedMessages, systemPrompt, toolDefs string) (string, Usage, error)
+	GoalCall(ctx context.Context, conversation, systemPrompt, toolDefs, goal string) (string, Usage, error)
 }
 
 // Display 输出显示接口（display_* 4 个方法）

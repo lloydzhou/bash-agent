@@ -1468,12 +1468,26 @@ impl Agent {
 
     pub(crate) fn agent_loop_with_kind(
         &mut self,
-        user_input: String,
+        mut user_input: String,
         turn_kind: &str,
     ) -> Result<()> {
-        let result = self.agent_loop_stream(user_input, turn_kind);
+        let result = self.agent_loop_stream(user_input.clone(), turn_kind);
         self.update_term_title_with_status("idle");
-        result
+        result?;
+        // goal 模式（ref #96）：本轮停止后裁判（会话已完整持久化）；
+        // DONE 记 goal_done；否则续跑指令作为新输入再次运行（对齐 bash INPUT_FIFO 重新入队）
+        if turn_kind == "user_input" && !self.cfg.goal.is_empty() && !self.is_interrupted() {
+            loop {
+                let gr = self.goal_call()?;
+                if gr == "GOAL_DONE" {
+                    let _ = self.emit_and_append_event(json!({"type":"stop","reason":"goal_done"}))?;
+                    break;
+                }
+                user_input = gr;
+                self.agent_loop_stream(user_input.clone(), "user_input")?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn agent_loop_stream(&mut self, user_input: String, turn_kind: &str) -> Result<()> {
@@ -1802,6 +1816,7 @@ impl Agent {
             summary_file: self.paths.summary.clone(),
             plan_file: self.paths.plan.clone(),
             plan_draft_file: self.paths.plan_draft.clone(),
+            goal: self.cfg.goal.clone(),
         }
         .build_system_prompt()
     }
@@ -2130,6 +2145,68 @@ impl Agent {
             );
         }
         Ok(out)
+    }
+
+    /// goal 裁判（ref #96）：DONE=达成（归一化精确匹配）；否则输出续跑指令，由调用方重新入队。
+    /// 读取完整会话，缓存对齐同 summary。
+    fn goal_call(&mut self) -> Result<String> {
+        let instruction = "You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token GOAL_DONE — exactly as written (uppercase, with the underscore).. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: ".to_string() + &self.cfg.goal;
+        let all = self.conv.lines()?;
+        let mut messages: Vec<Value> = all.clone();
+        messages.push(json!({"role":"user","content":instruction}));
+        if self.cfg.vision {
+            crate::vision::expand_vision_messages(&mut messages)?;
+        }
+        let system_prompt = self.build_system_prompt()?;
+        let claude_body = build_claude_request(
+            &self.cfg,
+            &messages,
+            &self.tools_json,
+            &system_prompt,
+            200,
+            "disabled",
+            &self.cfg.effort,
+        )?;
+        let body = self.transport.convert_body(&claude_body)?;
+        let resp = self.http.post(&self.api_url, &self.headers(), &body)?;
+        let (channel_reader, _cancel) = self.http_stream(resp);
+        let mut out = String::new();
+        let mut parse_emit = |evt: Event| -> Result<()> {
+            match evt {
+                Event::Text(TextEvent { content }) => out.push_str(&content),
+                Event::Usage(usage) => {
+                    let _ = self.emit_and_append_event(json!({
+                        "type":"usage",
+                        "input_tokens":usage.input_tokens,
+                        "output_tokens":usage.output_tokens,
+                        "cache_read_input_tokens":usage.cache_read_input_tokens,
+                        "cache_creation_input_tokens":usage.cache_creation_input_tokens,
+                        "kind":"goal"
+                    }))?;
+                }
+                _ => {}
+            }
+            Ok(())
+        };
+        self.transport
+            .parse_sse(Box::new(channel_reader), &mut parse_emit)?;
+        if out.is_empty() {
+            bail!("goal check failed: empty response");
+        }
+        let norm: String = out
+            .chars()
+            .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+            .flat_map(|c| c.to_uppercase())
+            .collect();
+        if norm == "GOAL_DONE" {
+            return Ok("GOAL_DONE".to_string());
+        }
+        // 非 DONE（含翻译变体）→ 原样作为续跑指令；空则兜底
+        let mut instruction = out.trim().to_string();
+        if instruction.is_empty() {
+            instruction = "Continue working toward the goal.".to_string();
+        }
+        Ok(instruction)
     }
 
     /// 通过 mpsc channel 流式传输 HTTP 响应体，100ms 轮询 interrupted + CTRLC_FLAG 实现可中断。

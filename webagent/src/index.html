@@ -291,6 +291,7 @@ html[data-theme=light] .diff .dl.del .ln { background:
 .sysrow .sysmsg { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .sysrow.stderr .sysmsg { font-family: var(--font-code); font-size: 12px; line-height: 18px;
   color: var(--label-tertiary); }
+.sysrow.goal .tag, .sysrow.goal-done .tag { color: var(--brand); }
 
 /* 错误行（对齐 turnErrorRow） */
 .errorrow { display: grid; grid-template-columns: 10px minmax(0,1fr); column-gap: 8px;
@@ -1341,7 +1342,10 @@ var CFG = __WEBAGENT_CONFIG__;
         }
         case 'process_exit': finishStream(); setWorking(null); break;
         case 'error': finishStream(); setWorking(null); addError('错误', event.message || ''); break;
-        case 'stop': finishStream(); setWorking(null); break;
+        case 'stop':
+          finishStream(); setWorking(null);
+          if (event.reason === 'goal_done') addSystem('目标', '已达成', 'goal-done');
+          break;
         default: addSystem('', raw);
       }
     }
