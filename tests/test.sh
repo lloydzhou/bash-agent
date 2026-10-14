@@ -2733,14 +2733,6 @@ print('yes' if h.get('x-app') == 'cli' or h.get('X-App') == 'cli' or h.get('X-ap
 # 第 2 次调用（会话已含该消息）返回 DONE → STOP goal_done。
 test_agent_goal_loop() {
     info "Test 45b: Agent --goal driven loop"
-    # --goal 目前仅 bash 版实现（Go/Rust/C 随后跟进，ref #96）；其他 runtime 跳过
-    case "$AGENT" in
-        *agent.sh) ;;
-        *)
-            green "Agent --goal driven loop (skipped: non-bash runtime)"; ((PASS++)) || true
-            return 0
-            ;;
-    esac
     local home_dir output session_dir event_file conv_file
     home_dir=$(mktemp -d)
     session_dir="$home_dir/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)/goal-demo"

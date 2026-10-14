@@ -81,6 +81,10 @@ fn parse_args(args: Vec<String>) -> Result<Config> {
                 cfg.max_turns = require_value(&args, i)?.parse()?;
                 i += 2;
             }
+            "--goal" => {
+                cfg.goal = require_value(&args, i)?;
+                i += 2;
+            }
             "--max-context" => {
                 let val = require_value(&args, i)?;
                 cfg.max_context_tokens = parse_size_bytes(&val)

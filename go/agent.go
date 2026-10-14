@@ -358,7 +358,12 @@ func (a *Agent) BuildPrompt() string {
 	appendSection("selected-skills", strings.TrimRight(selectedSkills.String(), "\n"), "")
 
 	// current goal — bash parity: 槽位常驻；<not set> 占位直到 go 端实现 --goal（ref #96）
-	appendSection("current-goal", "Goal: <not set>", "")
+	// current goal — bash parity（ref #96）
+	goalSection := "Goal: <not set>"
+	if a.cfg.Goal != "" {
+		goalSection = "Goal: " + a.cfg.Goal + " — goal-driven mode: keep working until fully achieved; when done, reply DONE"
+	}
+	appendSection("current-goal", goalSection, "")
 
 	// current plan (with plan file name as attribute)
 	if plan, err := a.store.GetPlan(); err == nil && plan != "" {
@@ -947,6 +952,36 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 		if phaseFatalErr != nil {
 			a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
 			return phaseFatalErr
+		}
+
+		// goal 模式（ref #96）：本轮停止后裁判（会话已完整持久化）；DONE 记 goal_done，否则续跑指令作为新 phase 重新入队
+		if a.cfg.Goal != "" {
+			conversation, convErr := a.store.GetMessages()
+			if convErr == nil {
+				goalReply, goalUsage, goalErr := a.llm.GoalCall(ctx, conversation, a.BuildPrompt(), a.toolDefs, a.cfg.Goal)
+				if goalErr != nil {
+					a.emitJSON(map[string]interface{}{"type": "error", "message": "goal check failed"})
+					a.display.SetTitle(a.store.FormatTitle(a.cfg.Model, "idle"))
+					return goalErr
+				}
+				if goalUsage.InputTokens > 0 || goalUsage.OutputTokens > 0 || goalUsage.CacheRead > 0 || goalUsage.CacheWrite > 0 {
+					a.emitJSON(map[string]interface{}{
+						"type":                    "usage",
+						"input_tokens":            goalUsage.InputTokens,
+						"output_tokens":           goalUsage.OutputTokens,
+						"cache_read_input_tokens": goalUsage.CacheRead,
+						"cache_creation_input_tokens": goalUsage.CacheWrite,
+						"kind":                    "goal",
+					})
+				}
+				if goalReply == "DONE" {
+					a.emitJSON(map[string]interface{}{"type": "stop", "reason": "goal_done"})
+					break
+				}
+				userInput = goalReply
+				turnKind = "user_input"
+				continue
+			}
 		}
 		break
 	}

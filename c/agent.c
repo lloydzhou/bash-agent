@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <signal.h>
@@ -799,6 +800,104 @@ int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) 
  * agent_loop — 单次 LLM 对话循环
  * ============================================================ */
 
+/* ============================================================
+ * goal 裁判（ref #96）— 对完整会话判定目标是否达成。
+ * 返回 malloc 的 "DONE" 或续跑指令（调用方负责 free）；失败返回 NULL。
+ * 读取完整会话 + 裁判指令，缓存对齐同 summary。
+ * ============================================================ */
+static char *agent_goal_judge(Agent *agent) {
+    char **lines = NULL;
+    int line_count = 0;
+    if (store_conv_line_count(agent->paths.conversation, &lines, &line_count) != 0) return NULL;
+
+    StrBuf ins;
+    sb_init(&ins);
+    sb_append(&ins,
+        "You are the goal-completion judge. Judge the conversation above against the goal below. "
+        "Reply EXACTLY \"DONE\" if fully achieved, "
+        "otherwise reply one short actionable instruction for what remains (it becomes the agent next task). "
+        "Goal: ");
+    sb_append(&ins, agent->goal ? agent->goal : "");
+
+    char **judge_lines = malloc(sizeof(char *) * (size_t)(line_count + 1));
+    if (!judge_lines) {
+        for (int i = 0; i < line_count; i++) free(lines[i]);
+        free(lines);
+        sb_free(&ins);
+        return NULL;
+    }
+    StrBuf instr_line;
+    sb_init(&instr_line);
+    sb_append(&instr_line, "{\"role\":\"user\",\"content\":");
+    sb_append_json_string(&instr_line, ins.data);
+    sb_append(&instr_line, "}");
+    for (int i = 0; i < line_count; i++) judge_lines[i] = lines[i];
+    judge_lines[line_count] = instr_line.data;
+
+    char *system_prompt = agent_build_prompt(agent);
+    char *body = build_claude_request(
+        agent->model, system_prompt, embedded_tools_json,
+        judge_lines, line_count + 1,
+        200, "disabled", agent->effort, agent->vision);
+    free(system_prompt);
+    if (!body) {
+        for (int i = 0; i < line_count; i++) free(lines[i]);
+        free(lines);
+        free(judge_lines);
+        free(instr_line.data);
+        sb_free(&ins);
+        return NULL;
+    }
+    if (strcmp(agent->provider, "openai") == 0) {
+        char *openai_body = convert_to_openai(body);
+        free(body);
+        body = openai_body;
+    } else if (strcmp(agent->provider, "responses") == 0) {
+        char *responses_body = convert_to_responses(body);
+        free(body);
+        body = responses_body;
+    }
+
+    const char *headers[8];
+    char auth_header[512];
+    int hdr_count = 0;
+    headers[hdr_count++] = "Content-Type: application/json";
+    if (strcmp(agent->provider, "claude") == 0) {
+        headers[hdr_count++] = "x-app: cli";
+        snprintf(auth_header, sizeof(auth_header), "x-api-key: %s", agent->api_key);
+        headers[hdr_count++] = auth_header;
+        headers[hdr_count++] = "anthropic-version: 2023-06-01";
+    } else {
+        snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", agent->api_key);
+        headers[hdr_count++] = auth_header;
+    }
+
+    SseAccumulator accum;
+    sse_accum_init(&accum);
+    int rc = http_post_sse(agent->api_url, headers, hdr_count,
+                           body, strlen(body), agent->provider,
+                           sse_accum_callback, &accum, &agent->interrupted);
+    free(body);
+    for (int i = 0; i < line_count; i++) free(lines[i]);
+    free(lines);
+    free(judge_lines);
+    free(instr_line.data);
+    sb_free(&ins);
+
+    if (rc != 0 || accum.text.len == 0) { sse_accum_free(&accum); return NULL; }
+    /* 归一化 DONE：去空白与标点 + 大写后精确匹配 */
+    StrBuf norm;
+    sb_init(&norm);
+    for (const char *p = accum.text.data; p && *p; p++) {
+        if (isspace((unsigned char)*p) || ispunct((unsigned char)*p)) continue;
+        sb_append_char(&norm, (char)toupper((unsigned char)*p));
+    }
+    char *result = (strcmp(norm.data, "DONE") == 0) ? util_strdup("DONE") : util_strdup(accum.text.data);
+    sb_free(&norm);
+    sse_accum_free(&accum);
+    return result;
+}
+
 int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
     int is_notify = (turn_kind != NULL && strcmp(turn_kind, "notify") == 0);
     if ((!user_input || !user_input[0]) && !is_notify) return 0;
@@ -1345,6 +1444,37 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
         push_display_event(&agent->paths, agent->display_queue, dm);
     }
 
+    /* goal 模式（ref #96）：本轮停止后裁判（会话已完整持久化）；DONE 记 goal_done，
+     * 否则续跑指令作为 MSG_USER_INPUT 重新入队，由 agent_main_loop 开启新一轮 */
+    if (agent->goal && agent->goal[0] && !agent->interrupted && turn < agent->max_turns) {
+        char *gr = agent_goal_judge(agent);
+        if (!gr) {
+            DisplayMessage *em = malloc(sizeof(DisplayMessage));
+            *em = display_msg_error("goal check failed");
+            push_display_event(&agent->paths, agent->display_queue, em);
+            return -1;
+        }
+        if (strcmp(gr, "DONE") == 0) {
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_stop("goal_done");
+            push_display_event(&agent->paths, agent->display_queue, dm);
+            free(gr);
+            return 0;
+        }
+        InputMessage *msg = malloc(sizeof(InputMessage));
+        if (msg) {
+            memset(msg, 0, sizeof(*msg));
+            msg->type = MSG_USER_INPUT;
+            msg->data.user_input.text = gr; /* 所有权转移给队列 */
+            if (mq_push(agent->input_queue, msg) != 0) {
+                input_message_free(msg);
+                free(msg);
+            }
+            return 0;
+        }
+        free(gr);
+    }
+
     /* agent_loop 结束：恢复 idle 标题 + 清除 progress indicator */
 
     free(expanded_input);
@@ -1544,8 +1674,10 @@ int agent_main_loop(Agent *agent) {
         input_message_free(msg);
         free(msg);
 
-        /* 非交互模式且无活跃子 agent 时退出 */
-        if (!agent->interactive && agent->active_task_count <= 0) break;
+        /* 非交互模式且无活跃子 agent 且无待处理输入时退出
+         * （goal 模式的续跑指令会重新入队为新输入，需继续消费；ref #96） */
+        if (!agent->interactive && agent->active_task_count <= 0 &&
+            mq_count(agent->input_queue) == 0) break;
     }
     return 0;
 }
@@ -2396,8 +2528,16 @@ char *agent_build_prompt(Agent *agent) {
         sb_free(&skills);
     }
 
-    /* 10.5 current-goal — bash parity: 槽位常驻；<not set> 占位直到 c 端实现 --goal（ref #96） */
-    prompt_append_section(&buf, "current-goal", "Goal: <not set>", NULL);
+    /* 10.5 current-goal — bash parity（ref #96） */
+    if (agent->goal && agent->goal[0]) {
+        char goal_buf[4096];
+        snprintf(goal_buf, sizeof(goal_buf),
+                 "Goal: %s — goal-driven mode: keep working until fully achieved; when done, reply DONE",
+                 agent->goal);
+        prompt_append_section(&buf, "current-goal", goal_buf, NULL);
+    } else {
+        prompt_append_section(&buf, "current-goal", "Goal: <not set>", NULL);
+    }
 
     /* 11. current-plan */
     {

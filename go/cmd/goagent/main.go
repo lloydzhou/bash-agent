@@ -46,6 +46,7 @@ func main() {
 		toolTimeout  int
 		skills       stringSlice
 		maxTurns     int
+		goal         string
 		maxContext   string
 		apiKey       string
 		baseURL      string
@@ -70,6 +71,7 @@ func main() {
 	flag.IntVar(&toolTimeout, "tool-timeout", 600, "Tool execution timeout in seconds")
 	flag.Var(&skills, "skill", "Load a skill (repeatable)")
 	flag.IntVar(&maxTurns, "max-turns", 1000, "Max agent turns")
+	flag.StringVar(&goal, "goal", "", "Goal-driven mode: loop until the judge outputs DONE (bypasses --max-turns)")
 	flag.StringVar(&maxContext, "max-context", "200000", "Max context tokens before compact")
 	flag.StringVar(&apiKey, "api-key", "", "API key (default from env)")
 	flag.StringVar(&baseURL, "base-url", "", "Override API base URL")
@@ -128,6 +130,7 @@ Examples:
 	cfg.OutputFormat = outputFormat
 	cfg.ToolTimeoutSecs = toolTimeout
 	cfg.MaxTurns = maxTurns
+	cfg.Goal = goal
 	cfg.SkillNames = []string(skills)
 	applyThinkingOptions(&cfg, thinking, effort)
 	if vision != "" {
