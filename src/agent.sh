@@ -1793,7 +1793,6 @@ interactive_mode() {
 
 main() {
     parse_args "$@"
-    # --goal 且未提供 prompt（stdin 为 tty）时，以 goal 作为初始任务
     [[ -z "${USER_INPUT:-}" && -n "$GOAL" && -t 0 ]] && USER_INPUT="$GOAL"
     util_find_awk_dir
     validate_config
