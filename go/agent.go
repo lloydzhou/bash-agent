@@ -358,7 +358,7 @@ func (a *Agent) BuildPrompt() string {
 	appendSection("selected-skills", strings.TrimRight(selectedSkills.String(), "\n"), "")
 
 	// current goal — bash parity: 槽位常驻；<not set> 占位直到 go 端实现 --goal（ref #96）
-	appendSection("current-goal", "<not set>", "")
+	appendSection("current-goal", "Goal: <not set>", "")
 
 	// current plan (with plan file name as attribute)
 	if plan, err := a.store.GetPlan(); err == nil && plan != "" {

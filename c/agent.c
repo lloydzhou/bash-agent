@@ -2397,7 +2397,7 @@ char *agent_build_prompt(Agent *agent) {
     }
 
     /* 10.5 current-goal — bash parity: 槽位常驻；<not set> 占位直到 c 端实现 --goal（ref #96） */
-    prompt_append_section(&buf, "current-goal", "<not set>", NULL);
+    prompt_append_section(&buf, "current-goal", "Goal: <not set>", NULL);
 
     /* 11. current-plan */
     {

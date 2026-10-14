@@ -613,20 +613,16 @@ llm_summary_call() {
     printf '%s' "$text"
 }
 
-# goal 裁判（ref #96）：对完整会话判定目标是否达成。输出 DONE（达成，归一化精确匹配）
-# 或续跑指令（未达成，由调用方注入为下一轮 user 消息）。与主循环共享 prompt+会话前缀（缓存对齐）。
+# goal 裁判（ref #96）：DONE=达成（归一化精确匹配）；否则输出续跑指令，经 INPUT_FIFO 重新入队
 llm_goal_call() {
-    local t="" messages ins=$'You are the goal-completion judge. Judge the conversation above against the goal below. Reply with EXACTLY one of:\nDONE — the goal has been fully achieved\nOtherwise: one short, actionable instruction describing what remains (it will be sent to the agent as its next task)\nGoal: '"$GOAL"
+    local t="" messages ins=$'You are the goal-completion judge. Judge the conversation above against the goal below. Reply EXACTLY "DONE" if fully achieved, otherwise reply one short actionable instruction for what remains (it becomes the agent next task). Goal: '"$GOAL"
     messages=$(store_conv_get_messages) || return 1
     while util_read_msg; do
-        case "${REPLY_MESSAGE[0]}" in
-            TEXT) t+="${REPLY_MESSAGE[1]}" ;;
-            USAGE) agent_record_usage goal goal_request_count >/dev/null ;;
-        esac
+        case "${REPLY_MESSAGE[0]}" in TEXT) t+="${REPLY_MESSAGE[1]}" ;; USAGE) agent_record_usage goal goal_request_count >/dev/null ;; esac
     done < <(llm_call "${messages%]}, {\"role\":\"user\",\"content\":\"$(util_json_escape "$ins")\"}]" 200 disabled)
     [[ -n "$t" ]] || return 1
-    local norm; norm=$(printf '%s' "$t" | tr -d '[:space:][:punct:]' | tr '[:lower:]' '[:upper:]')
-    [[ "$norm" == "DONE" ]] && printf 'DONE' || printf '%s' "$t"
+    local n; n=$(printf '%s' "$t" | tr -d '[:space:][:punct:]' | tr '[:lower:]' '[:upper:]')
+    [[ "$n" == "DONE" ]] && printf 'DONE' || printf '%s' "$t"
 }
 # tool
 tool_dispatch() {
@@ -1267,8 +1263,7 @@ agent_build_prompt() {
     util_append_section output "instruction-files" "$instruction_files"
     util_append_section output "skill-index" "$skill_index"
     util_append_section output "selected-skills" "$selected_skills"
-    util_append_section output "current-goal" "${GOAL:+Goal: $GOAL. Goal-driven mode: keep working until fully achieved; when done, reply DONE}"
-    [[ -n "$GOAL" ]] || util_append_section output "current-goal" "<not set>"
+    util_append_section output "current-goal" "Goal: ${GOAL:-<not set>}${GOAL:+ — goal-driven mode: keep working until fully achieved; when done, reply DONE}"
     util_append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     util_append_section output "context-snapshot" "$stable_context"
     util_append_section output "output-language" "$output_language_reaffirm"
@@ -1532,18 +1527,11 @@ agent_loop() {
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
-    # goal 模式（ref #96）：本轮停止后裁判判定（此时会话已完整持久化）。
-    # DONE → 以 goal_done 终止；否则续跑指令经 INPUT_FIFO 重新入队为新输入，
-    # 由 agent_main_loop 开启新一轮——原 agent_loop_stream 循环零改动。
+    # goal（ref #96）：本轮停止后裁判（会话已完整持久化）；DONE 记 goal_done，否则续跑指令重新入队
     if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
-        gr=$(llm_goal_call) || {
-            store_event_append '{"type":"error","message":"goal check failed"}'
-            util_write_msg "ERROR" "Goal check failed"
-            return 1
-        }
+        gr=$(llm_goal_call) || { store_event_append '{"type":"error","message":"goal check failed"}'; return 1; }
         if [[ "$gr" == "DONE" ]]; then
             store_event_append '{"type":"stop","reason":"goal_done"}'
-            util_is_stream_json || ( util_write_msg "STOP" "goal_done" ) >&4 2>/dev/null || true
         else
             util_write_msg "USER_INPUT" "0" "$gr" >&5
         fi
