@@ -613,13 +613,10 @@ llm_summary_call() {
     printf '%s' "$text"
 }
 
-# goal 裁判（ref #96）：DONE=达成（归一化精确匹配）；否则输出续跑指令，经 INPUT_FIFO 重新入队
 llm_goal_call() {
     local t="" messages ins=$'You are the goal-completion judge. Judge the conversation above against the goal below. Reply EXACTLY "DONE" if fully achieved, otherwise reply one short actionable instruction for what remains (it becomes the agent next task). Goal: '"$GOAL"
     messages=$(store_conv_get_messages) || return 1
-    while util_read_msg; do
-        case "${REPLY_MESSAGE[0]}" in TEXT) t+="${REPLY_MESSAGE[1]}" ;; USAGE) agent_record_usage goal goal_request_count >/dev/null ;; esac
-    done < <(llm_call "${messages%]}, {\"role\":\"user\",\"content\":\"$(util_json_escape "$ins")\"}]" 200 disabled)
+    while util_read_msg; do case "${REPLY_MESSAGE[0]}" in TEXT) t+="${REPLY_MESSAGE[1]}" ;; USAGE) agent_record_usage goal goal_request_count >/dev/null ;; esac; done < <(llm_call "${messages%]}, {\"role\":\"user\",\"content\":\"$(util_json_escape "$ins")\"}]" 200 disabled)
     [[ -n "$t" ]] || return 1
     local n; n=$(printf '%s' "$t" | tr -d '[:space:][:punct:]' | tr '[:lower:]' '[:upper:]')
     [[ "$n" == "DONE" ]] && printf 'DONE' || printf '%s' "$t"
@@ -1527,14 +1524,9 @@ agent_loop() {
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
-    # goal（ref #96）：本轮停止后裁判（会话已完整持久化）；DONE 记 goal_done，否则续跑指令重新入队
     if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
         gr=$(llm_goal_call) || { store_event_append '{"type":"error","message":"goal check failed"}'; return 1; }
-        if [[ "$gr" == "DONE" ]]; then
-            store_event_append '{"type":"stop","reason":"goal_done"}'
-        else
-            util_write_msg "USER_INPUT" "0" "$gr" >&5
-        fi
+        if [[ "$gr" == "DONE" ]]; then store_event_append '{"type":"stop","reason":"goal_done"}'; else util_write_msg "USER_INPUT" "0" "$gr" >&5; fi
     fi
     exec 7<&-
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
