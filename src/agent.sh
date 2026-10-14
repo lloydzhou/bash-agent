@@ -614,10 +614,9 @@ llm_summary_call() {
 }
 
 llm_goal_call() {
-    local t="" messages ins=$'You are the goal-completion judge. Judge the conversation above against the goal below. Reply EXACTLY "DONE" if fully achieved, otherwise reply one short actionable instruction for what remains (it becomes the agent next task). Goal: '"$GOAL"
+    local t="" messages ins="You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token DONE — exactly the uppercase word \"DONE\" and nothing else. Do NOT reply 已完成, 完成任务, \"Task complete\", or any other translated or paraphrased variant: any reply that is not exactly DONE will be treated as a continuation instruction and sent back to the agent. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: $GOAL"
     messages=$(store_conv_get_messages) || return 1
     while util_read_msg; do case "${REPLY_MESSAGE[0]}" in TEXT) t+="${REPLY_MESSAGE[1]}" ;; USAGE) agent_record_usage goal goal_request_count >/dev/null ;; esac; done < <(llm_call "${messages%]}, {\"role\":\"user\",\"content\":\"$(util_json_escape "$ins")\"}]" 200 disabled)
-    [[ -n "$t" ]] || return 1
     local n; n=$(printf '%s' "$t" | tr -d '[:space:][:punct:]' | tr '[:lower:]' '[:upper:]')
     [[ "$n" == "DONE" ]] && printf 'DONE' || printf '%s' "$t"
 }
@@ -1260,7 +1259,7 @@ agent_build_prompt() {
     util_append_section output "instruction-files" "$instruction_files"
     util_append_section output "skill-index" "$skill_index"
     util_append_section output "selected-skills" "$selected_skills"
-    util_append_section output "current-goal" "Goal: ${GOAL:-<not set>}${GOAL:+ — goal-driven mode: keep working until fully achieved; when done, reply DONE}"
+    util_append_section output "current-goal" "Goal: ${GOAL:-<not set>}${GOAL:+ — goal-driven mode: keep working autonomously until the goal is fully achieved; do not stop early}"
     util_append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     util_append_section output "context-snapshot" "$stable_context"
     util_append_section output "output-language" "$output_language_reaffirm"
@@ -1526,7 +1525,14 @@ agent_loop() {
     done
     if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
         gr=$(llm_goal_call) || { store_event_append '{"type":"error","message":"goal check failed"}'; return 1; }
-        if [[ "$gr" == "DONE" ]]; then store_event_append '{"type":"stop","reason":"goal_done"}'; else util_write_msg "USER_INPUT" "0" "$gr" >&5; fi
+        if [[ "$gr" == "DONE" ]]; then
+            store_event_append '{"type":"stop","reason":"goal_done"}'
+        else
+            # 续跑指令走 NOTIFY 路径：同步写 NOTIFY_BUF + 唤醒 notify turn
+            # （终端显示 [user inject] [goal] ...；NOTIFY_BUF 非空时 SESSION_END 不写入，链条存活）
+            util_write_msg "USER_NOTIFY" "[goal] $gr" >> "$NOTIFY_BUF"
+            util_write_msg "NOTIFY_PENDING" >&5 2>/dev/null || true
+        fi
     fi
     exec 7<&-
     rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
