@@ -272,6 +272,14 @@ Examples:
 	// 运行
 	ctx := context.Background()
 
+	// --goal 且未提供 prompt（stdin 是终端）时，以 goal 作为初始任务（对齐 bash 版）
+	if userInput == "" && cfg.Goal != "" {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) != 0 {
+			userInput = cfg.Goal
+		}
+	}
+
 	if interactive {
 		runInteractive(ctx, a, store, display, home, cfg.Model, userInput)
 	} else if userInput != "" {

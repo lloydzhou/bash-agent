@@ -252,6 +252,10 @@ int main(int argc, char *argv[]) {
     const char *home = (env_home && env_home[0]) ? env_home : util_env("HOME", util_home_dir());
 
     /* 判断交互模式 */
+    /* --goal 且未提供 prompt（stdin 是终端）时，以 goal 作为初始任务（对齐 bash 版） */
+    if (!prompt && goal_str && goal_str[0] && isatty(STDIN_FILENO)) {
+        prompt = goal_str;
+    }
     int interactive = force_interactive ||
         (!prompt && isatty(STDIN_FILENO));
 
