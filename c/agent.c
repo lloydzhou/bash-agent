@@ -885,6 +885,21 @@ static char *agent_goal_judge(Agent *agent) {
     sb_free(&ins);
 
     if (rc != 0 || accum.text.len == 0) { sse_accum_free(&accum); return NULL; }
+
+    /* 记录裁判 token 消耗（kind=goal，对齐 bash/go/rust） */
+    if (accum.in_tokens > 0 || accum.out_tokens > 0 ||
+        accum.cache_read_tokens > 0 || accum.cache_creation_tokens > 0) {
+        StrBuf evt;
+        sb_init(&evt);
+        sb_appendf(&evt, "{\"type\":\"usage\",\"input_tokens\":%d,\"output_tokens\":%d",
+                   accum.in_tokens, accum.out_tokens);
+        sb_appendf(&evt, ",\"cache_read_input_tokens\":%d,\"cache_creation_input_tokens\":%d",
+                   accum.cache_read_tokens, accum.cache_creation_tokens);
+        sb_append(&evt, ",\"kind\":\"goal\"}");
+        store_event_append(&agent->paths, evt.data);
+        sb_free(&evt);
+    }
+
     /* 归一化 DONE：去空白与标点 + 大写后精确匹配 */
     StrBuf norm;
     sb_init(&norm);
