@@ -4,11 +4,25 @@
 
 ---
 
-## [Unreleased]
+## [4.3.9] - 2026-10-14
+
+> **goal 目标驱动循环（四运行时）**：新增 `--goal "<目标>"`，agent 每次停止时由独立裁判调用判定目标是否达成——达成则输出字面 `GOAL_DONE` 终止（`stop goal_done`），未达成则将裁判给出的下一步指令作为新输入自动继续，直到目标完成。Bash/Go/Rust/C 四端同步实现。
 
 ### Added
 
-- **`--goal` 目标驱动循环（Bash 版）**：`--goal "<目标>"` 让 loop 绕过 `MAX_TURNS` 持续运行，模型每次想停下时由裁判调用（`llm_goal_call`）判定——输出 `DONE` 则以 `STOP goal_done` 结束，否则其输出作为续跑指令注入为下一轮 user 消息（reflexion 模式）。裁判调用与主循环共享 system prompt + conversation 前缀（缓存对齐，同 compact 设计）；新增通用 `llm_side_call` 与 `llm_summary_call` 共用流消费/记账路径；system prompt 新增常驻 `current-goal` 槽位（未设置时 `<not set>` 占位）。裁判失败按错误退出，Ctrl+C / LLM error / max_tokens 仍为硬退出。**Go/Rust/C 三端已同步实现**（Go: 外层 phase 循环 requeue + transport.GoalCall；Rust: agent_loop_with_kind 判定 + goal_call；C: agent_goal_judge + INPUT_QUEUE 重新入队，非交互主循环在有排队输入时不退出）。
+- **`--goal` 目标驱动模式**：`--goal "<目标>"` 启用 goal 模式（system prompt 注入常驻 `current-goal` 槽位）；模型每次停止（end_turn）时由独立裁判调用判定——输出字面 `GOAL_DONE` 则以 `stop goal_done` 终止并清空 goal 状态，否则其输出（下一步指令）作为新输入自动继续（reflexion 模式）。裁判调用与主循环共享 system prompt + conversation 前缀（缓存对齐，同 compact 设计）。裁判失败按错误退出；Ctrl+C / LLM error / max_tokens 仍为硬退出。
+- **四运行时一致实现**：Bash（裁判 + USER_NOTIFY 路径重新入队，notify turn 渲染 `[user inject]`）；Go（`transport.GoalCall` + 外层 phase 循环 requeue）；Rust（`goal_call` + `agent_loop_with_kind` 停止后判定）；C（`agent_goal_judge` + MSG_USER_INPUT 重新入队，非交互主循环在有排队输入时不退出）。裁判输出契约：字面 `GOAL_DONE`（归一化精确匹配，明确禁止 已完成 等翻译变体）；非 GOAL_DONE 一律原样作为续跑指令（回退语义）。
+- **`--goal` 单独使用**：未提供 prompt 且 stdin 为终端时，以 goal 作为初始任务直接开始执行（四运行时一致）。
+
+### Changed
+
+- **system prompt 新增常驻 `current-goal` 槽位**：未设置 goal 时为 `Goal: <not set>` 占位；设置后为持久性指引（自主持续推进、不提前停止）。终止判断唯一归属裁判，不要求模型在正文输出 DONE。
+
+### Fixed
+
+- **裁判输出健壮性**：归一化判定（去空白/标点 + 大写）精确匹配 `GOAL_DONE`，明确禁止 已完成 等翻译变体与确认式回复；非 GOAL_DONE 输出原样作为续跑指令（含空响应兜底），裁判失败按错误退出。
+- **C 退出条件**：非交互主循环在输入队列有排队消息（goal 续跑指令）时不提前退出。
+- **C goal 裁判 usage 事件**：补齐 `kind=goal` 的 usage 事件记录（对齐其他运行时）。
 
 ---
 
