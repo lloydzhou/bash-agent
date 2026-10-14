@@ -1340,7 +1340,7 @@ pub mod prompt {
                 "Goal: <not set>".to_string()
             } else {
                 format!(
-                    "Goal: {} — goal-driven mode: keep working until fully achieved; when done, reply DONE",
+                    "Goal: {} — goal-driven mode: keep working autonomously until the goal is fully achieved; do not stop early",
                     self.goal
                 )
             };

@@ -614,11 +614,11 @@ llm_summary_call() {
 }
 
 llm_goal_call() {
-    local t="" messages ins="You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token DONE — exactly the uppercase word \"DONE\" and nothing else. Do NOT reply 已完成, 完成任务, \"Task complete\", or any other translated or paraphrased variant: any reply that is not exactly DONE will be treated as a continuation instruction and sent back to the agent. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: $GOAL"
+    local t="" messages ins="You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token GOAL_DONE — exactly as written (uppercase, with the underscore).. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: $GOAL"
     messages=$(store_conv_get_messages) || return 1
     while util_read_msg; do case "${REPLY_MESSAGE[0]}" in TEXT) t+="${REPLY_MESSAGE[1]}" ;; USAGE) agent_record_usage goal goal_request_count >/dev/null ;; esac; done < <(llm_call "${messages%]}, {\"role\":\"user\",\"content\":\"$(util_json_escape "$ins")\"}]" 200 disabled)
     local n; n=$(printf '%s' "$t" | tr -d '[:space:][:punct:]' | tr '[:lower:]' '[:upper:]')
-    [[ "$n" == "DONE" ]] && printf 'DONE' || printf '%s' "$t"
+    [[ "$n" == "GOAL_DONE" ]] && printf 'GOAL_DONE' || printf '%s' "$t"
 }
 # tool
 tool_dispatch() {
@@ -1525,12 +1525,11 @@ agent_loop() {
     done
     if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
         gr=$(llm_goal_call) || { store_event_append '{"type":"error","message":"goal check failed"}'; return 1; }
-        if [[ "$gr" == "DONE" ]]; then
+        if [[ "$gr" == "GOAL_DONE" ]]; then
+            GOAL=""   # 目标达成：清空，后续输入回归普通模式
             store_event_append '{"type":"stop","reason":"goal_done"}'
         else
-            # 续跑指令走 NOTIFY 路径：同步写 NOTIFY_BUF + 唤醒 notify turn
-            # （终端显示 [user inject] [goal] ...；NOTIFY_BUF 非空时 SESSION_END 不写入，链条存活）
-            util_write_msg "USER_NOTIFY" "[goal] $gr" >> "$NOTIFY_BUF"
+            util_write_msg "USER_NOTIFY" "$gr" >> "$NOTIFY_BUF"
             util_write_msg "NOTIFY_PENDING" >&5 2>/dev/null || true
         fi
     fi
@@ -1553,7 +1552,7 @@ Options:
   --tool-timeout N        Tool execution timeout in seconds (default: 600)
   --skill NAME            Load a skill from .claude/skills/NAME/SKILL.md (fallback: ~/.claude/skills)
   --max-turns N           Max agent turns (default: 1000)
-  --goal TEXT             Goal-driven mode: loop until the judge outputs DONE (bypasses --max-turns)
+  --goal TEXT             Goal-driven mode: loop until the judge outputs GOAL_DONE (bypasses --max-turns)
   --max-context N         Max context tokens before compact (default: 200000; supports k/m)
   --api-key KEY           API key (default from env)
   --base-url URL          Override API base URL (for Ollama, DeepSeek, etc.)

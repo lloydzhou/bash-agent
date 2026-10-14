@@ -175,7 +175,7 @@ func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, system
 // GoalCall goal 裁判（ref #96）：DONE=达成（归一化精确匹配由调用方处理）；
 // 否则输出续跑指令。读取完整会话，缓存对齐同 summary。
 func (t *HTTPTransport) GoalCall(ctx context.Context, conversation, systemPrompt, toolDefs, goal string) (string, Usage, error) {
-	instruction := "You are the goal-completion judge. Judge the conversation above against the goal below. Reply EXACTLY \"DONE\" if fully achieved, otherwise reply one short actionable instruction for what remains (it becomes the agent next task). Goal: " + goal
+	instruction := "You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token GOAL_DONE — exactly as written (uppercase, with the underscore).. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: " + goal
 	lines := splitNonEmpty(conversation)
 	msgs := make([]json.RawMessage, 0, len(lines)+1)
 	for _, line := range lines {

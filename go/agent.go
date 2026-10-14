@@ -361,7 +361,7 @@ func (a *Agent) BuildPrompt() string {
 	// current goal — bash parity（ref #96）
 	goalSection := "Goal: <not set>"
 	if a.cfg.Goal != "" {
-		goalSection = "Goal: " + a.cfg.Goal + " — goal-driven mode: keep working until fully achieved; when done, reply DONE"
+		goalSection = "Goal: " + a.cfg.Goal + " — goal-driven mode: keep working autonomously until the goal is fully achieved; do not stop early"
 	}
 	appendSection("current-goal", goalSection, "")
 
@@ -974,9 +974,13 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 						"kind":                    "goal",
 					})
 				}
-				if goalReply == "DONE" {
+				if goalReply == "GOAL_DONE" {
 					a.emitJSON(map[string]interface{}{"type": "stop", "reason": "goal_done"})
 					break
+				}
+				// 非 DONE（含翻译变体）→ 原样作为续跑指令；空则兜底
+				if strings.TrimSpace(goalReply) == "" {
+					goalReply = "Continue working toward the goal."
 				}
 				userInput = goalReply
 				turnKind = "user_input"

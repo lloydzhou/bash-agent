@@ -1479,7 +1479,7 @@ impl Agent {
         if turn_kind == "user_input" && !self.cfg.goal.is_empty() && !self.is_interrupted() {
             loop {
                 let gr = self.goal_call()?;
-                if gr == "DONE" {
+                if gr == "GOAL_DONE" {
                     let _ = self.emit_and_append_event(json!({"type":"stop","reason":"goal_done"}))?;
                     break;
                 }
@@ -2150,7 +2150,7 @@ impl Agent {
     /// goal 裁判（ref #96）：DONE=达成（归一化精确匹配）；否则输出续跑指令，由调用方重新入队。
     /// 读取完整会话，缓存对齐同 summary。
     fn goal_call(&mut self) -> Result<String> {
-        let instruction = "You are the goal-completion judge. Judge the conversation above against the goal below. Reply EXACTLY \"DONE\" if fully achieved, otherwise reply one short actionable instruction for what remains (it becomes the agent next task). Goal: ".to_string() + &self.cfg.goal;
+        let instruction = "You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token GOAL_DONE — exactly as written (uppercase, with the underscore).. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: ".to_string() + &self.cfg.goal;
         let all = self.conv.lines()?;
         let mut messages: Vec<Value> = all.clone();
         messages.push(json!({"role":"user","content":instruction}));
@@ -2198,11 +2198,15 @@ impl Agent {
             .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
             .flat_map(|c| c.to_uppercase())
             .collect();
-        if norm == "DONE" {
-            Ok("DONE".to_string())
-        } else {
-            Ok(out)
+        if norm == "GOAL_DONE" {
+            return Ok("GOAL_DONE".to_string());
         }
+        // 非 DONE（含翻译变体）→ 原样作为续跑指令；空则兜底
+        let mut instruction = out.trim().to_string();
+        if instruction.is_empty() {
+            instruction = "Continue working toward the goal.".to_string();
+        }
+        Ok(instruction)
     }
 
     /// 通过 mpsc channel 流式传输 HTTP 响应体，100ms 轮询 interrupted + CTRLC_FLAG 实现可中断。

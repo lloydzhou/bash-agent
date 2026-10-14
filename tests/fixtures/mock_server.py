@@ -75,7 +75,7 @@ class H(http.server.BaseHTTPRequestHandler):
         # second call (conversation already contains it) returns DONE ---
         if b'goal-completion judge' in body and path.startswith('/v1/messages'):
             if b'GOAL_CONT_STEP' in body:
-                goal_text = 'DONE'
+                goal_text = 'GOAL_DONE'
             else:
                 goal_text = 'GOAL_CONT_STEP: write the report file'
             for c in [

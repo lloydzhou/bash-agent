@@ -802,7 +802,7 @@ int agent_run_loop(Agent *agent, const char *user_input, const char *turn_kind) 
 
 /* ============================================================
  * goal 裁判（ref #96）— 对完整会话判定目标是否达成。
- * 返回 malloc 的 "DONE" 或续跑指令（调用方负责 free）；失败返回 NULL。
+ * 返回 malloc 的 "GOAL_DONE" 或续跑指令（调用方负责 free）；失败返回 NULL。
  * 读取完整会话 + 裁判指令，缓存对齐同 summary。
  * ============================================================ */
 static char *agent_goal_judge(Agent *agent) {
@@ -813,10 +813,7 @@ static char *agent_goal_judge(Agent *agent) {
     StrBuf ins;
     sb_init(&ins);
     sb_append(&ins,
-        "You are the goal-completion judge. Judge the conversation above against the goal below. "
-        "Reply EXACTLY \"DONE\" if fully achieved, "
-        "otherwise reply one short actionable instruction for what remains (it becomes the agent next task). "
-        "Goal: ");
+        "You are the goal-completion judge. Review the conversation above against the goal below. If the goal has been fully achieved, reply with the single literal token GOAL_DONE — exactly as written (uppercase, with the underscore).. If the goal has NOT been fully achieved, reply instead with one short actionable instruction for what remains (it will be sent to the agent as its next task). Goal: ");
     sb_append(&ins, agent->goal ? agent->goal : "");
 
     char **judge_lines = malloc(sizeof(char *) * (size_t)(line_count + 1));
@@ -907,10 +904,20 @@ static char *agent_goal_judge(Agent *agent) {
         if (isspace((unsigned char)*p) || ispunct((unsigned char)*p)) continue;
         sb_append_char(&norm, (char)toupper((unsigned char)*p));
     }
-    char *result = (strcmp(norm.data, "DONE") == 0) ? util_strdup("DONE") : util_strdup(accum.text.data);
+    if (strcmp(norm.data, "GOAL_DONE") == 0) {
+        sb_free(&norm);
+        sse_accum_free(&accum);
+        return util_strdup("GOAL_DONE");
+    }
+    /* 非 DONE（含翻译变体）→ 原样作为续跑指令；空则兜底 */
+    char *instruction = util_strdup(accum.text.data);
     sb_free(&norm);
     sse_accum_free(&accum);
-    return result;
+    if (!instruction[0]) {
+        free(instruction);
+        instruction = util_strdup("Continue working toward the goal.");
+    }
+    return instruction;
 }
 
 int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
@@ -1469,12 +1476,23 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             push_display_event(&agent->paths, agent->display_queue, em);
             return -1;
         }
-        if (strcmp(gr, "DONE") == 0) {
+        if (strcmp(gr, "GOAL_DONE") == 0) {
             DisplayMessage *dm = malloc(sizeof(DisplayMessage));
             *dm = display_msg_stop("goal_done");
             push_display_event(&agent->paths, agent->display_queue, dm);
             free(gr);
             return 0;
+        }
+        /* 展示续跑指令（goal 注入非人工输入，对齐 [user inject] 样式） */
+        {
+            StrBuf gt;
+            sb_init(&gt);
+            sb_append(&gt, "[goal] ");
+            sb_append(&gt, gr);
+            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
+            *dm = display_msg_user_notify(gt.data);
+            push_display_event(&agent->paths, agent->display_queue, dm);
+            sb_free(&gt);
         }
         InputMessage *msg = malloc(sizeof(InputMessage));
         if (msg) {

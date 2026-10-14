@@ -16,3 +16,4 @@ c/test_transport
 c/test_transport.dSYM/
 .bash-agent/
 .worktree/
+go/dist/
