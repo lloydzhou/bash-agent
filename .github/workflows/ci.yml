@@ -532,8 +532,8 @@ jobs:
             dist/bash-agent_*_amd64.deb
             dist/bash-agent_*_arm64.deb
 
-      - name: Fetch mcpc/oapi debs for aggregate apt repo
-        run: bash scripts/apt/fetch-debs.sh dist lloydzhou/mcpc lloydzhou/oapi
+      - name: Fetch mcpc/oapi/voicetype debs for aggregate apt repo
+        run: bash scripts/apt/fetch-debs.sh dist lloydzhou/mcpc lloydzhou/oapi lloydzhou/voicetype-linux
 
       - name: Build APT repository and site
         env:

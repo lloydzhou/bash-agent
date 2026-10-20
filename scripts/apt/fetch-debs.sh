@@ -2,9 +2,9 @@
 # 从各仓库 GitHub Releases 下载最新版本的 .deb 到指定目录（聚合 apt 源用）。
 # 用法：scripts/apt/fetch-debs.sh <out_dir> [repo_slug ...]
 #
-# 默认聚合三个仓库：bash-agent / mcpc / oapi；也可显式传仓库列表，
-# 例如 release job 本地已有 bash-agent deb 时只拉另外两个：
-#   scripts/apt/fetch-debs.sh dist lloydzhou/mcpc lloydzhou/oapi
+# 默认聚合四个仓库：bash-agent / mcpc / oapi / voicetype-linux；也可显式传
+# 仓库列表，例如 release job 本地已有 bash-agent deb 时只拉另外三个：
+#   scripts/apt/fetch-debs.sh dist lloydzhou/mcpc lloydzhou/oapi lloydzhou/voicetype-linux
 #
 # 公开仓库匿名 API 即可读取（CI 中无需 PAT）；可选设置 GITHUB_TOKEN（PAT）
 # 提升 API 限流。任一指定仓库的 latest release 缺少 deb 资产时报错退出，
@@ -15,7 +15,7 @@ set -euo pipefail
 OUT_DIR="${1:-dist}"
 shift || true
 REPOS=("$@")
-(( ${#REPOS[@]} > 0 )) || REPOS=(lloydzhou/bash-agent lloydzhou/mcpc lloydzhou/oapi)
+(( ${#REPOS[@]} > 0 )) || REPOS=(lloydzhou/bash-agent lloydzhou/mcpc lloydzhou/oapi lloydzhou/voicetype-linux)
 
 mkdir -p "$OUT_DIR"
 
