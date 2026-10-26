@@ -3020,7 +3020,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         "Do NOT think. Just output the summary directly as plain text. "
         "Summarize the key information from the messages above into a concise context summary. "
         "Update the existing summary snapshot using the messages above. "
-        "Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:";
+        "Use exactly these fields:\nTitle:\nTask focus:\nLatest request:\nKey technical concepts:\nFiles and code:\nProgress:\nTool evidence:\nErrors and fixes:\nReflections:\nNext step:\nCritical context:";
 
     /* 构造 conv_lines: 丢弃的消息行 + summary 指令行 */
     StrBuf instr_line;

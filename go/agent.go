@@ -572,7 +572,16 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 	}
 
 	systemPrompt := a.BuildPrompt()
-	summaryResponse, summaryUsage, err := a.llm.SummaryCall(ctx, droppedMessages, systemPrompt, a.toolDefs)
+	currentTitle := ""
+	if summary, err := a.store.GetSummary(); err == nil {
+		for _, line := range strings.Split(summary, "\n") {
+			if strings.HasPrefix(line, "Title:") {
+				currentTitle = strings.TrimSpace(line)
+				break
+			}
+		}
+	}
+	summaryResponse, summaryUsage, err := a.llm.SummaryCall(ctx, droppedMessages, systemPrompt, a.toolDefs, currentTitle)
 	if err != nil {
 		return false, fmt.Errorf("summary call failed: %w", err)
 	}
