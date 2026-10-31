@@ -3015,18 +3015,36 @@ int agent_compact_context(Agent *agent, const char *trigger) {
      * 对齐 bash 版: llm_summary_call → llm_call（含 system prompt + tools）
      * 对齐 Rust 版: run_summary_call → build_claude_request（含 system prompt + tools）
      * system prompt 和 tools 虽然本次调用用不到，但必须包含以命中 KV cache */
-    const char *summary_instruction =
+    StrBuf summary_instruction;
+    sb_init(&summary_instruction);
+    sb_append(&summary_instruction,
         "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. "
         "Do NOT think. Just output the summary directly as plain text. "
         "Summarize the key information from the messages above into a concise context summary. "
         "Update the existing summary snapshot using the messages above. "
-        "Use exactly these fields:\nTitle:\nTask focus:\nLatest request:\nKey technical concepts:\nFiles and code:\nProgress:\nTool evidence:\nErrors and fixes:\nReflections:\nNext step:\nCritical context:";
+        "Use exactly these fields:\nTitle: ");
+    char *previous_summary = store_summary_get(&agent->paths);
+    for (const char *line = previous_summary; line && *line;) {
+        const char *end = strchr(line, '\n');
+        if (strncmp(line, "Title:", 6) == 0) {
+            const char *title = line + 6;
+            if (*title == ' ') title++;
+            sb_appendn(&summary_instruction, title, end ? (size_t)(end - title) : strlen(title));
+            break;
+        }
+        line = end ? end + 1 : NULL;
+    }
+    free(previous_summary);
+    sb_append(&summary_instruction,
+        "\nTask focus:\nLatest request:\nKey technical concepts:\nFiles and code:\nProgress:\nTool evidence:\nErrors and fixes:\nReflections:\nNext step:\nCritical context:"
+        "\n\nThe Title line is the session title: keep it EXACTLY as written above when present; otherwise write one short line (at most 60 characters, no surrounding quotes) describing this conversation.");
 
     /* 构造 conv_lines: 丢弃的消息行 + summary 指令行 */
     StrBuf instr_line;
     sb_init(&instr_line);
     sb_append(&instr_line, "{\"role\":\"user\",\"content\":");
-    sb_append_json_string(&instr_line, summary_instruction);
+    sb_append_json_string(&instr_line, summary_instruction.data);
+    sb_free(&summary_instruction);
     sb_append(&instr_line, "}");
 
     int summary_line_count = drop + 1;

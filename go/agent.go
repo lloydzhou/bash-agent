@@ -576,7 +576,7 @@ func (a *Agent) CompactContext(ctx context.Context, trigger string) (bool, error
 	if summary, err := a.store.GetSummary(); err == nil {
 		for _, line := range strings.Split(summary, "\n") {
 			if strings.HasPrefix(line, "Title:") {
-				currentTitle = strings.TrimSpace(line)
+				currentTitle = strings.TrimPrefix(strings.TrimPrefix(line, "Title:"), " ")
 				break
 			}
 		}

@@ -2051,7 +2051,7 @@ impl Agent {
             .unwrap_or_default()
             .lines()
             .find(|line| line.starts_with("Title:"))
-            .map(str::to_string)
+            .map(|line| line[6..].strip_prefix(' ').unwrap_or(&line[6..]).to_string())
             .unwrap_or_default();
         let summary_instruction = format!(
             "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTitle: {current_title}\nTask focus:\nLatest request:\nKey technical concepts:\nFiles and code:\nProgress:\nTool evidence:\nErrors and fixes:\nReflections:\nNext step:\nCritical context:\n\nThe Title line is the session title: keep it EXACTLY as written above when present; otherwise write one short line (at most 60 characters, no surrounding quotes) describing this conversation."
