@@ -290,7 +290,7 @@ func (a *Agent) BuildPrompt() string {
 		"- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n" +
 		"- Use Glob and Grep for one pattern at a time.\n" +
 		"- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n" +
-		"- Use multiple tool calls in one response when they are independent.\n" +
+		"- Before choosing tools, briefly check dependencies within the current response to minimize unnecessary model-tool round trips without sacrificing correctness or safety. Batch necessary calls with known arguments, satisfied prerequisites, and no shared-state conflicts into one response; use supported parallel execution where available. Wait for prerequisite results before choosing dependent actions; never guess missing inputs or add speculative calls to fill a batch. Reassess after each batch. Keep this scheduling internal: do not add a separate planning turn or tool call solely for it; still follow required plan, todo, and approval workflows.\n" +
 		"- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n" +
 		"- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n" +
 		"- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n" +
