@@ -160,9 +160,9 @@ func (t *HTTPTransport) sideCall(ctx context.Context, msgs []json.RawMessage, sy
 	return text, usage, nil
 }
 
-func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, systemPrompt, toolDefs string) (string, Usage, error) {
+func (t *HTTPTransport) SummaryCall(ctx context.Context, droppedMessages, systemPrompt, toolDefs, currentTitle string) (string, Usage, error) {
 	// 将 JSONL 转成 JSON 数组，并追加 summary instruction
-	summaryInstruction := "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTask focus:\nLatest request:\nProgress:\nTool evidence:\nReflections:"
+	summaryInstruction := "The conversation context above needs to be compacted. IMPORTANT: Do NOT use any tools. Do NOT think. Just output the summary directly as plain text. Summarize the key information from the messages above into a concise context summary. Update the existing summary snapshot using the messages above. Use exactly these fields:\nTitle: " + currentTitle + "\nTask focus:\nLatest request:\nKey technical concepts:\nFiles and code:\nProgress:\nTool evidence:\nErrors and fixes:\nReflections:\nNext step:\nCritical context:\n\nThe Title line is the session title: keep it EXACTLY as written above when present; otherwise write one short line (at most 60 characters, no surrounding quotes) describing this conversation."
 
 	lines := splitNonEmpty(droppedMessages)
 	msgs := make([]json.RawMessage, 0, len(lines)+1)

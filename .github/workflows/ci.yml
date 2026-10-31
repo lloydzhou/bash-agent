@@ -60,13 +60,13 @@ jobs:
             suffix: linux-arm64
             ext: ""
             cc: aarch64-linux-gnu-gcc
-          - runner: macos-14
+          - runner: macos-15
             goos: darwin
             goarch: arm64
             suffix: darwin-arm64
             ext: ""
             cc: cc
-          - runner: macos-14
+          - runner: macos-15
             goos: darwin
             goarch: amd64
             suffix: darwin-amd64
@@ -143,12 +143,12 @@ jobs:
             suffix: linux-arm64
             bin: rustagent
             ext: ""
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             suffix: darwin-arm64
             bin: rustagent
             ext: ""
-          - runner: macos-14
+          - runner: macos-15
             target: x86_64-apple-darwin
             suffix: darwin-amd64
             bin: rustagent
@@ -174,7 +174,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build rustagent (macOS)
-        if: matrix.runner == 'macos-14'
+        if: runner.os == 'macOS'
         run: |
           mkdir -p dist
           cd rust && cargo build --release --target ${{ matrix.target }}
@@ -222,12 +222,12 @@ jobs:
             suffix: linux-arm64
             bin: webagent
             ext: ""
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             suffix: darwin-arm64
             bin: webagent
             ext: ""
-          - runner: macos-14
+          - runner: macos-15
             target: x86_64-apple-darwin
             suffix: darwin-amd64
             bin: webagent
@@ -249,7 +249,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build webagent (macOS)
-        if: matrix.runner == 'macos-14'
+        if: runner.os == 'macOS'
         run: |
           mkdir -p dist
           cd webagent && cargo build --release --target ${{ matrix.target }}
@@ -293,10 +293,10 @@ jobs:
           - runner: ubuntu-24.04-arm
             suffix: linux-arm64
             cc: gcc
-          - runner: macos-14
+          - runner: macos-15
             suffix: darwin-arm64
             cc: cc
-          - runner: macos-14
+          - runner: macos-15
             suffix: darwin-amd64
             cc: cc
     runs-on: ${{ matrix.runner }}
