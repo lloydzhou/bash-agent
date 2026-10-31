@@ -4,6 +4,30 @@
 
 ---
 
+## [4.4.0] - 2026-10-31
+
+> **更完整的压缩摘要与更少的工具交互往返**：Bash / Go / Rust / C 同步扩展摘要字段、在首次摘要请求中生成会话标题，并指导模型在当前响应内按依赖安排工具批次；同时迁移即将退役的 macOS CI runner。
+
+### Added
+
+- **摘要维度扩展（PR #98）**：保留 `Task focus`、`Latest request`、`Progress`、`Tool evidence`、`Reflections`，新增 `Key technical concepts`、`Files and code`、`Errors and fixes`、`Next step`、`Critical context`。
+- **摘要中的会话标题（PR #98）**：首次压缩在同一次摘要请求中生成 `Title:`，不增加独立标题生成调用；后续将旧标题传入摘要指令并要求原样保留。标题稳定性由提示词约束，不是存储层强制写回。
+- **标题专项回归测试**：新增 `python3 tests/test_summary_title.py`，覆盖 Bash 实际摘要函数的标题提取、模拟连续两次调用，以及 C / Go / Rust 摘要指令文本一致性。
+
+### Changed
+
+- **依赖就绪的工具批次（PR #99）**：在当前响应内部检查依赖，将参数已知、前置条件满足且无共享状态冲突的必要工具调用同轮提交；等待依赖结果，不猜输入、不为凑批次执行推测性操作，不为调度另加规划轮次。保留既有 Plan / Todo / 审批要求；普通工具同轮提交不代表执行器新增并发能力。
+- **macOS CI runner**：Go / Rust / Web / C 的 arm64 与 amd64 构建由 `macos-14` 迁移至 `macos-15`；Rust / Web 构建步骤改按 `runner.os` 判断，避免镜像标签升级后跳过构建。
+- **APT 聚合源**：新增 `voicetype-linux`，与 bash-agent / mcpc / oapi 一同聚合发布。
+- **双语 Wiki**：新增中英文第 12 章，介绍内部工具调度、依赖分批、交互轮次与实际并发的区别及评估方法。
+
+### Fixed
+
+- **标题前缀重复（PR #98）**：Bash / Go / Rust 读取旧标题时剥离 `Title:` 标签和一个可选空格，避免重复压缩时将 `Title: Title: ...` 注入指令。
+- **C 摘要标题对齐（PR #98）**：补齐旧标题读取、首次生成和后续原样保留的指令，与其余三个运行时保持一致。
+
+---
+
 ## [4.3.9] - 2026-10-14
 
 > **goal 目标驱动循环（四运行时）**：新增 `--goal "<目标>"`，agent 每次停止时由独立裁判调用判定目标是否达成——达成则输出字面 `GOAL_DONE` 终止（`stop goal_done`），未达成则将裁判给出的下一步指令作为新输入自动继续，直到目标完成。Bash/Go/Rust/C 四端同步实现。
