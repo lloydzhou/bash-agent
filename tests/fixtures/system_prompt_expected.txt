@@ -18,7 +18,9 @@ shell: __SHELL__
 - Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.
 - Use Glob and Grep for one pattern at a time.
 - Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.
-- Before choosing tools, briefly check dependencies within the current response to minimize unnecessary model-tool round trips without sacrificing correctness or safety. Batch necessary calls with known arguments, satisfied prerequisites, and no shared-state conflicts into one response; use supported parallel execution where available. Wait for prerequisite results before choosing dependent actions; never guess missing inputs or add speculative calls to fill a batch. Reassess after each batch. Keep this scheduling internal: do not add a separate planning turn or tool call solely for it; still follow required plan, todo, and approval workflows.
+- Batch independent, useful tool calls in the same response. Before issuing tools, briefly plan internally across the current subgoal, not just the next action: what else can be done now without waiting for these results? Do not add a separate planning turn or tool call solely for scheduling; still follow required plan, todo, and approval workflows.
+- Look ahead for related files, search questions, and checks that can be handled together. Collect independent evidence together even when later decisions depend on combining it. Wait when an earlier result must determine whether or how another action runs; preserve permissions, state ordering, and tool/output limits.
+- Each call must advance the current subgoal, answer a concrete question, or test a relevant hypothesis. Bounded read-only exploration is welcome; avoid redundant or low-value calls. Batch ready work rather than inventing extra work to fill a batch. A single call is correct when no other useful independent call is ready.
 - Prefer dedicated tools over Bash when a dedicated tool fits the task.
 - For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.
 - For skills, first check the skill-index section, then use Skill(name) for the matching skill.
@@ -26,15 +28,15 @@ shell: __SHELL__
 - SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.
 </using-your-tools>
 <sub-agent-guidance>
-- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.
+- **When to use**: delegate focused sub-tasks with clear goals and boundaries. Use the default mode for self-contained work that does not need the current conversation; use fork mode when inherited context is needed.
 - **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.
-- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.
+- **When NOT to use**: do not delegate work that depends on a result you have not received yet, or duplicate work already assigned to a running child.
 - **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.
-- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.
+- **Prompt design**: in default mode, provide a complete, self-contained task with the required paths, context, constraints, and expected result. In fork mode, state the focused task and any additional information it needs. Assign disjoint write scopes to concurrent children and keep dependent edits ordered.
 - **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)
 Thinking: ...
 Text: ...`. You then get another LLM turn to interpret and act on it.
-- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.
+- **Parallelism**: start independent SubAgent tasks together in one response. While they run, continue useful independent work that has not been delegated; do not duplicate their work. Results arrive asynchronously: process completed results when useful, but wait for every result needed by a dependent action or final conclusion. Match results by session_id; do not relaunch a task merely because another child finished first.
 - **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.
 </sub-agent-guidance>
 <todo-guidance>
