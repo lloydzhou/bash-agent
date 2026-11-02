@@ -299,13 +299,13 @@ func (a *Agent) BuildPrompt() string {
 	appendSection("using-your-tools", toolGuidance, "")
 
 	// sub-agent guidance
-	subAgentGuidance := "- **When to use**: delegating independent sub-tasks that do NOT need your current conversation context — e.g. investigating a separate file, running a focused search, testing a hypothesis in isolation.\n" +
+	subAgentGuidance := "- **When to use**: delegate focused sub-tasks with clear goals and boundaries. Use the default mode for self-contained work that does not need the current conversation; use fork mode when inherited context is needed.\n" +
 		"- **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.\n" +
-		"- **When NOT to use**: tasks that depend on your working context, conversation history, or intermediate state. The child agent starts with a blank slate.\n" +
+		"- **When NOT to use**: do not delegate work that depends on a result you have not received yet, or duplicate work already assigned to a running child.\n" +
 		"- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n" +
-		"- **Prompt design**: write a complete, self-contained prompt. Include all file paths, function names, error messages, and constraints the child needs. Assume zero shared context.\n" +
+		"- **Prompt design**: in default mode, provide a complete, self-contained task with the required paths, context, constraints, and expected result. In fork mode, state the focused task and any additional information it needs. Assign disjoint write scopes to concurrent children and keep dependent edits ordered.\n" +
 		"- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n" +
-		"- **Parallelism**: multiple SubAgent calls in one turn run concurrently. Use this to parallelize independent investigations. **IMPORTANT**: results return asynchronously as each sub-agent finishes — they do NOT return together. When you receive a result for one sub-agent, the others are still running. Simply wait for all results to arrive before acting. Do NOT re-launch a sub-agent just because another one finished first — match results by session_id.\n" +
+		"- **Parallelism**: start independent SubAgent tasks together in one response. While they run, continue useful independent work that has not been delegated; do not duplicate their work. Results arrive asynchronously: process completed results when useful, but wait for every result needed by a dependent action or final conclusion. Match results by session_id; do not relaunch a task merely because another child finished first.\n" +
 		"- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically."
 	appendSection("sub-agent-guidance", subAgentGuidance, "")
 
