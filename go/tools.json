@@ -1,7 +1,7 @@
 [
   {
     "name": "Read",
-    "description": "Read a file from the local filesystem. Use multiple Read calls if you need multiple files. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.\n\nIMPORTANT - Prefer Grep over Read:\n- When searching for specific content, ALWAYS use Grep first — it returns only matching lines, never truncates, and keeps context small.\n- Read loads entire files into context, which rapidly inflates token usage. Use it ONLY when you already know exactly which lines you need (e.g. after a Grep located the target), or when you must understand the full file structure.\n- Grep with context provides enough surrounding lines for Edit in most cases, eliminating the need for a separate Read.\n- If a Read result is truncated (you see a truncation notice), do NOT re-read the same range — use Grep to search instead.\n- Use Read with offset/limit only when you already know the target line range (e.g. from a prior Grep).",
+    "description": "Read a file from the local filesystem. Batch independent reads of needed files in the same response, using one call per file. Output includes line numbers (cat -n format). By default reads the whole file; use offset/limit to read specific line ranges.\n\nIMPORTANT - Choose the tool for the information needed:\n- Prefer Grep when locating specific content; matching lines and context often avoid reading an entire file.\n- Use Read when you need the contents of a known file or a known line range; no preliminary search is needed merely to read an already identified target. Keep reads scoped to the information needed.\n- Grep with context provides enough surrounding lines for Edit in most cases, eliminating the need for a separate Read.\n- If a Read result is truncated, do not repeat the same range; narrow the read or use Grep to locate the needed content.\n- Use offset/limit to read a known target range instead of the whole file.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -23,7 +23,7 @@
   },
   {
     "name": "Write",
-    "description": "Write a file to the local filesystem.",
+    "description": "Write a file to the local filesystem. Independent writes to different files may be issued in the same response once their contents and prerequisites are known.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -41,7 +41,7 @@
   },
   {
     "name": "Edit",
-    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, locate the exact text — prefer Grep with context to capture the target in one step; use Read with offset/limit only if you already know the exact line range. Copy the exact text before calling Edit.",
+    "description": "Edit a file by replacing an exact string match with a new string. old_string must match byte-for-byte (including whitespace/indent/newlines). Before editing, locate the exact text — prefer Grep with context to capture the target in one step; use Read with offset/limit only if you already know the exact line range. Copy the exact text before calling Edit. Independent edits to different files may be issued in the same response once their exact changes and prerequisites are known.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -85,7 +85,7 @@
   },
   {
     "name": "Glob",
-    "description": "Find files matching a single glob pattern. Use multiple Glob calls if you need multiple patterns.",
+    "description": "Find files matching a single glob pattern. Batch independent searches for needed patterns in the same response, using one Glob call per pattern.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -103,7 +103,7 @@
   },
   {
     "name": "Grep",
-    "description": "Search file contents with ripgrep. Supports regex patterns.\n- Use context to show surrounding lines — often enough for Edit without a separate Read\n- Use multiple Grep calls if you need multiple patterns",
+    "description": "Search file contents with ripgrep. Supports regex patterns.\n- Use context to show surrounding lines — often enough for Edit without a separate Read\n- Batch independent searches for needed patterns in the same response, using one Grep call per pattern.",
     "input_schema": {
       "type": "object",
       "properties": {
