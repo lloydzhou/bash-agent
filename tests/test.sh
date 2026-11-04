@@ -2783,6 +2783,11 @@ test_agent_plan_confirm_mv() {
 # Test 47: system prompt golden — current AGENT must produce the byte-exact expected prompt
 test_agent_system_prompt_format() {
     info "Test 47: system prompt byte-exact golden"
+    if python3 "$ROOT_DIR/tests/test_prompt_scheduling.py"; then
+        green "system prompt scheduling contract and source parity"; ((PASS++)) || true
+    else
+        red "system prompt scheduling contract and source parity"; ((FAIL++)) || true
+    fi
     local home_dir project_dir session_id project_key_value project_storage candidate_agent
     local expected_prompt actual_prompt candidate_err diff_file platform prompt_shell
     home_dir=$(mktemp -d)
