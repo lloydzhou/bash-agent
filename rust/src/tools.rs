@@ -161,8 +161,12 @@ impl Runner {
         if path.is_empty() {
             bail!("no path provided");
         }
-        let data = fs::read_to_string(path)
+        let data = fs::read(path)
             .map_err(|_| anyhow!("Error: file not found or unreadable: {path}"))?;
+        let data = match String::from_utf8(data) {
+            Ok(s) if !s.contains('\0') => s,
+            _ => bail!("binary file not supported by Read: {path} (contains NUL or invalid UTF-8; use Bash with file/xxd for binary content)"),
+        };
         if offset.is_none() && limit.is_none() {
             return Ok(data);
         }

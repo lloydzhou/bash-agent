@@ -1148,9 +1148,57 @@ test_agent_read_offset_limit() {
     rm -f "$target_file"
 }
 
-# Test 20c: Bash with per-call timeout
+# Test 20c: Read rejects binary content across all runtimes
+test_agent_read_binary_guard() {
+    info "Test 20c: Read rejects binary without polluting conversation"
+    local output session_id conv_file
+    session_id="read-binary-guard-$$"
+    conv_file="$BASH_AGENT_HOME/.bash-agent/projects/$(cd "$ROOT_DIR" && project_key)/$session_id/conversation.jsonl"
+    rm -rf "$(dirname "$conv_file")"
+
+    printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRSHOULD-NOT-APPEAR' > /tmp/bash-agent-read-binary.png
+    printf '\x89PNG\r\n\x1a\n' > /tmp/bash-agent-read-binary-sig.dat
+    printf 'safe-ascii-before-binary\n\x89PNG\r\n\x1a\n\x00' > /tmp/bash-agent-read-binary-late.txt
+    printf 'nul-text-before\x00nul-text-after\n' > /tmp/bash-agent-read-binary-nul.txt
+    printf '中文内容\n' > /tmp/bash-agent-read-utf8.txt
+    : > /tmp/bash-agent-read-empty.txt
+    rm -f /tmp/bash-agent-read-missing.txt
+
+    output=$("$AGENT" --session "$session_id" -p claude --base-url "$BASE/v1" -m test --api-key test 'READ_BINARY_GUARD_MARKER' 2>&1) || true
+    if [[ "$output" == *"Read binary guard complete."* ]] && /usr/bin/python3 - "$conv_file" <<'PY' >/dev/null 2>&1
+import json, sys
+raw = open(sys.argv[1], 'rb').read()
+assert b'\x00' not in raw and b'\x89PNG' not in raw
+lines = [json.loads(line) for line in raw.decode('utf-8').splitlines() if line.strip()]
+res = {}
+for obj in lines:
+    if obj.get('role') == 'user' and isinstance(obj.get('content'), list):
+        for b in obj['content']:
+            if b.get('type') == 'tool_result':
+                res[b['tool_use_id']] = b.get('content', '')
+assert sum('binary file not supported by Read' in r for r in res.values()) == 4, res
+assert 'binary file not supported by Read' in res['toolu_rb_png'], res
+assert 'binary file not supported by Read' in res['toolu_rb_sig'], res
+assert 'binary file not supported by Read' in res['toolu_rb_late'], res
+assert 'binary file not supported by Read' in res['toolu_rb_nul'], res
+assert '中文内容' in res['toolu_rb_utf8'], res
+assert 'binary file not supported by Read' not in res['toolu_rb_empty'], res
+assert 'file not found' in res['toolu_rb_missing'], res
+assert not any('SHOULD-NOT-APPEAR' in r or 'nul-text-before' in r or 'safe-ascii-before-binary' in r for r in res.values()), res
+PY
+    then
+        green "Agent Read rejects binary without polluting conversation"; ((PASS++)) || true
+    else
+        red "Agent Read rejects binary without polluting conversation"; echo "  Output: $output"; echo "  Conversation: $(cat "$conv_file" 2>/dev/null || true)"; ((FAIL++)) || true
+    fi
+    rm -f /tmp/bash-agent-read-binary.png /tmp/bash-agent-read-binary-sig.dat \
+          /tmp/bash-agent-read-binary-late.txt /tmp/bash-agent-read-binary-nul.txt \
+          /tmp/bash-agent-read-utf8.txt /tmp/bash-agent-read-empty.txt
+}
+
+# Test 20d: Bash with per-call timeout
 test_agent_bash_timeout() {
-    info "Test 20c: Agent.sh Bash with timeout parameter"
+    info "Test 20d: Agent.sh Bash with timeout parameter"
     local output
     output=$("$AGENT" -p claude --base-url "$BASE/v1" -m test --api-key test 'BASH_TIMEOUT_MARKER' 2>&1) || true
     if echo "$output" | grep -q "Bash timeout complete."; then
@@ -3060,6 +3108,7 @@ test_agent_grep
 test_agent_glob_no_match
 test_agent_grep_no_match
 test_agent_read_offset_limit
+test_agent_read_binary_guard
 test_agent_bash_timeout
 test_agent_grep_context
 test_agent_edit_file

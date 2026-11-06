@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 const defaultToolResultMaxBytes = 100000
@@ -209,6 +210,9 @@ func (td *ToolDispatcher) toolRead(p, offsetStr, limitStr string) (string, error
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return "", fmt.Errorf("read error: %v", err)
+	}
+	if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
+		return "", fmt.Errorf("binary file not supported by Read: %s (contains NUL or invalid UTF-8; use Bash with file/xxd for binary content)", p)
 	}
 
 	lines := strings.Split(string(data), "\n")
