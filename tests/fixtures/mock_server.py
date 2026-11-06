@@ -467,6 +467,61 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     self.send_response(422); self.end_headers(); w.write(b'missing or incorrect Read offset/limit content')
             return
+        if b'READ_BINARY_GUARD_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                calls = [
+                    ('toolu_rb_png', {'path': '/tmp/bash-agent-read-binary.png'}),
+                    ('toolu_rb_sig', {'path': '/tmp/bash-agent-read-binary-sig.dat'}),
+                    ('toolu_rb_late', {'path': '/tmp/bash-agent-read-binary-late.txt', 'offset': 1, 'limit': 1}),
+                    ('toolu_rb_nul', {'path': '/tmp/bash-agent-read-binary-nul.txt'}),
+                    ('toolu_rb_range', {'path': '/tmp/bash-agent-read-binary-range.txt'}),
+                    ('toolu_rb_utf8', {'path': '/tmp/bash-agent-read-utf8.txt'}),
+                    ('toolu_rb_empty', {'path': '/tmp/bash-agent-read-empty.txt'}),
+                    ('toolu_rb_missing', {'path': '/tmp/bash-agent-read-missing.txt'}),
+                ]
+                events = [
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_read_binary","role":"assistant","content":[],"model":"test","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+                    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+                    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Checking binary Read guard."}}\n\n',
+                    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+                ]
+                for i, (tid, inp) in enumerate(calls, start=1):
+                    events.append('event: content_block_start\ndata: ' + json.dumps({'type': 'content_block_start', 'index': i, 'content_block': {'type': 'tool_use', 'id': tid, 'name': 'Read', 'input': {}}}) + '\n\n')
+                    events.append('event: content_block_delta\ndata: ' + json.dumps({'type': 'content_block_delta', 'index': i, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(inp)}}) + '\n\n')
+                    events.append('event: content_block_stop\ndata: {"type":"content_block_stop","index":%d}\n\n' % i)
+                events.extend([
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":20}}\n\n',
+                    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+                ])
+                for c in events:
+                    w.write(c.encode()); w.flush()
+            return
+        if b'READ_BINARY_GUARD_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                err = b'binary file not supported by Read:'
+                ok = (
+                    body.count(err) == 5
+                    and b'\x89PNG' not in body
+                    and b'\x00' not in body
+                    and b'SHOULD-NOT-APPEAR' not in body
+                    and b'safe-ascii-before-binary' not in body
+                    and b'nul-text-before' not in body
+                    and '中文内容'.encode() in body
+                    and b'file not found' in body
+                    and b'/tmp/bash-agent-read-missing.txt' in body
+                )
+                if ok:
+                    for c in [
+                        'event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_read_binary_done\",\"role\":\"assistant\",\"content\":[],\"model\":\"test\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n',
+                        'event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n',
+                        'event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Read binary guard complete.\"}}\n\n',
+                        'event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n',
+                        'event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n',
+                        'event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n',
+                    ]: w.write(c.encode()); w.flush()
+                else:
+                    self.send_response(422); self.end_headers(); w.write(b'invalid or polluted binary Read result')
+            return
         if b'BASH_TIMEOUT_MARKER' in body and b'"tool_result"' not in body:
             if path.startswith('/v1/messages'):
                 for c in [

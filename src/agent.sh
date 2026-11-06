@@ -890,6 +890,8 @@ tool_read() {
     [[ -z "$path" ]] && { echo "no path provided"; return 1; }
     [[ ! -f "$path" ]] && { echo "file not found: $path"; return 1; }
     [[ ! -r "$path" ]] && { echo "permission denied: $path"; return 1; }
+    # 整文件拒绝 NUL/非法 UTF-8；转 UTF-16LE 避免 macOS iconv 的 UTF-8 直通校验漏洞。
+    { LC_ALL=C tr -d '\000' <"$path" 2>/dev/null | cmp -s - "$path" && iconv -f UTF-8 -t UTF-16LE "$path" >/dev/null 2>&1; } || { echo "binary file not supported by Read: $path (contains NUL or invalid UTF-8; use Bash with file/xxd for binary content)"; return 1; }
     if (( limit > 0 )); then
         sed -n "${offset},$((offset + limit - 1))p" "$path"
     else

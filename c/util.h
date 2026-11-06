@@ -81,6 +81,8 @@ char *util_rtrim(char *s);
 /* 读取整个文件到字符串 */
 char *util_read_file(const char *path);
 char *util_read_file_len(const char *path, size_t *out_len);
+/* 文本判定：1=无 NUL 且严格合法 UTF-8，0=二进制，-1=无法打开 */
+int util_is_utf8_text_file(const char *path);
 char *util_base64_encode(const unsigned char *data, size_t len);
 
 /* 写入整个文件 */

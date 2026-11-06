@@ -83,6 +83,19 @@ static ToolResult tool_read(const char *input_json, int max_bytes) {
     int offset = json_get_int(jp.val, "offset");
     int limit = json_get_int(jp.val, "limit");
 
+    /* 先做整文件文本判定：二进制内容不能进入会话（不受 offset/limit 影响） */
+    int text = util_is_utf8_text_file(path);
+    if (text <= 0) {
+        StrBuf err;
+        sb_init(&err);
+        if (text < 0) sb_appendf(&err, "Error: file not found: %s", path);
+        else sb_appendf(&err, "Error: binary file not supported by Read: %s (contains NUL or invalid UTF-8; use Bash with file/xxd for binary content)", path);
+        r.output = err.data;
+        r.exit_code = 1;
+        free(path);
+        return r;
+    }
+
     /* 读取文件 */
     char *content = util_read_file(path);
     if (!content) {
