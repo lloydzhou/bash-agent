@@ -1160,6 +1160,7 @@ test_agent_read_binary_guard() {
     printf '\x89PNG\r\n\x1a\n' > /tmp/bash-agent-read-binary-sig.dat
     printf 'safe-ascii-before-binary\n\x89PNG\r\n\x1a\n\x00' > /tmp/bash-agent-read-binary-late.txt
     printf 'nul-text-before\x00nul-text-after\n' > /tmp/bash-agent-read-binary-nul.txt
+    printf '\xf4\x90\x80\x80' > /tmp/bash-agent-read-binary-range.txt
     printf '中文内容\n' > /tmp/bash-agent-read-utf8.txt
     : > /tmp/bash-agent-read-empty.txt
     rm -f /tmp/bash-agent-read-missing.txt
@@ -1176,11 +1177,12 @@ for obj in lines:
         for b in obj['content']:
             if b.get('type') == 'tool_result':
                 res[b['tool_use_id']] = b.get('content', '')
-assert sum('binary file not supported by Read' in r for r in res.values()) == 4, res
+assert sum('binary file not supported by Read' in r for r in res.values()) == 5, res
 assert 'binary file not supported by Read' in res['toolu_rb_png'], res
 assert 'binary file not supported by Read' in res['toolu_rb_sig'], res
 assert 'binary file not supported by Read' in res['toolu_rb_late'], res
 assert 'binary file not supported by Read' in res['toolu_rb_nul'], res
+assert 'binary file not supported by Read' in res['toolu_rb_range'], res
 assert '中文内容' in res['toolu_rb_utf8'], res
 assert 'binary file not supported by Read' not in res['toolu_rb_empty'], res
 assert 'file not found' in res['toolu_rb_missing'], res
@@ -1193,7 +1195,7 @@ PY
     fi
     rm -f /tmp/bash-agent-read-binary.png /tmp/bash-agent-read-binary-sig.dat \
           /tmp/bash-agent-read-binary-late.txt /tmp/bash-agent-read-binary-nul.txt \
-          /tmp/bash-agent-read-utf8.txt /tmp/bash-agent-read-empty.txt
+          /tmp/bash-agent-read-binary-range.txt /tmp/bash-agent-read-utf8.txt /tmp/bash-agent-read-empty.txt
 }
 
 # Test 20d: Bash with per-call timeout

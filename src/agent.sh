@@ -142,7 +142,8 @@ util_append_section() {
 util_read_optional() { [[ -n "$1" && -s "$1" ]] && printf '%s' "$(<"$1")"; }
 
 # 文本判定：无 NUL 且严格合法 UTF-8；按整个文件检查，不受 offset/limit 影响。
-util_file_is_text() { LC_ALL=C tr -d '\000' <"$1" 2>/dev/null | cmp -s - "$1" && iconv -f UTF-8 -t UTF-8 "$1" >/dev/null 2>&1; }
+# iconv 目标用 UTF-16LE：macOS 的 UTF-8→UTF-8 会放过超范围/五字节序列。
+util_file_is_text() { LC_ALL=C tr -d '\000' <"$1" 2>/dev/null | cmp -s - "$1" && iconv -f UTF-8 -t UTF-16LE "$1" >/dev/null 2>&1; }
 
 store_session_image_dir() { printf '%s/%s/images' "$(store_session_get_dir)" "${SESSION_ID:-}"; }
 

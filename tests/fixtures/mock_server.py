@@ -474,6 +474,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     ('toolu_rb_sig', {'path': '/tmp/bash-agent-read-binary-sig.dat'}),
                     ('toolu_rb_late', {'path': '/tmp/bash-agent-read-binary-late.txt', 'offset': 1, 'limit': 1}),
                     ('toolu_rb_nul', {'path': '/tmp/bash-agent-read-binary-nul.txt'}),
+                    ('toolu_rb_range', {'path': '/tmp/bash-agent-read-binary-range.txt'}),
                     ('toolu_rb_utf8', {'path': '/tmp/bash-agent-read-utf8.txt'}),
                     ('toolu_rb_empty', {'path': '/tmp/bash-agent-read-empty.txt'}),
                     ('toolu_rb_missing', {'path': '/tmp/bash-agent-read-missing.txt'}),
@@ -499,7 +500,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if path.startswith('/v1/messages'):
                 err = b'binary file not supported by Read:'
                 ok = (
-                    body.count(err) == 4
+                    body.count(err) == 5
                     and b'\x89PNG' not in body
                     and b'\x00' not in body
                     and b'SHOULD-NOT-APPEAR' not in body
