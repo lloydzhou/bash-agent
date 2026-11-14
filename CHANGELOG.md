@@ -4,6 +4,34 @@
 
 ---
 
+## [4.4.2] - 2026-11-14
+
+> **Read 不再把二进制内容写入会话（PR #104）**：Bash / Go / Rust / C 在返回任何内容前对整个文件做文本判定，含 NUL 或非严格合法 UTF-8 即拒绝，且不受 `offset` / `limit` 影响；同时将工具调度指导收敛为依赖 DAG 心智模型（PR #103）。本版不涉及图片视觉能力，也不改写历史会话中的既有污染。
+
+### Added
+
+- **跨运行时 Read 二进制回归测试**：新增 `test_agent_read_binary_guard` 及 mock server 分支，覆盖带 NUL/非法 UTF-8 的 PNG、仅 PNG 签名、`offset` / `limit` 切片之后的二进制、纯 NUL 文本、越过 U+10FFFF 的 `F4 90 80 80`、合法中文 UTF-8、空文件与缺失文件；断言会话 JSONL 仍为合法 UTF-8/JSON，且不含原始 PNG 签名或被隐藏的二进制文本。
+
+### Changed
+
+- **工具调度指导改为依赖 DAG（PR #103）**：发工具前先判断当前子目标中哪些独立调用无需等待结果即可执行，将输入已知、前置条件满足的就绪调用同轮提交；等待会决定后续动作的结果、审批与共享状态顺序（含 read-before-edit）。后台任务运行期间只继续与其结果和状态无关的工作，结果返回后重新评估，且不重复运行中或已完成的工作。保留合法单调用与真实依赖链，不为凑批次发明工作或借 shell/委派模拟并发；不打印 DAG、不增加调度专用轮次，保留既有 plan / todo / approval 流程。Bash / Go / Rust / C 与双语 golden 同步，无执行器、工具 schema 或实际并发机制改动；仅减少模型往返，实际并发取决于运行时。
+
+### Fixed
+
+- **Read 全文件文本判定（PR #104）**：在读取内容及应用 `offset` / `limit` 之前扫描整个文件；只要出现 NUL 或严格非法 UTF-8，就返回纯文本错误 `binary file not supported by Read: <path> (contains NUL or invalid UTF-8; use Bash with file/xxd for binary content)`，避免二进制字节写入持久化会话，也避免通过切片绕过检查。四运行时规则与错误文案一致。
+- **Bash**：用 `tr -d '\000'` + `cmp` 检测 NUL，并用 `iconv -f UTF-8 -t UTF-16LE` 做严格解码（macOS 的 UTF-8→UTF-8 会放行部分越界序列）；最终仅新增 2 行。
+- **Go**：`bytes.IndexByte(data, 0)` + `utf8.Valid(data)`。
+- **Rust**：先 `fs::read` 读取字节，再用 `String::from_utf8` 与 NUL 检查；二进制输入转为工具错误，不再因 `read_to_string` 失败拖垮整个会话。
+- **C**：新增 `util_is_utf8_text_file`，以状态机拒绝 overlong、代理区与 >U+10FFFF，并检查 NUL。
+
+### Validation
+
+- 本轮本地实际运行 `tests/test.sh`：Bash 228 项、C（cagent）228 项、Rust（rustagent）228 项，均为 0 失败，包含新增二进制防护用例与双语全量提示词 golden 校验。
+- Go 未在本机运行（本机无 Go 工具链）；依据 PR #104 合并前 CI 的 goagent 构建与 `make test-go` 通过，且该 PR 的完整 CI 全部通过。
+- 局限：判定边界为“无 NUL + 严格 UTF-8”，不含 NUL/非法字节的 ASCII 型二进制仍无法与文本区分；这是有意的安全兜底，不做 MIME/内容嗅探，也不改变图片视觉支持。
+
+---
+
 ## [4.4.1] - 2026-11-02
 
 > **工具与子代理调度提示词优化（PR #101）**：围绕当前子目标主动发现可合批的操作，避免低价值调用；子代理运行期间继续独立工作，并明确普通 / fork 模式的上下文边界。Bash / Go / Rust / C 与双语提示词 golden 同步，无执行器改动。
