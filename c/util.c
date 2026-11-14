@@ -365,6 +365,43 @@ char *util_read_file_len(const char *path, size_t *out_len) {
     return buf;
 }
 
+/* 文本判定：返回 1=无 NUL 且严格合法 UTF-8，0=二进制，-1=无法打开。
+ * 与 Go 的 utf8.Valid+IndexByte、Rust 的 from_utf8、Bash 的 iconv 对齐。 */
+int util_is_utf8_text_file(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    int c, need = 0, lo = 0x80, hi = 0xBF;
+    while ((c = fgetc(f)) != EOF) {
+        unsigned char b = (unsigned char)c;
+        if (b == 0) { fclose(f); return 0; }
+        if (need > 0) {
+            if (b < lo || b > hi) { fclose(f); return 0; }
+            need--; lo = 0x80; hi = 0xBF;
+        } else if (b < 0x80) {
+            continue;
+        } else if (b >= 0xC2 && b <= 0xDF) {
+            need = 1;
+        } else if (b == 0xE0) {
+            need = 2; lo = 0xA0;
+        } else if (b == 0xED) {
+            need = 2; hi = 0x9F;
+        } else if ((b >= 0xE1 && b <= 0xEC) || b == 0xEE || b == 0xEF) {
+            need = 2;
+        } else if (b == 0xF0) {
+            need = 3; lo = 0x90;
+        } else if (b == 0xF4) {
+            need = 3; hi = 0x8F;
+        } else if (b >= 0xF1 && b <= 0xF3) {
+            need = 3;
+        } else {
+            fclose(f); return 0;
+        }
+    }
+    if (ferror(f)) { fclose(f); return -1; }
+    fclose(f);
+    return need == 0;
+}
+
 /* 标准 base64 编码（单行、无换行），返回 NUL 结尾的 malloc 字符串。 */
 char *util_base64_encode(const unsigned char *data, size_t len) {
     static const char tbl[] =
