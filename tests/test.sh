@@ -3055,6 +3055,38 @@ test_agent_image_placeholders() {
 }
 
 
+test_agent_http_error_body() {
+    info "Test 51: HTTP error status surfaces real body without a fallback duplicate"
+    local provider marker output
+    for provider in claude openai responses; do
+        case "$provider" in
+            claude)    marker="HTTP_ERR_529" ;;
+            openai)    marker="HTTP_ERR_429" ;;
+            responses) marker="HTTP_ERR_529" ;;
+        esac
+        output=$(BASH_AGENT_HOME="$(mktemp -d)" timeout 20 "$AGENT" -p "$provider" \
+            --base-url "$BASE/v1" -m test --api-key test --session "http-err-$provider-$$" \
+            "$marker trigger" 2>&1) || true
+
+        if echo "$output" | grep -q "HTTP_ERR_..." && echo "$output" | grep -qE "HTTP (429|529)"; then
+            green "HTTP error body ($provider): real status and message shown"; ((PASS++)) || true
+        else
+            red "HTTP error body ($provider): real status and message missing"
+            echo "  Output: $output" >&2
+            ((FAIL++)) || true
+        fi
+
+        if echo "$output" | grep -q "Stream interrupted"; then
+            red "HTTP error body ($provider): generic fallback still appended"
+            echo "  Output: $output" >&2
+            ((FAIL++)) || true
+        else
+            green "HTTP error body ($provider): no generic fallback error"; ((PASS++)) || true
+        fi
+    done
+}
+
+
 # ===== Main =====
 
 if $START_SERVER; then
@@ -3175,9 +3207,10 @@ test_agent_system_prompt_format
 test_agent_model_arg
 test_agent_max_tokens_suffix
 test_agent_image_placeholders
+test_agent_http_error_body
 
 # ──────────────────────────────────────────────
-# Test 51: bash mode scanner unit tests (Bash only)
+# Test 52: bash mode scanner unit tests (Bash only)
 # NOTE: This test directly sources Bash functions from src/agent.sh.
 # It only validates the Bash implementation. Go/Rust/C versions have
 # their own equivalent unit tests:

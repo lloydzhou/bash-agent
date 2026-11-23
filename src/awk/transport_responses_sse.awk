@@ -23,7 +23,9 @@ BEGIN {
 }
 
 /^:/ { next }
-/^ERROR:/ { print; fflush(); next }
+# Mark completed so END does not emit a generic "no response.completed" error
+# on top of the real status/body already reported by http_stream.awk.
+/^ERROR:/ { completed = 1; print; fflush(); next }
 
 # Pass through timing event from curl -w (captured by claude_sse.awk)
 /^event: timing$/ { print; fflush(); next }

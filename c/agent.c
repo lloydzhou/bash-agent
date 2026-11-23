@@ -158,13 +158,10 @@ static void stream_display_callback(void *ctx, const SseEvent *evt) {
         break;
 
     case SSE_ERROR:
+        /* 只记录，不在此推送：由 agent 末尾统一带上 HTTP 状态码推送一次，
+         * 避免同一条错误显示两遍。 */
         if (sctx->accum.error) free(sctx->accum.error);
         sctx->accum.error = util_strdup(evt->content ? evt->content : "unknown error");
-        {
-            DisplayMessage *dm = malloc(sizeof(DisplayMessage));
-            *dm = display_msg_error(sctx->accum.error);
-            push_display_event(sctx->paths, sctx->display_queue, dm);
-        }
         break;
 
     case SSE_USAGE:
@@ -1088,9 +1085,16 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 sse_accum_free(accum);
                 return 0;
             }
-            /* 对齐 bash 版 END 块：总是发出 STOP + ERROR */
+            /* 对齐 bash 版 END 块：总是发出 STOP + ERROR；
+             * 有错误体时带上状态码，如 "HTTP 529: {...}"。 */
             DisplayMessage *dm_err = malloc(sizeof(DisplayMessage));
-            *dm_err = display_msg_error(accum->error ? accum->error : "HTTP request failed");
+            if (accum->error) {
+                char http_err[96];
+                snprintf(http_err, sizeof(http_err), "HTTP %d: %s", sse_rc, accum->error);
+                *dm_err = display_msg_error(http_err);
+            } else {
+                *dm_err = display_msg_error("HTTP request failed");
+            }
             push_display_event(&agent->paths, agent->display_queue, dm_err);
             DisplayMessage *dm_stop = malloc(sizeof(DisplayMessage));
             *dm_stop = display_msg_stop("error");
