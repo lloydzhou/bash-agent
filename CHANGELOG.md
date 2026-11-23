@@ -4,6 +4,31 @@
 
 ---
 
+## [4.4.3] - 2026-11-23
+
+> **HTTP 错误不再只剩通用文案（PR #105）**：服务端返回 4xx/5xx（如 429 限流、529 过载）时，Bash 与 C 版现在都会显示真实的状态码与响应体，不再被「HTTP request failed」或「Stream interrupted」覆盖。这是错误展示修复，不改变重试策略、响应解析或生成本身。
+
+### Fixed
+
+- **Bash 三端统一不再重复兜底**：`http_stream.awk` 早已对任意 `>= 400` 输出 `ERROR:<code>\tHTTP <code>: <body>`，但下游 END 块仍会补发一条通用 `Stream interrupted ...`，导致 claude 只看到兜底文案、openai/responses 同时看到两条错误。现在 `claude_sse.awk` 与 `transport_responses_sse.awk` 收到 `ERROR:` 后即标记终态，END 不再兜底。`src/agent.sh` 未改动（新增 0 行），改动仅在 awk 层。
+- **C 版解析嵌套错误体**：此前只接受 `"error": "字符串"`，而实际响应是 `{"error":{"type":"overloaded_error","code":"1305","message":"..."}}`，取不到值便落到 `HTTP request failed`。现在解析嵌套 `error.message`，并兼容顶层 `message`。
+- **C 版重试耗尽时保留错误体**：529/503 会触发重试，此前最后一次尝试在释放 `line_buf` 后才返回，错误体已无法读取；现在于清理前完成解析。
+- **C 版不再重复推送错误**：`SSE_ERROR` 回调与 `agent_loop` 各推送一次造成同一条错误显示两遍；现在回调只记录，由末尾统一推送一次并带上状态码，例如 `HTTP 529: ...`。
+- **Go / Rust 无需改动**：两者已有终态判断，实测同样只输出一条真实错误。
+
+### Added
+
+- **跨运行时错误体回归测试**：新增 `test_agent_http_error_body` 与 mock server 的 429/529 分支，覆盖 claude / openai / responses 三个 provider，断言显示真实状态码与消息、且不出现通用兜底文案。
+
+### Validation
+
+- 本轮本地实际运行 `tests/test.sh`：Bash 234 项、C（cagent）234 项、Rust（rustagent）234 项，均为 0 失败，包含新增错误体用例。
+- 独立验证三个 provider × 10 个状态码（400 / 401 / 403 / 404 / 413 / 429 / 500 / 502 / 503 / 529）：均只输出一条真实错误，无兜底重复。
+- C 版实测输出为 `Error: HTTP 529: <upstream message>`。
+- Go 未在本机运行（本机无 Go 工具链）；依据 PR #105 合并前 CI 的 goagent 构建与测试通过。
+
+---
+
 ## [4.4.2] - 2026-11-14
 
 > **Read 不再把二进制内容写入会话（PR #104）**：Bash / Go / Rust / C 在返回任何内容前对整个文件做文本判定，含 NUL 或非严格合法 UTF-8 即拒绝，且不受 `offset` / `limit` 影响；同时将工具调度指导收敛为依赖 DAG 心智模型（PR #103）。本版不涉及图片视觉能力，也不改写历史会话中的既有污染。
