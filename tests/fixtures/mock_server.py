@@ -15,6 +15,20 @@ class H(http.server.BaseHTTPRequestHandler):
         H.last_body = body
         H.last_headers = dict(self.headers)
         # --- Early error returns (must be before send_response(200)) ---
+        # HTTP error status mock: server returns a nested error body so the
+        # runtime must surface the real status/message, not a generic fallback.
+        if b'HTTP_ERR_529' in body:
+            self.send_response(529)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'type':'error','error':{'type':'overloaded_error','code':'1305','message':'HTTP_ERR_529 overloaded'}},sort_keys=True).encode())
+            return
+        if b'HTTP_ERR_429' in body:
+            self.send_response(429)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'type':'error','error':{'type':'rate_limit_error','code':'1302','message':'HTTP_ERR_429 rate limited'}},sort_keys=True).encode())
+            return
         # SubAgent failure mock: child agent request -> 422 error
         # Only match child requests (no SUB_FAIL_MARKER in body)
         if b'SUB_FAIL_CHILD' in body and b'SUB_FAIL_MARKER' not in body:

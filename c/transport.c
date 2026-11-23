@@ -502,6 +502,12 @@ static void process_residual_json(StreamCtx *sctx, const char *provider,
     if (jp.error) return;
 
     char *err_msg = json_get_string(jp.val, "error");
+    if (!err_msg) {
+        /* 嵌套错误体：{"error":{"type":"overloaded_error","message":"..."}} */
+        JsonVal err_obj = json_get(jp.val, "error");
+        if (err_obj.type == JSON_OBJECT) err_msg = json_get_string(err_obj, "message");
+    }
+    if (!err_msg) err_msg = json_get_string(jp.val, "message");
     if (err_msg) {
         emit_simple_event(callback, ctx, SSE_ERROR, err_msg);
         free(err_msg);
@@ -712,7 +718,18 @@ int http_post_sse(const char *url, const char **headers, int header_count,
             return 0;
         }
 
-        /* 需要重试 → 清理本次尝试的状态 */
+        /* 检查重试限制（提前计算，供下方错误体解析判断使用） */
+        struct timespec now_ts;
+        clock_gettime(CLOCK_MONOTONIC, &now_ts);
+        long elapsed_ms = (now_ts.tv_sec - start_ts.tv_sec) * 1000L +
+                          (now_ts.tv_nsec - start_ts.tv_nsec) / 1000000L;
+
+        /* 需要重试 → 清理本次尝试的状态。
+         * 若是最后一次尝试且状态码为 4xx/5xx，先把错误体解析出来：
+         * 重试分支会释放 line_buf，之后就没有错误体可读了。 */
+        if (http_code >= 400 && (attempt >= max_retries || elapsed_ms >= retry_max_time_ms)) {
+            process_residual_json(&sctx, provider, callback, ctx);
+        }
         sb_free(&sctx.line_buf);
         FREE_PTR(sctx.event);
         streamctx_free_openai_tools(&sctx);
@@ -726,12 +743,8 @@ int http_post_sse(const char *url, const char **headers, int header_count,
         }
 
         /* 检查重试限制 */
-        struct timespec now_ts;
-        clock_gettime(CLOCK_MONOTONIC, &now_ts);
-        long elapsed_ms = (now_ts.tv_sec - start_ts.tv_sec) * 1000L +
-                          (now_ts.tv_nsec - start_ts.tv_nsec) / 1000000L;
         if (attempt >= max_retries || elapsed_ms >= retry_max_time_ms) {
-            /* 重试耗尽 */
+            /* 重试耗尽：错误体已在清理前解析，这里只需返回状态码 */
             curl_slist_free_all(hdrs);
             if (rc != CURLE_OK) return -1;
             if (http_code >= 400) return (int)http_code;
@@ -877,6 +890,10 @@ int sse_parse_event(const char *provider, const char *data, size_t data_len,
             }
         } else if (strcmp(type, "error") == 0) {
             char *msg = json_get_string(jp.val, "error");
+            if (!msg) {
+                JsonVal err_obj = json_get(jp.val, "error");
+                if (err_obj.type == JSON_OBJECT) msg = json_get_string(err_obj, "message");
+            }
             if (!msg) msg = json_get_string(jp.val, "message");
             emit_simple_event(callback, ctx, SSE_ERROR, msg ? msg : "unknown error");
             free(msg);

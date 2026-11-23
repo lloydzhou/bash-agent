@@ -21,8 +21,9 @@ BEGIN {
 
 /^:/ { next }
 
-# Pass through ERROR lines from http_stream.awk
-/^ERROR:/ { emit1("ERROR"); emit(substr($0, 7)); emit_flush(); next }
+# Pass through ERROR lines from http_stream.awk; mark it so END does not add a
+# generic fallback error that would hide the real status/body.
+/^ERROR:/ { pending_stop_reason = "error"; emit1("ERROR"); emit(substr($0, 7)); emit_flush(); next }
 
 # Handle curl retry: reset all parser state for new response
 /^RETRY:/ {
