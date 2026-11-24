@@ -1135,8 +1135,12 @@ fn strip_ansi(s: &str) -> String {
             }
             i = j;
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            // Multi-byte UTF-8: advance by the whole character. `bytes[i]
+            // as char` is a Latin-1 map and would mangle non-ASCII (same
+            // bug as the old sanitize_utf8).
+            let ch = s[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
         }
     }
     out
@@ -1230,7 +1234,7 @@ fn utf8_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {
 mod tests {
     use super::{
         Runner, WaitResult, bash_mode_allows, classify_bash_required_mode, drain_fd,
-        sanitize_utf8, wait_child_or_cancel,
+        sanitize_utf8, strip_ansi, wait_child_or_cancel,
     };
     use crate::config::Config;
     use nix::unistd::pipe;
@@ -1261,6 +1265,16 @@ mod tests {
         assert_eq!(sanitize_utf8(b"\xe6\xb5x"), "\\ufffd\\ufffdx");
         // Overlong encoding C0 AF -> literal text for both bytes.
         assert_eq!(sanitize_utf8(b"\xc0\xaf"), "\\ufffd\\ufffd");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_non_ascii() {
+        // Regression: `bytes[i] as char` Latin-1-mangled multi-byte
+        // characters while scanning for ANSI escapes.
+        assert_eq!(strip_ansi("\u{1b}[31m\u{6d4b}\u{8bd5}\u{1b}[0m"), "\u{6d4b}\u{8bd5}");
+        assert_eq!(strip_ansi("\u{4e2d}\u{6587} emoji \u{1f389}"), "\u{4e2d}\u{6587} emoji \u{1f389}");
+        assert_eq!(strip_ansi("a\u{1b}[2Kb\u{1b}[?25hc"), "abc");
+        assert_eq!(strip_ansi(""), "");
     }
 
     #[test]
