@@ -1145,65 +1145,33 @@ fn strip_ansi(s: &str) -> String {
 /// sanitize_utf8: replace illegal UTF-8 bytes with literal `\ufffd` text.
 /// Ported from src/awk/sanitize_utf8.awk — ensures JSON serialization won't
 /// fail on illegal bytes and produces the same `\ufffd` text the mock server checks for.
+///
+/// Valid UTF-8 multi-byte sequences are passed through verbatim (fast path
+/// `std::str::from_utf8`); only invalid bytes are replaced. The previous
+/// implementation pushed each byte via `u8 as char`, which is a Latin-1
+/// zero-extension map — it corrupted every non-ASCII character in tool output
+/// (e.g. "测" = E6 B5 8B became "æµ‹").
 fn sanitize_utf8(data: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(data) {
+        return s.to_string();
+    }
     let mut out = String::with_capacity(data.len());
-    let mut i = 0;
-    let n = data.len();
-    while i < n {
-        let b = data[i];
-        if b < 0x80 {
-            // ASCII
-            out.push(b as char);
-            i += 1;
-        } else if b >= 0xC2 && b <= 0xDF {
-            // 2-byte: C2-DF + 80-BF
-            if i + 1 < n && data[i + 1] >= 0x80 && data[i + 1] <= 0xBF {
-                out.push(b as char);
-                out.push(data[i + 1] as char);
-                i += 2;
-            } else {
-                out.push_str("\\ufffd");
-                i += 1;
+    let mut rest = data;
+    while !rest.is_empty() {
+        match std::str::from_utf8(rest) {
+            Ok(s) => {
+                out.push_str(s);
+                break;
             }
-        } else if b >= 0xE0 && b <= 0xEF {
-            // 3-byte: E0-EF + 80-BF + 80-BF
-            if i + 2 < n
-                && data[i + 1] >= 0x80
-                && data[i + 1] <= 0xBF
-                && data[i + 2] >= 0x80
-                && data[i + 2] <= 0xBF
-            {
-                out.push(b as char);
-                out.push(data[i + 1] as char);
-                out.push(data[i + 2] as char);
-                i += 3;
-            } else {
-                out.push_str("\\ufffd");
-                i += 1;
+            Err(e) => {
+                let valid = e.valid_up_to();
+                out.push_str(std::str::from_utf8(&rest[..valid]).unwrap());
+                let bad = e.error_len().unwrap_or(1);
+                for _ in 0..bad {
+                    out.push_str("\\ufffd");
+                }
+                rest = &rest[valid + bad..];
             }
-        } else if b >= 0xF0 && b <= 0xF4 {
-            // 4-byte: F0-F4 + 80-BF + 80-BF + 80-BF
-            if i + 3 < n
-                && data[i + 1] >= 0x80
-                && data[i + 1] <= 0xBF
-                && data[i + 2] >= 0x80
-                && data[i + 2] <= 0xBF
-                && data[i + 3] >= 0x80
-                && data[i + 3] <= 0xBF
-            {
-                out.push(b as char);
-                out.push(data[i + 1] as char);
-                out.push(data[i + 2] as char);
-                out.push(data[i + 3] as char);
-                i += 4;
-            } else {
-                out.push_str("\\ufffd");
-                i += 1;
-            }
-        } else {
-            // Illegal byte: C0-C1 (overlong), 80-BF (orphan continuation), F5-FF (out of range)
-            out.push_str("\\ufffd");
-            i += 1;
         }
     }
     out
@@ -1262,7 +1230,7 @@ fn utf8_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {
 mod tests {
     use super::{
         Runner, WaitResult, bash_mode_allows, classify_bash_required_mode, drain_fd,
-        wait_child_or_cancel,
+        sanitize_utf8, wait_child_or_cancel,
     };
     use crate::config::Config;
     use nix::unistd::pipe;
@@ -1273,6 +1241,27 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn sanitize_utf8_passes_valid_utf8_through() {
+        // Regression: valid multi-byte sequences must survive byte-for-byte.
+        // The old implementation pushed each byte via `u8 as char` (Latin-1
+        // map), so every non-ASCII char came out mangled.
+        let input = "智谱 Z.ai 测试 — emoji 🎉 too";
+        assert_eq!(sanitize_utf8(input.as_bytes()), input);
+        assert_eq!(sanitize_utf8(b""), "");
+    }
+
+    #[test]
+    fn sanitize_utf8_replaces_invalid_bytes_with_literal_text() {
+        // Orphan continuation byte -> one literal \ufffd per bad byte.
+        assert_eq!(sanitize_utf8(b"a\x80b"), "a\\ufffdb");
+        // Truncated 3-byte sequence: E6 B5 then 'x'. Each consumed byte gets
+        // its own \ufffd (same count as the awk port), 'x' is untouched.
+        assert_eq!(sanitize_utf8(b"\xe6\xb5x"), "\\ufffd\\ufffdx");
+        // Overlong encoding C0 AF -> literal text for both bytes.
+        assert_eq!(sanitize_utf8(b"\xc0\xaf"), "\\ufffd\\ufffd");
+    }
 
     #[test]
     fn dispatch_skill_reads_content() {
