@@ -2224,33 +2224,33 @@ static char *find_instruction_file(const char *dir) {
 /* 从 SKILL.md 内容中提取摘要：优先 description: 行，否则取第一个非空非标题非---行 */
 static void extract_skill_summary(const char *md, StrBuf *out) {
     const char *p = md;
-    char line[1024];
     int found = 0;
-    char fallback[1024] = "";
+    /* fallback 行内容（指向 md 内部，md 在本函数返回前保持有效） */
+    const char *fallback = NULL;
+    size_t fallback_len = 0;
 
     while (*p) {
-        /* 读取一行 */
-        int li = 0;
-        while (*p && *p != '\n' && li < (int)sizeof(line) - 1) {
-            line[li++] = *p++;
-        }
-        line[li] = '\0';
-        if (*p == '\n') p++;
+        /* 整行切片：不设字节上限——SKILL.md 的 description 行可能远超
+         * 1KB（长中文描述），固定缓冲会把多字节字符从中间劈开，
+         * 产生非法 UTF-8 并污染之后每次请求的系统提示词（网关 400） */
+        const char *line = p;
+        const char *nl = strchr(p, '\n');
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        p = nl ? nl + 1 : p + line_len;
 
         /* trim */
-        char *s = line;
-        while (*s == ' ' || *s == '\t') s++;
-        char *e = s + strlen(s);
-        while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) e--;
-        *e = '\0';
-        if (*s == '\0') continue;
+        const char *s = line;
+        size_t slen = line_len;
+        while (slen > 0 && (*s == ' ' || *s == '\t')) { s++; slen--; }
+        while (slen > 0 && (s[slen-1] == ' ' || s[slen-1] == '\t' || s[slen-1] == '\r')) slen--;
+        if (slen == 0) continue;
 
         /* description: 行 */
-        if (strncmp(s, "description:", 12) == 0) {
-            char *val = s + 12;
-            while (*val == ' ' || *val == '\t') val++;
+        if (slen >= 12 && strncmp(s, "description:", 12) == 0) {
+            const char *val = s + 12;
+            size_t vl = slen - 12;
+            while (vl > 0 && (*val == ' ' || *val == '\t')) { val++; vl--; }
             /* 去掉引号 */
-            size_t vl = strlen(val);
             if (vl >= 2 && ((val[0] == '"' && val[vl-1] == '"') ||
                             (val[0] == '\'' && val[vl-1] == '\''))) {
                 val++;
@@ -2261,15 +2261,16 @@ static void extract_skill_summary(const char *md, StrBuf *out) {
             return;
         }
         /* fallback：非标题、非---、非``` */
-        if (!found && fallback[0] == '\0' && s[0] != '#' &&
-            !(s[0] == '-' && s[1] == '-' && s[2] == '-' && s[3] == '\0') &&
-            !(s[0] == '`' && s[1] == '`' && s[2] == '`')) {
-            strncpy(fallback, s, sizeof(fallback) - 1);
-            fallback[sizeof(fallback) - 1] = '\0';
+        if (!found && !fallback &&
+            s[0] != '#' &&
+            !(slen == 3 && s[0] == '-' && s[1] == '-' && s[2] == '-') &&
+            !(slen >= 3 && s[0] == '`' && s[1] == '`' && s[2] == '`')) {
+            fallback = s;
+            fallback_len = slen;
         }
     }
-    if (!found && fallback[0]) {
-        sb_append(out, fallback);
+    if (!found && fallback) {
+        sb_appendn(out, fallback, fallback_len);
     }
 }
 
