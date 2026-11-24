@@ -490,16 +490,38 @@ static void fill_openai_usage_event(SseEvent *evt, JsonVal usage) {
 }
 
 /* 处理非 SSE 响应：如果 line_buf 中有残留 JSON，作为完整响应解析 */
+static void emit_body_preview(sse_callback_fn callback, void *ctx, const char *body) {
+    /* 4xx/5xx 错误体预览：去控制字符、单行截断，避免只报裸 "HTTP request failed" */
+    char preview[256];
+    size_t n = 0;
+    for (const char *p = body; *p && n < sizeof(preview) - 1; p++) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch == '\n' || ch == '\r' || ch == '\t') preview[n++] = ' ';
+        else if (ch < 0x20) preview[n++] = '?';
+        else preview[n++] = *p;
+    }
+    preview[n] = '\0';
+    if (n > 0) emit_simple_event(callback, ctx, SSE_ERROR, preview);
+}
+
 static void process_residual_json(StreamCtx *sctx, const char *provider,
-                                  sse_callback_fn callback, void *ctx) {
+                                  sse_callback_fn callback, void *ctx,
+                                  long http_code) {
     if (!sctx->line_buf.data || sctx->line_buf.len == 0) return;
     char *residual = sctx->line_buf.data;
     while (*residual == ' ' || *residual == '\t' || *residual == '\r' || *residual == '\n') residual++;
-    if (*residual != '{') return;
+    if (*residual != '{') {
+        /* 非 JSON 错误体（如 HTML 502 网关页）：原样预览 */
+        if (http_code >= 400) emit_body_preview(callback, ctx, residual);
+        return;
+    }
 
     size_t pos = 0;
     JsonParse jp = json_parse(residual, &pos);
-    if (jp.error) return;
+    if (jp.error) {
+        if (http_code >= 400) emit_body_preview(callback, ctx, residual);
+        return;
+    }
 
     char *err_msg = json_get_string(jp.val, "error");
     if (!err_msg) {
@@ -511,6 +533,9 @@ static void process_residual_json(StreamCtx *sctx, const char *provider,
     if (err_msg) {
         emit_simple_event(callback, ctx, SSE_ERROR, err_msg);
         free(err_msg);
+    } else if (http_code >= 400) {
+        /* JSON 但无 error/message 字段的错误体：预览原始内容 */
+        emit_body_preview(callback, ctx, residual);
     } else if (strcmp(provider, "claude") == 0) {
         JsonVal content = json_get(jp.val, "content");
         if (content.type == JSON_ARRAY) {
@@ -680,7 +705,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
         if (!should_retry) {
             /* 成功或不可重试错误 → 处理残留 JSON */
             if (rc == CURLE_OK) {
-                process_residual_json(&sctx, provider, callback, ctx);
+                process_residual_json(&sctx, provider, callback, ctx, http_code);
                 /* 用 curl 内部计时器对齐 bash 版 curl -w 的
                  * time_total - time_starttransfer（同一套计时器，口径完全一致，
                  * 排除 DNS/TCP/TLS/TTFB，只算传输时间）。
@@ -709,7 +734,14 @@ int http_post_sse(const char *url, const char **headers, int header_count,
                 emit_simple_event(callback, ctx, SSE_STOP, "interrupted");
                 return 0;
             }
-            if (rc != CURLE_OK) return -1;
+            if (rc != CURLE_OK) {
+                /* curl 层失败：带出具体原因（对齐 bash curl -sS 的 stderr 透传） */
+                char err_buf[160];
+                snprintf(err_buf, sizeof(err_buf), "HTTP request failed: %s",
+                         curl_easy_strerror(rc));
+                emit_simple_event(callback, ctx, SSE_ERROR, err_buf);
+                return -1;
+            }
             if (http_code >= 400) return (int)http_code;
             if (strcmp(provider, "responses") == 0 && !sctx.responses_terminal) {
                 emit_simple_event(callback, ctx, SSE_ERROR, "Stream interrupted (no response.completed received)");
@@ -728,7 +760,7 @@ int http_post_sse(const char *url, const char **headers, int header_count,
          * 若是最后一次尝试且状态码为 4xx/5xx，先把错误体解析出来：
          * 重试分支会释放 line_buf，之后就没有错误体可读了。 */
         if (http_code >= 400 && (attempt >= max_retries || elapsed_ms >= retry_max_time_ms)) {
-            process_residual_json(&sctx, provider, callback, ctx);
+            process_residual_json(&sctx, provider, callback, ctx, http_code);
         }
         sb_free(&sctx.line_buf);
         FREE_PTR(sctx.event);
@@ -746,7 +778,13 @@ int http_post_sse(const char *url, const char **headers, int header_count,
         if (attempt >= max_retries || elapsed_ms >= retry_max_time_ms) {
             /* 重试耗尽：错误体已在清理前解析，这里只需返回状态码 */
             curl_slist_free_all(hdrs);
-            if (rc != CURLE_OK) return -1;
+            if (rc != CURLE_OK) {
+                char err_buf[160];
+                snprintf(err_buf, sizeof(err_buf), "HTTP request failed: %s",
+                         curl_easy_strerror(rc));
+                emit_simple_event(callback, ctx, SSE_ERROR, err_buf);
+                return -1;
+            }
             if (http_code >= 400) return (int)http_code;
             return 0;
         }

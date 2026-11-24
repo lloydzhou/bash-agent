@@ -13,6 +13,19 @@ use crate::util::{
     build_claude_request, chrono_like_now, chrono_now_rfc3339, parse_input_fields, stats_get_f64,
     touch, truncate_for_replay, truncate_str,
 };
+
+/// 错误已由 display 层打印（彩色 Error 行）。
+/// main 捕获后不再重复输出，仅保持非零退出码，与 Bash/C 单条显示对齐。
+#[derive(Debug)]
+pub struct DisplayedError;
+
+impl std::fmt::Display for DisplayedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "error already displayed")
+    }
+}
+
+impl std::error::Error for DisplayedError {}
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -1559,7 +1572,8 @@ impl Agent {
                         if !self.is_stream_json_mode() {
                             self.error(&err_msg);
                         }
-                        return Err(e);
+                        // 错误已显示；用哨兵替换原错误，main 不再重复打印
+                        return Err(anyhow::Error::new(DisplayedError));
                     }
                 };
                 loop {
@@ -1763,7 +1777,8 @@ impl Agent {
                     "error" | "max_tokens" | "length" => {
                         if stop == "error" {
                             if !loop_error.is_empty() {
-                                return Err(anyhow!("{}", loop_error));
+                                // Event::Error 已通过 display 队列打印，main 不再重复输出
+                                return Err(anyhow::Error::new(DisplayedError));
                             }
                             return Err(anyhow!("unknown API error"));
                         }

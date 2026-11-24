@@ -29,6 +29,14 @@ class H(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({'type':'error','error':{'type':'rate_limit_error','code':'1302','message':'HTTP_ERR_429 rate limited'}},sort_keys=True).encode())
             return
+        # 非 JSON 错误体：网关 502 返回 HTML 页，运行时必须透出状态码与
+        # 响应体预览，而不是只报裸 "HTTP request failed"。
+        if b'HTTP_ERR_HTML' in body:
+            self.send_response(502)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b'<html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>HTTP_ERR_HTML upstream failure</p></body></html>')
+            return
         # SubAgent failure mock: child agent request -> 422 error
         # Only match child requests (no SUB_FAIL_MARKER in body)
         if b'SUB_FAIL_CHILD' in body and b'SUB_FAIL_MARKER' not in body:

@@ -13,7 +13,10 @@ fn main() {
     }));
 
     if let Err(err) = run() {
-        eprintln!("Error: {err}");
+        // 已由 display 层显示的错误（DisplayedError）不再重复打印，仅保持非零退出码
+        if err.downcast_ref::<rustagent::agent::DisplayedError>().is_none() {
+            eprintln!("Error: {err}");
+        }
         std::process::exit(1);
     }
 }

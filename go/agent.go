@@ -903,11 +903,9 @@ func (a *Agent) RunLoop(ctx context.Context, initialUserInput, initialTurnKind s
 				if stopReason != "error" {
 					a.EmitDisplay(Event{Type: EventError, Fields: []string{"ERROR", "Response truncated (max_tokens reached)"}})
 				}
-				if loopErr != "" {
-					phaseFatalErr = fmt.Errorf("LLM error: %s", loopErr)
-				} else {
-					phaseFatalErr = fmt.Errorf("stopped: %s", stopReason)
-				}
+				// 两条路径（EventError / 截断提示）均已由 display 层输出，
+				// 用哨兵错误让 main 不再重复打印，与 Bash/C 单条显示对齐
+				phaseFatalErr = &DisplayedError{}
 				break TurnLoop
 			}
 

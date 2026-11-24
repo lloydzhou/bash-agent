@@ -70,8 +70,12 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 			break // 成功（2xx）或客户端错误（4xx）
 		}
 
-		// 传输错误或 5xx → 可重试；上下文取消必须立即退出。
+		// 传输错误或 5xx → 可重试；读取少量响应体用于错误展示（对齐 Bash/C 的 HTTP %d: %s 形式）
+		var bodyPreview string
 		if resp != nil {
+			if pb, _ := io.ReadAll(io.LimitReader(resp.Body, 200)); len(pb) > 0 {
+				bodyPreview = string(pb)
+			}
 			resp.Body.Close()
 		}
 		if ctx.Err() != nil {
@@ -91,8 +95,12 @@ func (t *HTTPTransport) Call(ctx context.Context, messages, systemPrompt, toolDe
 			return nil, fmt.Errorf("http request: %w", httpErr)
 		}
 		// 5xx 重试耗尽 → 返回错误事件
+		errMsg := fmt.Sprintf("HTTP %d (server error, retries exhausted)", resp.StatusCode)
+		if bodyPreview != "" {
+			errMsg = fmt.Sprintf("HTTP %d: %s (server error, retries exhausted)", resp.StatusCode, bodyPreview)
+		}
 		ch := make(chan Event, 2)
-		ch <- Event{Type: EventError, Fields: []string{"ERROR", fmt.Sprintf("HTTP %d (server error, retries exhausted)", resp.StatusCode)}}
+		ch <- Event{Type: EventError, Fields: []string{"ERROR", errMsg}}
 		ch <- Event{Type: EventStop, Fields: []string{"STOP", "error"}}
 		close(ch)
 		return ch, nil
