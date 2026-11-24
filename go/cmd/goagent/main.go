@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -284,7 +285,11 @@ Examples:
 		runInteractive(ctx, a, store, display, home, cfg.Model, userInput)
 	} else if userInput != "" {
 		if err := a.RunLoop(ctx, userInput, "user_input"); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			// 已由 display 层显示的错误（DisplayedError）不再重复打印
+			var de *agent.DisplayedError
+			if !errors.As(err, &de) {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			}
 			os.Exit(1)
 		}
 	} else {
@@ -295,7 +300,11 @@ Examples:
 			n, _ := os.Stdin.Read(buf)
 			userInput = strings.TrimSpace(string(buf[:n]))
 			if err := a.RunLoop(ctx, userInput, "user_input"); err != nil {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				// 已由 display 层显示的错误（DisplayedError）不再重复打印
+				var de *agent.DisplayedError
+				if !errors.As(err, &de) {
+					fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				}
 				os.Exit(1)
 			}
 		} else {

@@ -1086,11 +1086,19 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
                 return 0;
             }
             /* 对齐 bash 版 END 块：总是发出 STOP + ERROR；
-             * 有错误体时带上状态码，如 "HTTP 529: {...}"。 */
+             * 4xx/5xx 有错误体时带状态码前缀，如 "HTTP 529: {...}"；
+             * curl 层失败（sse_rc == -1）时 transport 已带
+             * "HTTP request failed: <原因>"，原样显示不再加前缀。 */
             DisplayMessage *dm_err = malloc(sizeof(DisplayMessage));
-            if (accum->error) {
-                char http_err[96];
+            if (accum->error && sse_rc >= 400) {
+                char http_err[288];
                 snprintf(http_err, sizeof(http_err), "HTTP %d: %s", sse_rc, accum->error);
+                *dm_err = display_msg_error(http_err);
+            } else if (accum->error) {
+                *dm_err = display_msg_error(accum->error);
+            } else if (sse_rc >= 400) {
+                char http_err[64];
+                snprintf(http_err, sizeof(http_err), "HTTP %d: (empty response body)", sse_rc);
                 *dm_err = display_msg_error(http_err);
             } else {
                 *dm_err = display_msg_error("HTTP request failed");
@@ -3109,7 +3117,8 @@ int agent_compact_context(Agent *agent, const char *trigger) {
         fprintf(err, "[compact] Failed to generate summary: rc=%d text_len=%zu stop=%s error=%s\n",
                 rc, accum.text.len,
                 accum.stop_reason ? accum.stop_reason : "none",
-                accum.error ? accum.error : "none");
+                accum.error ? accum.error
+                    : (rc >= 400 ? "(empty response body)" : "none"));
         sse_accum_free(&accum);
         free(summary_body);
         sb_free(&dropped);

@@ -3083,7 +3083,48 @@ test_agent_http_error_body() {
         else
             green "HTTP error body ($provider): no generic fallback error"; ((PASS++)) || true
         fi
+
+        # 单条错误显示：display 层输出一次后，main 不得重复打印（Go/Rust 对齐 Bash/C）
+        local err_count
+        err_count=$(printf '%s\n' "$output" | grep -c "Error:") || true
+        if [ "$err_count" -eq 1 ]; then
+            green "HTTP error body ($provider): exactly one Error line"; ((PASS++)) || true
+        else
+            red "HTTP error body ($provider): expected 1 'Error:' line, got $err_count"
+            echo "  Output: $output" >&2
+            ((FAIL++)) || true
+        fi
     done
+
+    # 非 JSON 错误体（HTML 502）：状态码与响应体预览必须可见
+    output=$(BASH_AGENT_HOME="$(mktemp -d)" timeout 20 "$AGENT" -p claude \
+        --base-url "$BASE/v1" -m test --api-key test --session "http-err-html-$$" \
+        "HTTP_ERR_HTML trigger" 2>&1) || true
+
+    if echo "$output" | grep -qE "HTTP 502" && echo "$output" | grep -q "502 Bad Gateway"; then
+        green "HTML error body: status and body preview shown"; ((PASS++)) || true
+    else
+        red "HTML error body: status or body preview missing"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    err_count=$(printf '%s\n' "$output" | grep -c "Error:") || true
+    if [ "$err_count" -eq 1 ]; then
+        green "HTML error body: exactly one Error line"; ((PASS++)) || true
+    else
+        red "HTML error body: expected 1 'Error:' line, got $err_count"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    fi
+
+    if echo "$output" | grep -q "Stream interrupted"; then
+        red "HTML error body: generic fallback still appended"
+        echo "  Output: $output" >&2
+        ((FAIL++)) || true
+    else
+        green "HTML error body: no generic fallback error"; ((PASS++)) || true
+    fi
 }
 
 

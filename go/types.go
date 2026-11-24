@@ -268,3 +268,9 @@ type ToolExecutor interface {
 }
 
 // ─── 其他辅助类型 ───
+
+// DisplayedError 表示错误已由 display 层输出（彩色 Error 行）。
+// main 捕获后不再重复输出，仅保持非零退出码，与 Bash/C 单条显示对齐。
+type DisplayedError struct{}
+
+func (e *DisplayedError) Error() string { return "error already displayed" }
