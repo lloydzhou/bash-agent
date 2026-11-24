@@ -4,6 +4,33 @@
 
 ---
 
+## [4.4.4] - 2026-11-24
+
+> **错误显示跨运行时收敛 + ccagent 网关 400 根因修复（PR #107 / #108）**：Go 与 Rust 的 HTTP 错误输出从两条收敛为一条（与 Bash/C 表现一致）；C 版不再吞掉失败原因；并修复一个让 ccagent 对真实网关必现 400 的隐性 bug——系统提示词 skill-index 中被 1KB 固定缓冲从中间劈开的多字节字符。
+
+### Fixed
+
+- **ccagent 网关 400 根因（#107）**：`extract_skill_summary` 用固定 1023 字节缓冲读取 SKILL.md 行，超长 description 行（如 lark-sheets 的 1105 字节）会把多字节字符从中间劈开，非法 UTF-8 进入 skill-index / 系统提示词，导致每次请求体都被网关以 `400 {"detail":"There was an error parsing the body"}` 秒拒。改为指针切片读整行（无长度上限），对齐 bash / rust 的整行语义。经本地代理抓包验证：修复后请求体为合法 UTF-8（0 替换符），原被劈文本「…域名不是飞书而回退到 WebFetch」完整。
+- **C 失败原因透传（#107）**：curl 层失败现在带 `curl_easy_strerror` 具体原因（如 DNS / 连接失败），不再是裸 `HTTP request failed`；4xx/5xx 的非 JSON 错误体（如网关 HTML 502 页）或无 `error.message` 字段的 JSON 体输出单行预览；`HTTP %d:` 前缀只加在真实 HTTP 状态上（不再出现 `HTTP -1:`）；空响应体明确报出；compact 失败行同步补齐。
+- **strip_ansi 不再 Latin-1 破坏非 ASCII（#108）**：rust `strip_ansi` 非转义分支的 `bytes[i] as char` 与旧版 `sanitize_utf8` 同款 Latin-1 零扩展映射，会把多字节字符逐字节转成乱码。改为按完整字符前进；新增 CJK + emoji 回归测试。此前因 `count_diff_lines` 只统计 +/- 前缀而无可见影响，现构造即正确。
+
+### Changed
+
+- **Go / Rust 错误收敛为单条（#107）**：引入 `DisplayedError` 哨兵（Go 经 `errors.As`、Rust 经 anyhow downcast），display 层输出一次后 main 保持非零退出码但不再重复打印 `Error:`；Go 的 max_tokens 截断路径同样收敛；Go 5xx 重试耗尽的错误事件补上响应体预览（此前丢弃）。
+
+### Added
+
+- **回归测试**：mock server 新增 `HTTP_ERR_HTML` 分支（502 + text/html 网关页）；Test 51 扩展为断言每个失败用例输出恰好一条 `Error:`（Go/Rust 修复前为两条），并覆盖 HTML 502 场景（状态码 + 响应体预览可见、无通用回退）。
+
+### Validation
+
+- 本地 `tests/test.sh`：Bash / C / Rust 各 **240 项，0 失败**（含新增断言）。
+- CI：bash-agent 套件、cagent / goagent 各 6 平台、rustagent、webagent 全绿（#107、#108）。
+- 诊断方法论备查：本地转发代理分别抓取四个运行时对同一会话的实发请求，发现 ccagent 请求体含 1 个 U+FFFD 替换符而 bash/rust 为 0，从而定位上述根因；重放实验证明 body 字节与请求头本身均被网关接受（200）。
+- **已知事项（后续任务）**：C/Rust 有 300s 总超时而 Bash 仅连接超时 + 速度保护（长生成行为差异）；C json.c 对孤立代理转义（`\ud800` 系）会写出非法 UTF-8（潜在加固项，本次事故未涉及）；`sessions` 列表 preview 的 1KB 缓冲劈字仅影响显示。
+
+---
+
 ## [4.4.3] - 2026-11-23
 
 > **HTTP 错误不再只剩通用文案（PR #105）**：服务端返回 4xx/5xx（如 429 限流、529 过载）时，Bash 与 C 版现在都会显示真实的状态码与响应体，不再被「HTTP request failed」或「Stream interrupted」覆盖。这是错误展示修复，不改变重试策略、响应解析或生成本身。
