@@ -574,10 +574,10 @@ store_session_list_rows() {
 llm_stream_curl() {
     exec 9< <(curl -sS --no-buffer -D - --retry 2 --retry-delay 1 --retry-max-time 20 --connect-timeout 5 --speed-limit 1 --speed-time 60 -w '\nevent: timing\ndata: {"time_total":%{time_total},"time_starttransfer":%{time_starttransfer}}\n\n' "${HEADER_ARGS[@]}" -d @- "$API_URL" 2>&1)
     curl_pid=$!
-    echo "$curl_pid" > "/tmp/agent_curl_pid.$$" 2>/dev/null || true
+    echo "$curl_pid" > "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null || true
     util_awk_run -f "$AWK_DIR/http_stream.awk" <&9
     exec 9<&-
-    rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
+    rm -f "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null || true
 }
 
 llm_call() {
@@ -1501,7 +1501,7 @@ agent_loop() {
     [[ "$turn_kind" != notify ]] && store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
     # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl
-    trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT
+    trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT
     # Open the process substitution
     exec 7< <(agent_loop_stream "$user_input")
     while util_read_msg <&7; do
@@ -1536,7 +1536,7 @@ agent_loop() {
         fi
     fi
     exec 7<&-
-    rm -f "/tmp/agent_curl_pid.$$" 2>/dev/null || true
+    rm -f "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null || true
     $had_error && return 1
     return 0
 }
