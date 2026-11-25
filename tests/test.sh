@@ -3250,6 +3250,428 @@ test_agent_max_tokens_suffix
 test_agent_image_placeholders
 test_agent_http_error_body
 
+# bash 3.2 无 coproc：用 FIFO + 后台进程。stdout 落文件，测试端顺序轮询读取。
+ACP_CWD=""
+ACP_SID=""
+ACP_B_SID=""
+ACP_LINE=""
+ACPB_LINE=""
+ACP_EXIT=""
+ACP_FIFO="/tmp/acp_stdin_$$.fifo"
+ACP_B_FIFO="/tmp/acp_stdin_b_$$.fifo"
+ACP_OUT="/tmp/acp_stdout_$$.log"
+ACP_B_OUT="/tmp/acp_stdout_b_$$.log"
+ACP_LINES="/tmp/acp_lines_$$.log"
+ACP_B_LINES="/tmp/acp_lines_b_$$.log"
+
+acp_prepare_cwd() { ACP_CWD="$(mktemp -d "${TMPDIR:-/tmp}/acp-e2e-cwd.XXXXXX")"; }
+
+acp_start() {  # $1=port — 主实例（stdin FIFO: fd20, stdout: $ACP_OUT）
+    : > "$ACP_OUT"
+    rm -f "$ACP_FIFO"; mkfifo "$ACP_FIFO"
+    BASH_AGENT_HOME="$_TEST_HOME" ANTHROPIC_BASE_URL="http://localhost:$1/v1" \
+        ANTHROPIC_API_KEY=test bash "$AGENT" --acp \
+        < "$ACP_FIFO" > "$ACP_OUT" 2>/tmp/acp_stderr_$$.log &
+    ACP_PID=$!
+    ACP_OFF=0
+    exec 20>"$ACP_FIFO"   # 持有写端，防止提前 EOF
+}
+
+acp_start_b() {  # 并发测试第二实例（stdin FIFO: fd22, stdout: $ACP_B_OUT）
+    : > "$ACP_B_OUT"
+    rm -f "$ACP_B_FIFO"; mkfifo "$ACP_B_FIFO"
+    BASH_AGENT_HOME="$_TEST_HOME" ANTHROPIC_BASE_URL="http://localhost:$1/v1" \
+        ANTHROPIC_API_KEY=test bash "$AGENT" --acp \
+        < "$ACP_B_FIFO" > "$ACP_B_OUT" 2>/tmp/acp_stderr_b_$$.log &
+    ACPB_PID=$!
+    ACP_B_OFF=0
+    exec 22>"$ACP_B_FIFO"
+}
+
+acp_send()   { printf '%s\n' "$1" >&20 2>/dev/null; }
+acp_send_b() { printf '%s\n' "$1" >&22 2>/dev/null; }
+
+ACP_OFF=0
+ACP_B_OFF=0
+
+# 命令替换会剥离尾部换行，不能用 [[ $chunk == *$'\n'* ]] 判完整行；
+# 改为字节级判断：行字节数+1(换行) <= 可用字节数 即为完整行（含 UTF-8 多字节安全）
+acp_readline() {  # $1=timeout秒 → ACP_LINE（按字节偏移轮询 stdout 文件取下一完整行）
+    local _end=$(( SECONDS + ${1:-5} )) _b _line _lb
+    while (( SECONDS < _end )); do
+        _b=$(wc -c < "$ACP_OUT" 2>/dev/null)
+        _b=${_b//[[:space:]]/}
+        if (( ${_b:-0} > ACP_OFF )); then
+            _line=$(tail -c +$(( ACP_OFF + 1 )) "$ACP_OUT" 2>/dev/null | head -n 1)
+            _lb=$(printf '%s' "$_line" | wc -c)
+            _lb=${_lb//[[:space:]]/}
+            if (( _lb + 1 <= _b - ACP_OFF )); then
+                ACP_OFF=$(( ACP_OFF + _lb + 1 ))
+                ACP_LINE="$_line"
+                return 0
+            fi
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+acp_readline_b() {
+    local _end=$(( SECONDS + ${1:-5} )) _b _line _lb
+    while (( SECONDS < _end )); do
+        _b=$(wc -c < "$ACP_B_OUT" 2>/dev/null)
+        _b=${_b//[[:space:]]/}
+        if (( ${_b:-0} > ACP_B_OFF )); then
+            _line=$(tail -c +$(( ACP_B_OFF + 1 )) "$ACP_B_OUT" 2>/dev/null | head -n 1)
+            _lb=$(printf '%s' "$_line" | wc -c)
+            _lb=${_lb//[[:space:]]/}
+            if (( _lb + 1 <= _b - ACP_B_OFF )); then
+                ACP_B_OFF=$(( ACP_B_OFF + _lb + 1 ))
+                ACPB_LINE="$_line"
+                return 0
+            fi
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+
+acp_collect() {  # $1=reqid $2=timeout秒：行追加到 $ACP_LINES，直到该 id 的回包
+    : > "$ACP_LINES"
+    local _end=$(( SECONDS + $2 ))
+    while (( SECONDS < _end )); do
+        acp_readline 1 || continue
+        printf '%s\n' "$ACP_LINE" >> "$ACP_LINES"
+        [[ "$ACP_LINE" == *'"id":'"$1,"* ]] && return 0
+    done
+    return 1
+}
+acp_collect_b() {
+    : > "$ACP_B_LINES"
+    local _end=$(( SECONDS + $2 ))
+    while (( SECONDS < _end )); do
+        acp_readline_b 1 || continue
+        printf '%s\n' "$ACPB_LINE" >> "$ACP_B_LINES"
+        [[ "$ACPB_LINE" == *'"id":'"$1,"* ]] && return 0
+    done
+    return 1
+}
+
+acp_silence() {  # $1=秒：等待期不产生任何行则通过（回包后静默）
+    local _end=$(( SECONDS + $1 ))
+    while (( SECONDS < _end )); do
+        acp_readline 1 || continue
+        printf 'UNEXPECTED AFTER REPLY: %s\n' "$ACP_LINE" >> "$ACP_LINES"
+        return 1
+    done
+    return 0
+}
+
+acp_stop() {  # 关 stdin（EOF）→ 等待退出 → ACP_EXIT
+    exec 20>&- 2>/dev/null
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$ACP_PID" 2>/dev/null || break
+        sleep 1
+    done
+    if kill -0 "$ACP_PID" 2>/dev/null; then
+        kill -9 "$ACP_PID" 2>/dev/null || true
+        ACP_EXIT="hung"
+    else
+        wait "$ACP_PID" 2>/dev/null
+        ACP_EXIT="$?"
+    fi
+}
+
+acp_kill() {
+    kill -9 "$ACP_PID" 2>/dev/null || true
+    wait "$ACP_PID" 2>/dev/null || true
+    exec 20>&- 2>/dev/null
+    rm -f "$ACP_FIFO"
+}
+acp_kill_b() {
+    kill -9 "$ACPB_PID" 2>/dev/null || true
+    wait "$ACPB_PID" 2>/dev/null || true
+    exec 22>&- 2>/dev/null
+    rm -f "$ACP_B_FIFO"
+}
+
+acp_new_session() {  # 主实例：initialize + session/new → ACP_SID
+    acp_send '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}'
+    acp_readline 5 || return 1
+    acp_send '{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"'"$ACP_CWD"'","mcpServers":[]}}'
+    acp_readline 5 || return 1
+    ACP_SID="$(sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p' <<< "$ACP_LINE")"
+    [[ -n "$ACP_SID" ]]
+}
+
+acp_new_session_b() {  # B 实例 → ACP_B_SID
+    acp_send_b '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}'
+    acp_readline_b 5 || return 1
+    acp_send_b '{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"'"$ACP_CWD"'","mcpServers":[]}}'
+    acp_readline_b 5 || return 1
+    ACP_B_SID="$(sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p' <<< "$ACPB_LINE")"
+    [[ -n "$ACP_B_SID" ]]
+}
+
+acp_assert_lines_valid() {  # $1=file $2=描述：每行都是合法 JSON-RPC 2.0
+    if python3 -c '
+import json, sys
+bad = 0
+for ln in open(sys.argv[1]):
+    ln = ln.strip()
+    if not ln:
+        continue
+    try:
+        o = json.loads(ln)
+        assert o.get("jsonrpc") == "2.0"
+    except Exception:
+        bad += 1
+print("bad=%d" % bad)
+sys.exit(1 if bad else 0)' "$1" >/dev/null 2>&1; then
+        green "$2"; ((PASS++)) || true
+    else
+        red "$2"; echo "  file: $1"; ((FAIL++)) || true
+    fi
+}
+
+# T1/T2/T12: initialize→new→prompt 的 update 序列 + end_turn；stdout 全合法；EOF 退出码 0
+test_acp_basic_jsonrpc_prompt() {
+    acp_start "$PORT"
+    if ! acp_new_session; then
+        red "ACP basic: initialize/session/new 失败"; ((FAIL++)) || true; acp_kill; return
+    fi
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"Hello"}]}}'
+    if acp_collect 2 25; then
+        acp_assert_lines_valid "$ACP_OUT" "ACP stdout 每行都是合法 JSON-RPC"
+        if grep -q '"sessionUpdate":"agent_message_chunk"' "$ACP_LINES" && grep -q '"stopReason":"end_turn"' "$ACP_LINES"; then
+            green "ACP prompt update 序列 + end_turn 回包"; ((PASS++)) || true
+        else
+            red "ACP prompt update 序列 + end_turn 回包"; echo "  lines: $(grep -c . "$ACP_LINES")"; ((FAIL++)) || true
+        fi
+    else
+        red "ACP basic prompt 未收到回包"; ((FAIL++)) || true
+    fi
+    acp_stop
+    if [[ "$ACP_EXIT" == "0" ]]; then
+        green "ACP stdin EOF 退出码 0"; ((PASS++)) || true
+    else
+        red "ACP stdin EOF 退出码 0"; echo "  exit=$ACP_EXIT"; ((FAIL++)) || true
+    fi
+}
+
+# T3: 工具调用 tool_call→tool_call_update；bash-guard 拦截为 failed
+test_acp_tool_call_and_guard() {
+    acp_start "$PORT"
+    acp_new_session || { red "ACP guard: session failed"; ((FAIL++)) || true; acp_kill; return; }
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"ACP_GUARD_MARKER"}]}}'
+    if acp_collect 2 30 \
+        && grep -q '"sessionUpdate":"tool_call","toolCallId":"toolu_acp_guard","kind":"execute"' "$ACP_LINES" \
+        && grep -q '"sessionUpdate":"tool_call_update","toolCallId":"toolu_acp_guard","status":"failed"' "$ACP_LINES" \
+        && grep -q 'Error:' "$ACP_LINES" \
+        && grep -q '"stopReason":"end_turn"' "$ACP_LINES"; then
+        green "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn"; ((PASS++)) || true
+    else
+        red "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn"; echo "  lines: $(grep -c . "$ACP_LINES" 2>/dev/null || echo 0)"; ((FAIL++)) || true
+    fi
+    acp_kill
+}
+
+# T4/T6: cancel（前台工具执行中）→ 未完成 tool_call 先补 failed，再 cancelled 回包
+test_acp_cancel_tool_open() {
+    acp_start "$PORT"
+    acp_new_session || { red "ACP cancel: session failed"; ((FAIL++)) || true; acp_kill; return; }
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"ACP_SLOW_MARKER"}]}}'
+    sleep 2
+    acp_send '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"'"$ACP_SID"'"}}'
+    if acp_collect 2 25; then
+        if grep -q '"toolCallId":"toolu_acp_slow","status":"failed"' "$ACP_LINES" && grep -q '"stopReason":"cancelled"' "$ACP_LINES"; then
+            green "ACP cancel: 未完成 tool_call 补 failed + cancelled 回包"; ((PASS++)) || true
+        else
+            red "ACP cancel: 未完成 tool_call 补 failed + cancelled 回包"; ((FAIL++)) || true
+        fi
+        # T6: update 先于回包（failed 行号 < cancelled 行号）
+        local fl cl
+        fl=$(grep -n '"toolCallId":"toolu_acp_slow","status":"failed"' "$ACP_LINES" | head -1 | cut -d: -f1)
+        cl=$(grep -n '"stopReason":"cancelled"' "$ACP_LINES" | head -1 | cut -d: -f1)
+        if [[ -n "$fl" && -n "$cl" && "$fl" -lt "$cl" ]]; then
+            green "ACP cancel: failed 补发行号先于 cancelled 回包行号"; ((PASS++)) || true
+        else
+            red "ACP cancel: failed 补发行号先于 cancelled 回包行号"; echo "  failed@$fl cancelled@$cl"; ((FAIL++)) || true
+        fi
+        if acp_silence 2; then
+            green "ACP cancel: 回包后 2s 静默"; ((PASS++)) || true
+        else
+            red "ACP cancel: 回包后 2s 静默"; ((FAIL++)) || true
+        fi
+    else
+        red "ACP cancel: 未收到 cancelled 回包"; ((FAIL++)) || true
+    fi
+    acp_kill
+}
+
+# T5: 取消隔离 — A/B 并跑慢流，cancel A 不影响 B（B 的请求/工具进程存活并正常完成）
+test_acp_cancel_isolation() {
+    acp_start "$PORT"
+    acp_start_b "$PORT"
+    local ok_a=false ok_b=false
+    if acp_new_session && acp_new_session_b; then
+        acp_send   '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"ACP_SLOW_MARKER"}]}}'
+        acp_send_b '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_B_SID"'","prompt":[{"type":"text","text":"ACP_SLOW_MARKER"}]}}'
+        sleep 2
+        acp_send '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"'"$ACP_SID"'"}}'
+        if acp_collect 2 25 && grep -q '"stopReason":"cancelled"' "$ACP_LINES"; then ok_a=true; fi
+        if acp_collect_b 2 40 && grep -q '"stopReason":"end_turn"' "$ACP_B_LINES" && ! grep -q '"stopReason":"cancelled"' "$ACP_B_LINES"; then ok_b=true; fi
+        if $ok_a && $ok_b; then
+            green "ACP 取消隔离: A=cancelled、B=end_turn（B 的请求未被误杀）"; ((PASS++)) || true
+        else
+            red "ACP 取消隔离: A=cancelled、B=end_turn"; echo "  a=$ok_a b=$ok_b"; ((FAIL++)) || true
+        fi
+    else
+        red "ACP 取消隔离: session 建立失败"; ((FAIL++)) || true
+    fi
+    acp_kill
+    acp_kill_b
+}
+
+# T8: 已完成轮次的 cancel 被忽略，后续 prompt 正常（cancel 与 end_turn 竞争的确定性覆盖）
+test_acp_cancel_idle_ignore() {
+    acp_start "$PORT"
+    acp_new_session || { red "ACP idle cancel: session failed"; ((FAIL++)) || true; acp_kill; return; }
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"Hello"}]}}'
+    local first_ok=false
+    acp_collect 2 20 && grep -q '"stopReason":"end_turn"' "$ACP_LINES" && first_ok=true
+    acp_send '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"'"$ACP_SID"'"}}'
+    sleep 1
+    acp_send '{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"Hello again"}]}}'
+    if $first_ok && acp_collect 3 20 && grep -q '"stopReason":"end_turn"' "$ACP_LINES" && ! grep -q 'already in progress' "$ACP_LINES"; then
+        green "ACP 空闲 cancel 被忽略 + 后续 prompt 正常"; ((PASS++)) || true
+    else
+        red "ACP 空闲 cancel 被忽略 + 后续 prompt 正常"; echo "  first=$first_ok"; ((FAIL++)) || true
+    fi
+    acp_kill
+}
+
+# T7/T11: 子代理 tool_call 在 prompt 返回前可见；取消时子代理/后台 Bash 被终止、回包后静默、无残留注入
+test_acp_subagent_visible_and_cancel_cleanup() {
+    acp_start "$PORT"
+    acp_new_session || { red "ACP subagent: session failed"; ((FAIL++)) || true; acp_kill; return; }
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"ACP_SUB_SLOW_MARKER"}]}}'
+    local saw_sub=false got_early_reply=false
+    local _end=$(( SECONDS + 6 ))
+    while (( SECONDS < _end )); do
+        acp_readline 1 || continue
+        printf '%s\n' "$ACP_LINE" >> "$ACP_LINES"
+        [[ "$ACP_LINE" == *'"toolCallId":"sub:'* ]] && saw_sub=true
+        [[ "$ACP_LINE" == *'"id":2,'* ]] && got_early_reply=true && break
+    done
+    if $saw_sub && ! $got_early_reply; then
+        green "ACP 子代理 tool_call(sub:) 在 prompt 返回前可见"; ((PASS++)) || true
+    else
+        red "ACP 子代理 tool_call(sub:) 在 prompt 返回前可见"; echo "  saw_sub=$saw_sub early_reply=$got_early_reply"; ((FAIL++)) || true
+    fi
+    acp_send '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"'"$ACP_SID"'"}}'
+    if acp_collect 2 30 && grep -q '"stopReason":"cancelled"' "$ACP_LINES"; then
+        green "ACP cancel: 子代理/后台任务进行中取消返回 cancelled"; ((PASS++)) || true
+    else
+        red "ACP cancel: 子代理/后台任务进行中取消返回 cancelled"; ((FAIL++)) || true
+    fi
+    if acp_silence 2; then
+        green "ACP cancel: 回包后 2s 静默（子代理晚到结果不输出）"; ((PASS++)) || true
+    else
+        red "ACP cancel: 回包后 2s 静默（子代理晚到结果不输出）"; ((FAIL++)) || true
+    fi
+    sleep 2
+    if pgrep -f 'sleep 5; echo acp-bg-done' >/dev/null 2>&1; then
+        red "ACP cancel: 后台 Bash 进程已被终止"; ((FAIL++)) || true
+    else
+        green "ACP cancel: 后台 Bash 进程已被终止"; ((PASS++)) || true
+    fi
+    acp_send '{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"Hello"}]}}'
+    if acp_collect 3 20 && grep -q '"stopReason":"end_turn"' "$ACP_LINES"; then
+        green "ACP cancel: 取消后同一会话再次 prompt 正常（无残留通知注入）"; ((PASS++)) || true
+    else
+        red "ACP cancel: 取消后同一会话再次 prompt 正常（无残留通知注入）"; ((FAIL++)) || true
+    fi
+    acp_kill
+}
+
+# T9a: 同会话并发 prompt → -32600
+test_acp_concurrent_prompt_rejected() {
+    acp_start "$PORT"
+    acp_new_session || { red "ACP concurrent prompt: session failed"; ((FAIL++)) || true; acp_kill; return; }
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"ACP_SLOW_MARKER"}]}}'
+    sleep 2
+    acp_send '{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"second"}]}}'
+    local rej=false
+    local _end=$(( SECONDS + 5 ))
+    while (( SECONDS < _end )); do
+        acp_readline 1 || continue
+        if [[ "$ACP_LINE" == *'"id":3,'* && "$ACP_LINE" == *'-32600'* ]]; then rej=true; break; fi
+    done
+    if $rej; then
+        green "ACP 同会话并发 prompt → -32600 prompt already in progress"; ((PASS++)) || true
+    else
+        red "ACP 同会话并发 prompt → -32600 prompt already in progress"; ((FAIL++)) || true
+    fi
+    acp_send '{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"'"$ACP_SID"'"}}'
+    sleep 8
+    acp_kill
+}
+
+# T9b: 两会话并发输出 >64KB 大块不交错（每行仍是合法 JSON-RPC）
+test_acp_big_output_concurrent() {
+    acp_start "$PORT"
+    acp_start_b "$PORT"
+    local ok=false
+    if acp_new_session && acp_new_session_b; then
+        acp_send   '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"ACP_BIG_MARKER"}]}}'
+        acp_send_b '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_B_SID"'","prompt":[{"type":"text","text":"ACP_BIG_MARKER"}]}}'
+        local oka=false okb=false
+        acp_collect   2 40 && grep -q '"stopReason":"end_turn"' "$ACP_LINES"   && oka=true
+        acp_collect_b 2 40 && grep -q '"stopReason":"end_turn"' "$ACP_B_LINES" && okb=true
+        if $oka && $okb; then
+            ok=true
+            if grep -q '"toolCallId":"toolu_acp_big","status":"completed"' "$ACP_LINES" && grep -q '"toolCallId":"toolu_acp_big","status":"completed"' "$ACP_B_LINES"; then
+                green "ACP 并发 >64KB tool_result 两会话均完整完成"; ((PASS++)) || true
+            else
+                red "ACP 并发 >64KB tool_result 两会话均完整完成"; ((FAIL++)) || true
+            fi
+        fi
+    fi
+    if $ok; then
+        acp_assert_lines_valid "$ACP_OUT"   "ACP 并发大块输出 A 行完整（无交错）"
+        acp_assert_lines_valid "$ACP_B_OUT" "ACP 并发大块输出 B 行完整（无交错）"
+    else
+        red "ACP 并发 >64KB 大块输出"; ((FAIL++)) || true
+    fi
+    acp_kill
+    acp_kill_b
+}
+
+# T10: session/resume — 存在 {} / 不存在 -32002
+test_acp_resume() {
+    acp_start "$PORT"
+    acp_new_session || { red "ACP resume: session failed"; ((FAIL++)) || true; acp_kill; return; }
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$ACP_SID"'","prompt":[{"type":"text","text":"Hello"}]}}'
+    acp_collect 2 20 >/dev/null || true
+    acp_stop   # 结束第一个实例
+    acp_start "$PORT"
+    acp_send '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}'
+    acp_readline 5 || true
+    acp_send '{"jsonrpc":"2.0","id":1,"method":"session/resume","params":{"sessionId":"'"$ACP_SID"'","cwd":"'"$ACP_CWD"'","mcpServers":[]}}'
+    local ok_exist=false
+    acp_readline 8 && [[ "$ACP_LINE" == *'"id":1,'* && "$ACP_LINE" == *'"result":{}'* ]] && ok_exist=true
+    acp_send '{"jsonrpc":"2.0","id":2,"method":"session/resume","params":{"sessionId":"acp-missing-0000","cwd":"'"$ACP_CWD"'","mcpServers":[]}}'
+    local ok_missing=false
+    acp_readline 8 && [[ "$ACP_LINE" == *'"id":2,'* && "$ACP_LINE" == *'-32002'* ]] && ok_missing=true
+    if $ok_exist && $ok_missing; then
+        green "ACP resume: 已存在 → {}；不存在 → -32002"; ((PASS++)) || true
+    else
+        red "ACP resume: 已存在 → {}；不存在 → -32002"; echo "  exist=$ok_exist missing=$ok_missing"; ((FAIL++)) || true
+    fi
+    acp_kill
+}
+
 # ──────────────────────────────────────────────
 # Test 52: bash mode scanner unit tests (Bash only)
 # NOTE: This test directly sources Bash functions from src/agent.sh.
@@ -3455,6 +3877,23 @@ test_bash_mode_scanner() {
 }
 
 test_bash_mode_scanner
+# ──────────────────────────────────────────────
+# ACP (--acp) E2E tests (issue #110 P1)
+# ──────────────────────────────────────────────
+if [[ "${RUN_ACP_TESTS:-true}" == true ]]; then
+    info "ACP (--acp) E2E tests"
+    acp_prepare_cwd
+    test_acp_basic_jsonrpc_prompt
+    test_acp_tool_call_and_guard
+    test_acp_cancel_tool_open
+    test_acp_cancel_isolation
+    test_acp_cancel_idle_ignore
+    test_acp_subagent_visible_and_cancel_cleanup
+    test_acp_concurrent_prompt_rejected
+    test_acp_big_output_concurrent
+    test_acp_resume
+    timing_finish
+fi
 
 timing_finish
 

@@ -77,6 +77,8 @@ awk_files = {
     "term_title": ("term_title.awk", "_AWK_TERM_TITLE"),
     "send_sub_result": ("send_sub_result.awk", "_AWK_SEND_SUB_RESULT"),
     "sanitize_utf8": ("sanitize_utf8.awk", "_AWK_SANITIZE_UTF8"),
+    "acp_in": ("acp_in.awk", "_AWK_ACP_IN"),
+    "acp_out": ("acp_out.awk", "_AWK_ACP_OUT"),
 }
 
 awk_bodies = {}
@@ -191,6 +193,10 @@ content = content.replace('-f "$AWK_DIR/term_title.awk"', '"${_AWK_TERM_TITLE}"'
 content = content.replace('-f "$AWK_DIR/json.awk" -f "$AWK_DIR/send_sub_result.awk"', '"${_AWK_JSON}\n${_AWK_SEND_SUB_RESULT}"')
 # --- Inline sanitize_utf8.awk reference ---
 content = content.replace('util_awk_run -f "$AWK_DIR/sanitize_utf8.awk"', 'util_awk_run "${_AWK_SANITIZE_UTF8}"')
+# --- Inline acp_in.awk reference in acp_mode ---
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/acp_in.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_PROTOCOL}\n${_AWK_ACP_IN}"')
+# --- Inline acp_out.awk reference in acp_mode ---
+content = content.replace('util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/acp_out.awk"', 'util_awk_run "${_AWK_JSON}\n${_AWK_ACP_OUT}"')
 # --- Inline http_stream.awk reference in OpenAI transport (piped, not <&9) ---
 content = content.replace('util_awk_run -f "$AWK_DIR/http_stream.awk" |', 'util_awk_run "${_AWK_HTTP_STREAM}" |')
 # --- Write output ---

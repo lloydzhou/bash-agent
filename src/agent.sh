@@ -33,6 +33,13 @@ declare -a SKILL_NAMES=()
 INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
+AGENT_VERSION="4.4.4"
+
+# ACP runtime state (--acp)
+: "${ACP_LOCK_FD:=}"     # 令牌 FIFO fd（dispatcher 打开后 export，worker 继承）
+: "${ACP_OUT_FD:=}"      # ACP_OUT 管道写端 fd（同上）
+: "${ACP_WORKER:=}"      # 1 表示当前进程是 acp worker 子 shell（turn_pids 记录用）
+ACP_SHUTDOWN=false
 
 util_awk_run() { LC_ALL=C LANG=C awk "$@"; }
 
@@ -127,6 +134,8 @@ util_json_escape() {
 }
 
 util_is_stream_json() { [[ "$OUTPUT_FORMAT" == "stream-json" ]]; }
+util_is_acp() { [[ "$OUTPUT_FORMAT" == "acp" ]]; }
+util_is_machine_output() { [[ "$OUTPUT_FORMAT" == "stream-json" || "$OUTPUT_FORMAT" == "acp" ]]; }
 
 util_append_section() {
     local __outvar="$1" tag="$2" content="$3" name="${4:-}" wrapped
@@ -368,6 +377,9 @@ store_session_init() {
     ACTIVE_TASK_FILE="${session_dir}/active_task.count"
     [[ -p "$NOTIFY_FIFO" ]] || { rm -f "$NOTIFY_FIFO"; mkfifo "$NOTIFY_FIFO"; }
     printf '0\n' > "$ACTIVE_TASK_FILE"
+    TURN_PIDS_FILE="${session_dir}/turn_pids"  # ACP worker: 本轮子代理/后台 Bash pid 记录
+    TURN_BUSY_FILE="${session_dir}/acp.busy"   # ACP dispatcher: prompt 进行中标志（noclobber 原子创建）
+    TURN_CANCEL_FILE="${session_dir}/acp.cancel"  # ACP 取消标志：后台子 shell trap 不可靠，经文件传递取消状态
 }
 
 store_session_fork() {
@@ -426,7 +438,13 @@ store_session_resolve_continue() {
 
 store_event_append() {
     [[ -n "${SESSION_EVENT_FILE:-}" ]] || return 0
-    if util_is_stream_json; then printf '%s\n' "$1" | tee -a "$SESSION_EVENT_FILE"; else printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"; fi
+    if util_is_acp; then
+        # events.jsonl 照常落盘；同时经令牌互斥写给 acp_out.awk（唯一 stdout 写入方）
+        printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"
+        acp_emit "$(printf '%s\tEVT\t%s\t%s' "${ACP_SID:-}" "${SUB_AGENT_DEPTH:-0}" "$1")"
+    elif util_is_stream_json; then printf '%s\n' "$1" | tee -a "$SESSION_EVENT_FILE"
+    else printf '%s\n' "$1" >> "$SESSION_EVENT_FILE"
+    fi
 }
 
 store_conv_add_user() {
@@ -942,6 +960,9 @@ tool_bash() {
             _rc=$?; _out=$(util_awk_run -f "$AWK_DIR/sanitize_utf8.awk" "$tmpout"); rm -f "$tmpout"
             util_write_msg "ASYNC_TASK_RESULT" "$task_id" "$_rc" "$_out" >> "$NOTIFY_FIFO" 2>/dev/null || true
         ) </dev/null >/dev/null 2>&1 &
+        if [[ "$ACP_WORKER" == "1" && -n "${TURN_PIDS_FILE:-}" ]]; then
+            printf '%s\n' "$!" >> "$TURN_PIDS_FILE" 2>/dev/null || true
+        fi
         printf 'Async task started: task_id=%s, pid=%s' "$task_id" "$!"
         return 0
     fi
@@ -1042,6 +1063,9 @@ tool_sub_agent() {
         store_sub_send_result "$sub_session_id" "$_status" "$_parent_notify_fifo"
         _done=true
     ) &
+    if [[ "$ACP_WORKER" == "1" && -n "${TURN_PIDS_FILE:-}" ]]; then
+        printf '%s\n' "$!" >> "$TURN_PIDS_FILE" 2>/dev/null || true
+    fi
 
     printf 'Sub-agent started: session_id=%s, pid=%s' "$sub_session_id" "$!"
 }
@@ -1186,6 +1210,7 @@ display_message() {
 }
 
 display_term_title() {
+    util_is_acp && return 0
     local status="${1:-}" active=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
     [[ "$status" == "idle" ]] && (( active > 0 )) && status=""
     store_stats_format_title "$MODEL" "$status"
@@ -1507,6 +1532,11 @@ agent_loop() {
     while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
+        # ACP worker: 取消标志检查（取消后到达的事件不落盘 → open tool_call 保留，DONE 时补 failed）
+        if [[ -n "${ACP_WORKER:-}" && -f "${TURN_CANCEL_FILE:-}" ]]; then
+            INTERRUPT_REQUESTED=true
+            break
+        fi
         case "$_type" in
             TEXT) store_event_append "{\"type\":\"text\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
             THINKING) store_event_append "{\"type\":\"thinking\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
@@ -1518,13 +1548,17 @@ agent_loop() {
             ERROR) store_event_append "{\"type\":\"error\",\"message\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
             RETRY) store_event_append '{"type":"retry"}' ;;
         esac
-        util_is_stream_json || ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
+        util_is_machine_output || ( util_write_msg "${REPLY_MESSAGE[@]}" ) >&4 2>/dev/null || true
         if [[ "$_type" == "ERROR" ]]; then
             had_error=true
             break
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
+    # ACP worker: read 被中断（流未结束）时同样判定为取消
+    if [[ -n "${ACP_WORKER:-}" && -f "${TURN_CANCEL_FILE:-}" && "${INTERRUPT_REQUESTED:-}" != true ]]; then
+        INTERRUPT_REQUESTED=true
+    fi
     if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
         gr=$(llm_goal_call) || { store_event_append '{"type":"error","message":"goal check failed"}'; return 1; }
         if [[ "$gr" == "GOAL_DONE" ]]; then
@@ -1562,6 +1596,7 @@ Options:
   --thinking MODE         Thinking mode: adaptive|enabled|disabled (default: adaptive)
   --output-format FMT     Output format: human | stream-json
   --print                 Alias for --output-format stream-json
+  --acp                   Run as ACP (Agent Client Protocol) server: JSON-RPC 2.0 over stdio
   --session [NAME]        Use named session (persist conversation)
   --continue              Continue most recent session
   --fork                  When resuming, create a new forked session instead of reusing the source (use with --session <id> or --continue)
@@ -1606,6 +1641,7 @@ parse_args() {
             --thinking)      THINKING="$2"; shift 2 ;;
             --output-format)  OUTPUT_FORMAT="$2"; shift 2 ;;
             --print)         OUTPUT_FORMAT="stream-json"; shift ;;
+            --acp)           OUTPUT_FORMAT="acp"; shift ;;
             --session)
                 if [[ $# -gt 1 && ! "$2" =~ ^- ]]; then
                     SESSION_ID="$2"; shift 2
@@ -1634,8 +1670,8 @@ parse_args() {
     done
 
     case "$OUTPUT_FORMAT" in
-        human|stream-json) ;;
-        *) util_die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json)" ;;
+        human|stream-json|acp) ;;
+        *) util_die "Unknown output format: $OUTPUT_FORMAT (use human|stream-json|acp)" ;;
     esac
 }
 
@@ -1681,10 +1717,15 @@ validate_config() {
     fi
 
     if [[ -z "$API_KEY" && -z "$BASE_URL" ]]; then
-        case "$PROVIDER" in
-            claude) util_die "No API key. Set ANTHROPIC_API_KEY or use --api-key" ;;
-            openai|responses) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
-        esac
+        # ACP: 不在启动时 die（否则 client 只能看到进程退出），推迟到 session/prompt 报 -32000
+        if util_is_acp; then
+            ACP_AUTH_MISSING=true
+        else
+            case "$PROVIDER" in
+                claude) util_die "No API key. Set ANTHROPIC_API_KEY or use --api-key" ;;
+                openai|responses) util_die "No API key. Set OPENAI_API_KEY or use --api-key" ;;
+            esac
+        fi
     fi
 
     # Build the final transport only after provider fallback has completed.
@@ -1727,6 +1768,350 @@ validate_config() {
 
     # Unified SSE parser — same for all providers (sse_convert normalizes to Claude format)
     sse_parse() { util_awk_run -v verbose="${VERBOSE:-false}" -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/todo_protocol.awk" -f "$AWK_DIR/claude_sse.awk"; }
+}
+
+# ===== ACP runtime (--acp): JSON-RPC 2.0 over stdio (issue #110 P1) =====
+# 结构：client stdin → acp_in.awk（RESP 帧）→ acp_mode dispatcher → 每会话一个 worker
+# 子 shell（复用 agent_main_loop 的 FIFO/notify 机制与 agent_run_loop）→ 事件经
+# store_event_append 进入 ACP_OUT 管道 → acp_out.awk（唯一 stdout 写入方）→ client。
+# fd 约定（dispatcher 打开，worker 继承）：10=原 stdout（只给 acp_out）、11=令牌 FIFO、
+# 13=ACP_OUT 管道写端；3-9 保持现有用途。stdout 结构性隔离：dispatcher 与全部 worker
+# 的 fd1 都指向 stderr，任何遗漏的 printf / 终端标题都不可能污染协议帧。
+
+acp_sid_var() { printf 'ACP_S_%s' "${1//-/_}"; }  # sid 动态变量名（bash 3.2 无关联数组）
+
+acp_session_set() {  # $1=sid $2=worker_pid $3=cwd
+    local v; v="$(acp_sid_var "$1")_PID"
+    eval "$v=\$2"
+    v="$(acp_sid_var "$1")_CWD"
+    eval "$v=\$3"
+    ACP_SID_LIST="$ACP_SID_LIST $1"
+}
+
+acp_session_pid() { local v; v="$(acp_sid_var "$1")_PID"; eval "printf '%s' "\${$v:-}""; }
+acp_session_cwd() { local v; v="$(acp_sid_var "$1")_CWD"; eval "printf '%s' "\${$v:-}""; }
+
+acp_session_dir() {  # $1=sid $2=cwd → 磁盘会话目录（project_key(cwd)/sid）
+    ( cd "$2" 2>/dev/null && printf '%s/%s' "$(store_session_get_dir)" "$1" ) 2>/dev/null
+}
+
+acp_prepare_session_dir() {  # $1=sid $2=cwd：建目录 + 预创建 FIFO，消除 new 与首个 prompt 的竞态
+    (
+        cd "$2" 2>/dev/null || exit 1
+        local _sd f
+        _sd="$(store_session_get_dir)/$1"
+        mkdir -p "$_sd" 2>/dev/null || true
+        for f in input.fifo notify.fifo; do
+            [[ -p "$_sd/$f" ]] || { rm -f "$_sd/$f" 2>/dev/null || true; mkfifo "$_sd/$f" 2>/dev/null || true; }
+        done
+    ) 2>/dev/null
+    return 0
+}
+
+# 令牌 FIFO 互斥（macOS PIPE_BUF=512，>512B 单次 write 不保证原子）：
+# 读走令牌字节 → 整行一次写出 → 回填令牌。全部 bash 内建，不额外 fork。
+acp_emit() {
+    [[ -n "${ACP_OUT_FD:-}" && -n "${ACP_LOCK_FD:-}" ]] || return 0
+    local _tok=""
+    IFS= read -r -n 1 _tok <&"$ACP_LOCK_FD" 2>/dev/null || true
+    printf '%s\n' "$1" >&"$ACP_OUT_FD" 2>/dev/null || true
+    printf x >&"$ACP_LOCK_FD" 2>/dev/null || true
+}
+
+acp_reply_result() {  # $1=id_raw $2=result_json（单行）
+    acp_emit "$(printf -- '-\tRAW\t{"jsonrpc":"2.0","id":%s,"result":%s}' "$1" "$2")"
+}
+
+acp_reply_error() {  # $1=id_raw $2=code $3=message（内部常量文本，无需 JSON 转义）
+    acp_emit "$(printf -- '-\tRAW\t{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":"%s"}}' "$1" "$2" "$3")"
+}
+
+acp_worker_start() {  # $1=sid $2=cwd —— 复刻 tool_sub_agent 子 shell 模式
+    (
+        cd "$2" || exit 1
+        export SESSION_ID="$1"
+        export SUB_AGENT_DEPTH=0
+        export INTERACTIVE=false
+        export ACP_WORKER=1
+        export ACP_SID="$1"
+        store_session_init
+        util_load_tool_defs
+        set -m  # 后台任务自成进程组（bash 3.2 兼容，不依赖 setsid），取消时按组终止
+        exec 1>&2
+        exec 4>/dev/null
+        acp_worker_main_loop
+    ) &
+}
+
+acp_maybe_done() {  # ACTIVE_TASK==0 && NOTIFY_BUF 空 → DONE（与 headless SESSION_END 条件一致）
+    (( $(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0) <= 0 )) || return 0
+    [[ -s "$NOTIFY_BUF" ]] && return 0
+    [[ -n "${ACP_CUR_REQID:-}" ]] || return 0
+    acp_emit "$ACP_SID"$'\t'"DONE"$'\t'"$ACP_CUR_REQID"
+    ACP_CUR_REQID=""
+    rm -f "${TURN_BUSY_FILE:-}" 2>/dev/null || true
+}
+
+acp_cancel_cleanup() {  # 取消收尾：终止本轮子代理/后台 Bash → 清通知 → DONE interrupted
+    local pid
+    # 杀掉本轮 curl 并关 SSE 读端（后台子 shell trap 不执行时 trap 内的 kill 不会发生）
+    kill "$(cat "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null)" 2>/dev/null || true
+    exec 7<&- 2>/dev/null || true
+    rm -f "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null || true
+    if [[ -s "${TURN_PIDS_FILE:-}" ]]; then
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        done < "$TURN_PIDS_FILE"
+        sleep 2
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            kill -KILL -- "-$pid" 2>/dev/null || true
+        done < "$TURN_PIDS_FILE"
+    fi
+    : > "${TURN_PIDS_FILE:-/dev/null}" 2>/dev/null || true
+    : > "${NOTIFY_BUF:-/dev/null}" 2>/dev/null || true
+    printf '0\n' > "${ACTIVE_TASK_FILE:-/dev/null}" 2>/dev/null || true
+    if [[ -n "${ACP_CUR_REQID:-}" ]]; then
+        # 第三字段 reason=interrupted：acp_out 映射 stopReason=cancelled（覆盖 last_stop）
+        acp_emit "$ACP_SID"$'\t'"DONE"$'\t'"$ACP_CUR_REQID"$'\t'"interrupted"
+        ACP_CUR_REQID=""
+    fi
+    rm -f "${TURN_BUSY_FILE:-}" 2>/dev/null || true
+}
+
+acp_worker_main_loop() {  # agent_main_loop 的 ACP 变体：不自动 SESSION_END，以 DONE 帧回报
+    local _notify_pid
+    until exec 3< "$INPUT_FIFO"; do sleep 0.01; done 2>/dev/null
+    exec 5> "$INPUT_FIFO"  # keep write end open to prevent premature EOF
+    (
+        trap - INT EXIT
+        exec 6<> "$NOTIFY_FIFO" 2>/dev/null  # `<>` 双端打开，防止写者关闭后 EOF
+        while util_read_msg <&6; do
+            case "${REPLY_MESSAGE[0]}" in
+                AGENT_RESULT)
+                    local _sid="${REPLY_MESSAGE[1]}" _status="${REPLY_MESSAGE[2]}" _thinking="${REPLY_MESSAGE[3]}" _text="${REPLY_MESSAGE[4]}"
+                    local _in="${REPLY_MESSAGE[5]:-0}" _out="${REPLY_MESSAGE[6]:-0}" _cr="${REPLY_MESSAGE[7]:-0}" _cc="${REPLY_MESSAGE[8]:-0}" _reqs="${REPLY_MESSAGE[9]:-0}"
+                    store_event_append "{\"type\":\"usage\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"cache_read_input_tokens\":$_cr,\"cache_creation_input_tokens\":$_cc,\"kind\":\"sub_agent\",\"sub_session_id\":\"$(util_json_escape "$_sid")\"}"
+                    store_event_append "{\"type\":\"sub_agent_result\",\"session_id\":\"$(util_json_escape "$_sid")\",\"status\":\"$_status\",\"input_tokens\":$_in,\"output_tokens\":$_out,\"thinking\":\"$(util_json_escape "$_thinking")\",\"text\":\"$(util_json_escape "$_text")\"}"
+                    store_event_append "{\"type\":\"sub_agent_end\",\"session_id\":\"$(util_json_escape "$_sid")\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"status\":\"$_status\"}"
+                    store_stats_update total_input_tokens=+$_in total_output_tokens=+$_out total_cache_read_tokens=+$_cr total_cache_creation_tokens=+$_cc sub_agent_request_count=+1 agent_request_count=+$_reqs
+                    util_write_msg "AGENT_RESULT" "$_sid" "$_status" "$_in" "$_out" "$_thinking" "$_text" >> "$NOTIFY_BUF"
+                    ;;
+                ASYNC_TASK_RESULT)
+                    store_event_append "{\"type\":\"async_task_result\",\"task_id\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\",\"exit_code\":${REPLY_MESSAGE[2]},\"output\":\"$(util_json_escape "${REPLY_MESSAGE[3]}")\"}"
+                    util_write_msg "${REPLY_MESSAGE[@]}" >> "$NOTIFY_BUF"
+                    ;;
+                USER_NOTIFY)
+                    util_write_msg "USER_NOTIFY" "${REPLY_MESSAGE[1]}" >> "$NOTIFY_BUF"
+                    ;;
+                *) continue ;;
+            esac
+            if [[ "${REPLY_MESSAGE[0]}" != "USER_NOTIFY" ]]; then
+                local _cnt=$(cat "$ACTIVE_TASK_FILE" 2>/dev/null || echo 0)
+                (( _cnt > 0 )) && printf '%d\n' $(( _cnt - 1 )) > "$ACTIVE_TASK_FILE"
+            fi
+            util_write_msg "NOTIFY_PENDING" >&5
+        done
+    ) &
+    _notify_pid=$!
+
+    while true; do
+        trap 'ACP_INT_IDLE=true' INT  # 空闲时收到 INT（cancel 竞态）：中断 read 但不退出
+        ACP_INT_IDLE=false
+        if ! util_read_msg <&3; then
+            if [[ -f "${TURN_CANCEL_FILE:-}" ]]; then
+                # 空闲时收到 cancel：标志文件已由 dispatcher 写入，做收尾并继续等下一轮 prompt
+                [[ -n "${ACP_CUR_REQID:-}" ]] && acp_cancel_cleanup
+                continue
+            fi
+            if [[ "${ACP_INT_IDLE:-}" == true ]]; then
+                # INT（cancel）到达且 worker 空闲但 prompt 仍挂着（等子代理/后台 Bash）：取消收尾
+                [[ -n "${ACP_CUR_REQID:-}" ]] && acp_cancel_cleanup
+                continue
+            fi
+            break
+        fi
+        case "${REPLY_MESSAGE[0]}" in
+            SESSION_END)
+                break
+                ;;
+            USER_INPUT)
+                ACP_CUR_REQID="${REPLY_MESSAGE[1]}"
+                : > "${TURN_PIDS_FILE:-/dev/null}" 2>/dev/null || true
+                rm -f "${TURN_CANCEL_FILE:-}" 2>/dev/null || true
+                agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
+                if [[ "${INTERRUPT_REQUESTED:-}" == true ]]; then
+                    acp_cancel_cleanup
+                else
+                    acp_maybe_done
+                fi
+                ;;
+            CANCEL)
+                # session/cancel 经 INPUT_FIFO 唤醒空闲 worker：有挂起轮次则收尾（DONE interrupted）
+                [[ -n "${ACP_CUR_REQID:-}" ]] && acp_cancel_cleanup
+                ;;
+            NOTIFY_PENDING)
+                agent_run_loop "" notify
+                if [[ "${INTERRUPT_REQUESTED:-}" == true ]]; then
+                    acp_cancel_cleanup
+                else
+                    acp_maybe_done
+                fi
+                ;;
+        esac
+    done
+    trap - INT
+    kill "$_notify_pid" 2>/dev/null; wait "$_notify_pid" 2>/dev/null || true
+    cleanup_all_pipes
+    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "${TURN_BUSY_FILE:-}" "${TURN_PIDS_FILE:-}" 2>/dev/null || true
+}
+
+acp_shutdown_workers() {  # $1=signal：向全部 worker 单 pid 发信号（不广播进程组）
+    local sid pid
+    for sid in $ACP_SID_LIST; do
+        pid="$(acp_session_pid "$sid")"
+        [[ -n "$pid" ]] && kill -"$1" "$pid" 2>/dev/null || true
+    done
+}
+
+acp_worker_alive() { local pid; pid="$(acp_session_pid "$1")"; [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; }
+acp_wait_workers() {  # 轮询等待全部 worker 退出（bash 3.2 无 wait -n/-T），超时后由调用方 KILL 兜底
+    local sid i n
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
+        n=0
+        for sid in $ACP_SID_LIST; do acp_worker_alive "$sid" && n=$(( n + 1 )); done
+        (( n == 0 )) && break
+        sleep 0.5
+    done
+    for sid in $ACP_SID_LIST; do
+        pid="$(acp_session_pid "$sid")"
+        [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
+    done
+}
+
+acp_session_fifo() {  # $1=sid $2=cwd → 该会话 INPUT_FIFO 路径
+    local d; d="$(acp_session_dir "$1" "$2")"
+    [[ -n "$d" ]] && printf '%s/input.fifo' "$d"
+}
+
+acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_emit 交给 acp_out
+    local _acp_tmp="${TMPDIR:-/tmp}/bash-agent-acp.$$"
+    mkdir -p "$_acp_tmp" 2>/dev/null || true
+    local _lock_fifo="$_acp_tmp/lock.fifo"
+    mkfifo "$_lock_fifo" 2>/dev/null || true
+
+    exec 10>&1   # ACP_STDOUT：只留给 acp_out.awk
+    exec 1>&2    # dispatcher 与所有子进程的 stdout → stderr（结构性隔离）
+    exec 13> >(util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/acp_out.awk" >&10)
+    exec 11<> "$_lock_fifo"
+    printf x >&11 2>/dev/null || true
+    export ACP_LOCK_FD=11 ACP_OUT_FD=13
+
+    local ACP_SID_LIST=""
+    # ACP_AUTH_MISSING 由 validate_config 在全局设置（缺 key 时推迟到 prompt 报 -32000），此处不得重置
+    ACP_SHUTDOWN=false
+    trap 'ACP_SHUTDOWN=true' INT TERM
+
+    exec 8< <(util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/protocol.awk" -f "$AWK_DIR/acp_in.awk")
+    local _id _method _sid _cwd _text _pid _fifo _sdir _csid _cpid
+    while util_read_msg <&8; do
+        [[ "${ACP_SHUTDOWN:-}" == true ]] && break
+        case "${REPLY_MESSAGE[0]}" in
+            BAD)
+                acp_reply_error "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}"
+                ;;
+            NOTIF)
+                # session/cancel：只影响目标会话；无进行中轮次（无 busy 文件）时忽略
+                _csid="${REPLY_MESSAGE[2]}"
+                _cpid="$(acp_session_pid "$_csid")"
+                _sdir="$(acp_session_dir "$_csid" "$(acp_session_cwd "$_csid")")"
+                if [[ -n "$_cpid" && -n "$_sdir" && -f "$_sdir/acp.busy" ]]; then
+                    # SIGINT 在后台异步子 shell 中 trap 不执行（bash 行为），取消状态
+                    # 经 acp.cancel 标志文件传递；同时断 curl（SSE 源）促使当前流尽快结束，
+                    # 并写 CANCEL 控制帧到 INPUT_FIFO 唤醒空闲阻塞中的 worker read
+                    : > "$_sdir/acp.cancel" 2>/dev/null || true
+                    kill -INT "$_cpid" 2>/dev/null || true
+                    # curl pid 文件由子 shell 写入，其中 $$ 为 dispatcher pid（bash 子 shell 继承父 $$）
+                    kill -INT "$(cat "/tmp/agent_curl_pid.$$.${_csid}" 2>/dev/null)" 2>/dev/null || true
+                    _cfifo="$(acp_session_fifo "$_csid" "$(acp_session_cwd "$_csid")")"
+                    ( exec 5> "$_cfifo" && util_write_msg "CANCEL" >&5 ) 2>/dev/null || true
+                fi
+                ;;
+            REQ)
+                _id="${REPLY_MESSAGE[1]}" _method="${REPLY_MESSAGE[2]}" _sid="${REPLY_MESSAGE[3]}"
+                _cwd="${REPLY_MESSAGE[4]}" _text="${REPLY_MESSAGE[5]}"
+                case "$_method" in
+                    initialize)
+                        # 能力如实声明：未实现的一律不声明
+                        acp_reply_result "$_id" "{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":false,\"promptCapabilities\":{\"image\":false,\"audio\":false,\"embeddedContext\":true},\"mcpCapabilities\":{\"http\":false,\"sse\":false},\"sessionCapabilities\":{\"resume\":{}}},\"agentInfo\":{\"name\":\"bash-agent\",\"version\":\"$AGENT_VERSION\"},\"authMethods\":[]}"
+                        ;;
+                    session/new)
+                        _sid="$(util_new_session_id)"
+                        acp_prepare_session_dir "$_sid" "$_cwd"
+                        acp_worker_start "$_sid" "$_cwd"
+                        acp_session_set "$_sid" "$!" "$_cwd"
+                        acp_reply_result "$_id" "{\"sessionId\":\"$_sid\"}"
+                        ;;
+                    session/resume)
+                        _sdir="$(acp_session_dir "$_sid" "$_cwd")"
+                        if [[ -n "$(acp_session_pid "$_sid")" ]]; then
+                            # 同一 dispatcher 内该 sid 已有活跃 worker：拒绝，避免双 reader 竞争同一 FIFO
+                            acp_reply_error "$_id" -32600 "session already active: $_sid"
+                        elif [[ -z "$_sdir" || ! -d "$_sdir" ]]; then
+                            acp_reply_error "$_id" -32002 "session not found: $_sid"
+                        else
+                            acp_prepare_session_dir "$_sid" "$_cwd"
+                            rm -f "$_sdir/acp.busy" 2>/dev/null || true
+                            acp_worker_start "$_sid" "$_cwd"
+                            acp_session_set "$_sid" "$!" "$_cwd"
+                            acp_reply_result "$_id" "{}"
+                        fi
+                        ;;
+                    session/prompt)
+                        _pid="$(acp_session_pid "$_sid")"
+                        _sdir="$(acp_session_dir "$_sid" "$(acp_session_cwd "$_sid")")"
+                        if [[ -z "$_pid" ]]; then
+                            acp_reply_error "$_id" -32002 "session not found: $_sid"
+                        elif [[ "${ACP_AUTH_MISSING:-false}" == true ]]; then
+                            acp_reply_error "$_id" -32000 "auth required: no API key configured"
+                        else
+                            # noclobber 原子创建 busy 标志：同会话并发 prompt 拒绝
+                            if ( set -o noclobber; printf '%s\n' "$_id" > "$_sdir/acp.busy" ) 2>/dev/null; then
+                                acp_emit "$_sid"$'\t'"TURN"$'\t'"$_id"
+                                _fifo="$(acp_session_fifo "$_sid" "$(acp_session_cwd "$_sid")")"
+                                ( exec 5> "$_fifo" && util_write_msg "USER_INPUT" "$_id" "$_text" >&5 ) 2>/dev/null
+                            else
+                                acp_reply_error "$_id" -32600 "prompt already in progress"
+                            fi
+                        fi
+                        ;;
+                    *)
+                        acp_reply_error "$_id" -32601 "Method not found: $_method"
+                        ;;
+                esac
+                ;;
+        esac
+    done
+
+    if [[ "${ACP_SHUTDOWN:-}" == true ]]; then
+        # SIGINT/SIGTERM：先 drain（转发 INT，进行中的 prompt 以 cancelled 返回）
+        acp_shutdown_workers INT
+        sleep 3
+    fi
+    # stdin EOF（或 drain 结束）：SESSION_END → wait → 关 acp_out → exit 0
+    local sid pid fifo
+    for sid in $ACP_SID_LIST; do
+        fifo="$(acp_session_fifo "$sid" "$(acp_session_cwd "$sid")")"
+        [[ -n "$fifo" && -p "$fifo" ]] && { ( exec 5> "$fifo" && util_write_msg "SESSION_END" >&5 ) 2>/dev/null; } || true
+    done
+    acp_wait_workers
+    acp_shutdown_workers KILL  # 兜底：仍未退出的 worker
+    exec 13>&- 2>/dev/null
+    exec 11>&- 2>/dev/null
+    exec 10>&- 2>/dev/null
+    rm -rf "$_acp_tmp" 2>/dev/null || true
+    exit 0
 }
 
 # Ctrl+O: inject input through NOTIFY_FIFO.
@@ -1789,6 +2174,11 @@ main() {
     [[ -z "${USER_INPUT:-}" && -n "$GOAL" && -t 0 ]] && USER_INPUT="$GOAL"
     util_find_awk_dir
     validate_config
+    if util_is_acp; then
+        # ACP: 顶层不建会话，每个 session/new|resume 由 worker 子 shell 自行 store_session_init
+        acp_mode
+        return 0
+    fi
     [[ "${FORK:-}" == true ]] && { local _fs="$(store_session_get_dir)/${SESSION_ID}"; SESSION_ID="$(util_new_session_id)"; store_session_fork "$_fs" "$(store_session_get_dir)/${SESSION_ID}"; }
     store_session_init
     util_load_tool_defs
