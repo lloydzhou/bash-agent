@@ -7,6 +7,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
+mod acp;
 mod server;
 
 const AGENT_NAMES: &[&str] = &["bash-agent", "goagent", "rustagent", "rust2agent", "cagent"];
@@ -43,7 +44,7 @@ fn project_key(cwd: &Path) -> String {
 }
 
 /// 构造 events.jsonl 路径：$BASH_AGENT_HOME/.bash-agent/projects/<project_key>/<session_id>/events.jsonl
-fn events_path_for(home: &Path, cwd: &Path, session_id: &str) -> PathBuf {
+pub(crate) fn events_path_for(home: &Path, cwd: &Path, session_id: &str) -> PathBuf {
     home.join(".bash-agent/projects")
         .join(project_key(cwd))
         .join(session_id)
@@ -60,7 +61,7 @@ fn read_speed_from_stats(events_path: &Path) -> Option<i64> {
 
 /// usage 事件可能先于 agent 将本次速度写入 stats.json。
 /// 等待一小段时间，以读取到本次调用的速度而非上一轮的值。
-fn wait_for_speed_from_stats(events_path: &Path, previous_speed: Option<i64>) -> Option<i64> {
+pub(crate) fn wait_for_speed_from_stats(events_path: &Path, previous_speed: Option<i64>) -> Option<i64> {
     const RETRIES: usize = 20;
     const INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
     for attempt in 0..=RETRIES {
@@ -121,6 +122,23 @@ fn resolve_events_path(args: &[String], home: &Path, cwd: &Path) -> Option<PathB
     if args.iter().any(|a| a == "--continue") {
         let sid = resolve_latest_session(home, cwd)?;
         return Some(events_path_for(home, cwd, &sid));
+    }
+    None
+}
+
+/// ACP 模式解析握手目标：给 --session 直接取该会话；--continue 取最近会话；否则 None（走 session/new）。
+fn resolve_resume_target(args: &[String], home: &Path, cwd: &Path) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == "--session" {
+            if let Some(sid) = args.get(i + 1) {
+                if !sid.starts_with('-') {
+                    return Some(sid.clone());
+                }
+            }
+        }
+    }
+    if args.iter().any(|a| a == "--continue") {
+        return resolve_latest_session(home, cwd);
     }
     None
 }
@@ -281,6 +299,7 @@ fn usage() {
     eprintln!("  --bind ADDR      bind address (default 127.0.0.1)");
     eprintln!("  --port PORT      listen port (default 8686)");
     eprintln!("  --agent PATH     agent binary (default: resolve <agent> from dist/ or PATH)");
+    eprintln!("  --protocol P     acp or stream-json (default: stream-json)");
     eprintln!("  -h, --help       show this help");
     eprintln!();
     eprintln!("<agent>: {} (default: cagent)", AGENT_NAMES.join(" | "));
@@ -288,11 +307,12 @@ fn usage() {
     eprintln!("it is treated as an argument for cagent.");
     eprintln!("Remaining args are passed through to the agent on every spawn, plus");
     eprintln!("a per-input prompt positional and --output-format stream-json.");
+    eprintln!("--protocol acp keeps a persistent agent process speaking ACP instead.");
 }
 
 /// 从透传给 agent 的参数中提取前端展示配置（--model / --provider / --max-context-tokens）。
 /// 参数在 `--` 之后也可能出现，扫描全部 pos；值支持 `--k v` 与 `--k=v` 两种形式。
-fn build_config_json(args: &[String]) -> String {
+fn build_config_json(args: &[String], protocol: &str) -> String {
     let mut model: Option<&str> = None;
     let mut provider: Option<&str> = None;
     let mut max_context: Option<&str> = None;
@@ -324,6 +344,7 @@ fn build_config_json(args: &[String]) -> String {
             obj.insert("max_context".into(), json!(n));
         }
     }
+    obj.insert("protocol".into(), json!(protocol));
     json!(obj).to_string()
 }
 
@@ -334,6 +355,7 @@ fn main() -> Result<()> {
     let mut port = 8686u16;
     let mut agent_explicit: Option<String> = None;
     let mut pos: Vec<String> = Vec::new();
+    let mut protocol = "stream-json".to_string();
     let mut after_sep = false;
     let mut i = 0;
     while i < args.len() {
@@ -362,6 +384,13 @@ fn main() -> Result<()> {
                 port = v
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid --ws-port: {v}"))?;
+                i += 2;
+            }
+            "--protocol" => {
+                protocol = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--protocol requires a value"))?;
                 i += 2;
             }
             "--agent" => {
@@ -403,8 +432,16 @@ fn main() -> Result<()> {
     // 网关不做任何会话魔法：用户参数原样透传，不追加 --session。
     // 会话延续由用户自行控制：--session <id> 或 --continue 保持跨轮上下文；
     // 什么都不传时 agent 每次 spawn 都是新会话。
-    base_args.push("--output-format".to_string());
-    base_args.push("stream-json".to_string());
+    let protocol = match protocol.as_str() {
+        "acp" => "acp".to_string(),
+        "stream-json" => "stream-json".to_string(),
+        other => anyhow::bail!("invalid --protocol: {other} (expect acp or stream-json)"),
+    };
+    // ACP 模式：常驻 agent 子进程（握手 session/new 或 resume），不追加 stream-json 旗标
+    if protocol != "acp" {
+        base_args.push("--output-format".to_string());
+        base_args.push("stream-json".to_string());
+    }
 
     // 解析 home/cwd 用于定位 events.jsonl
     let home = std::env::var("BASH_AGENT_HOME")
@@ -437,7 +474,7 @@ fn main() -> Result<()> {
     .ok();
 
     let addr = format!("{bind}:{port}");
-    let config_json = build_config_json(&base_args);
+    let config_json = build_config_json(&base_args, &protocol);
     eprintln!("[webagent] config: {config_json}");
     let (handle, server_thread) = server::start_server(&addr, events_path.clone(), &config_json)?;
 
@@ -451,12 +488,52 @@ fn main() -> Result<()> {
 
     // 工作线程：从队列取一条输入，运行一轮，处理完再取下一条。
     let hub = handle.hub.clone();
+    // ACP 常驻 client（懒初始化，跨轮复用）
+    let acp_state: Arc<Mutex<Option<Arc<acp::AcpClient>>>> = Arc::new(Mutex::new(None));
     let home_clone = home.clone();
     let cwd_clone = cwd.clone();
     let worker = std::thread::spawn(move || {
         for prompt in handle.input_rx.iter() {
             eprintln!("[webagent] turn: {prompt}");
-            if let Err(e) = run_turn(
+            if protocol == "acp" {
+                // ACP 常驻模式：首轮懒初始化（spawn 加握手），之后每轮复用同一进程
+                let client = {
+                    let mut st = acp_state.lock().unwrap();
+                    match st.clone() {
+                        Some(c) => c,
+                        None => {
+                            let target =
+                                resolve_resume_target(&base_args, &home_clone, &cwd_clone);
+                            match acp::AcpClient::spawn(
+                                &agent_bin,
+                                &base_args,
+                                hub.clone(),
+                                target,
+                                &events_path,
+                                &home_clone,
+                                &cwd_clone,
+                            ) {
+                                Ok(c) => {
+                                    let c = Arc::new(c);
+                                    *st = Some(c.clone());
+                                    c
+                                }
+                                Err(e) => {
+                                    let msg = format!("[webagent] acp spawn failed: {e}");
+                                    eprintln!("{msg}");
+                                    emit(&hub, &json!({"type":"error","message":msg}).to_string());
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                };
+                if let Err(e) = client.run_turn(&prompt, &hub) {
+                    let msg = format!("[webagent] acp turn failed: {e}");
+                    eprintln!("{msg}");
+                    emit(&hub, &json!({"type":"error","message":msg}).to_string());
+                }
+            } else if let Err(e) = run_turn(
                 &agent_bin,
                 &base_args,
                 &prompt,
