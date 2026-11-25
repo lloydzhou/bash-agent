@@ -37,6 +37,154 @@ class H(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'<html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>HTTP_ERR_HTML upstream failure</p></body></html>')
             return
+        # --- ACP (--acp) mocks (issue #110 P1) ---
+        # ACP_SLOW_MARKER round 1: text + foreground Bash tool (sleep 4), so a cancel
+        # arriving within ~4s lands while a tool_call is still open.
+        if b'ACP_SLOW_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                for chunk in [
+                    'event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_slow1','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n',
+                    'event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'Starting slow tool.'}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n',
+                    'event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':1,'content_block':{'type':'tool_use','id':'toolu_acp_slow','name':'Bash','input':{}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'sleep 4; echo slow-tool-done'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':1}) + '\n\n',
+                    'event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'tool_use'},'usage':{'output_tokens':20}}) + '\n\n',
+                    'event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n',
+                ]: w.write(chunk.encode()); w.flush()
+            return
+        # ACP_SLOW_MARKER round 2 (after tool_result): slow text stream; cancel lands mid-text
+        if b'ACP_SLOW_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                w.write(('event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_slow2','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n').encode()); w.flush()
+                w.write(('event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}}) + '\n\n').encode()); w.flush()
+                for i in range(10):
+                    w.write(('event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'chunk%d ' % i}}) + '\n\n').encode()); w.flush()
+                    time.sleep(0.6)
+                w.write(('event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n').encode()); w.flush()
+                w.write(('event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'output_tokens':30}}) + '\n\n').encode()); w.flush()
+                w.write(('event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n').encode()); w.flush()
+            return
+        # ACP_GUARD_MARKER: Bash tool_call that bash-guard must block (system path delete)
+        if b'ACP_GUARD_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                for chunk in [
+                    'event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_guard1','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'I will try a dangerous delete.'}}) + '\n\n',
+                    'event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':1,'content_block':{'type':'tool_use','id':'toolu_acp_guard','name':'Bash','input':{}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'rm -rf /etc/acp-guard-test'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':1}) + '\n\n',
+                    'event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'tool_use'},'usage':{'output_tokens':15}}) + '\n\n',
+                    'event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n',
+                ]: w.write(chunk.encode()); w.flush()
+            return
+        if b'ACP_GUARD_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                for chunk in [
+                    'event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_guard2','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'Guard test complete.'}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n',
+                    'event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'output_tokens':5}}) + '\n\n',
+                    'event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n',
+                ]: w.write(chunk.encode()); w.flush()
+            return
+        # ACP_BIG_MARKER: Bash seq 1 20000 (~108KB tool_result) for >64KB interleaving test
+        if b'ACP_BIG_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                for chunk in [
+                    'event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_big1','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n',
+                    'event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'tool_use','id':'toolu_acp_big','name':'Bash','input':{}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'seq 1 20000'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n',
+                    'event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'tool_use'},'usage':{'output_tokens':10}}) + '\n\n',
+                    'event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n',
+                ]: w.write(chunk.encode()); w.flush()
+            return
+        if b'ACP_BIG_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                for chunk in [
+                    'event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_big2','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'Big output complete.'}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n',
+                    'event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'output_tokens':5}}) + '\n\n',
+                    'event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n',
+                ]: w.write(chunk.encode()); w.flush()
+            return
+        # ACP_SUB_SLOW_CHILD: the slow sub-agent request itself
+        if b'ACP_SUB_SLOW_CHILD' in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                w.write(('event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_subchild','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n').encode()); w.flush()
+                w.write(('event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}}) + '\n\n').encode()); w.flush()
+                for i in range(4):
+                    w.write(('event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'subchunk%d ' % i}}) + '\n\n').encode()); w.flush()
+                    time.sleep(1.0)
+                w.write(('event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n').encode()); w.flush()
+                w.write(('event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'output_tokens':10}}) + '\n\n').encode()); w.flush()
+                w.write(('event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n').encode()); w.flush()
+            return
+        # ACP_SUB_SLOW_MARKER round 1: SubAgent (slow child) + background Bash in one response
+        if b'ACP_SUB_SLOW_MARKER' in body and b'"tool_result"' not in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                for chunk in [
+                    'event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_sub1','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n',
+                    'event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'tool_use','id':'toolu_acp_sub','name':'SubAgent','input':{}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'input_json_delta','partial_json': json.dumps({'prompt':'ACP_SUB_SLOW_CHILD slow child task','description':'acp-sub-slow'})}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n',
+                    'event: content_block_start\ndata: ' + json.dumps({'type':'content_block_start','index':1,'content_block':{'type':'tool_use','id':'toolu_acp_bg','name':'Bash','input':{}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':1,'delta':{'type':'input_json_delta','partial_json': json.dumps({'command':'sleep 5; echo acp-bg-done','background':True})}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':1}) + '\n\n',
+                    'event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'tool_use'},'usage':{'output_tokens':20}}) + '\n\n',
+                    'event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n',
+                ]: w.write(chunk.encode()); w.flush()
+            return
+        # ACP_SUB_SLOW_MARKER round 2: main agent acknowledges after SubAgent tool_result
+        if b'ACP_SUB_SLOW_MARKER' in body and b'"tool_result"' in body:
+            if path.startswith('/v1/messages'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                w = self.wfile
+                for chunk in [
+                    'event: message_start\ndata: ' + json.dumps({'type':'message_start','message':{'id':'msg_acp_sub2','role':'assistant','content':[],'model':'test','usage':{'input_tokens':10,'output_tokens':0}}}) + '\n\n',
+                    'event: content_block_delta\ndata: ' + json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':'Sub acknowledged.'}}) + '\n\n',
+                    'event: content_block_stop\ndata: ' + json.dumps({'type':'content_block_stop','index':0}) + '\n\n',
+                    'event: message_delta\ndata: ' + json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn'},'usage':{'output_tokens':5}}) + '\n\n',
+                    'event: message_stop\ndata: ' + json.dumps({'type':'message_stop'}) + '\n\n',
+                ]: w.write(chunk.encode()); w.flush()
+            return
         # SubAgent failure mock: child agent request -> 422 error
         # Only match child requests (no SUB_FAIL_MARKER in body)
         if b'SUB_FAIL_CHILD' in body and b'SUB_FAIL_MARKER' not in body:
@@ -1791,7 +1939,8 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
         self.wfile.write(json.dumps({'status':'ok'}).encode())
 
-httpd = http.server.HTTPServer(('127.0.0.1', int(os.environ['BASH_AGENT_TEST_PORT'])), H)
+_HTTPD_CLASS = getattr(http.server, 'ThreadingHTTPServer', http.server.HTTPServer)
+httpd = _HTTPD_CLASS(('127.0.0.1', int(os.environ['BASH_AGENT_TEST_PORT'])), H)
 t = threading.Thread(target=httpd.serve_forever)
 t.daemon = True
 t.start()
