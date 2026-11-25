@@ -313,15 +313,6 @@ fn usage() {
     eprintln!("ACP mode accepts WS control messages: {{\"type\":\"cancel\"}} / {{\"type\":\"force_kill\"}}.");
 }
 
-/// 控制消息识别：整段文本必须是严格 JSON 且顶层 type 字符串等于 kind；
-/// 解析失败或 type 不匹配时一律按普通 prompt 处理。
-fn is_control(text: &str, kind: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(text)
-        .ok()
-        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|t| t == kind))
-        .unwrap_or(false)
-}
-
 /// 从透传给 agent 的参数中提取前端展示配置（--model / --provider / --max-context-tokens）。
 /// 参数在 `--` 之后也可能出现，扫描全部 pos；值支持 `--k v` 与 `--k=v` 两种形式。
 fn build_config_json(args: &[String], protocol: &str, cancel_timeout_ms: u64) -> String {
@@ -487,6 +478,8 @@ fn main() -> Result<()> {
 
     // ACP 常驻 client（懒初始化，跨轮复用）；提前定义以便 Ctrl+C 处理器访问
     let acp_state: Arc<Mutex<Option<Arc<acp::AcpClient>>>> = Arc::new(Mutex::new(None));
+    // 最近一次 ACP 会话 id：agent 崩溃/强停后 respawn 用它 resume 同一会话
+    let last_sid: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
     // Ctrl+C：ACP 先 cancel + 关 stdin 优雅退出（agent drain 后以 cancelled 回包），
     // 3s 后仍未退出则 SIGTERM；stream-json 保持向当前 agent 子进程发 SIGINT。
@@ -513,7 +506,13 @@ fn main() -> Result<()> {
     let addr = format!("{bind}:{port}");
     let config_json = build_config_json(&base_args, &protocol, cancel_timeout_ms);
     eprintln!("[webagent] config: {config_json}");
-    let (handle, server_thread) = server::start_server(&addr, events_path.clone(), &config_json)?;
+    let acp_control = if protocol == "acp" {
+        Some(server::AcpControl::new(acp_state.clone()))
+    } else {
+        None
+    };
+    let (handle, server_thread) =
+        server::start_server(&addr, events_path.clone(), &config_json, acp_control)?;
 
     eprintln!("[webagent] listening on ws://{addr}/  (Ctrl+C to stop)");
     eprintln!("[webagent] agent: {}", agent_bin.display());
@@ -527,39 +526,23 @@ fn main() -> Result<()> {
     let hub = handle.hub.clone();
     let home_clone = home.clone();
     let cwd_clone = cwd.clone();
+    let last_sid_worker = last_sid.clone();
     let worker = std::thread::spawn(move || {
         for prompt in handle.input_rx.iter() {
             eprintln!("[webagent] turn: {prompt}");
             if protocol == "acp" {
-                // 控制消息：严格 JSON 且 type 命中才识别，其余文本一律当 prompt
-                if is_control(&prompt, "cancel") {
-                    let cur = acp_state.lock().unwrap().clone();
-                    if let Some(c) = cur {
-                        eprintln!("[webagent] cancel requested");
-                        if let Err(e) = c.cancel() {
-                            eprintln!("[webagent] cancel failed: {e}");
-                        }
-                    }
-                    continue;
-                }
-                if is_control(&prompt, "force_kill") {
-                    let cur = acp_state.lock().unwrap().clone();
-                    if let Some(c) = cur {
-                        eprintln!("[webagent] force kill agent (SIGTERM)");
-                        c.terminate();
-                        let mut st = acp_state.lock().unwrap();
-                        *st = None;
-                    }
-                    continue;
-                }
-                // ACP 常驻模式：首轮懒初始化（spawn 加握手），之后每轮复用同一进程
+                // 控制消息（cancel/force_kill）由 server 连接线程旁路处理（AcpControl），
+                // 队列里只剩 prompt。常驻模式：首轮懒初始化，之后每轮复用同一进程
                 let client = {
                     let mut st = acp_state.lock().unwrap();
                     match st.clone() {
                         Some(c) => c,
                         None => {
-                            let target =
-                                resolve_resume_target(&base_args, &home_clone, &cwd_clone);
+                            // resume 优先级：同进程内已知的上一会话（崩溃/强停后恢复）
+                            // 大于启动参数（--session/--continue）
+                            let target = last_sid_worker.lock().unwrap().clone().or_else(|| {
+                                resolve_resume_target(&base_args, &home_clone, &cwd_clone)
+                            });
                             match acp::AcpClient::spawn(
                                 &agent_bin,
                                 &base_args,
@@ -568,9 +551,11 @@ fn main() -> Result<()> {
                                 &events_path,
                                 &home_clone,
                                 &cwd_clone,
+                                Arc::downgrade(&acp_state),
                             ) {
                                 Ok(c) => {
                                     let c = Arc::new(c);
+                                    *last_sid_worker.lock().unwrap() = Some(c.session_id.clone());
                                     *st = Some(c.clone());
                                     c
                                 }

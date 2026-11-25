@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 /// 握手类请求超时；prompt 回包用 recv() 阻塞等待，
@@ -159,6 +159,7 @@ impl AcpClient {
         events_path: &EventsPath,
         home: &Path,
         cwd: &Path,
+        st_weak: Weak<Mutex<Option<Arc<AcpClient>>>>,
     ) -> Result<Self> {
         let mut cmd = Command::new(agent_bin);
         cmd.args(base_args);
@@ -191,6 +192,7 @@ impl AcpClient {
         let p_reader = pending.clone();
         let h_reader = hub.clone();
         let ep_reader = events_path.clone();
+        let st_reader = st_weak;
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             let mut previous_speed: Option<i64> = None;
@@ -241,7 +243,11 @@ impl AcpClient {
                     }
                 }
             }
-            // stdout EOF：agent 进程退出 —— 清空 pending 解除所有阻塞等待，并广播退出
+            // stdout EOF：agent 进程退出 —— 先置空上层 client 状态（下轮自动
+            // respawn 并 resume 上一会话），再清 pending 解除阻塞、广播退出
+            if let Some(st) = st_reader.upgrade() {
+                *st.lock().unwrap() = None;
+            }
             p_reader.lock().unwrap().clear();
             let evt = json!({"type":"process_exit","code":null}).to_string();
             h_reader.broadcast(&evt);

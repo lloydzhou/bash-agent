@@ -93,6 +93,7 @@ fn handle_connection(
     input_tx: mpsc::Sender<String>,
     events_path: EventsPath,
     index_html: Arc<String>,
+    control: Option<AcpControl>,
 ) -> Result<()> {
     stream.set_nodelay(true)?;
 
@@ -159,7 +160,7 @@ fn handle_connection(
     let prefixed = PrefixedRead::new(request_bytes, stream);
     let mut ws = tungstenite::accept(prefixed)?;
 
-    client_loop(&mut ws, &hub, &input_tx, &events_path)?;
+    client_loop(&mut ws, &hub, &input_tx, &events_path, control.as_ref())?;
     Ok(())
 }
 
@@ -211,6 +212,7 @@ fn client_loop(
     hub: &Arc<WsHub>,
     input_tx: &mpsc::Sender<String>,
     events_path: &EventsPath,
+    control: Option<&AcpControl>,
 ) -> Result<()> {
     // 从 events.jsonl 回放：取最近 2000 原始行，合并 delta 分片后取 500 逻辑事件。
     // （thinking/text 流式 delta 一行一小片，长思考一轮可达数千行；不合并的话
@@ -259,8 +261,17 @@ fn client_loop(
     loop {
         match ws.read() {
             Ok(Message::Text(text)) => {
-                if !text.trim().is_empty() {
-                    let _ = input_tx.send(text.trim().to_string());
+                let text = text.trim().to_string();
+                if text.is_empty() {
+                    // 空文本忽略
+                } else if let Some(ctrl) = control {
+                    // 控制消息旁路：worker 被 run_turn 阻塞时 cancel/force_kill
+                    // 仍需即时生效；未命中控制消息则照常入队
+                    if !ctrl.handles(&text) {
+                        let _ = input_tx.send(text);
+                    }
+                } else {
+                    let _ = input_tx.send(text);
                 }
             }
             Ok(Message::Close(_)) | Err(tungstenite::Error::ConnectionClosed) => break,
@@ -525,6 +536,57 @@ fn handle_upload(
     serve_status(stream, 200, &resp.to_string(), "application/json")
 }
 
+/// ACP 控制消息旁路：WS 文本命中 cancel/force_kill 时在连接线程直接处理，
+/// 不进 prompt 队列——worker 被 run_turn 阻塞时取消仍能即时生效。
+/// 仅 acp 协议下由 main 注入；stream-json 模式为 None，控制消息按普通 prompt 落队列。
+#[derive(Clone)]
+pub(crate) struct AcpControl {
+    state: Arc<Mutex<Option<Arc<crate::acp::AcpClient>>>>,
+}
+
+impl AcpControl {
+    pub(crate) fn new(state: Arc<Mutex<Option<Arc<crate::acp::AcpClient>>>>) -> Self {
+        Self { state }
+    }
+
+    /// 命中并处理控制消息返回 true（调用方不再入队）；否则 false（当普通 prompt）。
+    fn handles(&self, text: &str) -> bool {
+        // 注意：不能写 `if let Some(c) = self.state.lock().unwrap().clone()`——
+        // if-let 会把 MutexGuard 临时值存活期延长到整个块，terminate 睡 2s 期间
+        // 锁被占住，reader 线程 EOF 时置空状态要等锁 → 与本线程后续取锁互相等待死锁。
+        // 先把 owned 值 clone 出来立即释放锁。
+        if is_control(text, "cancel") {
+            let cur = self.state.lock().unwrap().clone();
+            if let Some(c) = cur {
+                eprintln!("[webagent] cancel requested");
+                if let Err(e) = c.cancel() {
+                    eprintln!("[webagent] cancel failed: {e}");
+                }
+            }
+            return true;
+        }
+        if is_control(text, "force_kill") {
+            let cur = self.state.lock().unwrap().clone();
+            if let Some(c) = cur {
+                eprintln!("[webagent] force kill agent (SIGTERM)");
+                c.terminate();
+            }
+            *self.state.lock().unwrap() = None;
+            return true;
+        }
+        false
+    }
+}
+
+/// 控制消息识别：整段文本必须是严格 JSON 且顶层 type 字符串等于 kind；
+/// 解析失败或 type 不匹配时一律按普通 prompt 处理。
+fn is_control(text: &str, kind: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|t| t == kind))
+        .unwrap_or(false)
+}
+
 /// serve 服务器句柄：hub 用于广播，input_rx 接收用户输入行。
 pub(crate) struct ServeHandle {
     pub(crate) hub: Arc<WsHub>,
@@ -535,6 +597,7 @@ pub(crate) fn start_server(
     addr: &str,
     events_path: EventsPath,
     config_json: &str,
+    control: Option<AcpControl>,
 ) -> Result<(ServeHandle, std::thread::JoinHandle<()>)> {
     let listener = TcpListener::bind(addr).with_context(|| format!("serve on {addr}"))?;
     let hub = Arc::new(WsHub::new());
@@ -550,8 +613,11 @@ pub(crate) fn start_server(
                     let input_tx = input_tx.clone();
                     let events_path = events_path.clone();
                     let index_html = index_html.clone();
+                    let control = control.clone();
                     std::thread::spawn(move || {
-                        let _ = handle_connection(stream, hub, input_tx, events_path, index_html);
+                        let _ = handle_connection(
+                            stream, hub, input_tx, events_path, index_html, control,
+                        );
                     });
                 }
                 Err(_) => break,
