@@ -3467,11 +3467,12 @@ test_acp_tool_call_and_guard() {
     if acp_collect 2 30 \
         && grep -q '"sessionUpdate":"tool_call","toolCallId":"toolu_acp_guard","kind":"execute"' "$ACP_LINES" \
         && grep -q '"sessionUpdate":"tool_call_update","toolCallId":"toolu_acp_guard","status":"failed"' "$ACP_LINES" \
+        && grep -q '"_meta":{"bash-agent":{"name":"Bash"}}' "$ACP_LINES" \
         && grep -q 'Error:' "$ACP_LINES" \
         && grep -q '"stopReason":"end_turn"' "$ACP_LINES"; then
-        green "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn"; ((PASS++)) || true
+        green "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn（带 _meta 工具名）"; ((PASS++)) || true
     else
-        red "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn"; echo "  lines: $(grep -c . "$ACP_LINES" 2>/dev/null || echo 0)"; ((FAIL++)) || true
+        red "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn（带 _meta 工具名）"; echo "  lines: $(grep -c . "$ACP_LINES" 2>/dev/null || echo 0)"; ((FAIL++)) || true
     fi
     acp_kill
 }

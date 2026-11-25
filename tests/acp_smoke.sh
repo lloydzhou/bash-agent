@@ -74,9 +74,11 @@ if isinstance(u, dict):
     if t == "agent_message_chunk":
         line += " | message: " + ((u.get("content") or {}).get("text", "") or "")[:80]
     elif t == "tool_call":
-        line += " | tool_call %s %s (%s)" % (u.get("toolCallId"), u.get("kind"), u.get("status"))
+        nm = ((u.get("_meta") or {}).get("bash-agent") or {}).get("name")
+        line += " | tool_call %s %s (%s)%s" % (u.get("toolCallId"), u.get("kind"), u.get("status"), (" name=" + nm) if nm else "")
     elif t == "tool_call_update":
-        line += " | tool_update %s status=%s" % (u.get("toolCallId"), u.get("status"))
+        nm = ((u.get("_meta") or {}).get("bash-agent") or {}).get("name")
+        line += " | tool_update %s status=%s%s" % (u.get("toolCallId"), u.get("status"), (" name=" + nm) if nm else "")
     else:
         line += " | " + str(t)
 print(line)' "$1" >&2 2>/dev/null || printf '  <- %s\n' "$1" >&2
@@ -157,8 +159,9 @@ send '{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"'
 if collect 3 "$_TMP/s3.log" 40; then
     grep -q '"sessionUpdate":"tool_call"' "$_TMP/s3.log" \
         && grep -q '"sessionUpdate":"tool_call_update","toolCallId":"toolu_acp_guard","status":"failed"' "$_TMP/s3.log" \
+        && grep -q '"_meta":{"bash-agent":{"name":"Bash"}}' "$_TMP/s3.log" \
         && grep -q '"stopReason":"end_turn"' "$_TMP/s3.log" \
-        && green "tool_call → tool_call_update(failed, guard 拦截) → end_turn" \
+        && green "tool_call → tool_call_update(failed, guard 拦截) → end_turn（带 _meta 工具名）" \
         || red "guard 拦截序列不完整"
 else
     red "guard 场景未收到回包"

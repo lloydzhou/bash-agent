@@ -17,12 +17,16 @@
 #   error         → 记录 err_msg（不输出；DONE 时回 JSON-RPC error -32603）
 #   sub_agent_start          → tool_call(toolCallId "sub:<sid>", kind think)
 #   sub_agent_result         → tool_call_update(completed/failed, content 为子代理 text)
-#   session_start/context_update/retry/usage/async_task_result/sub_agent_end → 忽略（P1）
+#   usage          → _bash-agent/usage 通知（webagent 消费；其他 client 忽略）
+#   session_start/context_update/retry/async_task_result/sub_agent_end → 忽略（P1）
 #   depth>0 的 EVT（子代理内部事件）不映射（P5 再做嵌套 transcript）
 #
 # DONE 处理：先补发 open_tool_calls 里未完成的 tool_call_update(failed, "cancelled")，
 # 再写回包（"update 先于回包"由 FIFO 写入顺序 + 单线程消费保证）；然后 turn_open=0。
 # turn_open[sid]==0 时到达的 EVT 一律丢弃（events.jsonl 里照常保留）。
+# bash-agent 扩展（issue #110 §五 P2）：tool_call / tool_call_update 帧附带
+#   "_meta":{"bash-agent":{"name":"<工具名>"}}
+# 供 webagent（ACP client）还原工具名；_meta 是 ACP 规范保留的扩展字段，其他 client 忽略。
 # 依赖：json.awk。必须以 LC_ALL=C 运行（字节语义，length/substr 按字节）。
 
 # 输出一行并立即 flush（唯一 stdout 写入点）
@@ -34,6 +38,12 @@ function acp_out(s) {
 # 输出 session/update 通知
 function acp_update(sid, update_json) {
     acp_out("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"" escape_json_string(sid) "\",\"update\":" update_json "}}")
+}
+
+# bash-agent 扩展 _meta：携带真实工具名（tc_name 映射查不到/无名字时省略）
+function acp_name_meta(nm) {
+    if (nm == "") return ""
+    return ",\"_meta\":{\"bash-agent\":{\"name\":\"" escape_json_string(nm) "\"}}"
 }
 
 # {"type":"text","text":...} content block
@@ -119,6 +129,10 @@ function acp_meta(name, input,    cmd, fp, off, pat, desc) {
         open_tc[sid] = ""
         last_stop[sid] = ""
         err_msg[sid] = ""
+        for (k in tc_name) {
+            split(k, ka, SUBSEP)
+            if (ka[1] == sid) delete tc_name[k]
+        }
         next
     }
     if (kind == "DONE") {
@@ -136,7 +150,8 @@ function acp_meta(name, input,    cmd, fp, off, pat, desc) {
             m = split(open_tc[sid], tc, ",")
             for (i = 1; i <= m; i++) {
                 if (tc[i] == "") continue
-                acp_update(sid, "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"" escape_json_string(tc[i]) "\",\"status\":\"failed\",\"content\":" acp_tool_content("cancelled") "}")
+                acp_update(sid, "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"" escape_json_string(tc[i]) "\",\"status\":\"failed\",\"content\":" acp_tool_content("cancelled") acp_name_meta(tc_name[sid, tc[i]]) "}")
+                delete tc_name[sid, tc[i]]
             }
             acp_out("{\"jsonrpc\":\"2.0\",\"id\":" reqid ",\"result\":{\"stopReason\":\"" acp_stop_reason(last_stop[sid]) "\"}}")
         }
@@ -162,16 +177,21 @@ function acp_meta(name, input,    cmd, fp, off, pat, desc) {
         tid = extract_str(ev, "id")
         tinput = json_get_raw(ev, "input")
         acp_meta(tname, tinput)
-        acp_update(sid, "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"" escape_json_string(tid) "\",\"kind\":\"" META_KIND "\",\"title\":\"" escape_json_string(META_TITLE) "\",\"status\":\"in_progress\",\"rawInput\":" ((tinput == "" || tinput == "null") ? "{}" : tinput) META_LOC_JSON "}")
+        tc_name[sid, tid] = tname
+        acp_update(sid, "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"" escape_json_string(tid) "\",\"kind\":\"" META_KIND "\",\"title\":\"" escape_json_string(META_TITLE) "\",\"status\":\"in_progress\",\"rawInput\":" ((tinput == "" || tinput == "null") ? "{}" : tinput) META_LOC_JSON acp_name_meta(tname) "}")
         open_tc[sid] = open_tc[sid] ((open_tc[sid] == "") ? "" : ",") tid
     } else if (et == "tool_result") {
         tid = extract_str(ev, "tool_use_id")
         tcontent = extract_str(ev, "content")
         tstatus = ((tcontent ~ /^Error:/) ? "failed" : "completed")
-        acp_update(sid, "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"" escape_json_string(tid) "\",\"status\":\"" tstatus "\",\"content\":" acp_tool_content(tcontent) "}")
+        acp_update(sid, "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"" escape_json_string(tid) "\",\"status\":\"" tstatus "\",\"content\":" acp_tool_content(tcontent) acp_name_meta(tc_name[sid, tid]) "}")
+        delete tc_name[sid, tid]
         acp_tc_remove(sid, tid)
     } else if (et == "stop") {
         last_stop[sid] = extract_str(ev, "reason")
+    } else if (et == "usage") {
+        # bash-agent 扩展通知（ACP 规范外）：webagent 转 usage 事件注入 HUD；其他 client 忽略
+        acp_out("{\"jsonrpc\":\"2.0\",\"method\":\"_bash-agent/usage\",\"params\":" ev "}")
     } else if (et == "error") {
         err_msg[sid] = extract_str(ev, "message")
     } else if (et == "sub_agent_start") {
@@ -180,14 +200,16 @@ function acp_meta(name, input,    cmd, fp, off, pat, desc) {
         sprompt = extract_str(ev, "prompt")
         stitle = ((sdesc != "") ? sdesc : substr(sprompt, 1, 80))
         tid = "sub:" subs
-        acp_update(sid, "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"" escape_json_string(tid) "\",\"kind\":\"think\",\"title\":\"" escape_json_string(stitle) "\",\"status\":\"in_progress\",\"rawInput\":{\"prompt\":\"" escape_json_string(sprompt) "\"}}")
+        tc_name[sid, tid] = "SubAgent"
+        acp_update(sid, "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"" escape_json_string(tid) "\",\"kind\":\"think\",\"title\":\"" escape_json_string(stitle) "\",\"status\":\"in_progress\",\"rawInput\":{\"prompt\":\"" escape_json_string(sprompt) "\"}}" acp_name_meta("SubAgent"))
         open_tc[sid] = open_tc[sid] ((open_tc[sid] == "") ? "" : ",") tid
     } else if (et == "sub_agent_result") {
         subs = extract_str(ev, "session_id")
         sstatus = extract_str(ev, "status")
         stext = extract_str(ev, "text")
         tstatus = ((sstatus == "ok") ? "completed" : "failed")
-        acp_update(sid, "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"sub:" escape_json_string(subs) "\",\"status\":\"" tstatus "\",\"content\":" acp_tool_content(stext) "}")
+        acp_update(sid, "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"sub:" escape_json_string(subs) "\",\"status\":\"" tstatus "\",\"content\":" acp_tool_content(stext) acp_name_meta(tc_name[sid, "sub:" subs]) "}")
+        delete tc_name[sid, "sub:" subs]
         acp_tc_remove(sid, "sub:" subs)
     }
     # session_start / context_update / retry / usage / async_task_result / sub_agent_end → 忽略（P1）
