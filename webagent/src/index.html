@@ -302,6 +302,10 @@ html[data-theme=light] .diff .dl.del .ln { background:
 .errorrow .emsg { color: var(--label-secondary); overflow-wrap: anywhere; }
 
 /* 运行状态行（DSH turnStatus shimmer） */
+.stopbtn { margin-left: 10px; padding: 0 12px; height: 20px; font-size: 12px; font-weight: 500;
+  border: 1px solid var(--label-secondary); border-radius: 10px; background: transparent;
+  color: var(--label-primary); cursor: pointer; }
+.stopbtn:disabled { opacity: .45; cursor: default; }
 .turnstatus { display: inline-flex; align-items: center; align-self: flex-start;
   height: 26px; font-size: 14px; font-weight: 500; white-space: nowrap;
   background: linear-gradient(90deg, var(--ds-500) 0%, var(--ds-500) 40%,
@@ -1085,7 +1089,20 @@ var CFG = __WEBAGENT_CONFIG__;
   });
 
   var WorkingStatus = defineComponent(function WorkingStatus(props) {
-    return function () { return h('div', { class: 'turnstatus' }, props.text); };
+    return function () {
+      var acpMode = false;
+      if (CFG) { if (CFG.protocol === 'acp') { acpMode = true; } }
+      var kids = [h('span', null, props.text)];
+      if (acpMode) {
+        var label = '停止';
+        var busy = false;
+        if (props.cancelState === 'cancelling') { label = '取消中…'; busy = true; }
+        else if (props.cancelState === 'timeout') { label = '强制停止'; }
+        else if (props.cancelState === 'killing') { label = '停止中…'; busy = true; }
+        kids.push(h('button', { class: 'stopbtn', disabled: busy ? true : null, onClick: stopRequest }, label));
+      }
+      return h('div', { class: 'turnstatus' }, kids);
+    };
   });
 
   function ioSection(key, label, item) {
@@ -1149,7 +1166,7 @@ var CFG = __WEBAGENT_CONFIG__;
   var ChatTranscript = defineComponent(function ChatTranscript(props) {
     return function () {
       var rows = (props.messages || []).map(function (message) { return h(MessageRow, { key: message.id, message: message }); });
-      if (props.working) rows.push(h(WorkingStatus, { key: 'working-status', text: props.working }));
+      if (props.working) rows.push(h(WorkingStatus, { key: 'working-status', text: props.working, cancelState: props.cancelState }));
       return h('div', { id: 'flow' }, rows);
     };
   });
@@ -1173,7 +1190,7 @@ var CFG = __WEBAGENT_CONFIG__;
     var savedTheme = null;
     try { savedTheme = localStorage.getItem('webagent-theme'); } catch (e) {}
     var initialTheme = savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : ((window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark');
-    var stateSignal = createSignal({ theme: initialTheme, hud: newHud(), messages: [], todos: [], todoCollapsed: true, working: null, connection: 'connecting', toBottom: false, uploadName: '' });
+    var stateSignal = createSignal({ theme: initialTheme, hud: newHud(), messages: [], todos: [], todoCollapsed: true, working: null, cancelState: null, connection: 'connecting', toBottom: false, uploadName: '' });
     var getState = stateSignal[0], setState = stateSignal[1];
     var ws = null, reconnectTimer = 0, connectionTimer = 0, active = true, stickBottom = true;
     var pending = { kind: null, id: null, buffer: '', raf: 0 };
@@ -1218,6 +1235,40 @@ var CFG = __WEBAGENT_CONFIG__;
     function setWorking(text) {
       var state = getState();
       patch(Object.assign({}, state, { working: text || null }));
+    }
+    var cancelTimer = 0;
+    function setCancelState(v) {
+      var state = getState();
+      patch(Object.assign({}, state, { cancelState: v || null }));
+    }
+    // 停止按钮：null 态发 cancel 请求并启动超时计时；超时后按钮变强制停止
+    function stopRequest() {
+      if (!ws || ws.readyState !== 1) return;
+      var st = getState().cancelState;
+      if (st === null) {
+        ws.send(JSON.stringify({ type: 'cancel' }));
+        setCancelState('cancelling');
+        var limit = 10000;
+        if (CFG) { if (CFG.cancel_timeout_ms) { limit = CFG.cancel_timeout_ms; } }
+        if (cancelTimer) clearTimeout(cancelTimer);
+        cancelTimer = setTimeout(function () {
+          cancelTimer = 0;
+          if (getState().cancelState === 'cancelling') setCancelState('timeout');
+        }, limit);
+      } else if (st === 'timeout') {
+        if (cancelTimer) { clearTimeout(cancelTimer); cancelTimer = 0; }
+        setCancelState('killing');
+        ws.send(JSON.stringify({ type: 'force_kill' }));
+      }
+    }
+    function clearCancel(note) {
+      if (cancelTimer) { clearTimeout(cancelTimer); cancelTimer = 0; }
+      var prev = getState().cancelState;
+      setCancelState(null);
+      if (note === 'cancelled') { addSystem('状态', '已取消', 'cancel'); return; }
+      if (note === 'exit') {
+        if (prev === 'killing' || prev === 'timeout') { addSystem('状态', '已强制停止', 'cancel'); }
+      }
     }
     function addSystem(tag, content, className) { addMessage({ id: nextId('system'), type: 'system', tag: tag, content: content, className: className || '' }); }
     function addError(title, content) { addMessage({ id: nextId('error'), type: 'error', title: title, content: content }); }
@@ -1303,7 +1354,7 @@ var CFG = __WEBAGENT_CONFIG__;
       try { event = JSON.parse(raw); } catch (e) { addSystem('', raw); return; }
       switch (event.type) {
         case 'session_start':
-          finishStream(); updateHud(newHud()); setWorking(null); openToolId = null; break;
+          finishStream(); updateHud(newHud()); clearCancel(); setWorking(null); openToolId = null; break;
         case 'user_input':
         case 'user_message': {
           finishStream();
@@ -1340,10 +1391,10 @@ var CFG = __WEBAGENT_CONFIG__;
           if (visible) addSystem('', visible, 'stderr');
           break;
         }
-        case 'process_exit': finishStream(); setWorking(null); break;
-        case 'error': finishStream(); setWorking(null); addError('错误', event.message || ''); break;
+        case 'process_exit': finishStream(); clearCancel('exit'); setWorking(null); break;
+        case 'error': finishStream(); clearCancel(); setWorking(null); addError('错误', event.message || ''); break;
         case 'stop':
-          finishStream(); setWorking(null);
+          finishStream(); clearCancel(event.reason === 'interrupted' ? 'cancelled' : null); setWorking(null);
           if (event.reason === 'goal_done') addSystem('目标', '已达成', 'goal-done');
           break;
         default: addSystem('', raw);
@@ -1359,7 +1410,7 @@ var CFG = __WEBAGENT_CONFIG__;
         if (pending.raf) cancelAnimationFrame(pending.raf);
         pending = { kind: null, id: null, buffer: '', raf: 0 }; openToolId = null; stickBottom = true;
         var state = getState();
-        patch(Object.assign({}, state, { messages: [], todos: [], todoCollapsed: true, hud: newHud(), working: null, connection: 'connected', toBottom: false }));
+        patch(Object.assign({}, state, { messages: [], todos: [], todoCollapsed: true, hud: newHud(), working: null, cancelState: null, connection: 'connected', toBottom: false }));
         scheduleScroll(true);
       };
       ws.onmessage = function (event) { handleLine(event.data); };
@@ -1432,7 +1483,7 @@ var CFG = __WEBAGENT_CONFIG__;
       return h('div', { id: 'app' }, [
         h(Header, { key: 'header', theme: state.theme, connection: state.connection, onToggleTheme: toggleTheme }),
         h('div', { id: 'scroll', onScroll: syncBottomButton }, [
-          h(ChatTranscript, { key: 'transcript', messages: state.messages, working: state.working }),
+          h(ChatTranscript, { key: 'transcript', messages: state.messages, working: state.working, cancelState: state.cancelState }),
           h('div', { class: 'hero' }, [h('img', { src: '/icon.svg', alt: '' }), h('h1', {}, 'bash-agent'), h('p', {}, '输入提示词开始对话 · Enter 发送 · Shift+Enter 换行')]),
           h('div', { id: 'tobottom-wrap' }, h('button', { id: 'tobottom', class: state.toBottom ? 'show' : '', 'aria-label': '跳到底部', onClick: function () { stickBottom = true; patch(Object.assign({}, getState(), { toBottom: false })); var scroll = document.getElementById('scroll'); if (scroll) scroll.scrollTo({ top: scroll.scrollHeight, behavior: 'smooth' }); } }, downIcon()))
         ]),

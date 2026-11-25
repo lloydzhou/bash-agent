@@ -12,6 +12,8 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -161,6 +163,7 @@ impl AcpClient {
         let mut cmd = Command::new(agent_bin);
         cmd.args(base_args);
         cmd.arg("--acp");
+        cmd.process_group(0);
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
@@ -354,5 +357,32 @@ impl AcpClient {
         let evt = json!({"type":"stop","reason":stop_reason_to_ws(stop)}).to_string();
         hub.broadcast(&evt);
         Ok(resp)
+    }
+
+    /// 发送 session/cancel 通知（JSON-RPC 无 id）：agent 中断当前 prompt，
+    /// 回 stopReason=cancelled 的 prompt 回包。
+    pub(crate) fn cancel(&self) -> Result<()> {
+        let frame = json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId": self.session_id}});
+        let mut w = self.stdin.lock().unwrap();
+        writeln!(w, "{frame}").context("acp write session/cancel")?;
+        w.flush().ok();
+        Ok(())
+    }
+
+    /// fd 级关闭子进程 stdin：agent 读到 EOF 后自行收尾退出（SESSION_END 后 wait）。
+    pub(crate) fn shutdown_stdin(&self) {
+        let w = self.stdin.lock().unwrap();
+        let fd = w.as_raw_fd();
+        unsafe { libc::close(fd) };
+    }
+
+    /// 停止 agent 整个进程组：先 SIGTERM（agent trap 收尾清理），
+    /// 2s 后仍未退出则 SIGKILL（bash 3.2 阻塞 read 可能吞掉 TERM，KILL 兜底）。
+    /// stdout 关闭后 reader 线程广播 process_exit。
+    pub(crate) fn terminate(&self) {
+        let pgid = self.child.id() as i32;
+        unsafe { libc::killpg(pgid, libc::SIGTERM) };
+        std::thread::sleep(Duration::from_secs(2));
+        unsafe { libc::killpg(pgid, libc::SIGKILL) };
     }
 }

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 mod acp;
 mod server;
@@ -300,6 +301,7 @@ fn usage() {
     eprintln!("  --port PORT      listen port (default 8686)");
     eprintln!("  --agent PATH     agent binary (default: resolve <agent> from dist/ or PATH)");
     eprintln!("  --protocol P     acp or stream-json (default: stream-json)");
+    eprintln!("  --cancel-timeout-ms N   acp 取消确认超时毫秒（默认 10000）");
     eprintln!("  -h, --help       show this help");
     eprintln!();
     eprintln!("<agent>: {} (default: cagent)", AGENT_NAMES.join(" | "));
@@ -308,11 +310,21 @@ fn usage() {
     eprintln!("Remaining args are passed through to the agent on every spawn, plus");
     eprintln!("a per-input prompt positional and --output-format stream-json.");
     eprintln!("--protocol acp keeps a persistent agent process speaking ACP instead.");
+    eprintln!("ACP mode accepts WS control messages: {{\"type\":\"cancel\"}} / {{\"type\":\"force_kill\"}}.");
+}
+
+/// 控制消息识别：整段文本必须是严格 JSON 且顶层 type 字符串等于 kind；
+/// 解析失败或 type 不匹配时一律按普通 prompt 处理。
+fn is_control(text: &str, kind: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|t| t == kind))
+        .unwrap_or(false)
 }
 
 /// 从透传给 agent 的参数中提取前端展示配置（--model / --provider / --max-context-tokens）。
 /// 参数在 `--` 之后也可能出现，扫描全部 pos；值支持 `--k v` 与 `--k=v` 两种形式。
-fn build_config_json(args: &[String], protocol: &str) -> String {
+fn build_config_json(args: &[String], protocol: &str, cancel_timeout_ms: u64) -> String {
     let mut model: Option<&str> = None;
     let mut provider: Option<&str> = None;
     let mut max_context: Option<&str> = None;
@@ -345,6 +357,7 @@ fn build_config_json(args: &[String], protocol: &str) -> String {
         }
     }
     obj.insert("protocol".into(), json!(protocol));
+    obj.insert("cancel_timeout_ms".into(), json!(cancel_timeout_ms));
     json!(obj).to_string()
 }
 
@@ -356,6 +369,7 @@ fn main() -> Result<()> {
     let mut agent_explicit: Option<String> = None;
     let mut pos: Vec<String> = Vec::new();
     let mut protocol = "stream-json".to_string();
+    let mut cancel_timeout_ms = 10_000u64;
     let mut after_sep = false;
     let mut i = 0;
     while i < args.len() {
@@ -391,6 +405,16 @@ fn main() -> Result<()> {
                     .get(i + 1)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("--protocol requires a value"))?;
+                i += 2;
+            }
+            "--cancel-timeout-ms" => {
+                let v = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--cancel-timeout-ms requires a value"))?;
+                cancel_timeout_ms = v
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid --cancel-timeout-ms: {v}"))?;
                 i += 2;
             }
             "--agent" => {
@@ -461,8 +485,21 @@ fn main() -> Result<()> {
         eprintln!("[webagent] events: {}", p.display());
     }
 
-    // Ctrl+C：向当前 agent 子进程发 SIGINT，然后退出
-    ctrlc::set_handler(|| {
+    // ACP 常驻 client（懒初始化，跨轮复用）；提前定义以便 Ctrl+C 处理器访问
+    let acp_state: Arc<Mutex<Option<Arc<acp::AcpClient>>>> = Arc::new(Mutex::new(None));
+
+    // Ctrl+C：ACP 先 cancel + 关 stdin 优雅退出（agent drain 后以 cancelled 回包），
+    // 3s 后仍未退出则 SIGTERM；stream-json 保持向当前 agent 子进程发 SIGINT。
+    let acp_for_ctrlc = acp_state.clone();
+    ctrlc::set_handler(move || {
+        let cur = acp_for_ctrlc.lock().unwrap().clone();
+        if let Some(c) = cur {
+            let _ = c.cancel();
+            c.shutdown_stdin();
+            std::thread::sleep(Duration::from_millis(3000));
+            c.terminate();
+            std::process::exit(0);
+        }
         let pid = CURRENT_PID.load(Ordering::SeqCst);
         if pid > 0 {
             unsafe {
@@ -474,7 +511,7 @@ fn main() -> Result<()> {
     .ok();
 
     let addr = format!("{bind}:{port}");
-    let config_json = build_config_json(&base_args, &protocol);
+    let config_json = build_config_json(&base_args, &protocol, cancel_timeout_ms);
     eprintln!("[webagent] config: {config_json}");
     let (handle, server_thread) = server::start_server(&addr, events_path.clone(), &config_json)?;
 
@@ -488,14 +525,33 @@ fn main() -> Result<()> {
 
     // 工作线程：从队列取一条输入，运行一轮，处理完再取下一条。
     let hub = handle.hub.clone();
-    // ACP 常驻 client（懒初始化，跨轮复用）
-    let acp_state: Arc<Mutex<Option<Arc<acp::AcpClient>>>> = Arc::new(Mutex::new(None));
     let home_clone = home.clone();
     let cwd_clone = cwd.clone();
     let worker = std::thread::spawn(move || {
         for prompt in handle.input_rx.iter() {
             eprintln!("[webagent] turn: {prompt}");
             if protocol == "acp" {
+                // 控制消息：严格 JSON 且 type 命中才识别，其余文本一律当 prompt
+                if is_control(&prompt, "cancel") {
+                    let cur = acp_state.lock().unwrap().clone();
+                    if let Some(c) = cur {
+                        eprintln!("[webagent] cancel requested");
+                        if let Err(e) = c.cancel() {
+                            eprintln!("[webagent] cancel failed: {e}");
+                        }
+                    }
+                    continue;
+                }
+                if is_control(&prompt, "force_kill") {
+                    let cur = acp_state.lock().unwrap().clone();
+                    if let Some(c) = cur {
+                        eprintln!("[webagent] force kill agent (SIGTERM)");
+                        c.terminate();
+                        let mut st = acp_state.lock().unwrap();
+                        *st = None;
+                    }
+                    continue;
+                }
                 // ACP 常驻模式：首轮懒初始化（spawn 加握手），之后每轮复用同一进程
                 let client = {
                     let mut st = acp_state.lock().unwrap();
