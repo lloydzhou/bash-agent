@@ -379,6 +379,7 @@ store_session_init() {
     printf '0\n' > "$ACTIVE_TASK_FILE"
     TURN_PIDS_FILE="${session_dir}/turn_pids"  # ACP worker: 本轮子代理/后台 Bash pid 记录
     TURN_BUSY_FILE="${session_dir}/acp.busy"   # ACP dispatcher: prompt 进行中标志（noclobber 原子创建）
+    TURN_CANCEL_FILE="${session_dir}/acp.cancel"  # ACP 取消标志：后台子 shell trap 不可靠，经文件传递取消状态
 }
 
 store_session_fork() {
@@ -1531,6 +1532,11 @@ agent_loop() {
     while util_read_msg <&7; do
         _type="${REPLY_MESSAGE[0]-}"
         _reason="${REPLY_MESSAGE[1]-}"
+        # ACP worker: 取消标志检查（取消后到达的事件不落盘 → open tool_call 保留，DONE 时补 failed）
+        if [[ -n "${ACP_WORKER:-}" && -f "${TURN_CANCEL_FILE:-}" ]]; then
+            INTERRUPT_REQUESTED=true
+            break
+        fi
         case "$_type" in
             TEXT) store_event_append "{\"type\":\"text\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
             THINKING) store_event_append "{\"type\":\"thinking\",\"content\":\"$(util_json_escape "${REPLY_MESSAGE[1]}")\"}" ;;
@@ -1549,6 +1555,10 @@ agent_loop() {
         fi
         [[ "$_type" == "STOP" && "$_reason" == "interrupted" ]] && break
     done
+    # ACP worker: read 被中断（流未结束）时同样判定为取消
+    if [[ -n "${ACP_WORKER:-}" && -f "${TURN_CANCEL_FILE:-}" && "${INTERRUPT_REQUESTED:-}" != true ]]; then
+        INTERRUPT_REQUESTED=true
+    fi
     if [[ -n "$GOAL" && "$_type" == "STOP" && "$_reason" != "interrupted" ]]; then
         gr=$(llm_goal_call) || { store_event_append '{"type":"error","message":"goal check failed"}'; return 1; }
         if [[ "$gr" == "GOAL_DONE" ]]; then
@@ -1844,6 +1854,10 @@ acp_maybe_done() {  # ACTIVE_TASK==0 && NOTIFY_BUF 空 → DONE（与 headless S
 
 acp_cancel_cleanup() {  # 取消收尾：终止本轮子代理/后台 Bash → 清通知 → DONE interrupted
     local pid
+    # 杀掉本轮 curl 并关 SSE 读端（后台子 shell trap 不执行时 trap 内的 kill 不会发生）
+    kill "$(cat "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null)" 2>/dev/null || true
+    exec 7<&- 2>/dev/null || true
+    rm -f "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null || true
     if [[ -s "${TURN_PIDS_FILE:-}" ]]; then
         while IFS= read -r pid; do
             [[ -n "$pid" ]] || continue
@@ -1859,7 +1873,8 @@ acp_cancel_cleanup() {  # 取消收尾：终止本轮子代理/后台 Bash → �
     : > "${NOTIFY_BUF:-/dev/null}" 2>/dev/null || true
     printf '0\n' > "${ACTIVE_TASK_FILE:-/dev/null}" 2>/dev/null || true
     if [[ -n "${ACP_CUR_REQID:-}" ]]; then
-        acp_emit "$ACP_SID"$'\t'"DONE"$'\t'"$ACP_CUR_REQID"
+        # 第三字段 reason=interrupted：acp_out 映射 stopReason=cancelled（覆盖 last_stop）
+        acp_emit "$ACP_SID"$'\t'"DONE"$'\t'"$ACP_CUR_REQID"$'\t'"interrupted"
         ACP_CUR_REQID=""
     fi
     rm -f "${TURN_BUSY_FILE:-}" 2>/dev/null || true
@@ -1905,7 +1920,16 @@ acp_worker_main_loop() {  # agent_main_loop 的 ACP 变体：不自动 SESSION_E
         trap 'ACP_INT_IDLE=true' INT  # 空闲时收到 INT（cancel 竞态）：中断 read 但不退出
         ACP_INT_IDLE=false
         if ! util_read_msg <&3; then
-            [[ "${ACP_INT_IDLE:-}" == true ]] && continue
+            if [[ -f "${TURN_CANCEL_FILE:-}" ]]; then
+                # 空闲时收到 cancel：标志文件已由 dispatcher 写入，做收尾并继续等下一轮 prompt
+                [[ -n "${ACP_CUR_REQID:-}" ]] && acp_cancel_cleanup
+                continue
+            fi
+            if [[ "${ACP_INT_IDLE:-}" == true ]]; then
+                # INT（cancel）到达且 worker 空闲但 prompt 仍挂着（等子代理/后台 Bash）：取消收尾
+                [[ -n "${ACP_CUR_REQID:-}" ]] && acp_cancel_cleanup
+                continue
+            fi
             break
         fi
         case "${REPLY_MESSAGE[0]}" in
@@ -1915,12 +1939,17 @@ acp_worker_main_loop() {  # agent_main_loop 的 ACP 变体：不自动 SESSION_E
             USER_INPUT)
                 ACP_CUR_REQID="${REPLY_MESSAGE[1]}"
                 : > "${TURN_PIDS_FILE:-/dev/null}" 2>/dev/null || true
+                rm -f "${TURN_CANCEL_FILE:-}" 2>/dev/null || true
                 agent_run_loop "${REPLY_MESSAGE[2]:-${REPLY_MESSAGE[1]:-}}"
                 if [[ "${INTERRUPT_REQUESTED:-}" == true ]]; then
                     acp_cancel_cleanup
                 else
                     acp_maybe_done
                 fi
+                ;;
+            CANCEL)
+                # session/cancel 经 INPUT_FIFO 唤醒空闲 worker：有挂起轮次则收尾（DONE interrupted）
+                [[ -n "${ACP_CUR_REQID:-}" ]] && acp_cancel_cleanup
                 ;;
             NOTIFY_PENDING)
                 agent_run_loop "" notify
@@ -1998,7 +2027,15 @@ acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_em
                 _cpid="$(acp_session_pid "$_csid")"
                 _sdir="$(acp_session_dir "$_csid" "$(acp_session_cwd "$_csid")")"
                 if [[ -n "$_cpid" && -n "$_sdir" && -f "$_sdir/acp.busy" ]]; then
+                    # SIGINT 在后台异步子 shell 中 trap 不执行（bash 行为），取消状态
+                    # 经 acp.cancel 标志文件传递；同时断 curl（SSE 源）促使当前流尽快结束，
+                    # 并写 CANCEL 控制帧到 INPUT_FIFO 唤醒空闲阻塞中的 worker read
+                    : > "$_sdir/acp.cancel" 2>/dev/null || true
                     kill -INT "$_cpid" 2>/dev/null || true
+                    # curl pid 文件由子 shell 写入，其中 $$ 为 dispatcher pid（bash 子 shell 继承父 $$）
+                    kill -INT "$(cat "/tmp/agent_curl_pid.$$.${_csid}" 2>/dev/null)" 2>/dev/null || true
+                    _cfifo="$(acp_session_fifo "$_csid" "$(acp_session_cwd "$_csid")")"
+                    ( exec 5> "$_cfifo" && util_write_msg "CANCEL" >&5 ) 2>/dev/null || true
                 fi
                 ;;
             REQ)

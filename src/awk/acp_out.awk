@@ -124,6 +124,10 @@ function acp_meta(name, input,    cmd, fp, off, pat, desc) {
     if (kind == "DONE") {
         if (turn_open[sid] != 1) next   # 空闲/竞态（已回包）时的 DONE 忽略
         reqid = F[3]
+        # F[4] 可选 reason（如 "interrupted"）：显式指定时覆盖 last_stop（取消与正常结束竞态时以先到者为准）
+        if (F[4] != "") {
+            last_stop[sid] = F[4]
+        }
         if (err_msg[sid] != "") {
             # LLM/内部错误：ACP stopReason 枚举无 error，按规范回 JSON-RPC error
             acp_out("{\"jsonrpc\":\"2.0\",\"id\":" reqid ",\"error\":{\"code\":-32603,\"message\":\"Internal error\",\"data\":{\"message\":\"" escape_json_string(err_msg[sid]) "\"}}}")
