@@ -13,26 +13,16 @@ TARGET = ../dist/cagent
 
 all: $(TARGET)
 
-# 自动从 tools.json 生成嵌入头文件
-tools_embed.h: tools.json
-	@echo "  GEN     tools_embed.h"
-	@{ echo '/* tools.json 编译时嵌入 — 由 Makefile 自动生成，勿手动编辑 */'; \
-	   echo 'const char embedded_tools_json[] = {'; \
-	   xxd -i < tools.json; \
-	   echo ', 0x00 };'; \
-	   echo "const unsigned int embedded_tools_json_len = $$(wc -c < tools.json);"; \
-	} > tools_embed.h
-
 $(TARGET): $(OBJS)
 	@mkdir -p ../dist
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-$(BUILDDIR)/%.o: %.c tools_embed.h
+$(BUILDDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -rf $(BUILDDIR) $(TARGET) tools_embed.h test_classify test_continue test_transport
+	rm -rf $(BUILDDIR) $(TARGET) test_classify test_continue test_transport
 
 test-classify: test_classify.c
 	$(MAKE) $(BUILDDIR)/tools_test.o CFLAGS="$(CFLAGS) -DTEST_CLASSIFY" OBJS="$(filter-out $(BUILDDIR)/cagent.o $(BUILDDIR)/tools.o,$(OBJS)) $(BUILDDIR)/tools_test.o"
@@ -52,7 +42,7 @@ $(BUILDDIR)/tools_test.o: tools.c tools.h agent.h msgqueue.h protocol.h json.h u
 
 # 依赖关系
 $(BUILDDIR)/cagent.o: cagent.c agent.h store.h transport.h tools.h display.h msgqueue.h readline.h protocol.h util.h
-$(BUILDDIR)/agent.o: agent.c agent.h tools_embed.h store.h transport.h tools.h msgqueue.h protocol.h json.h util.h
+$(BUILDDIR)/agent.o: agent.c agent.h prompt_gen.h store.h transport.h tools.h msgqueue.h protocol.h json.h util.h
 $(BUILDDIR)/store.o: store.c store.h json.h util.h
 $(BUILDDIR)/transport.o: transport.c transport.h json.h util.h
 $(BUILDDIR)/tools.o: tools.c tools.h agent.h msgqueue.h protocol.h json.h util.h

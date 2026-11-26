@@ -262,9 +262,9 @@ func (a *Agent) BuildPrompt() string {
 	}
 
 	// agent-identity
-	identity := "You are bash-agent, a lightweight coding agent that works in a terminal."
+	identity := promptIdentityEn
 	if strings.HasPrefix(locale, "zh") {
-		identity = "你是 bash-agent，一个在终端中运行的轻量级编码智能体。"
+		identity = promptIdentityZh
 	}
 	appendSection("agent-identity", identity, "")
 
@@ -281,42 +281,19 @@ func (a *Agent) BuildPrompt() string {
 	appendSection("environment", env, "")
 
 	// rules
-	rules := "- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.\n" +
-		"- Prefer safe, exact edits.\n- Report failures clearly."
+	rules := promptRules
 	appendSection("rules", rules, "")
 
 	// tool guidance
-	toolGuidance := "- Use one Read call per file; batch independent reads of needed files in the same response.\n" +
-		"- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n" +
-		"- Glob and Grep take one pattern per call; batch independent searches for needed patterns in the same response.\n" +
-		"- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n" +
-		"- Before calling tools, briefly check what other useful work can run now without these results. Use an internal dependency DAG for the current subgoal: batch all ready, independent tool calls together in one response, within tool/output limits, with known inputs and prerequisites met. Gather independent evidence together even if later combined. Wait for results that decide whether or how to act, approvals, or shared-state ordering (including read-before-edit). While background work runs, continue work independent of its results and non-interfering with its state. After results, reassess; never repeat running/completed work. Real dependency chains and single calls are valid; never invent work. Use tools as intended, not shell wrappers or delegation to simulate batching. No printed DAG or extra scheduling turns; preserve required plan, todo, and approval workflows. Aim to reduce model round trips; actual concurrency depends on runtime.\n- Each call must advance the current subgoal, answer a concrete question, or test a relevant hypothesis. Bounded read-only exploration is welcome; avoid redundant or low-value calls.\n" +
-		"- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n" +
-		"- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n" +
-		"- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n" +
-		"- Bash supports background=true for long-running commands. Returns task_id immediately; output delivered asynchronously like SubAgent.\n" +
-		"- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules."
+	toolGuidance := promptToolGuidance
 	appendSection("using-your-tools", toolGuidance, "")
 
 	// sub-agent guidance
-	subAgentGuidance := "- **When to use**: delegate focused sub-tasks with clear goals and boundaries. Use the default mode for self-contained work that does not need the current conversation; use fork mode when inherited context is needed.\n" +
-		"- **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.\n" +
-		"- **When NOT to use**: do not delegate work that depends on a result you have not received yet, or duplicate work already assigned to a running child.\n" +
-		"- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n" +
-		"- **Prompt design**: in default mode, provide a complete, self-contained task with the required paths, context, constraints, and expected result. In fork mode, state the focused task and any additional information it needs. Assign disjoint write scopes to concurrent children and keep dependent edits ordered.\n" +
-		"- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n" +
-		"- **Parallelism**: start independent SubAgent tasks together in one response. While they run, continue useful independent work that has not been delegated; do not duplicate their work. Results arrive asynchronously: process completed results when useful, but wait for every result needed by a dependent action or final conclusion. Match results by session_id; do not relaunch a task merely because another child finished first.\n" +
-		"- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically."
+	subAgentGuidance := promptSubAgentGuidance
 	appendSection("sub-agent-guidance", subAgentGuidance, "")
 
 	// todo guidance
-	todoGuidance := "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n" +
-		"- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n" +
-		"- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n" +
-		"- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n" +
-		"- Keep the checklist short, concrete, and actionable.\n" +
-		"- Prefer exactly one in_progress item when work is actively underway.\n" +
-		"- Mark items completed immediately after finishing them, and remove stale items that no longer matter."
+	todoGuidance := promptTodoGuidance
 	appendSection("todo-guidance", todoGuidance, "")
 
 	// plan lifecycle
@@ -327,17 +304,7 @@ func (a *Agent) BuildPrompt() string {
 	if pPath == "" {
 		pPath = "<not set>"
 	}
-	planGuidance := "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n" +
-		"- **Files**: PLAN_DRAFT_FILE: " + pdPath + " | PLAN_FILE: " + pPath + "\n" +
-		"- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n" +
-		"- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n" +
-		"  Every user reply MUST be classified as exactly ONE of:\n" +
-		"  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n" +
-		"  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n" +
-		"  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n" +
-		"  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n" +
-		"- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n" +
-		"- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix."
+	planGuidance := promptPlanLifecycle0 + pdPath + promptPlanLifecycle1 + pPath + promptPlanLifecycle2
 	appendSection("plan-lifecycle-guidance", planGuidance, "")
 
 	// instruction files
@@ -376,9 +343,9 @@ func (a *Agent) BuildPrompt() string {
 	}
 
 	// output language — 必须放在最后
-	outputLang := "MUST use \"" + locale + "\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is."
+	outputLang := promptOutputLanguageEn0 + locale + promptOutputLanguageEn1
 	if strings.HasPrefix(locale, "zh") {
-		outputLang = "再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！"
+		outputLang = promptOutputLanguageZh
 	}
 	appendSection("output-language", outputLang, "")
 
