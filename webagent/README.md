@@ -58,9 +58,27 @@ prompt 送达 agent）：
 
 - cancel：发 session/cancel 通知，等待 agent 回 stopReason=cancelled
   （上限 --cancel-timeout-ms）
-- force_kill：跳过等待，SIGTERM agent 进程组，轮询 2s 未退则 SIGKILL
+- force_kill：跳过等待，先 SIGTERM agent 进程组，最多等 5s 让 agent 排空
+  （agent.sh 收到 SIGTERM 后固定 3s 退出），未退再 SIGKILL（再等 2s）
 
-agent 崩溃 / 强停 / 外部 kill 后，下一轮自动 respawn 并 resume 上一会话。
+### 强停 / 异常退出收尾
+
+agent.sh 的 worker 在后台子 shell 里跑工具、收通知，这些子 shell 各自成
+进程组，且持有 stdout 写端。所以进程是否退出不能只看 stdout EOF：孤儿不退，
+EOF 永远不来。webagent 的做法：
+
+- agent 存活期间由后台线程持续记录它的后代进程组快照（启动后头 2s 每
+  250ms，之后每 1s；SIGTERM 前再刷新一次。已记录的组只要有存活成员就保留）
+- 根进程一退出（`child.wait()` 返回，强停 / 崩溃 / 被 `kill -9` 均适用），
+  立即对快照里的进程组发 SIGKILL 清理孤儿，再广播 `process_exit`
+- 因此无论强停、崩溃还是被 `kill -9`，都保证：`process_exit` 必达、不残留
+  agent 进程、下一轮自动 respawn 并 resume 上一会话（无需 stdout EOF）
+- 已知边界：意外退出只能用最近一次快照，退出前不到一个采样周期（≤1s）
+  新建的进程组可能漏清
+
+Ctrl+C 退出 webagent 走同一条收尾路径（先 SIGTERM 等排空，超时 SIGKILL），
+退出后不残留 agent 进程。
+
 ## 事件流
 
 与 stream-json 模式一致（session_start / user_input / text / thinking /
@@ -90,4 +108,5 @@ cargo test --manifest-path webagent/Cargo.toml
 
 E2E 端口可用环境变量覆盖：ACP_E2E_LLM_PORT / ACP_E2E_PORT /
 ACP_E2E_REAL_PORT / ACP_E2E_CANCEL_PORT / ACP_E2E_KILL_PORT /
-ACP_E2E_STREAM_PORT / ACP_E2E_404_PORT。
+ACP_E2E_STREAM_PORT / ACP_E2E_404_PORT / ACP_E2E_STRONG_PORT /
+ACP_E2E_QUICK_PORT。

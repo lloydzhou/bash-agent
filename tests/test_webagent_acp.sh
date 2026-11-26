@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # webagent ACP 模式 E2E —— 起 webagent(--protocol acp) 驱动 mock ACP agent，
 # 覆盖：正常轮 / 工具流 _meta / 取消确认 / 忽略取消→强制停止 / 强停后 respawn+resume /
-# 崩溃自动恢复 / 外部 kill 恢复 / 默认 stream-json 回归。
+# 崩溃自动恢复 / 外部 kill 恢复 / 默认 stream-json 回归 /
+# 真实 agent.sh 强停与 dispatcher 被杀（S10–S12：零孤儿 + process_exit + resume）。
 # 用法: bash tests/test_webagent_acp.sh   （需先 cargo build webagent + python3 websockets）
 set -u
 cd "$(dirname "$0")/.."
@@ -15,8 +16,11 @@ PORT_CANCEL=${ACP_E2E_CANCEL_PORT:-8734}
 PORT_KILL=${ACP_E2E_KILL_PORT:-8735}
 PORT_STREAM=${ACP_E2E_STREAM_PORT:-8736}
 PORT_404=${ACP_E2E_404_PORT:-8737}
+PORT_STRONG=${ACP_E2E_STRONG_PORT:-8738}
+PORT_QUICK=${ACP_E2E_QUICK_PORT:-8739}
 
-BIN="$ROOT_DIR/webagent/target/debug/webagent"
+BIN="${ACP_E2E_BIN:-}"   # 可显式指定二进制（如对比修复前后的行为）
+[[ -n "$BIN" ]] || BIN="$ROOT_DIR/webagent/target/debug/webagent"
 [[ -x "$BIN" ]] || BIN="$ROOT_DIR/webagent/target/release/webagent"
 if [[ ! -x "$BIN" ]]; then
     echo "webagent 二进制不存在，先: cargo build --manifest-path webagent/Cargo.toml"; exit 1
@@ -83,7 +87,9 @@ wait_ready() {  # $1=端口
 
 stop_web() {  # $1=pid
     kill_all_mocks   # 先杀 webagent 名下的 mock（ppid 匹配需要它还活着）
-    kill "$1" 2>/dev/null
+    # 用 SIGINT（Ctrl+C）而非 SIGTERM：webagent 只注册了 Ctrl+C 处理器，SIGTERM
+    # 走默认动作瞬死，来不及 terminate() 收尾，空闲的真实 agent 树会被孤儿化泄漏
+    kill -INT "$1" 2>/dev/null
     wait "$1" 2>/dev/null
 }
 
@@ -458,6 +464,178 @@ async def main():
                 if e.get("type") == "stderr" and "不可恢复" in (e.get("content") or "")]
         check("S9 提示事件（原会话不可恢复，已新建）", bool(hint), d.events[-8:])
 
+    sys.exit(1 if fails else 0)
+
+asyncio.run(main())
+PYEOF
+stop_web "${PIDS[${#PIDS[@]}-1]}"
+
+# ---------- 批 G：真实 agent.sh 强停 / dispatcher 被杀（不能靠测试替 webagent 兜底） ----------
+# agent.sh 的 worker 在后台子 shell 里跑工具、收通知，它们各自成进程组并持有 stdout
+# 写端：只 killpg 顶层组打不到，孤儿持有写端 → webagent 收不到 EOF → 永不广播
+# process_exit、下一轮挂死。
+# 本批用例刻意不替 webagent 清理进程树，断言：process_exit 到达 + 零孤儿 + resume 同会话。
+# 启动前快照：排除本机历史遗留的 agent.sh --acp 孤儿，只统计本批新增进程
+ACP_E2E_OLD_PIDS=$({ pgrep -f "$ROOT_DIR/src/agent.sh --acp"; pgrep -f "$ROOT_DIR/src/.*acp_(in|out)\\.awk"; } 2>/dev/null | sort -u | tr '\n' ' ')
+export ACP_E2E_OLD_PIDS ROOT_DIR
+export ACP_E2E_PORT="$PORT_STRONG"
+(cd "$E2E_CWD" && exec env ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT_LLM/v1" ANTHROPIC_API_KEY=test \
+    BASH_AGENT_HOME="$TEST_HOME" \
+    "$BIN" --agent "$ROOT_DIR/src/agent.sh" --protocol acp --port "$PORT_STRONG" >>"$_TMP/web-strong.log" 2>&1) &
+PIDS+=($!)
+WEB_REAL_PID=${PIDS[${#PIDS[@]}-1]}
+export WEB_REAL_PID
+wait_ready "$PORT_STRONG" || red "webagent(strong :$PORT_STRONG) 启动失败"
+
+# 两个用例共用的 python 辅助（本批本地内联，避免改动 ws_driver 公共夹具）
+STRONG_PY_HELPERS='
+import asyncio, json, os, subprocess, sys, time
+sys.path.insert(0, "tests/fixtures")
+from ws_driver import Driver, has
+
+PORT = int(os.environ["ACP_E2E_PORT"])
+ROOT = os.environ["ROOT_DIR"]
+OLD = set(os.environ.get("ACP_E2E_OLD_PIDS", "").split())
+fails = []
+
+def check(name, cond, detail=""):
+    print(("PASS - " if cond else "FAIL - ") + name + ("" if cond else "  " + str(detail)[:200]))
+    if not cond:
+        fails.append(name)
+
+def agent_pids():
+    # 本批新增的 agent.sh / acp awk 进程（不含启动前已存在的历史孤儿）
+    out = []
+    for pat in (ROOT + "/src/agent.sh --acp", ROOT + "/src/.*acp_(in|out)\\.awk"):
+        out += subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True).stdout.split()
+    return sorted({p for p in out if p not in OLD}, key=int)
+
+def settled_pids(wait=3.0):
+    # 收尾是异步的：给 3s 让进程退干净，返回仍存活的
+    deadline = time.monotonic() + wait
+    left = agent_pids()
+    while left and time.monotonic() < deadline:
+        time.sleep(0.2)
+        left = agent_pids()
+    return left
+
+def dispatcher_pids():
+    top = []
+    for p in agent_pids():
+        ppid = subprocess.run(["ps", "-o", "ppid=", "-p", p], capture_output=True, text=True).stdout.strip()
+        if ppid == os.environ["WEB_REAL_PID"]:
+            top.append(p)
+    return top
+
+async def start_slow_turn(d):
+    # ACP_SLOW_MARKER: tool_call 后 Bash 工具 sleep 4，此时 worker 在跑工具
+    await d.send("ACP_SLOW_MARKER")
+    evs = await d.pump(30, until=lambda e: e.get("type") == "tool_call")
+    await asyncio.sleep(1.0)
+    return evs
+
+def sid_of(evs):
+    for e in evs:
+        if e.get("type") == "session_start":
+            return e.get("session_id")
+    return None
+
+async def followup(d, label, sid1):
+    await d.send("hello again")
+    evs = await d.pump(60, until=lambda e: e.get("type") == "stop")
+    check(label + " 后续 prompt 正常 stop end_turn", has(evs, "stop", reason="end_turn"), evs[-6:])
+    check(label + " resume 同会话 sid", bool(sid1) and sid_of(evs) == sid1, (sid1, sid_of(evs)))
+'
+
+run_py "S10 真实 agent 强停: force_kill → process_exit + 零孤儿 + resume" "$_TMP/web-strong.log" <<PYEOF
+$STRONG_PY_HELPERS
+async def main():
+    async with Driver(PORT) as d:
+        evs = await start_slow_turn(d)
+        check("S10 工具执行中（tool_call 已出）", has(evs, "tool_call"), evs[-6:])
+        sid1 = sid_of(d.events)
+        check("S10 进行中有 agent 进程", len(agent_pids()) > 0, agent_pids())
+
+        t0 = time.monotonic()
+        await d.send(json.dumps({"type": "bashagent_ctrl", "action": "force_kill"}))
+        evs = await d.pump(15, until=lambda e: e.get("type") == "process_exit")
+        cost = time.monotonic() - t0
+        print("INFO - force_kill → process_exit 耗时 %.2fs" % cost)
+        check("S10 force_kill → process_exit（不依赖 stdout EOF）", has(evs, "process_exit"), evs)
+        check("S10 process_exit 在 8s 内（SIGTERM 排空 3s + 余量）", cost < 8, cost)
+        left = settled_pids()
+        check("S10 强停后零孤儿进程", not left, left)
+        await followup(d, "S10", sid1)
+    sys.exit(1 if fails else 0)
+
+asyncio.run(main())
+PYEOF
+
+run_py "S11 真实 agent dispatcher 被 kill -9: process_exit + 零孤儿 + resume" "$_TMP/web-strong.log" <<PYEOF
+$STRONG_PY_HELPERS
+async def main():
+    async with Driver(PORT) as d:
+        evs = await start_slow_turn(d)
+        check("S11 工具执行中（tool_call 已出）", has(evs, "tool_call"), evs[-6:])
+        sid1 = sid_of(d.events)
+        victims = dispatcher_pids()
+        check("S11 找到 webagent 名下的 dispatcher", len(victims) == 1, victims)
+        for p in victims:
+            os.kill(int(p), 9)   # 只杀 dispatcher：worker/awk 全部变孤儿
+
+        t0 = time.monotonic()
+        evs = await d.pump(15, until=lambda e: e.get("type") == "process_exit")
+        print("INFO - kill -9 dispatcher → process_exit 耗时 %.2fs" % (time.monotonic() - t0))
+        check("S11 dispatcher 被杀 → process_exit", has(evs, "process_exit"), evs)
+        left = settled_pids()
+        check("S11 收尾后零孤儿进程（worker 的后台子 shell 各自成进程组，也被清）", not left, left)
+        await followup(d, "S11", sid1)
+    sys.exit(1 if fails else 0)
+
+asyncio.run(main())
+PYEOF
+
+stop_web "${PIDS[${#PIDS[@]}-1]}"
+
+# ---------- 批 H：真实 agent 空闲时 dispatcher 被 kill -9（S12） ----------
+# 必须与批 G 分开起 webagent：mock 按请求体里是否带 ACP_SLOW_MARKER 分流，而同
+# 一会话的历史里已有该标记，批 G 会话的后续每一轮都是慢速流。这里要的是
+# 「回包早于 1s」的快轮次 + 随后空闲的 agent，这正是采样盲区所在的时序。
+export ACP_E2E_PORT="$PORT_QUICK"
+(cd "$E2E_CWD" && exec env ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT_LLM/v1" ANTHROPIC_API_KEY=test \
+    BASH_AGENT_HOME="$TEST_HOME" \
+    "$BIN" --agent "$ROOT_DIR/src/agent.sh" --protocol acp --port "$PORT_QUICK" >>"$_TMP/web-quick.log" 2>&1) &
+PIDS+=($!)
+WEB_REAL_PID=${PIDS[${#PIDS[@]}-1]}
+export WEB_REAL_PID
+wait_ready "$PORT_QUICK" || red "webagent(quick :$PORT_QUICK) 启动失败"
+
+run_py "S12 真实 agent 空闲时 dispatcher 被 kill -9: 快轮次后仍零孤儿 + resume" "$_TMP/web-quick.log" <<PYEOF
+$STRONG_PY_HELPERS
+async def main():
+    async with Driver(PORT) as d:
+        # 快轮次：回包早于 1s。worker 的通知子 shell 在 session 应答之后才创建，
+        # 握手后的刷新看不到它；轮次一结束 agent 就空闲，没有「等回包」的刷新时机。
+        # 此时 dispatcher 被 kill -9，只能靠空闲期间的采样记下它的进程组
+        t0 = time.monotonic()
+        await d.send("hello")
+        evs = await d.pump(60, until=lambda e: e.get("type") == "stop")
+        cost = time.monotonic() - t0
+        print("INFO - 首轮耗时 %.2fs（< 1s 时仅靠等回包期间刷新记不到新进程组）" % cost)
+        check("S12 快轮次 stop end_turn", has(evs, "stop", reason="end_turn"), evs[-6:])
+        sid1 = sid_of(evs)
+        await asyncio.sleep(1.5)   # 留出一个采样周期：空闲 agent 的进程树应已被完整记下
+
+        victims = dispatcher_pids()
+        check("S12 找到空闲 agent 的 dispatcher", len(victims) == 1, victims)
+        for p in victims:
+            os.kill(int(p), 9)
+
+        evs = await d.pump(15, until=lambda e: e.get("type") == "process_exit")
+        check("S12 dispatcher 被杀 → process_exit", has(evs, "process_exit"), evs)
+        left = settled_pids()
+        check("S12 收尾后零孤儿进程（含 worker 启动时创建的通知子 shell）", not left, left)
+        await followup(d, "S12", sid1)
     sys.exit(1 if fails else 0)
 
 asyncio.run(main())
