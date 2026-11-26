@@ -7,11 +7,14 @@ set -u
 cd "$(dirname "$0")/.."
 ROOT_DIR="$PWD"
 
+# 端口全部可用环境变量覆盖，避免本地并行测试撞车（P2-13）
 PORT_LLM=${ACP_E2E_LLM_PORT:-8731}
 PORT_ACP=${ACP_E2E_PORT:-8732}
+PORT_REAL=${ACP_E2E_REAL_PORT:-8733}
 PORT_CANCEL=${ACP_E2E_CANCEL_PORT:-8734}
 PORT_KILL=${ACP_E2E_KILL_PORT:-8735}
 PORT_STREAM=${ACP_E2E_STREAM_PORT:-8736}
+PORT_404=${ACP_E2E_404_PORT:-8737}
 
 BIN="$ROOT_DIR/webagent/target/debug/webagent"
 [[ -x "$BIN" ]] || BIN="$ROOT_DIR/webagent/target/release/webagent"
@@ -31,24 +34,31 @@ PIDS=()
 green() { printf '\033[32m✓ %s\033[0m\n' "$1"; ((PASS++)) || true; }
 red()   { printf '\033[31m✗ %s\033[0m\n' "$1"; ((FAIL++)) || true; }
 
+# 只杀本测试启动的 webagent（PIDS）名下的 mock 子进程；
+# 其他会话/历史遗留的同名 mock 一律不碰（P2-13 收敛杀伤范围）
 kill_all_mocks() {
-    python3 - <<'PYK'
-import os, signal, subprocess
-out = subprocess.run(["pgrep", "-f", "mock_acp_agent.py"],
-                     capture_output=True, text=True).stdout.split()
-for pid in out:
-    try:
-        os.kill(int(pid), signal.SIGKILL)
-    except Exception:
-        pass
-PYK
+    local mp wp
+    for wp in "${PIDS[@]:-}"; do
+      for mp in $(pgrep -f mock_acp_agent.py); do
+        if [[ "$(ps -o ppid= -p "$mp" 2>/dev/null | tr -d ' ')" == "$wp" ]]; then
+            kill -9 "$mp" 2>/dev/null
+        fi
+      done
+    done
 }
 
 cleanup() {
     local p
-    for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null; done
+    # 先杀 mock（此时 webagent 还活着，ppid 可匹配），再停 webagent，
+    # 避免先杀 webagent 导致 mock 变孤儿逃过 ppid 过滤（P2-13）
     kill_all_mocks
-    rm -rf "$_TMP" "$TEST_HOME" "$E2E_CWD"
+    for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null; done
+    # ACP_E2E_KEEP=1 保留现场（调试用）
+    if [[ "${ACP_E2E_KEEP:-}" == 1 ]]; then
+        echo "KEEP=1 现场保留: $_TMP $TEST_HOME $E2E_CWD"
+    else
+        rm -rf "$_TMP" "$TEST_HOME" "$E2E_CWD"
+    fi
 }
 trap cleanup EXIT
 
@@ -72,9 +82,9 @@ wait_ready() {  # $1=端口
 }
 
 stop_web() {  # $1=pid
+    kill_all_mocks   # 先杀 webagent 名下的 mock（ppid 匹配需要它还活着）
     kill "$1" 2>/dev/null
     wait "$1" 2>/dev/null
-    kill_all_mocks
 }
 
 run_py() {  # $1=场景名 $2=失败时附加日志(可选)；python 脚本从函数 stdin 读
@@ -158,6 +168,8 @@ async def main():
         # 恰是 resume 证据；若退化为 session/new 则计数变 2（mock-<新pid>-2）
         check("S5 resume 同会话（sid 原样保留 mock-*-1）",
               bool(old and new and new == old), (old, new))
+        check("S5 resume 语义：reply 带 [resumed]（agent 侧真恢复, P2-11）",
+              has(evs, "text", content="mock reply: after respawn [resumed]"), evs)
 
         out = subprocess.run(["pgrep", "-f", "mock_acp_agent.py"],
                              capture_output=True, text=True).stdout.split()
@@ -176,6 +188,8 @@ async def main():
             await d.send("revive")
             evs = await d.pump(15, until=lambda e: e.get("type") == "stop")
             check("S6 自动恢复后正常轮", has(evs, "stop", reason="end_turn"), evs)
+            check("S6 resume 语义：reply 带 [resumed] (P2-11)",
+                  has(evs, "text", content="mock reply: revive [resumed]"), evs)
 
     sys.exit(1 if fails else 0)
 
@@ -197,10 +211,16 @@ PORT = int(os.environ["ACP_E2E_PORT"])
 
 async def main():
     async with Driver(PORT) as d:
+        # P3-20：裸 {"type":"cancel"} 不再是控制消息，应作为普通 prompt 送达
+        await d.send('{"type":"cancel"}')
+        evs = await d.pump(10, until=lambda e: e.get("type") == "stop")
+        ok3 = has(evs, "text", content='mock reply: {"type":"cancel"}')
+        print(("PASS" if ok3 else "FAIL") + " - 裸 cancel 文本当普通 prompt (P3-20)")
+
         await d.send("slow task")
         await asyncio.sleep(0.6)
         t0 = time.monotonic()
-        await d.send(json.dumps({"type": "cancel"}))
+        await d.send(json.dumps({"type": "bashagent_ctrl", "action": "cancel"}))
         evs = await d.pump(10, until=lambda e: e.get("type") == "stop")
         dt = time.monotonic() - t0
         ok1 = has(evs, "stop", reason="interrupted")
@@ -208,7 +228,7 @@ async def main():
         print(("PASS" if ok1 else "FAIL") + " - stop reason=interrupted (got %s)" %
               [e.get("type") for e in evs])
         print(("PASS" if ok2 else "FAIL") + " - 取消→回包 %.2fs (<2.5s, 排队实现会 >3s)" % dt)
-        sys.exit(0 if ok1 and ok2 else 1)
+        sys.exit(0 if ok1 and ok2 and ok3 else 1)
 
 asyncio.run(main())
 PYEOF
@@ -244,16 +264,16 @@ async def main():
     async with Driver(PORT) as d:
         await d.send("long task")
         await asyncio.sleep(0.6)
-        await d.send(json.dumps({"type": "cancel"}))
+        await d.send(json.dumps({"type": "bashagent_ctrl", "action": "cancel"}))
         evs = await d.pump(2.5)
         check("S4 mock 忽略 cancel → 无 stop(interrupted)",
               not has(evs, "stop"), [e.get("type") for e in evs])
 
         t0 = time.monotonic()
-        await d.send(json.dumps({"type": "force_kill"}))
+        await d.send(json.dumps({"type": "bashagent_ctrl", "action": "force_kill"}))
         evs = await d.pump(10, until=lambda e: e.get("type") == "process_exit")
         check("S4 force_kill → process_exit", has(evs, "process_exit"), evs)
-        print("INFO - force_kill → process_exit 耗时 %.2fs (SIGTERM+2s 兜底)" % (time.monotonic() - t0))
+        print("INFO - force_kill → process_exit 耗时 %.2fs (SIGTERM+轮询兜底)" % (time.monotonic() - t0))
 
         await d.send("after kill")
         evs = await d.pump(15, until=lambda e: e.get("type") == "stop")
@@ -302,6 +322,143 @@ async def main():
         print(("PASS" if ok1 else "FAIL") + " - stop end_turn")
         print(("PASS" if ok2 else "FAIL") + " - text 事件流正常")
         sys.exit(0 if ok1 and ok2 else 1)
+
+asyncio.run(main())
+PYEOF
+stop_web "${PIDS[${#PIDS[@]}-1]}"
+
+# ---------- 批 E：真实 src/agent.sh --acp（P2-9：mock 之外验证真实语义） ----------
+# 三个此前未被真实验证的假设：events.jsonl 落盘路径、stats.json speed 写入、resume 语义
+export ACP_E2E_PORT="$PORT_REAL"
+(cd "$E2E_CWD" && exec env ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT_LLM/v1" ANTHROPIC_API_KEY=test \
+    BASH_AGENT_HOME="$TEST_HOME" \
+    "$BIN" --agent "$ROOT_DIR/src/agent.sh" --protocol acp --port "$PORT_REAL" >>"$_TMP/web-real.log" 2>&1) &
+PIDS+=($!)
+WEB_REAL_PID=${PIDS[${#PIDS[@]}-1]}
+export WEB_REAL_PID TEST_HOME ROOT_DIR
+wait_ready "$PORT_REAL" || red "webagent(real :$PORT_REAL) 启动失败"
+
+run_py "S8 真实 agent.sh --acp: 握手+事件流+落盘+崩溃resume" "$_TMP/web-real.log" <<'PYEOF'
+import asyncio, glob, json, os, signal, subprocess, sys
+sys.path.insert(0, "tests/fixtures")
+from ws_driver import Driver, has
+
+PORT = int(os.environ["ACP_E2E_PORT"])
+fails = []
+
+def check(name, cond, detail=""):
+    print(("PASS - " if cond else "FAIL - ") + name + ("" if cond else "  " + str(detail)[:200]))
+    if not cond:
+        fails.append(name)
+
+def kill_real_agent():
+    # agent.sh 的 worker 子进程是独立进程组组长（pgid=自身），单 killpg 杀不到，
+    # 它持有 stdout 写端则 webagent 永远收不到 EOF。策略：先对顶层组 killpg，
+    # 再对 cmdline 匹配本仓库路径的全部 pid 逐个兜底 kill。
+    pat = os.environ["ROOT_DIR"] + "/src/agent.sh --acp"
+    out = subprocess.run(["pgrep", "-f", pat],
+                         capture_output=True, text=True).stdout.split()
+    victim = None
+    for pid in out:
+        ppid = subprocess.run(["ps", "-o", "ppid=", "-p", pid],
+                              capture_output=True, text=True).stdout.strip()
+        if ppid == os.environ["WEB_REAL_PID"]:
+            victim = pid
+            try:
+                os.killpg(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    for pid in out:
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return victim
+
+async def main():
+    async with Driver(PORT) as d:
+        await d.send("hello")
+        evs = await d.pump(60, until=lambda e: e.get("type") == "stop")
+        check("S8 stop end_turn", has(evs, "stop", reason="end_turn"), evs)
+        check("S8 text 事件流", any(e.get("type") == "text" for e in evs), evs)
+        ss = [e for e in d.events if e.get("type") == "session_start"]
+        check("S8 session_start + sid", bool(ss and ss[0].get("session_id")), ss)
+        sid1 = ss[0]["session_id"] if ss else ""
+        check("S8 usage 事件", has(evs, "usage"), evs)
+
+        # os.walk 遍历：glob 的 ** 不进入 .bash-agent 这类点开头目录
+        evs_files, st_files = [], []
+        for root, _dirs, files in os.walk(os.environ["TEST_HOME"]):
+            for f in files:
+                if f == "events.jsonl":
+                    evs_files.append(os.path.join(root, f))
+                elif f == "stats.json":
+                    st_files.append(os.path.join(root, f))
+        if st_files:
+            content = open(st_files[0]).read()
+            print("INFO - stats.json 内容: " + content[:120])
+            check("S8 stats.json 含 speed", "last_call_speed_tok_per_sec" in content, content[:120])
+        else:
+            print("INFO - stats.json 未生成（mock LLM 响应可能无 timing）")
+
+        victim = kill_real_agent()
+        check("S8 找到并 kill 真实 agent", victim is not None, None)
+        evs = await d.pump(10, until=lambda e: e.get("type") == "process_exit")
+        check("S8 崩溃广播 process_exit", has(evs, "process_exit"), evs)
+        await d.send("hi again")
+        evs = await d.pump(60, until=lambda e: e.get("type") == "stop")
+        check("S8 恢复后正常轮", has(evs, "stop", reason="end_turn"), evs)
+        ss2 = [e for e in evs if e.get("type") == "session_start"]
+        check("S8 resume 同会话 sid", bool(ss2 and ss2[0].get("session_id") == sid1),
+              (sid1, ss2))
+
+    sys.exit(1 if fails else 0)
+
+asyncio.run(main())
+PYEOF
+kill_real_left() {
+    local mp
+    for mp in $(pgrep -f "src/agent.sh --acp"); do
+        if [[ "$(ps -o ppid= -p "$mp" 2>/dev/null | tr -d ' ')" == "$WEB_REAL_PID" ]]; then
+            kill -9 "$mp" 2>/dev/null
+        fi
+    done
+}
+kill_real_left
+stop_web "${PIDS[${#PIDS[@]}-1]}"
+
+# ---------- 批 F：resume 404 fallback（P2-10：原会话不可恢复 → 新建 + 提示） ----------
+export ACP_E2E_PORT="$PORT_404"
+MOCK_RESUME_404=1 start_web "$PORT_404" "$_TMP/web-404.log" "--session mock-ghost-9"
+wait_ready "$PORT_404" || red "webagent(404 :$PORT_404) 启动失败"
+
+run_py "S9 resume 404 → fallback session/new + 提示事件 (P2-10)" "$_TMP/web-404.log" <<'PYEOF'
+import asyncio, json, os, sys
+sys.path.insert(0, "tests/fixtures")
+from ws_driver import Driver, has, find
+
+PORT = int(os.environ["ACP_E2E_PORT"])
+fails = []
+
+def check(name, cond, detail=""):
+    print(("PASS - " if cond else "FAIL - ") + name + ("" if cond else "  " + str(detail)[:200]))
+    if not cond:
+        fails.append(name)
+
+async def main():
+    async with Driver(PORT) as d:
+        await d.send("hello")
+        evs = await d.pump(15, until=lambda e: e.get("type") == "stop")
+        check("S9 stop end_turn", has(evs, "stop", reason="end_turn"), evs)
+        ss = find(d.events, "session_start")
+        check("S9 fallback 新建会话（sid != mock-ghost-9）",
+              bool(ss and ss.get("session_id")
+                   and ss["session_id"] != "mock-ghost-9"), ss)
+        hint = [e for e in d.events
+                if e.get("type") == "stderr" and "不可恢复" in (e.get("content") or "")]
+        check("S9 提示事件（原会话不可恢复，已新建）", bool(hint), d.events[-8:])
+
+    sys.exit(1 if fails else 0)
 
 asyncio.run(main())
 PYEOF

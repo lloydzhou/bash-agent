@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -63,6 +63,15 @@ fn read_speed_from_stats(events_path: &Path) -> Option<i64> {
 /// usage 事件可能先于 agent 将本次速度写入 stats.json。
 /// 等待一小段时间，以读取到本次调用的速度而非上一轮的值。
 pub(crate) fn wait_for_speed_from_stats(events_path: &Path, previous_speed: Option<i64>) -> Option<i64> {
+    // stats.json 尚不存在（如 mock agent 不写 stats）时直接放弃，
+    // 避免每轮 usage 固定空转 200ms（P3-18）
+    if !events_path
+        .parent()
+        .map(|d| d.join("stats.json").is_file())
+        .unwrap_or(false)
+    {
+        return None;
+    }
     const RETRIES: usize = 20;
     const INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
     for attempt in 0..=RETRIES {
@@ -128,6 +137,11 @@ fn resolve_events_path(args: &[String], home: &Path, cwd: &Path) -> Option<PathB
 }
 
 /// ACP 模式解析握手目标：给 --session 直接取该会话；--continue 取最近会话；否则 None（走 session/new）。
+///
+/// --session 在 ACP 模式下的双重语义（P2-15，当前自洽但机制不同）：
+/// 1) 原样透传给 agent 命令行（agent.sh 设 SESSION_ID 并在启动时初始化会话）；
+/// 2) webagent 另用它做 resume 决策：握手先试 session/resume(target)，失败退 session/new。
+/// resume 走 JSON-RPC、透传走 argv，二者共用同一 id 才保持一致；改动任一侧需评估另一侧。
 fn resolve_resume_target(args: &[String], home: &Path, cwd: &Path) -> Option<String> {
     for i in 0..args.len() {
         if args[i] == "--session" {
@@ -302,6 +316,7 @@ fn usage() {
     eprintln!("  --agent PATH     agent binary (default: resolve <agent> from dist/ or PATH)");
     eprintln!("  --protocol P     acp or stream-json (default: stream-json)");
     eprintln!("  --cancel-timeout-ms N   acp 取消确认超时毫秒（默认 10000）");
+    eprintln!("  --prompt-timeout-ms N   acp prompt 回包超时毫秒（默认 0=不限）");
     eprintln!("  -h, --help       show this help");
     eprintln!();
     eprintln!("<agent>: {} (default: cagent)", AGENT_NAMES.join(" | "));
@@ -310,12 +325,18 @@ fn usage() {
     eprintln!("Remaining args are passed through to the agent on every spawn, plus");
     eprintln!("a per-input prompt positional and --output-format stream-json.");
     eprintln!("--protocol acp keeps a persistent agent process speaking ACP instead.");
-    eprintln!("ACP mode accepts WS control messages: {{\"type\":\"cancel\"}} / {{\"type\":\"force_kill\"}}.");
+    eprintln!("ACP mode accepts WS control messages: {{\"type\":\"bashagent_ctrl\",\"action\":\"cancel\"}} /");
+    eprintln!("  {{\"type\":\"bashagent_ctrl\",\"action\":\"force_kill\"}} (namespaced; bare {{\"type\":\"cancel\"}} is a normal prompt).");
 }
 
 /// 从透传给 agent 的参数中提取前端展示配置（--model / --provider / --max-context-tokens）。
 /// 参数在 `--` 之后也可能出现，扫描全部 pos；值支持 `--k v` 与 `--k=v` 两种形式。
-fn build_config_json(args: &[String], protocol: &str, cancel_timeout_ms: u64) -> String {
+fn build_config_json(
+    args: &[String],
+    protocol: &str,
+    cancel_timeout_ms: u64,
+    prompt_timeout_ms: u64,
+) -> String {
     let mut model: Option<&str> = None;
     let mut provider: Option<&str> = None;
     let mut max_context: Option<&str> = None;
@@ -349,6 +370,7 @@ fn build_config_json(args: &[String], protocol: &str, cancel_timeout_ms: u64) ->
     }
     obj.insert("protocol".into(), json!(protocol));
     obj.insert("cancel_timeout_ms".into(), json!(cancel_timeout_ms));
+    obj.insert("prompt_timeout_ms".into(), json!(prompt_timeout_ms));
     json!(obj).to_string()
 }
 
@@ -361,6 +383,7 @@ fn main() -> Result<()> {
     let mut pos: Vec<String> = Vec::new();
     let mut protocol = "stream-json".to_string();
     let mut cancel_timeout_ms = 10_000u64;
+    let mut prompt_timeout_ms = 0u64;
     let mut after_sep = false;
     let mut i = 0;
     while i < args.len() {
@@ -406,6 +429,16 @@ fn main() -> Result<()> {
                 cancel_timeout_ms = v
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid --cancel-timeout-ms: {v}"))?;
+                i += 2;
+            }
+            "--prompt-timeout-ms" => {
+                let v = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--prompt-timeout-ms requires a value"))?;
+                prompt_timeout_ms = v
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid --prompt-timeout-ms: {v}"))?;
                 i += 2;
             }
             "--agent" => {
@@ -478,6 +511,15 @@ fn main() -> Result<()> {
 
     // ACP 常驻 client（懒初始化，跨轮复用）；提前定义以便 Ctrl+C 处理器访问
     let acp_state: Arc<Mutex<Option<Arc<acp::AcpClient>>>> = Arc::new(Mutex::new(None));
+    // client 代数号：每次成功 spawn +1。旧 reader EOF 时校验代数，
+    // 防止旧 reader 把 respawn 后的新 client 抹掉（P1-4）
+    let acp_generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    // prompt 回包等待上限：0 = 不限（P1-5）
+    let prompt_timeout = if prompt_timeout_ms > 0 {
+        Some(Duration::from_millis(prompt_timeout_ms))
+    } else {
+        None
+    };
     // 最近一次 ACP 会话 id：agent 崩溃/强停后 respawn 用它 resume 同一会话
     let last_sid: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -504,7 +546,7 @@ fn main() -> Result<()> {
     .ok();
 
     let addr = format!("{bind}:{port}");
-    let config_json = build_config_json(&base_args, &protocol, cancel_timeout_ms);
+    let config_json = build_config_json(&base_args, &protocol, cancel_timeout_ms, prompt_timeout_ms);
     eprintln!("[webagent] config: {config_json}");
     let acp_control = if protocol == "acp" {
         Some(server::AcpControl::new(acp_state.clone()))
@@ -534,8 +576,10 @@ fn main() -> Result<()> {
                 // 控制消息（cancel/force_kill）由 server 连接线程旁路处理（AcpControl），
                 // 队列里只剩 prompt。常驻模式：首轮懒初始化，之后每轮复用同一进程
                 let client = {
-                    let mut st = acp_state.lock().unwrap();
-                    match st.clone() {
+                    // 锁内只判空：spawn/握手最坏 3x30s，全程持锁会让 Ctrl+C
+                    // 处理器取锁阻塞、用户按 Ctrl+C 无响应（P1-6）
+                    let cur = acp_state.lock().unwrap().clone();
+                    match cur {
                         Some(c) => c,
                         None => {
                             // resume 优先级：同进程内已知的上一会话（崩溃/强停后恢复）
@@ -551,12 +595,17 @@ fn main() -> Result<()> {
                                 &events_path,
                                 &home_clone,
                                 &cwd_clone,
+                                acp_generation.clone(),
+                                prompt_timeout,
                                 Arc::downgrade(&acp_state),
                             ) {
                                 Ok(c) => {
                                     let c = Arc::new(c);
                                     *last_sid_worker.lock().unwrap() = Some(c.session_id.clone());
-                                    *st = Some(c.clone());
+                                    let mut stg = acp_state.lock().unwrap();
+                                    if stg.is_none() {
+                                        *stg = Some(c.clone());
+                                    }
                                     c
                                 }
                                 Err(e) => {

@@ -282,6 +282,14 @@ jobs:
           name: webagent-${{ matrix.suffix }}
           path: dist/webagent-${{ matrix.suffix }}${{ matrix.ext }}
 
+      - name: Test webagent ACP E2E (linux amd64 only)
+        if: matrix.suffix == 'linux-amd64'
+        run: |
+          python3 -m pip install --quiet websockets \
+            || python3 -m pip install --quiet --break-system-packages websockets
+          cargo build --manifest-path webagent/Cargo.toml
+          bash tests/test_webagent_acp.sh
+
   cagent:
     strategy:
       fail-fast: false

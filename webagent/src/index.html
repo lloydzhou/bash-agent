@@ -1246,7 +1246,7 @@ var CFG = __WEBAGENT_CONFIG__;
       if (!ws || ws.readyState !== 1) return;
       var st = getState().cancelState;
       if (st === null) {
-        ws.send(JSON.stringify({ type: 'cancel' }));
+        ws.send(JSON.stringify({ type: 'bashagent_ctrl', action: 'cancel' }));
         setCancelState('cancelling');
         var limit = 10000;
         if (CFG) { if (CFG.cancel_timeout_ms) { limit = CFG.cancel_timeout_ms; } }
@@ -1258,7 +1258,7 @@ var CFG = __WEBAGENT_CONFIG__;
       } else if (st === 'timeout') {
         if (cancelTimer) { clearTimeout(cancelTimer); cancelTimer = 0; }
         setCancelState('killing');
-        ws.send(JSON.stringify({ type: 'force_kill' }));
+        ws.send(JSON.stringify({ type: 'bashagent_ctrl', action: 'force_kill' }));
       }
     }
     function clearCancel(note) {

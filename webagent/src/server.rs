@@ -578,12 +578,20 @@ impl AcpControl {
     }
 }
 
-/// 控制消息识别：整段文本必须是严格 JSON 且顶层 type 字符串等于 kind；
-/// 解析失败或 type 不匹配时一律按普通 prompt 处理。
+/// 控制消息识别（P3-20 命名空间）：接受
+///   {"type":"bashagent_ctrl","action":"cancel"|"force_kill"}
+/// 旧的裸 {"type":"cancel"} 不再识别为控制消息——用户真想发这段文本时
+/// 会当普通 prompt 送达 agent，而不是被网关吞掉。
+/// 解析失败或 action 不匹配时一律按普通 prompt 处理。
 fn is_control(text: &str, kind: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(text)
         .ok()
-        .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|t| t == kind))
+        .and_then(|v| {
+            if v.get("type").and_then(|t| t.as_str()) != Some("bashagent_ctrl") {
+                return None;
+            }
+            v.get("action").and_then(|a| a.as_str()).map(|a| a == kind)
+        })
         .unwrap_or(false)
 }
 

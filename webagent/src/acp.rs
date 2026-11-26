@@ -12,47 +12,68 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
-/// 握手类请求超时；prompt 回包用 recv() 阻塞等待，
-/// agent 进程退出时 reader 线程清空 pending（Sender 全部 drop）从而立刻解除阻塞。
+/// 握手类请求超时。prompt 等待上限由 --prompt-timeout-ms 决定（0=不限）：
+/// 不限时靠 agent 退出时 reader 清空 pending（Sender 全部 drop）解除阻塞；
+/// 限时则超时报错并回收 pending 条目，避免 agent 活着但不回包卡死 worker（P1-5）。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) struct AcpClient {
-    child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
+    /// Mutex 包裹以支持 terminate 轮询 try_wait 与 Drop reap（P1-7/P1-8）
+    child: Mutex<Child>,
+    /// None = stdin 已关闭（优雅退出后）。不手工 libc::close，
+    /// 让 ChildStdin 自然 Drop 关 fd，避免双重关闭同一 fd（P0-1）
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
     /// JSON-RPC id → 等待回包的 sender（reader 线程按 id 投递）
     pending: Arc<Mutex<HashMap<i64, SyncSender<Value>>>>,
     next_id: AtomicI64,
     pub(crate) session_id: String,
+    /// prompt 回包等待上限；None = 不限（P1-5）
+    prompt_timeout: Option<Duration>,
+}
+
+impl Drop for AcpClient {
+    fn drop(&mut self) {
+        // reap 已退出子进程：长跑 webagent 每次崩溃/强停置空 state 都会丢弃
+        // client，没有 Drop 会留下已退出未 wait 的僵尸进程（P1-7）
+        let _ = self.child.lock().unwrap().try_wait();
+    }
 }
 
 
 /// 发送 JSON-RPC 请求（写 stdin + 注册 pending）。
 fn send_request(
-    stdin: &Mutex<ChildStdin>,
+    stdin: &Mutex<Option<ChildStdin>>,
     pending: &Mutex<HashMap<i64, SyncSender<Value>>>,
     next_id: &AtomicI64,
     method: &str,
     params: Value,
-) -> Result<Receiver<Value>> {
+) -> Result<(i64, Receiver<Value>)> {
     let id = next_id.fetch_add(1, Ordering::SeqCst);
     let (tx, rx) = sync_channel(1);
     pending.lock().unwrap().insert(id, tx);
     let frame = json!({"jsonrpc":"2.0","id":id,"method":method,"params":params});
-    {
-        let mut w = stdin.lock().unwrap();
-        writeln!(w, "{frame}").with_context(|| format!("acp write {method}"))?;
-        w.flush().ok();
+    let write_res = {
+        let mut g = stdin.lock().unwrap();
+        match g.as_mut() {
+            Some(w) => writeln!(w, "{frame}")
+                .with_context(|| format!("acp write {method}"))
+                .map(|_| w.flush().ok()),
+            None => Err(anyhow!("acp stdin closed (agent shutting down)")),
+        }
+    };
+    if let Err(e) = write_res {
+        pending.lock().unwrap().remove(&id);
+        return Err(e);
     }
-    Ok(rx)
+    Ok((id, rx))
 }
 
 /// ACP content（单对象或数组）→ 纯文本。
@@ -141,10 +162,13 @@ fn usage_to_ws(
 /// ACP stopReason → stream-json stop 事件 reason。
 fn stop_reason_to_ws(reason: &str) -> &'static str {
     const MAX: &str = "max_tokens";
+    // refusal / max_turn_requests 等异常收尾不映射 end_turn：
+    // 前端把 end_turn 当正常结束展示，掩盖异常收尾（P3-19）
     match reason {
         "cancelled" => "interrupted",
+        "end_turn" => "end_turn",
         MAX => MAX,
-        _ => "end_turn",
+        _ => "error",
     }
 }
 impl AcpClient {
@@ -159,6 +183,8 @@ impl AcpClient {
         events_path: &EventsPath,
         home: &Path,
         cwd: &Path,
+        generation: Arc<AtomicU64>,
+        prompt_timeout: Option<Duration>,
         st_weak: Weak<Mutex<Option<Arc<AcpClient>>>>,
     ) -> Result<Self> {
         let mut cmd = Command::new(agent_bin);
@@ -187,12 +213,21 @@ impl AcpClient {
 
         let pending: Arc<Mutex<HashMap<i64, SyncSender<Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        // stdin 的 Arc 提前建好：reader 线程要对未知反向请求回 -32601（P0-2）
+        let stdin: Arc<Mutex<Option<ChildStdin>>> =
+            Arc::new(Mutex::new(Some(child.stdin.take().expect("stdin piped"))));
+        // 本 client 的 generation 号：EOF 置空上层 state 前校验自己仍是
+        // 当前 client，防旧 reader 抹掉 respawn 后的新 client（P1-4）
+        let my_gen_slot: Arc<OnceLock<u64>> = Arc::new(OnceLock::new());
 
         // reader 线程：解析 stdout JSON-RPC —— 通知转 WS 事件广播；回包按 id 投递
         let p_reader = pending.clone();
         let h_reader = hub.clone();
         let ep_reader = events_path.clone();
         let st_reader = st_weak;
+        let p_stdin = stdin.clone();
+        let gen_reader = generation.clone();
+        let slot_reader = my_gen_slot.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             let mut previous_speed: Option<i64> = None;
@@ -215,7 +250,28 @@ impl AcpClient {
                             let events_file = ep_reader.lock().unwrap().clone();
                             usage_to_ws(&params, events_file, &mut previous_speed)
                         }
-                        _ => None,
+                        _ => {
+                            // 未知 method：带 id 的请求回 -32601 (Method not found)。
+                            // 标准 ACP agent 的 session/request_permission 等反向
+                            // 请求无人应答会永久挂住（P0-2，对齐 agent.sh 的
+                            // acp_reply_error 行为），回包后 agent 可降级处理
+                            if v.get("id").is_some() {
+                                let frame = json!({
+                                    "jsonrpc": "2.0",
+                                    "id": v["id"],
+                                    "error": {
+                                        "code": -32601,
+                                        "message": format!("Method not found: {method}"),
+                                    },
+                                });
+                                let mut g = p_stdin.lock().unwrap();
+                                if let Some(w) = g.as_mut() {
+                                    let _ = writeln!(w, "{frame}");
+                                    w.flush().ok();
+                                }
+                            }
+                            None
+                        }
                     };
                     if let Some(evt) = evt {
                         h_reader.broadcast(&evt);
@@ -243,43 +299,70 @@ impl AcpClient {
                     }
                 }
             }
-            // stdout EOF：agent 进程退出 —— 先置空上层 client 状态（下轮自动
-            // respawn 并 resume 上一会话），再清 pending 解除阻塞、广播退出
-            if let Some(st) = st_reader.upgrade() {
-                *st.lock().unwrap() = None;
+            // stdout EOF：agent 进程退出。仅当自己仍是当前 client（generation
+            // 未被新 spawn 推进）才置空上层状态并广播退出——否则旧 reader 会
+            // 把 respawn 后的新 client 抹掉，双 agent 抢同一 events.jsonl（P1-4）。
+            // pending 无论新旧都清（解除本轮等待者）。
+            let mine = slot_reader.get().copied();
+            let current = gen_reader.load(Ordering::SeqCst);
+            let is_current = mine == Some(current);
+            if is_current {
+                if let Some(st) = st_reader.upgrade() {
+                    *st.lock().unwrap() = None;
+                }
+            } else {
+                eprintln!(
+                    "[webagent] stale acp reader exit (gen {mine:?} != {current}), keep current client"
+                );
             }
             p_reader.lock().unwrap().clear();
-            let evt = json!({"type":"process_exit","code":null}).to_string();
-            h_reader.broadcast(&evt);
+            if is_current {
+                let evt = json!({"type":"process_exit","code":null}).to_string();
+                h_reader.broadcast(&evt);
+            }
         });
 
         let next_id = AtomicI64::new(1);
-        let stdin = Arc::new(Mutex::new(child.stdin.take().expect("stdin piped")));
         let mut client = Self {
-            child,
+            child: Mutex::new(child),
             stdin,
             pending,
             next_id,
             session_id: String::new(),
+            prompt_timeout,
         };
-        client.handshake(&hub, resume_target, home, cwd)?;
+        if let Err(e) = client.handshake(&hub, resume_target, cwd) {
+            // 握手失败：杀掉进程组再返回，避免泄漏仍活着的子进程
+            client.terminate();
+            return Err(e);
+        }
         // 握手拿到 sessionId 后直接设置回放路径（不依赖 session_start 行）
         let ep = events_path_for(home, cwd, &client.session_id);
         *events_path.lock().unwrap() = Some(ep);
         eprintln!("[webagent] acp session: {}", client.session_id);
+        // 占定 generation 号：此后本 client 的 reader EOF 才有权置空 state（P1-4）
+        let my_gen = 1 + generation.fetch_add(1, Ordering::SeqCst);
+        let _ = my_gen_slot.set(my_gen);
         Ok(client)
     }
 
-    fn request_timeout(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
-        let rx = send_request(&self.stdin, &self.pending, &self.next_id, method, params)?;
-        rx.recv_timeout(timeout)
-            .map_err(|_| anyhow!("acp {method} timeout / agent exited"))
-    }
-
-    fn request(&self, method: &str, params: Value) -> Result<Value> {
-        let rx = send_request(&self.stdin, &self.pending, &self.next_id, method, params)?;
-        // agent 退出时 reader 清空 pending → recv 立即返回 Err，不会永久阻塞
-        rx.recv().map_err(|_| anyhow!("acp {method}: agent exited"))
+    /// 统一请求入口：timeout=None 不限（agent 退出时 reader 清空 pending 解除
+    /// 阻塞）；Some(t) 超时报错。超时/退出路径都回收 pending 条目（P3-17）。
+    fn request_raw(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Option<Duration>,
+    ) -> Result<Value> {
+        let (id, rx) = send_request(&self.stdin, &self.pending, &self.next_id, method, params)?;
+        let res = match timeout {
+            Some(t) => rx.recv_timeout(t).map_err(|e| e.to_string()),
+            None => rx.recv().map_err(|e| e.to_string()),
+        };
+        res.map_err(|e| anyhow!("acp {method}: {e}"))
+            .inspect_err(|_| {
+                self.pending.lock().unwrap().remove(&id);
+            })
     }
 
     /// initialize 加 session/new 或 resume。resume 失败（含 -32002 会话不存在）退回 session/new。
@@ -287,14 +370,12 @@ impl AcpClient {
         &mut self,
         hub: &Arc<WsHub>,
         resume_target: Option<String>,
-        home: &Path,
         cwd: &Path,
     ) -> Result<()> {
-        let _unused = home; // home 仅由调用方用于 events_path_for；会话 cwd 用真实 cwd
-        let init = self.request_timeout(
+        let init = self.request_raw(
             "initialize",
             json!({"protocolVersion": 1, "clientCapabilities": {}}),
-            HANDSHAKE_TIMEOUT,
+            Some(HANDSHAKE_TIMEOUT),
         )?;
         if init.get("error").is_some() {
             return Err(anyhow!("acp initialize failed: {init}"));
@@ -304,17 +385,24 @@ impl AcpClient {
         let mut sid: Option<String> = None;
         if let Some(target) = resume_target {
             let params = json!({"sessionId": target, "cwd": cwd_str, "mcpServers": []});
-            let resp = self.request_timeout("session/resume", params, HANDSHAKE_TIMEOUT);
+            let resp = self.request_raw("session/resume", params, Some(HANDSHAKE_TIMEOUT));
             match resp {
                 Ok(r) if r.get("error").is_none() => sid = Some(target),
-                _ => eprintln!("[webagent] acp resume failed, fallback to session/new"),
+                _ => {
+                    let msg = "原 ACP 会话不可恢复，已新建会话";
+                    eprintln!("[webagent] acp resume failed, fallback to session/new: {msg}");
+                    // 前端可见提示：stderr 是既有事件格式，前端原样展示（P2-10）
+                    let evt =
+                        json!({"type":"stderr","content": format!("[webagent] {msg}")}).to_string();
+                    hub.broadcast(&evt);
+                }
             }
         }
         if sid.is_none() {
             // cwd 传真实工作目录：agent 用它推 project_key 定位会话存储，
             // 与 events_path_for(home, cwd, sid) 的推导保持一致
             let params = json!({"cwd": cwd_str, "mcpServers": []});
-            let resp = self.request_timeout("session/new", params, HANDSHAKE_TIMEOUT)?;
+            let resp = self.request_raw("session/new", params, Some(HANDSHAKE_TIMEOUT))?;
             let got = resp
                 .pointer("/result/sessionId")
                 .and_then(|s| s.as_str())
@@ -344,7 +432,7 @@ impl AcpClient {
             "sessionId": self.session_id,
             "prompt": [{"type":"text","text": prompt}],
         });
-        let resp = self.request("session/prompt", params)?;
+        let resp = self.request_raw("session/prompt", params, self.prompt_timeout)?;
         if let Some(e) = resp.get("error") {
             let msg = e
                 .pointer("/data/message")
@@ -369,26 +457,43 @@ impl AcpClient {
     /// 回 stopReason=cancelled 的 prompt 回包。
     pub(crate) fn cancel(&self) -> Result<()> {
         let frame = json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId": self.session_id}});
-        let mut w = self.stdin.lock().unwrap();
-        writeln!(w, "{frame}").context("acp write session/cancel")?;
-        w.flush().ok();
-        Ok(())
+        let mut g = self.stdin.lock().unwrap();
+        match g.as_mut() {
+            Some(w) => {
+                writeln!(w, "{frame}").context("acp write session/cancel")?;
+                w.flush().ok();
+                Ok(())
+            }
+            None => Err(anyhow!("acp stdin closed")),
+        }
     }
 
-    /// fd 级关闭子进程 stdin：agent 读到 EOF 后自行收尾退出（SESSION_END 后 wait）。
+    /// 关闭子进程 stdin：take 出 ChildStdin 让其自然 Drop 关闭 fd——
+    /// 不再手工 libc::close，避免与后续 Drop 双重关闭同一 fd（P0-1）。
+    /// agent 读到 EOF 后自行收尾退出（SESSION_END 后 wait）。
     pub(crate) fn shutdown_stdin(&self) {
-        let w = self.stdin.lock().unwrap();
-        let fd = w.as_raw_fd();
-        unsafe { libc::close(fd) };
+        let _ = self.stdin.lock().unwrap().take();
     }
 
     /// 停止 agent 整个进程组：先 SIGTERM（agent trap 收尾清理），
     /// 2s 后仍未退出则 SIGKILL（bash 3.2 阻塞 read 可能吞掉 TERM，KILL 兜底）。
     /// stdout 关闭后 reader 线程广播 process_exit。
     pub(crate) fn terminate(&self) {
-        let pgid = self.child.id() as i32;
+        let pgid = self.child.lock().unwrap().id() as i32;
         unsafe { libc::killpg(pgid, libc::SIGTERM) };
-        std::thread::sleep(Duration::from_secs(2));
+        // 轮询 try_wait（100ms x 20）：已退出立即返回，不固定睡 2s——
+        // 缩短连接线程阻塞，也降低 pgid 复用时误杀无关进程组的风险（P1-8）
+        for _ in 0..20 {
+            let mut ch = self.child.lock().unwrap();
+            match ch.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) => {}
+            }
+            drop(ch); // 释放锁再睡，reader 置空 state 不被锁卡住
+            std::thread::sleep(Duration::from_millis(100));
+        }
         unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        // KILL 兜底后 reap，防僵尸
+        let _ = self.child.lock().unwrap().wait();
     }
 }

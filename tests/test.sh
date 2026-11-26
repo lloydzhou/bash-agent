@@ -3881,7 +3881,11 @@ test_bash_mode_scanner
 # ──────────────────────────────────────────────
 # ACP (--acp) E2E tests (issue #110 P1)
 # ──────────────────────────────────────────────
-if [[ "${RUN_ACP_TESTS:-true}" == true ]]; then
+# cagent(C 版) 不支持 --acp（CI 以 AGENT=./dist/cagent 跑本文件会红），
+# 按运行时 agent 名自动跳过；也可 RUN_ACP_TESTS=false 显式关闭（P0-3）
+_agent_is_cagent=false
+case "${AGENT:-}" in *cagent*) _agent_is_cagent=true ;; esac
+if [[ "${RUN_ACP_TESTS:-true}" == true && "$_agent_is_cagent" != true ]]; then
     info "ACP (--acp) E2E tests"
     acp_prepare_cwd
     test_acp_basic_jsonrpc_prompt
