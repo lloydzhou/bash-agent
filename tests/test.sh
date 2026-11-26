@@ -3467,11 +3467,12 @@ test_acp_tool_call_and_guard() {
     if acp_collect 2 30 \
         && grep -q '"sessionUpdate":"tool_call","toolCallId":"toolu_acp_guard","kind":"execute"' "$ACP_LINES" \
         && grep -q '"sessionUpdate":"tool_call_update","toolCallId":"toolu_acp_guard","status":"failed"' "$ACP_LINES" \
+        && grep -q '"_meta":{"bash-agent":{"name":"Bash"}}' "$ACP_LINES" \
         && grep -q 'Error:' "$ACP_LINES" \
         && grep -q '"stopReason":"end_turn"' "$ACP_LINES"; then
-        green "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn"; ((PASS++)) || true
+        green "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn（带 _meta 工具名）"; ((PASS++)) || true
     else
-        red "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn"; echo "  lines: $(grep -c . "$ACP_LINES" 2>/dev/null || echo 0)"; ((FAIL++)) || true
+        red "ACP bash-guard 拦截 → tool_call(in_progress) → tool_call_update(failed) → end_turn（带 _meta 工具名）"; echo "  lines: $(grep -c . "$ACP_LINES" 2>/dev/null || echo 0)"; ((FAIL++)) || true
     fi
     acp_kill
 }
@@ -3880,7 +3881,11 @@ test_bash_mode_scanner
 # ──────────────────────────────────────────────
 # ACP (--acp) E2E tests (issue #110 P1)
 # ──────────────────────────────────────────────
-if [[ "${RUN_ACP_TESTS:-true}" == true ]]; then
+# cagent(C 版) 不支持 --acp（CI 以 AGENT=./dist/cagent 跑本文件会红），
+# 按运行时 agent 名自动跳过；也可 RUN_ACP_TESTS=false 显式关闭（P0-3）
+_agent_is_cagent=false
+case "${AGENT:-}" in *cagent*) _agent_is_cagent=true ;; esac
+if [[ "${RUN_ACP_TESTS:-true}" == true && "$_agent_is_cagent" != true ]]; then
     info "ACP (--acp) E2E tests"
     acp_prepare_cwd
     test_acp_basic_jsonrpc_prompt

@@ -4,9 +4,11 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+mod acp;
 mod server;
 
 const AGENT_NAMES: &[&str] = &["bash-agent", "goagent", "rustagent", "rust2agent", "cagent"];
@@ -43,7 +45,7 @@ fn project_key(cwd: &Path) -> String {
 }
 
 /// 构造 events.jsonl 路径：$BASH_AGENT_HOME/.bash-agent/projects/<project_key>/<session_id>/events.jsonl
-fn events_path_for(home: &Path, cwd: &Path, session_id: &str) -> PathBuf {
+pub(crate) fn events_path_for(home: &Path, cwd: &Path, session_id: &str) -> PathBuf {
     home.join(".bash-agent/projects")
         .join(project_key(cwd))
         .join(session_id)
@@ -60,7 +62,16 @@ fn read_speed_from_stats(events_path: &Path) -> Option<i64> {
 
 /// usage 事件可能先于 agent 将本次速度写入 stats.json。
 /// 等待一小段时间，以读取到本次调用的速度而非上一轮的值。
-fn wait_for_speed_from_stats(events_path: &Path, previous_speed: Option<i64>) -> Option<i64> {
+pub(crate) fn wait_for_speed_from_stats(events_path: &Path, previous_speed: Option<i64>) -> Option<i64> {
+    // stats.json 尚不存在（如 mock agent 不写 stats）时直接放弃，
+    // 避免每轮 usage 固定空转 200ms（P3-18）
+    if !events_path
+        .parent()
+        .map(|d| d.join("stats.json").is_file())
+        .unwrap_or(false)
+    {
+        return None;
+    }
     const RETRIES: usize = 20;
     const INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
     for attempt in 0..=RETRIES {
@@ -121,6 +132,28 @@ fn resolve_events_path(args: &[String], home: &Path, cwd: &Path) -> Option<PathB
     if args.iter().any(|a| a == "--continue") {
         let sid = resolve_latest_session(home, cwd)?;
         return Some(events_path_for(home, cwd, &sid));
+    }
+    None
+}
+
+/// ACP 模式解析握手目标：给 --session 直接取该会话；--continue 取最近会话；否则 None（走 session/new）。
+///
+/// --session 在 ACP 模式下的双重语义（P2-15，当前自洽但机制不同）：
+/// 1) 原样透传给 agent 命令行（agent.sh 设 SESSION_ID 并在启动时初始化会话）；
+/// 2) webagent 另用它做 resume 决策：握手先试 session/resume(target)，失败退 session/new。
+/// resume 走 JSON-RPC、透传走 argv，二者共用同一 id 才保持一致；改动任一侧需评估另一侧。
+fn resolve_resume_target(args: &[String], home: &Path, cwd: &Path) -> Option<String> {
+    for i in 0..args.len() {
+        if args[i] == "--session" {
+            if let Some(sid) = args.get(i + 1) {
+                if !sid.starts_with('-') {
+                    return Some(sid.clone());
+                }
+            }
+        }
+    }
+    if args.iter().any(|a| a == "--continue") {
+        return resolve_latest_session(home, cwd);
     }
     None
 }
@@ -281,6 +314,9 @@ fn usage() {
     eprintln!("  --bind ADDR      bind address (default 127.0.0.1)");
     eprintln!("  --port PORT      listen port (default 8686)");
     eprintln!("  --agent PATH     agent binary (default: resolve <agent> from dist/ or PATH)");
+    eprintln!("  --protocol P     acp or stream-json (default: stream-json)");
+    eprintln!("  --cancel-timeout-ms N   acp 取消确认超时毫秒（默认 10000）");
+    eprintln!("  --prompt-timeout-ms N   acp prompt 回包超时毫秒（默认 0=不限）");
     eprintln!("  -h, --help       show this help");
     eprintln!();
     eprintln!("<agent>: {} (default: cagent)", AGENT_NAMES.join(" | "));
@@ -288,11 +324,19 @@ fn usage() {
     eprintln!("it is treated as an argument for cagent.");
     eprintln!("Remaining args are passed through to the agent on every spawn, plus");
     eprintln!("a per-input prompt positional and --output-format stream-json.");
+    eprintln!("--protocol acp keeps a persistent agent process speaking ACP instead.");
+    eprintln!("ACP mode accepts WS control messages: {{\"type\":\"bashagent_ctrl\",\"action\":\"cancel\"}} /");
+    eprintln!("  {{\"type\":\"bashagent_ctrl\",\"action\":\"force_kill\"}} (namespaced; bare {{\"type\":\"cancel\"}} is a normal prompt).");
 }
 
 /// 从透传给 agent 的参数中提取前端展示配置（--model / --provider / --max-context-tokens）。
 /// 参数在 `--` 之后也可能出现，扫描全部 pos；值支持 `--k v` 与 `--k=v` 两种形式。
-fn build_config_json(args: &[String]) -> String {
+fn build_config_json(
+    args: &[String],
+    protocol: &str,
+    cancel_timeout_ms: u64,
+    prompt_timeout_ms: u64,
+) -> String {
     let mut model: Option<&str> = None;
     let mut provider: Option<&str> = None;
     let mut max_context: Option<&str> = None;
@@ -324,6 +368,9 @@ fn build_config_json(args: &[String]) -> String {
             obj.insert("max_context".into(), json!(n));
         }
     }
+    obj.insert("protocol".into(), json!(protocol));
+    obj.insert("cancel_timeout_ms".into(), json!(cancel_timeout_ms));
+    obj.insert("prompt_timeout_ms".into(), json!(prompt_timeout_ms));
     json!(obj).to_string()
 }
 
@@ -334,6 +381,9 @@ fn main() -> Result<()> {
     let mut port = 8686u16;
     let mut agent_explicit: Option<String> = None;
     let mut pos: Vec<String> = Vec::new();
+    let mut protocol = "stream-json".to_string();
+    let mut cancel_timeout_ms = 10_000u64;
+    let mut prompt_timeout_ms = 0u64;
     let mut after_sep = false;
     let mut i = 0;
     while i < args.len() {
@@ -362,6 +412,33 @@ fn main() -> Result<()> {
                 port = v
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid --ws-port: {v}"))?;
+                i += 2;
+            }
+            "--protocol" => {
+                protocol = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--protocol requires a value"))?;
+                i += 2;
+            }
+            "--cancel-timeout-ms" => {
+                let v = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--cancel-timeout-ms requires a value"))?;
+                cancel_timeout_ms = v
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid --cancel-timeout-ms: {v}"))?;
+                i += 2;
+            }
+            "--prompt-timeout-ms" => {
+                let v = args
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--prompt-timeout-ms requires a value"))?;
+                prompt_timeout_ms = v
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("invalid --prompt-timeout-ms: {v}"))?;
                 i += 2;
             }
             "--agent" => {
@@ -403,8 +480,16 @@ fn main() -> Result<()> {
     // 网关不做任何会话魔法：用户参数原样透传，不追加 --session。
     // 会话延续由用户自行控制：--session <id> 或 --continue 保持跨轮上下文；
     // 什么都不传时 agent 每次 spawn 都是新会话。
-    base_args.push("--output-format".to_string());
-    base_args.push("stream-json".to_string());
+    let protocol = match protocol.as_str() {
+        "acp" => "acp".to_string(),
+        "stream-json" => "stream-json".to_string(),
+        other => anyhow::bail!("invalid --protocol: {other} (expect acp or stream-json)"),
+    };
+    // ACP 模式：常驻 agent 子进程（握手 session/new 或 resume），不追加 stream-json 旗标
+    if protocol != "acp" {
+        base_args.push("--output-format".to_string());
+        base_args.push("stream-json".to_string());
+    }
 
     // 解析 home/cwd 用于定位 events.jsonl
     let home = std::env::var("BASH_AGENT_HOME")
@@ -424,8 +509,32 @@ fn main() -> Result<()> {
         eprintln!("[webagent] events: {}", p.display());
     }
 
-    // Ctrl+C：向当前 agent 子进程发 SIGINT，然后退出
-    ctrlc::set_handler(|| {
+    // ACP 常驻 client（懒初始化，跨轮复用）；提前定义以便 Ctrl+C 处理器访问
+    let acp_state: Arc<Mutex<Option<Arc<acp::AcpClient>>>> = Arc::new(Mutex::new(None));
+    // client 代数号：每次成功 spawn +1。旧 reader EOF 时校验代数，
+    // 防止旧 reader 把 respawn 后的新 client 抹掉（P1-4）
+    let acp_generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    // prompt 回包等待上限：0 = 不限（P1-5）
+    let prompt_timeout = if prompt_timeout_ms > 0 {
+        Some(Duration::from_millis(prompt_timeout_ms))
+    } else {
+        None
+    };
+    // 最近一次 ACP 会话 id：agent 崩溃/强停后 respawn 用它 resume 同一会话
+    let last_sid: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+    // Ctrl+C：ACP 先 cancel + 关 stdin 优雅退出（agent drain 后以 cancelled 回包），
+    // 3s 后仍未退出则 SIGTERM；stream-json 保持向当前 agent 子进程发 SIGINT。
+    let acp_for_ctrlc = acp_state.clone();
+    ctrlc::set_handler(move || {
+        let cur = acp_for_ctrlc.lock().unwrap().clone();
+        if let Some(c) = cur {
+            let _ = c.cancel();
+            c.shutdown_stdin();
+            std::thread::sleep(Duration::from_millis(3000));
+            c.terminate();
+            std::process::exit(0);
+        }
         let pid = CURRENT_PID.load(Ordering::SeqCst);
         if pid > 0 {
             unsafe {
@@ -437,9 +546,15 @@ fn main() -> Result<()> {
     .ok();
 
     let addr = format!("{bind}:{port}");
-    let config_json = build_config_json(&base_args);
+    let config_json = build_config_json(&base_args, &protocol, cancel_timeout_ms, prompt_timeout_ms);
     eprintln!("[webagent] config: {config_json}");
-    let (handle, server_thread) = server::start_server(&addr, events_path.clone(), &config_json)?;
+    let acp_control = if protocol == "acp" {
+        Some(server::AcpControl::new(acp_state.clone()))
+    } else {
+        None
+    };
+    let (handle, server_thread) =
+        server::start_server(&addr, events_path.clone(), &config_json, acp_control)?;
 
     eprintln!("[webagent] listening on ws://{addr}/  (Ctrl+C to stop)");
     eprintln!("[webagent] agent: {}", agent_bin.display());
@@ -453,10 +568,62 @@ fn main() -> Result<()> {
     let hub = handle.hub.clone();
     let home_clone = home.clone();
     let cwd_clone = cwd.clone();
+    let last_sid_worker = last_sid.clone();
     let worker = std::thread::spawn(move || {
         for prompt in handle.input_rx.iter() {
             eprintln!("[webagent] turn: {prompt}");
-            if let Err(e) = run_turn(
+            if protocol == "acp" {
+                // 控制消息（cancel/force_kill）由 server 连接线程旁路处理（AcpControl），
+                // 队列里只剩 prompt。常驻模式：首轮懒初始化，之后每轮复用同一进程
+                let client = {
+                    // 锁内只判空：spawn/握手最坏 3x30s，全程持锁会让 Ctrl+C
+                    // 处理器取锁阻塞、用户按 Ctrl+C 无响应（P1-6）
+                    let cur = acp_state.lock().unwrap().clone();
+                    match cur {
+                        Some(c) => c,
+                        None => {
+                            // resume 优先级：同进程内已知的上一会话（崩溃/强停后恢复）
+                            // 大于启动参数（--session/--continue）
+                            let target = last_sid_worker.lock().unwrap().clone().or_else(|| {
+                                resolve_resume_target(&base_args, &home_clone, &cwd_clone)
+                            });
+                            match acp::AcpClient::spawn(
+                                &agent_bin,
+                                &base_args,
+                                hub.clone(),
+                                target,
+                                &events_path,
+                                &home_clone,
+                                &cwd_clone,
+                                acp_generation.clone(),
+                                prompt_timeout,
+                                Arc::downgrade(&acp_state),
+                            ) {
+                                Ok(c) => {
+                                    let c = Arc::new(c);
+                                    *last_sid_worker.lock().unwrap() = Some(c.session_id.clone());
+                                    let mut stg = acp_state.lock().unwrap();
+                                    if stg.is_none() {
+                                        *stg = Some(c.clone());
+                                    }
+                                    c
+                                }
+                                Err(e) => {
+                                    let msg = format!("[webagent] acp spawn failed: {e}");
+                                    eprintln!("{msg}");
+                                    emit(&hub, &json!({"type":"error","message":msg}).to_string());
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                };
+                if let Err(e) = client.run_turn(&prompt, &hub) {
+                    let msg = format!("[webagent] acp turn failed: {e}");
+                    eprintln!("{msg}");
+                    emit(&hub, &json!({"type":"error","message":msg}).to_string());
+                }
+            } else if let Err(e) = run_turn(
                 &agent_bin,
                 &base_args,
                 &prompt,
