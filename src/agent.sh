@@ -1269,39 +1269,34 @@ PROMPT_TOOLS_JSON=$'[\n  {\n    "name": "Read",\n    "description": "Read a file
 
 # agent
 agent_build_prompt() {
-    local output="" agent_identity environment core_rules tool_guidance todo_guidance plan_lifecycle_guidance instruction_files skill_index selected_skills plan stable_context locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
+    local output="" locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
     locale="${locale%%.*}"
-    agent_identity="$PROMPT_IDENTITY_EN"
-    [[ "$locale" == zh* ]] && agent_identity="$PROMPT_IDENTITY_ZH"
-    core_rules="$PROMPT_RULES"
-    output_language_reaffirm="${PROMPT_OUTPUT_LANGUAGE_EN_0}${locale}${PROMPT_OUTPUT_LANGUAGE_EN_1}"
-    [[ "$locale" == zh* ]] && output_language_reaffirm="$PROMPT_OUTPUT_LANGUAGE_ZH"
-    environment="lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
-    tool_guidance="$PROMPT_TOOL_GUIDANCE"
-    sub_agent_guidance="$PROMPT_SUB_AGENT_GUIDANCE"
-    todo_guidance="$PROMPT_TODO_GUIDANCE"
-    plan_lifecycle_guidance="${PROMPT_PLAN_LIFECYCLE_0}${PLAN_DRAFT_FILE:-<not set>}${PROMPT_PLAN_LIFECYCLE_1}${PLAN_FILE:-<not set>}${PROMPT_PLAN_LIFECYCLE_2}"
-
+    local identity="$PROMPT_IDENTITY_EN" output_language="${PROMPT_OUTPUT_LANGUAGE_EN_0}${locale}${PROMPT_OUTPUT_LANGUAGE_EN_1}"
+    if [[ "$locale" == zh* ]]; then
+        identity="$PROMPT_IDENTITY_ZH"
+        output_language="$PROMPT_OUTPUT_LANGUAGE_ZH"
+    fi
+    local instruction_files skill_index selected_skills plan stable_context
     instruction_files=$(util_build_instructions_section)
     skill_index=$(util_build_skill_index)
     selected_skills=$(util_build_skills_section)
     plan=$(store_plan_read)
     stable_context=$(store_summary_get)
 
-    util_append_section output "agent-identity" "$agent_identity"
-    util_append_section output "environment" "$environment"
-    util_append_section output "rules" "$core_rules"
-    util_append_section output "using-your-tools" "$tool_guidance"
-    util_append_section output "sub-agent-guidance" "$sub_agent_guidance"
-    util_append_section output "todo-guidance" "$todo_guidance"
-    util_append_section output "plan-lifecycle-guidance" "$plan_lifecycle_guidance"
+    util_append_section output "agent-identity" "$identity"
+    util_append_section output "environment" "lang: ${locale}"$'\n'"pwd: ${PWD:-$(pwd)}"$'\n'"home: ${HOME}"$'\n'"platform: $(uname -s 2>/dev/null || echo unknown)"$'\n'"shell: ${SHELL:-unknown}"
+    util_append_section output "rules" "$PROMPT_RULES"
+    util_append_section output "using-your-tools" "$PROMPT_TOOL_GUIDANCE"
+    util_append_section output "sub-agent-guidance" "$PROMPT_SUB_AGENT_GUIDANCE"
+    util_append_section output "todo-guidance" "$PROMPT_TODO_GUIDANCE"
+    util_append_section output "plan-lifecycle-guidance" "${PROMPT_PLAN_LIFECYCLE_0}${PLAN_DRAFT_FILE:-<not set>}${PROMPT_PLAN_LIFECYCLE_1}${PLAN_FILE:-<not set>}${PROMPT_PLAN_LIFECYCLE_2}"
     util_append_section output "instruction-files" "$instruction_files"
     util_append_section output "skill-index" "$skill_index"
     util_append_section output "selected-skills" "$selected_skills"
     util_append_section output "current-goal" "Goal: ${GOAL:-<not set>}${GOAL:+ — goal-driven mode: keep working autonomously until the goal is fully achieved; do not stop early}"
     util_append_section output "current-plan" "$plan" "${PLAN_FILE:-}"
     util_append_section output "context-snapshot" "$stable_context"
-    util_append_section output "output-language" "$output_language_reaffirm"
+    util_append_section output "output-language" "$output_language"
 
     printf '%s' "${output%$'\n'}"
 }
