@@ -284,6 +284,9 @@ jobs:
               cd webagent && cargo build --release --target ${{ matrix.target }}
               cp target/${{ matrix.target }}/release/${{ matrix.bin }} ../dist/webagent-${{ matrix.suffix }}${{ matrix.ext }}
             '
+          # 容器内以 root 构建，webagent/target 的属主是 root；
+          # 宿主 runner 用户后续无法在 target 下创建 debug/（E2E 步骤会用到）
+          sudo chown -R "$(id -u):$(id -g)" webagent/target dist
 
       - name: Upload webagent
         uses: actions/upload-artifact@v4
@@ -293,6 +296,7 @@ jobs:
 
       - name: Test webagent ACP E2E (linux amd64 only)
         if: matrix.suffix == 'linux-amd64'
+        timeout-minutes: 15
         run: |
           python3 -m pip install --quiet websockets \
             || python3 -m pip install --quiet --break-system-packages websockets
