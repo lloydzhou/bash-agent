@@ -91,15 +91,12 @@ for key, (filename, varname) in awk_files.items():
     escaped = body.replace("'", "'\\''")
     awk_bodies[key] = escaped
 
-tools_json_path = os.path.join(os.path.dirname(agent_src), "tools.json")
-with open(tools_json_path) as f:
-    tools_json_raw = f.read().strip()
+# tools.json 与提示词已由 scripts/gen-prompt.py 内联进 src/agent.sh 的 GENERATED 块
 
 # --- Insert bash variables after config section ---
 var_block = ""
 for key, (filename, varname) in awk_files.items():
     var_block += "\n" + varname + "='" + awk_bodies[key] + "'\n"
-var_block += "\n_TOOLS_JSON='" + tools_json_raw.replace("'", "'\\''") + "'\n"
 
 # Insert after the USER_INPUT="" line (end of config section)
 marker = 'USER_INPUT=""\n'
@@ -110,7 +107,6 @@ if idx != -1:
 # --- Replace each awk function to use variable concatenation ---
 functions = [
     ("util_json_escape", "_AWK_JSON", "_AWK_JSON_CLI", ""),
-    ("load_tool_defs", "", "", ""),
 ]
 
 for func_name, json_var, specific_var, extra_args in functions:
@@ -118,12 +114,6 @@ for func_name, json_var, specific_var, extra_args in functions:
         replacement = (
             "util_json_escape() {\n"
             "    printf '%s' \"${1:-}\" | util_awk_run -v json_mode=\"escape_string\" \"${_AWK_JSON}\n${_AWK_JSON_CLI}\"\n"
-            "}\n"
-        )
-    elif func_name == "load_tool_defs":
-        replacement = (
-            "load_tool_defs() {\n"
-            "    TOOL_DEF_JSON=\"$_TOOLS_JSON\"\n"
             "}\n"
         )
     else:

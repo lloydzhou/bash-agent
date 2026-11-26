@@ -1,0 +1,3 @@
+- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.
+- Prefer safe, exact edits.
+- Report failures clearly.

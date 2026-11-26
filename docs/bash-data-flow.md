@@ -158,7 +158,6 @@ flowchart LR
   f_interactive_mode --> f_util_write_msg
   f_interactive_mode --> f_agent_main_loop
   f_util_find_awk_dir --> f_util_die
-  f_util_load_tool_defs --> f_util_die
   f_agent_user_inject_readline --> f_util_write_msg
   f_interactive_mode -->|键绑定回调| f_agent_image_insert_placeholder_readline["agent_image_insert_placeholder_readline"]
   f_interactive_mode -->|键绑定回调| f_agent_user_inject_readline
@@ -578,7 +577,7 @@ flowchart LR
 | `util_build_tool_result_json` | [`src/agent.sh:297`](../src/agent.sh#L297) | M01 | 标识、已转义结果、类型 | 结果 JSON | 不再次转义结果正文 |
 | `util_build_assistant_json` | [`src/agent.sh:305`](../src/agent.sh#L305) | M01 | 文本、思考、制表符分隔调用 | 内容数组 JSON | 始终包含思考与文本块 |
 | `util_find_awk_dir` | [`src/agent.sh:318`](../src/agent.sh#L318) | M02 | AWK_DIR 或脚本目录 | AWK_DIR | 目录无效时退出 |
-| `util_load_tool_defs` | [`src/agent.sh:333`](../src/agent.sh#L333) | M02 | 脚本相邻 tools.json | TOOL_DEF_JSON | 读取定义，缺失退出 |
+| `util_load_tool_defs` | [`src/agent.sh:333`](../src/agent.sh#L333) | M02 | `PROMPT_TOOLS_JSON`（由 `prompt/tools.json` 生成） | TOOL_DEF_JSON | 赋值内联定义 |
 | `store_session_init` | [`src/agent.sh:342`](../src/agent.sh#L342) | M03 | SESSION_ID、项目目录 | 各存储路径全局变量 | 创建文件与 FIFO，活跃任务计数重置为零 |
 | `store_session_fork` | [`src/agent.sh:372`](../src/agent.sh#L372) | M03 | 父目录、子目录 | 退出状态 | 仅复制对话、归档、摘要、正式计划，复制失败被忽略 |
 | `store_session_get_dir` | [`src/agent.sh:378`](../src/agent.sh#L378) | M03 | 工作目录、存储根 | 项目目录路径 | 物理路径规范化及字符替换 |
@@ -808,7 +807,7 @@ flowchart LR
 | `notify.buf` | 通知读取器 | 排空函数 | 先改名快照再读取；主循环结束删除 |
 | `active_task.count` | 初始化、任务启动、通知读取器 | 主循环、终端标题 | 普通读改写计数；主会话正常清理没有删除此文件，子代理退出陷阱删除 |
 | 全局 `.bash-agent/history` | 交互输入进程 | `history -r` | 输入历史，位于存储根，不是会话目录 |
-| 指令文件、`SKILL.md`、`src/tools.json` | 本任务不写 | 提示词与技能工具 | 指令固定优先级、技能按目录优先级并去重 |
+| 指令文件、`SKILL.md`、`prompt/tools.json` | 本任务不写 | 提示词与技能工具 | 指令固定优先级、技能按目录优先级并去重 |
 | `/tmp/agent_curl_pid.$$` | 网络函数 | 中断陷阱 | 请求结束或外层循环结束删除；用于杀 curl |
 | 编辑、命令输出、裁剪、待摘要临时文件 | 相应工具或压缩函数 | 相应解析器或后续步骤 | 编辑非空才覆盖原文件；命令输出经 UTF-8 清理 |
 
