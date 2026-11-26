@@ -340,9 +340,7 @@ util_find_awk_dir() {
     util_die "Cannot find awk/ directory. Set AWK_DIR or ensure awk/ exists alongside agent.sh"
 }
 
-util_load_tool_defs() {
-    TOOL_DEF_JSON="$PROMPT_TOOLS_JSON"
-}
+util_load_tool_defs() { TOOL_DEF_JSON="$PROMPT_TOOLS_JSON"; }
 
 # store
 store_session_init() {
@@ -1269,14 +1267,13 @@ PROMPT_TOOLS_JSON=$'[\n  {\n    "name": "Read",\n    "description": "Read a file
 
 # agent
 agent_build_prompt() {
-    local output="" locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
+    local output="" locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}" identity="$PROMPT_IDENTITY_EN" output_language="" instruction_files skill_index selected_skills plan stable_context
     locale="${locale%%.*}"
-    local identity="$PROMPT_IDENTITY_EN" output_language="${PROMPT_OUTPUT_LANGUAGE_EN_0}${locale}${PROMPT_OUTPUT_LANGUAGE_EN_1}"
+    output_language="${PROMPT_OUTPUT_LANGUAGE_EN_0}${locale}${PROMPT_OUTPUT_LANGUAGE_EN_1}"
     if [[ "$locale" == zh* ]]; then
         identity="$PROMPT_IDENTITY_ZH"
         output_language="$PROMPT_OUTPUT_LANGUAGE_ZH"
     fi
-    local instruction_files skill_index selected_skills plan stable_context
     instruction_files=$(util_build_instructions_section)
     skill_index=$(util_build_skill_index)
     selected_skills=$(util_build_skills_section)
