@@ -58,19 +58,22 @@ Bash / Go / Rust / C 四个版本的 **system prompt** 和 **tools.json** 必须
 
 | 文件 | 作用 | 同步说明 |
 |------|------|----------|
-| `src/tools.json` | 工具定义 JSON | **基准文件**，修改后必须同步到 `rust/src/tools.json` 和 `go/tools.json` |
-| `src/agent.sh` | Bash 版 system prompt (`agent_build_prompt`) | **基准**，Go/Rust/C 的 prompt builder 必须逐字对齐 |
+| `prompt/*.txt` | 静态提示词文案（identity / rules / tool / sub-agent / todo / plan-lifecycle / output-language） | **唯一来源**，`{{NAME}}` 为占位符，文件末尾的一个换行不计入字面量 |
+| `prompt/tools.json` | 工具定义 JSON | **唯一来源** |
+| `scripts/gen-prompt.py` | 生成器 | 生成 `src/agent.sh` GENERATED 块、`go/prompt_gen.go`、`rust/src/prompt_gen.rs`、`c/prompt_gen.h`（均提交进仓库，勿手改） |
+| `src/agent.sh` | Bash 版 system prompt (`agent_build_prompt`) | **基准**：section 顺序与动态段拼接，Go/Rust/C 的 prompt builder 必须逐字对齐 |
 | `go/agent.go` | Go 版 system prompt (`BuildPrompt`) | 内容、顺序、格式必须与 bash 一致 |
 | `rust/src/lib.rs` | Rust 版 system prompt (`build_system_prompt`) | 同上 |
 | `c/agent.c` | C 版 system prompt (`agent_build_prompt`) | 同上 |
 
 ### 检查清单（修改任一 prompt 区域时）
 
-- [ ] `rust/src/lib.rs` 的 `build_system_prompt` 是否同步？
+- [ ] 静态文案或 tools.json 只改 `prompt/`，然后运行 `make gen-prompt`；`make check-prompt-gen` 是否通过？（CI `prompt-gen` job 会检查）
+- [ ] system prompt golden 测试是否通过？（`make update-system-prompt-golden` 仅在有意改动时使用）
+- [ ] 若改了 section 顺序或动态段：`rust/src/lib.rs` 的 `build_system_prompt` 是否同步？
 - [ ] `go/agent.go` 的 `BuildPrompt` 是否同步？
 - [ ] `c/agent.c` 的 `agent_build_prompt` 是否同步？
 - [ ] section 包装、空行、尾部换行和 `name` 属性转义是否逐字一致？
-- [ ] `go/`、`rust/src/`、`c/`、`src/` 四处的 `tools.json` SHA256 是否一致？(`sha256sum src/tools.json rust/src/tools.json go/tools.json c/tools.json`)
 
 > **经验**: 同一 session 在三个版本间切换是正常的开发/调试流程。system prompt 不同直接导致缓存失效，每次切换都相当于冷启动。保持一致性就是省钱。
 

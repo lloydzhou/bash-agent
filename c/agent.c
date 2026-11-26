@@ -1,6 +1,6 @@
 #include "agent.h"
 #include "display.h"
-#include "tools_embed.h"
+#include "prompt_gen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -830,7 +830,7 @@ static char *agent_goal_judge(Agent *agent) {
 
     char *system_prompt = agent_build_prompt(agent);
     char *body = build_claude_request(
-        agent->model, system_prompt, embedded_tools_json,
+        agent->model, system_prompt, PROMPT_TOOLS_JSON,
         judge_lines, line_count + 1,
         200, "disabled", agent->effort, agent->vision);
     free(system_prompt);
@@ -1001,8 +1001,8 @@ int agent_loop(Agent *agent, const char *user_input, const char *turn_kind) {
             return -1;
         }
 
-        /* tools.json 编译时嵌入 */
-        const char *tools_json = embedded_tools_json;
+        /* tools.json 由 prompt/tools.json 生成（prompt_gen.h） */
+        const char *tools_json = PROMPT_TOOLS_JSON;
 
         /* 构建请求体 */
         char *claude_body = build_claude_request(agent->model, system_prompt,
@@ -2401,8 +2401,7 @@ char *agent_build_prompt(Agent *agent) {
 
     /* 1. agent-identity */
     {
-        const char *identity = "You are bash-agent, a lightweight coding agent that works in a terminal.";
-        if (is_zh) identity = "你是 bash-agent，一个在终端中运行的轻量级编码智能体。";
+        const char *identity = is_zh ? PROMPT_IDENTITY_ZH : PROMPT_IDENTITY_EN;
         prompt_append_section(&buf, "agent-identity", identity, NULL);
     }
 
@@ -2429,52 +2428,25 @@ char *agent_build_prompt(Agent *agent) {
 
     /* 3. rules */
     {
-        const char *rules = "- Be concise and concrete. Lead with the answer. Use short sections or bullets when they improve readability. No pleasantries, no explanations unless asked. Raw results only.\n"
-                            "- Prefer safe, exact edits.\n"
-                            "- Report failures clearly.";
+        const char *rules = PROMPT_RULES;
         prompt_append_section(&buf, "rules", rules, NULL);
     }
 
     /* 4. using-your-tools */
     {
-        const char *tool_guidance =
-            "- Use one Read call per file; batch independent reads of needed files in the same response.\n"
-            "- Read supports optional offset and limit parameters to read specific line ranges (saves tokens for large files). Output includes line numbers.\n"
-            "- Glob and Grep take one pattern per call; batch independent searches for needed patterns in the same response.\n"
-            "- Grep supports a context parameter to show surrounding lines — use it to get enough text for Edit directly from Grep output, avoiding a separate Read.\n"
-            "- Before each tool-using response, silently list every call whose arguments you already know and send them all together. Per call, ask: could a pending result change whether I make it or what I pass? If not, include it now. A lone call is right only when every other next call depends on its result. Typical batches: the opening reads and searches of a task; every file or symbol one result points to (e.g. each frame of a stack trace); edits to different files once their content is known; read-only checks like typecheck, lint and tests. Treat calls in one response as unordered and possibly concurrent, so wait when a result decides the next call, approval is needed, or calls touch the same state (read before edit, edit before run, two edits to one file). Do not fake batches: no unrelated commands chained into one shell call, no SubAgent for quick calls, no speculative calls. While background work runs, do unrelated work; never poll or repeat running or finished calls. Never skip required plan, todo or approval steps.\n- Each call must advance the current subgoal, answer a concrete question, or test a relevant hypothesis. Bounded read-only exploration is welcome; avoid redundant or low-value calls.\n"
-            "- Prefer dedicated tools over Bash when a dedicated tool fits the task.\n"
-            "- For Edit: copy old_string exactly (including whitespace/indent/newlines). If you already know the location from prior context, use Read with offset/limit. If you need to locate the text first, use Grep with context — its output is often sufficient for Edit without an extra Read.\n"
-            "- For skills, first check the skill-index section, then use Skill(name) for the matching skill.\n"
-            "- Bash supports background=true for long-running commands. Returns task_id immediately; output delivered asynchronously like SubAgent.\n"
-            "- SubAgent launches a background agent session. Results are injected back into your conversation when complete. Use for parallelizable or independent sub-tasks. See sub-agent-guidance section for context inheritance rules.";
+        const char *tool_guidance = PROMPT_TOOL_GUIDANCE;
         prompt_append_section(&buf, "using-your-tools", tool_guidance, NULL);
     }
 
     /* 5. sub-agent-guidance */
     {
-        const char *sag =
-            "- **When to use**: delegate focused sub-tasks with clear goals and boundaries. Use the default mode for self-contained work that does not need the current conversation; use fork mode when inherited context is needed.\n"
-            "- **Recursion limit**: only the main agent may launch SubAgent. A child agent must not call SubAgent again; the runtime rejects nested launches.\n"
-            "- **When NOT to use**: do not delegate work that depends on a result you have not received yet, or duplicate work already assigned to a running child.\n"
-            "- **Fork mode**: pass `fork=true` to inherit parent session context (conversation history, plan, skills). Use when the child needs your working context.\n"
-            "- **Prompt design**: in default mode, provide a complete, self-contained task with the required paths, context, constraints, and expected result. In fork mode, state the focused task and any additional information it needs. Assign disjoint write scopes to concurrent children and keep dependent edits ordered.\n"
-            "- **Result handling**: when the child completes, its result is injected as a user message: `[sub-agent <id>] <status> (in=<n>, out=<n>)\nThinking: ...\nText: ...`. You then get another LLM turn to interpret and act on it.\n"
-            "- **Parallelism**: start independent SubAgent tasks together in one response. While they run, continue useful independent work that has not been delegated; do not duplicate their work. Results arrive asynchronously: process completed results when useful, but wait for every result needed by a dependent action or final conclusion. Match results by session_id; do not relaunch a task merely because another child finished first.\n"
-            "- **Failure**: if the child fails (status=failed), the result text may be partial or empty. Handle gracefully — do not retry automatically.";
+        const char *sag = PROMPT_SUB_AGENT_GUIDANCE;
         prompt_append_section(&buf, "sub-agent-guidance", sag, NULL);
     }
 
     /* 6. todo-guidance */
     {
-        const char *todo =
-            "- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.\n"
-            "- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.\n"
-            "- After receiving a non-trivial task, create an initial checklist before or as you begin work.\n"
-            "- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.\n"
-            "- Keep the checklist short, concrete, and actionable.\n"
-            "- Prefer exactly one in_progress item when work is actively underway.\n"
-            "- Mark items completed immediately after finishing them, and remove stale items that no longer matter.";
+        const char *todo = PROMPT_TODO_GUIDANCE;
         prompt_append_section(&buf, "todo-guidance", todo, NULL);
     }
 
@@ -2482,19 +2454,11 @@ char *agent_build_prompt(Agent *agent) {
     {
         StrBuf plg;
         sb_init(&plg);
-        sb_append(&plg, "- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)\n");
-        sb_appendf(&plg, "- **Files**: PLAN_DRAFT_FILE: %s | PLAN_FILE: %s\n",
-                   agent->paths.plan_draft ? agent->paths.plan_draft : "<not set>",
-                   agent->paths.plan ? agent->paths.plan : "<not set>");
-        sb_append(&plg, "- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.\n");
-        sb_append(&plg, "- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):\n"
-                        "  Every user reply MUST be classified as exactly ONE of:\n"
-                        "  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting\n"
-                        "  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute\n"
-                        "  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle\n"
-                        "  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.\n");
-        sb_append(&plg, "- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done\n"
-                        "- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.");
+        sb_append(&plg, PROMPT_PLAN_LIFECYCLE_0);
+        sb_append(&plg, agent->paths.plan_draft ? agent->paths.plan_draft : "<not set>");
+        sb_append(&plg, PROMPT_PLAN_LIFECYCLE_1);
+        sb_append(&plg, agent->paths.plan ? agent->paths.plan : "<not set>");
+        sb_append(&plg, PROMPT_PLAN_LIFECYCLE_2);
         prompt_append_section(&buf, "plan-lifecycle-guidance", plg.data, NULL);
         sb_free(&plg);
     }
@@ -2609,9 +2573,11 @@ char *agent_build_prompt(Agent *agent) {
         StrBuf ol;
         sb_init(&ol);
         if (is_zh) {
-            sb_append(&ol, "再次强调：必须使用中文进行所有输出，包括你的思考过程（Chain of Thought/推理/thinking）！严禁在思考或回答中出现任何英文内容！");
+            sb_append(&ol, PROMPT_OUTPUT_LANGUAGE_ZH);
         } else {
-            sb_appendf(&ol, "MUST use \"%s\" for all output, including your Chain of Thought/reasoning/thinking! Never mix languages! Code, commands, and file content remain as-is.", locale);
+            sb_append(&ol, PROMPT_OUTPUT_LANGUAGE_EN_0);
+            sb_append(&ol, locale);
+            sb_append(&ol, PROMPT_OUTPUT_LANGUAGE_EN_1);
         }
         prompt_append_section(&buf, "output-language", ol.data, NULL);
         sb_free(&ol);
@@ -3070,7 +3036,7 @@ int agent_compact_context(Agent *agent, const char *trigger) {
 
     /* 复用 build_claude_request，与正常 agent 请求保持前缀一致 */
     char *summary_body = build_claude_request(
-        agent->model, system_prompt, embedded_tools_json,
+        agent->model, system_prompt, PROMPT_TOOLS_JSON,
         summary_lines, summary_line_count,
         agent->max_tokens, "disabled", agent->effort, agent->vision);
     free(system_prompt);

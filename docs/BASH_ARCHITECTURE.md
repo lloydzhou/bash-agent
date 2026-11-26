@@ -1769,9 +1769,9 @@ fi
 
 ## 15. 工具定义 (tools.json)
 
-`tools.json` 定义了所有工具的 JSON Schema。Bash 版从 `src/tools.json` 加载到 `TOOL_DEF_JSON`。
+`tools.json` 定义了所有工具的 JSON Schema，唯一来源是 `prompt/tools.json`。`scripts/gen-prompt.py` 把它内联进 `src/agent.sh` 的 GENERATED 块（`PROMPT_TOOLS_JSON`），`util_load_tool_defs` 直接赋值给 `TOOL_DEF_JSON`。
 
-**四版本一致性要求**：`src/tools.json`、`rust/src/tools.json`、`go/tools.json`、`c/tools.json` 的 SHA256 必须一致。
+**四版本一致性要求**：Go/Rust/C 使用同一生成器产出的常量（`go/prompt_gen.go`、`rust/src/prompt_gen.rs`、`c/prompt_gen.h`），修改后运行 `make gen-prompt`，CI 用 `make check-prompt-gen` 校验生成文件未过期。
 
 ---
 

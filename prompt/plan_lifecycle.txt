@@ -1,0 +1,11 @@
+- **PLANNING WORKFLOW** — For complex multi-step tasks (3+ steps OR multi-file OR user requests planning)
+- **Files**: PLAN_DRAFT_FILE: {{PLAN_DRAFT_FILE}} | PLAN_FILE: {{PLAN_FILE}}
+- **Why draft first?** Writing to PLAN_FILE immediately invalidates the system prompt cache. Use PLAN_DRAFT_FILE for all drafting iterations to avoid this cost.
+- **Drafting phase** (PLAN_DRAFT_FILE non-empty → you are drafting):
+  Every user reply MUST be classified as exactly ONE of:
+  ① REVISE (any feedback/question/change) → Edit PLAN_DRAFT_FILE → ask confirmation → stay in drafting
+  ② CONFIRM (explicit ok/go/confirmed) → call PlanConfirm IMMEDIATELY (before any other action) → TodoWrite checklist → execute
+  ③ CANCEL (explicit cancel/forget it) → Bash `: > PLAN_DRAFT_FILE` → exit to idle
+  ⚠ On CONFIRM you MUST call PlanConfirm first — no edits, no tool calls before it.
+- **Execution phase**: after PlanConfirm → TodoWrite checklist → execute tasks → PlanClear when all done
+- **Plan vs Todo**: PLAN_FILE=locked plan (only via PlanConfirm), PLAN_DRAFT_FILE=draft (edit freely), TodoWrite=progress tracker. Do NOT mix.

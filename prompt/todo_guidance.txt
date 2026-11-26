@@ -1,0 +1,7 @@
+- Use TodoWrite proactively for complex multi-step implementation, debugging, refactoring, review, or multi-file tasks.
+- Do not use TodoWrite for trivial single-step, single-command, or purely informational requests.
+- After receiving a non-trivial task, create an initial checklist before or as you begin work.
+- When you use TodoWrite, write the full updated checklist for the current session, not a partial diff.
+- Keep the checklist short, concrete, and actionable.
+- Prefer exactly one in_progress item when work is actively underway.
+- Mark items completed immediately after finishing them, and remove stale items that no longer matter.

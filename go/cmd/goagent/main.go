@@ -241,7 +241,7 @@ Examples:
 	a := agent.NewAgent(cfg, store, llm, tools, display)
 	defer a.CloseDisplay()
 
-	// 加载工具定义（编译时嵌入的 tools.json）
+	// 加载工具定义（由 prompt/tools.json 生成的常量）
 	a.SetToolDefs(agent.UtilLoadToolDefs())
 
 	// Session 管理：--fork 和 --continue 无 --session 时统一回退到最新 session
