@@ -4,6 +4,43 @@
 
 ---
 
+## [4.5.0] - 2026-11-27
+
+> **ACP 协议接入（issue #110）+ 提示词单源化**：`agent.sh --acp` 现在是一个常驻 stdio 的 ACP JSON-RPC 服务，支持 initialize / session/new / session/resume / prompt / cancel，会话可跨轮复用并在崩溃后自愈；webagent 新增 `--protocol acp` 常驻通道（默认仍是 stream-json，旧行为零变化）。同时把系统提示词与 tools.json 收敛为 `prompt/` 单一来源，由生成器产出四运行时共用的常量块，并修掉 issue #116 提出的 6 个 ACP 实现缺陷。
+
+### Added
+
+- **ACP 服务端（#111 / #110 P1）**：`--acp` 设置 `OUTPUT_FORMAT=acp`，`acp_in.awk`（JSON-RPC 2.0 stdin 解析：REQ / NOTIF / BAD 帧、content block 顺序拼接、`resource_link` → `@path`、`resource` → `<context>`、image/audio 回 `-32602`、`-32700/-32600/-32601/-32602` 错误码、notification 不回错、`mcpServers` 非空忽略并在 stderr 告警）与 `acp_out.awk`（唯一 stdout writer，映射 text/thinking chunk、`tool_call` / `tool_call_update`、按工具名推断 kind/title/locations、子代理映射为 `kind: think` 的 toolCall、回复前回填未完成工具为 failed、stopReason 状态机、逐行 fflush）。dispatcher 管理 `initialize` / `session/new` / `session/resume` / `session/prompt` / `session/cancel`，每会话 worker 子 shell 复用主循环的 FIFO 机制，busy 用 noclobber 原子创建，auth 延后到 prompt（`-32000`）。
+- **stdout 结构隔离**：fd 10 保留原始 stdout 只给 `acp_out.awk`，dispatcher 与所有 worker `exec 1>&2`、fd 4 display 重定向到 `/dev/null`、关闭终端标题，保证机器输出通道纯净。
+- **ACP 扩展字段（#110 P2 阶段 1）**：`tool_call` / `tool_call_update`（含子代理与 DONE 补发的 failed）附带 `"_meta":{"bash-agent":{"name":"<工具名>"}}`，usage 事件转 `_bash-agent/usage` 通知，供 webagent 还原工具名与 HUD；其他 client 按 ACP 规范忽略。
+- **webagent ACP 通道（#113 / #110 P2）**：新增 `--protocol acp|stream-json`（默认 stream-json）。ACP 模式常驻 spawn `agent --acp`，握手 `initialize` → `session/resume`（`-32002` / 404 时退到 `session/new`），按 id 关联 JSON-RPC 回包，跨轮复用同一 client，`process_exit` 后 respawn + resume 自愈；`--session` 与 `--continue` 语义不变。
+- **取消与强停**：WS 控制消息 `{type:cancel}` → `session/cancel`、`{type:force_kill}` → killpg；前端三态（cancelling → cancelled / timeout）与超时后的强制停止按钮，仅 ACP 协议显示；`--cancel-timeout-ms`（默认 10000）；Ctrl+C 对进行中轮发 cancel 再收尾。agent spawn 独立进程组，terminate 先 SIGTERM（最多等 5s 排空）再 SIGKILL，并用后代进程组快照清理 agent.sh 遗留的子进程组。
+- **提示词单源（#115）**：新增 `prompt/`（静态文案 `*.txt` + `tools.json`）为唯一可编辑来源，`scripts/gen-prompt.py`（仅标准库）生成 `src/agent.sh` GENERATED 块、`go/prompt_gen.go`、`rust/src/prompt_gen.rs`、`c/prompt_gen.h`，产物入库；新增 `make gen-prompt` / `make check-prompt-gen`，CI 增加 `prompt-gen` job，C job 去掉 xxd 依赖，tools 符号链接移除。拼装顺序与动态 section 仍留在各运行时。
+- **测试**：`tests/acp_smoke.sh`（14 个场景：握手、流式文本、guard 拒绝、流中取消、EOF 退出、非法 method 转义、`kill -9` 后 resume、killpg 后 cancelled 回包不丢）、`tests/test_webagent_acp.sh`（S1–S12：正常轮 / resume / 取消 / 忽略取消→强停→respawn / 崩溃恢复 / kill 子进程恢复 / stream-json 回归 / 真实 agent.sh 强停与 kill -9 后零孤儿）、ACP stdio 端到端套件（19 项断言，含 64KB 并发输出完整性、取消隔离、并发 prompt 拒绝）、`mock_acp_agent.py`、`ws_driver.py`；webagent E2E 进入 CI。
+
+### Changed
+
+- **工具调度指导改为逐调用就绪判定（#114）**：把依赖 DAG 表述换成每个调用回答一个问题（待返回结果是否会改变我是否发出它、或以什么参数发出它）、单调用需说明理由、点名常被漏掉的批次，等待语义建立在「调用无序且可能并发」之上；反伪造只禁止无关命令串联、为快调用派 SubAgent、投机调用。Bash / Go / Rust / C 与双语 golden 逐字节同步。
+- **agent.sh 压缩到 2000 行（-278 行，行为不变）**：抽取 `display_clear_line` / `display_thinking_break` / `display_set_last_char`、`notify_read_loop`（主循环与 ACP worker 共用）、`acp_turn_finish` / `agent_maybe_session_end`；单语句分支合并。决策类注释（缓存顺序、compact 顺序、ACP fd 约定、请求体字段顺序）全部保留。
+
+### Fixed
+
+- **issue #116 六个 ACP 缺陷（#117）**：① 删除 `--prompt-timeout-ms`——超时不发 `session/cancel` 会把轮次变成孤儿继续跑完，改为一律不限时、挂死交给 cancel 与 terminate；② `tool_call_update` 的 `in_progress` 中间态不再映射为 `tool_result`，避免前端提前收尾工具卡片再建第二张；③ `acp_reply_error` 对 message 做 JSON 转义，含引号的 method/sessionId 不再产出非法 JSON；④ 新增 `acp_session_reap`（`kill -0` + 僵尸判定、回收 worker、杀残留 notify 子 shell、清 busy/cancel、重建 FIFO、注销会话），`session/resume` 不再误报 already active，webagent 收到 `-32002` 时 invalidate 当前 client 并在下一轮自愈；⑤ `killpg(SIGTERM)` 不再丢回包——`acp_out.awk` 忽略 TERM、生命周期只由 fd 13 EOF 控制，worker 与流子进程 trap 补 TERM，drain 复用取消路径让进行中轮次以 `cancelled` 收尾并清理 `acp.busy`；⑥ stdin 写失败时立即 invalidate 当前 client，watchdog 收尾前排队请求不再复用失效连接逐条报错。
+- **dispatcher 退出不再无限拖长（#118）**：KILL 兜底移进 `acp_wait_workers` 并置于回收 `wait` 之前。此前 worker 卡在长工具时（后台 `&` 任务被 bash 强制 SIG_IGN，CANCEL 帧也唤不醒），12s 轮询超时后 `wait` 仍要等工具跑完，KILL 永远到不了。实测 mock LLM 跑 `sleep 120` 场景：119.2s → 15.5s。
+- **session cancel 可靠中断 worker**：cancel 状态改用标志文件（每帧事件前与读循环后检查），dispatcher 杀掉当前 curl 结束流，向 worker 输入 FIFO 写 CANCEL 帧唤醒空闲 worker，DONE 帧携带 `reason: interrupted` 由 `acp_out.awk` 映射为 `stopReason: cancelled`，未完成的 tool call 先置 failed。（Bash 后台子 shell 不跑 INT trap 且阻塞 read 会被自动重启，旧的 `kill -INT` 路径从未生效。）
+- **curl pid 文件按会话隔离**：`/tmp/agent_curl_pid.$$` → `/tmp/agent_curl_pid.$$.${SESSION_ID}`（写入/清理与 INT trap 共 4 处）。`$$` 在子 shell 中恒为顶层 pid，此前所有会话与子代理共用一个 pid 文件，Ctrl+C 可能误杀其他会话的 curl。C / Go / Rust 无此共享 pid 文件模式，无需同步。
+- **webagent 稳定性（#113 review 20 项 + P0/P1）**：stdin 改 `Option::take` 修 fd 双重关闭；未知反向请求回 `-32601`；reader 用 generation 号避免旧 reader 抹掉新 client；spawn 移出 `acp_state` 锁修 Ctrl+C 失效；Drop 实现 reap 防僵尸；terminate 轮询等待；修 `if let` MutexGuard 临时值延长导致的 terminate ↔ reader 死锁；强停与异常退出判定改以 `child.wait()` 为准（不再依赖 stdout EOF），根进程退出即广播 `process_exit`，`finalized` 去重；`test.sh` 对不支持 `--acp` 的运行时自动跳过。
+- **CI：Linux amd64 ACP E2E 从未真正运行（#113）**：容器内以 root 构建导致 `webagent/target` 属主为 root，宿主 runner 后续 `cargo build` 在 `debug/` 上 Permission denied 直接失败；构建步骤末尾把 `webagent/target` 与 `dist` 归还 runner 用户，E2E 步骤补 `timeout-minutes: 15`。
+
+### Validation
+
+- `tests/test.sh`：Bash / C / Rust 各 259 项，0 失败；`make check-prompt-gen` 通过。
+- `tests/acp_smoke.sh` 14 个场景全绿；`tests/test_webagent_acp.sh` 此前 9 个场景全绿，新增 S10–S12 后覆盖强停与 `kill -9` 零孤儿；ACP stdio 端到端 19 项断言通过。
+- 生成器改造前后比对：`src/` / `dist/` / Rust / C × en_US / zh_CN 的 system prompt 与请求体逐字节一致。
+- 实测退出耗时：dispatcher 在工具执行中被关 stdin，119.2s → 15.5s。
+
+---
+
 ## [4.4.4] - 2026-11-24
 
 > **错误显示跨运行时收敛 + ccagent 网关 400 根因修复（PR #107 / #108）**：Go 与 Rust 的 HTTP 错误输出从两条收敛为一条（与 Bash/C 表现一致）；C 版不再吞掉失败原因；并修复一个让 ccagent 对真实网关必现 400 的隐性 bug——系统提示词 skill-index 中被 1KB 固定缓冲从中间劈开的多字节字符。

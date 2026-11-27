@@ -33,7 +33,7 @@ declare -a SKILL_NAMES=()
 INTERRUPT_REQUESTED=false
 DISPLAY_LAST_CHAR=$'\n'
 PREV_WAS_THINKING=false
-AGENT_VERSION="4.4.4"
+AGENT_VERSION="4.5.0"
 
 # ACP runtime state (--acp)
 : "${ACP_LOCK_FD:=}"     # 令牌 FIFO fd（dispatcher 打开后 export，worker 继承）
