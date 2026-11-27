@@ -316,7 +316,6 @@ fn usage() {
     eprintln!("  --agent PATH     agent binary (default: resolve <agent> from dist/ or PATH)");
     eprintln!("  --protocol P     acp or stream-json (default: stream-json)");
     eprintln!("  --cancel-timeout-ms N   acp 取消确认超时毫秒（默认 10000）");
-    eprintln!("  --prompt-timeout-ms N   acp prompt 回包超时毫秒（默认 0=不限）");
     eprintln!("  -h, --help       show this help");
     eprintln!();
     eprintln!("<agent>: {} (default: cagent)", AGENT_NAMES.join(" | "));
@@ -331,12 +330,7 @@ fn usage() {
 
 /// 从透传给 agent 的参数中提取前端展示配置（--model / --provider / --max-context-tokens）。
 /// 参数在 `--` 之后也可能出现，扫描全部 pos；值支持 `--k v` 与 `--k=v` 两种形式。
-fn build_config_json(
-    args: &[String],
-    protocol: &str,
-    cancel_timeout_ms: u64,
-    prompt_timeout_ms: u64,
-) -> String {
+fn build_config_json(args: &[String], protocol: &str, cancel_timeout_ms: u64) -> String {
     let mut model: Option<&str> = None;
     let mut provider: Option<&str> = None;
     let mut max_context: Option<&str> = None;
@@ -370,7 +364,6 @@ fn build_config_json(
     }
     obj.insert("protocol".into(), json!(protocol));
     obj.insert("cancel_timeout_ms".into(), json!(cancel_timeout_ms));
-    obj.insert("prompt_timeout_ms".into(), json!(prompt_timeout_ms));
     json!(obj).to_string()
 }
 
@@ -383,7 +376,6 @@ fn main() -> Result<()> {
     let mut pos: Vec<String> = Vec::new();
     let mut protocol = "stream-json".to_string();
     let mut cancel_timeout_ms = 10_000u64;
-    let mut prompt_timeout_ms = 0u64;
     let mut after_sep = false;
     let mut i = 0;
     while i < args.len() {
@@ -429,16 +421,6 @@ fn main() -> Result<()> {
                 cancel_timeout_ms = v
                     .parse()
                     .map_err(|_| anyhow::anyhow!("invalid --cancel-timeout-ms: {v}"))?;
-                i += 2;
-            }
-            "--prompt-timeout-ms" => {
-                let v = args
-                    .get(i + 1)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("--prompt-timeout-ms requires a value"))?;
-                prompt_timeout_ms = v
-                    .parse()
-                    .map_err(|_| anyhow::anyhow!("invalid --prompt-timeout-ms: {v}"))?;
                 i += 2;
             }
             "--agent" => {
@@ -514,12 +496,6 @@ fn main() -> Result<()> {
     // client 代数号：每次成功 spawn +1。旧 reader EOF 时校验代数，
     // 防止旧 reader 把 respawn 后的新 client 抹掉（P1-4）
     let acp_generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-    // prompt 回包等待上限：0 = 不限（P1-5）
-    let prompt_timeout = if prompt_timeout_ms > 0 {
-        Some(Duration::from_millis(prompt_timeout_ms))
-    } else {
-        None
-    };
     // 最近一次 ACP 会话 id：agent 崩溃/强停后 respawn 用它 resume 同一会话
     let last_sid: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -546,7 +522,7 @@ fn main() -> Result<()> {
     .ok();
 
     let addr = format!("{bind}:{port}");
-    let config_json = build_config_json(&base_args, &protocol, cancel_timeout_ms, prompt_timeout_ms);
+    let config_json = build_config_json(&base_args, &protocol, cancel_timeout_ms);
     eprintln!("[webagent] config: {config_json}");
     let acp_control = if protocol == "acp" {
         Some(server::AcpControl::new(acp_state.clone()))
@@ -596,7 +572,6 @@ fn main() -> Result<()> {
                                 &home_clone,
                                 &cwd_clone,
                                 acp_generation.clone(),
-                                prompt_timeout,
                                 Arc::downgrade(&acp_state),
                             ) {
                                 Ok(c) => {

@@ -180,10 +180,101 @@ else
     red "cancel 场景未收到回包"
 fi
 
-# ---------- 场景 5: EOF 退出 ----------
+# ---------- 场景 5: 非法 method 的错误回包必须转义（issue #116-3）----------
+echo "── 非法 method（含双引号/反斜杠）→ 错误回包仍是合法 JSON"
+send '{"jsonrpc":"2.0","id":50,"method":"x\"y\\z"}'
+if readline 10; then
+    show "$LINE" "$_TMP/s5json.log"
+    python3 -c 'import json,sys; json.loads(sys.argv[1])' "$LINE" 2>/dev/null \
+        && green "错误回包是合法 JSON（客户端可控 method 已转义）" \
+        || red "错误回包非法 JSON: $LINE"
+    grep -q '"code":-32601' <<< "$LINE" && green "错误码 -32601" || red "错误码不是 -32601"
+else
+    red "非法 method 无回包"
+fi
+
+# ---------- 场景 6: worker 崩溃后可 resume（issue #116-4）----------
+echo "── kill -9 worker → session/resume 成功 → prompt 正常"
+# worker = dispatcher 的 bash 子进程中「子进程含非 awk」的那个
+# （另两个 bash 子进程是 acp_out/acp_in 的进程替换包装，只 fork awk）
+find_worker() {
+    local i p sub
+    for ((i = 0; i < 40; i++)); do
+        for p in $(ps -o pid=,ppid=,comm= -ax | awk -v root="$AGENT_PID" '$2==root && $3=="bash"{print $1}'); do
+            sub=$(ps -o pid=,ppid=,comm= -ax | awk -v pp="$p" '$2==pp && $3!="awk"{print $1}')
+            [[ -n "$sub" ]] && { printf '%s' "$p"; return 0; }
+        done
+        sleep 0.25
+    done
+    return 1
+}
+WORKER_PID="$(find_worker)"
+NOTIFY_PID_FILE="$(find "$TEST_HOME" -name notify.pid -path "*${SID}*" 2>/dev/null | head -1)"
+NOTIFY_PID="$(cat "$NOTIFY_PID_FILE" 2>/dev/null)"
+if [[ -n "$WORKER_PID" ]]; then
+    kill -9 "$WORKER_PID" 2>/dev/null; sleep 0.5
+    send '{"jsonrpc":"2.0","id":6,"method":"session/resume","params":{"sessionId":"'"$SID"'","cwd":"'"$SESSION_CWD"'","mcpServers":[]}}'
+    if collect 6 "$_TMP/s6.log" 15; then
+        grep -q '"id":6,"result"' "$_TMP/s6.log" \
+            && green "worker 崩溃后 session/resume 成功（不再误报 already active）" \
+            || red "resume 被拒绝: $(head -1 "$_TMP/s6.log")"
+    else
+        red "resume 无回包"
+    fi
+    if [[ -n "$NOTIFY_PID" ]]; then
+        kill -0 "$NOTIFY_PID" 2>/dev/null \
+            && red "notify 子 shell 未被 reap 清理（pid=$NOTIFY_PID）" \
+            || green "worker 的 notify 子 shell 已清理"
+    fi
+    sleep 1
+    send '{"jsonrpc":"2.0","id":7,"method":"session/prompt","params":{"sessionId":"'"$SID"'","prompt":[{"type":"text","text":"Hello after resume"}]}}'
+    if collect 7 "$_TMP/s6b.log" 30; then
+        grep -q '"id":7,"result":{"stopReason":"end_turn"' "$_TMP/s6b.log" \
+            && green "resume 后 prompt 正常 (end_turn)" \
+            || red "resume 后 prompt 回包异常"
+    else
+        red "resume 后 prompt 无回包"
+    fi
+else
+    red "找不到 worker pid（跳过 resume 场景）"
+fi
+
+# ---------- 场景 7: EOF 退出 ----------
 echo "── 关闭 stdin (EOF)"
 stop_agent
 [[ "$ACP_EXIT" == "0" ]] && green "退出码 0" || red "退出码非 0: $ACP_EXIT"
+
+# ---------- 场景 8: killpg(SIGTERM) 不丢回包（issue #116-5）----------
+echo "── killpg(SIGTERM) 进行中 prompt → stopReason=cancelled 仍送达"
+OUT2="$_TMP/stdout2.log"; FIFO2="$_TMP/stdin2.fifo"
+: > "$OUT2"; : > "$_TMP/stderr2.log"; rm -f "$FIFO2"; mkfifo "$FIFO2"
+# setsid 让 agent 独立成进程组，才能用 killpg 精确复现 webagent 的 terminate()
+BASH_AGENT_HOME="$TEST_HOME" ANTHROPIC_BASE_URL="$BASE/v1" ANTHROPIC_API_KEY=test \
+    python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+    bash "$AGENT" --acp < "$FIFO2" > "$OUT2" 2>"$_TMP/stderr2.log" &
+AGENT2_PID=$!
+exec 20>&- 2>/dev/null; exec 20>"$FIFO2"
+OUT="$OUT2"; OFF=0
+send '{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"'"$SESSION_CWD"'","mcpServers":[]}}'
+if readline 10; then
+    SID2="$(sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p' <<< "$LINE")"
+    sleep 2
+    send '{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"'"$SID2"'","prompt":[{"type":"text","text":"ACP_SLOW_MARKER"}]}}'
+    sleep 3
+    kill -TERM -- "-$AGENT2_PID" 2>/dev/null
+    if collect 2 "$_TMP/s8.log" 25; then
+        grep -q '"id":2,"result":{"stopReason":"cancelled"' "$_TMP/s8.log" \
+            && green "killpg 后仍收到 cancelled（acp_out 忽略 TERM + drain 走完整取消）" \
+            || red "回包不是 cancelled: $(grep '"id":2' "$_TMP/s8.log" | head -1)"
+    else
+        red "killpg 后回包丢失"
+    fi
+    wait "$AGENT2_PID" 2>/dev/null
+    [[ $? -eq 0 ]] && green "SIGTERM 后 agent 正常退出（退出码 0）" || red "SIGTERM 后退出码非 0"
+    kill -0 "$AGENT2_PID" 2>/dev/null && kill -9 -- "-$AGENT2_PID" 2>/dev/null
+else
+    red "killpg 场景 session/new 无回包"
+fi
 
 echo "═══ 结果: $PASS passed, $FAIL failed ═══"
 exit $(( FAIL > 0 ))
