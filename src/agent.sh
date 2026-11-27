@@ -1434,7 +1434,14 @@ agent_drain_notify_buf() {
 agent_loop_stream() {
     local user_input="$1" turn=0 messages
     # Trap SIGINT: close pipe FD to unblock read
-    trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
+    # ACP worker 额外接 TERM：client killpg(SIGTERM) 时整个进程组都会收到，worker
+    # 不能直接被打死，否则收尾（acp.busy 清理 + DONE cancelled）丢失（#116-5）。
+    # 非 ACP 模式保持原语义（TERM 默认终止），避免改变普通命令行行为。
+    if [[ -n "${ACP_WORKER:-}" ]]; then
+        trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT TERM
+    else
+        trap 'INTERRUPT_REQUESTED=true; cleanup_all_pipes' INT
+    fi
     while (( turn < MAX_TURNS )); do
         (( turn++ )) || true
         agent_drain_notify_buf || true
@@ -1529,8 +1536,13 @@ agent_loop() {
     fi
     [[ "$turn_kind" != notify ]] && store_conv_add_user "$user_input"
     store_stats_update current_turn_count=+1
-    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl
-    trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT
+    # Trap SIGINT (Ctrl+C): close pipe FD to unblock read, kill curl.
+    # ACP worker 额外接 TERM（client killpg），非 ACP 模式保持 TERM 默认语义（#116-5）
+    if [[ -n "${ACP_WORKER:-}" ]]; then
+        trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT TERM
+    else
+        trap 'INTERRUPT_REQUESTED=true; kill "$(cat "/tmp/agent_curl_pid.$$.${SESSION_ID}" 2>/dev/null)" 2>/dev/null; exec 7<&- 2>/dev/null' INT
+    fi
     # Open the process substitution
     exec 7< <(agent_loop_stream "$user_input")
     while util_read_msg <&7; do
@@ -1826,8 +1838,8 @@ acp_reply_result() {  # $1=id_raw $2=result_json（单行）
     acp_emit "$(printf -- '-\tRAW\t{"jsonrpc":"2.0","id":%s,"result":%s}' "$1" "$2")"
 }
 
-acp_reply_error() {  # $1=id_raw $2=code $3=message（内部常量文本，无需 JSON 转义）
-    acp_emit "$(printf -- '-\tRAW\t{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":"%s"}}' "$1" "$2" "$3")"
+acp_reply_error() {  # $1=id_raw $2=code $3=message（可能含客户端可控文本：method/sessionId/content type，必须转义）
+    acp_emit "$(printf -- '-\tRAW\t{"jsonrpc":"2.0","id":%s,"error":{"code":%s,"message":"%s"}}' "$1" "$2" "$(util_json_escape "$3")")"
 }
 
 acp_worker_start() {  # $1=sid $2=cwd —— 复刻 tool_sub_agent 子 shell 模式
@@ -1919,9 +1931,12 @@ acp_worker_main_loop() {  # agent_main_loop 的 ACP 变体：不自动 SESSION_E
         done
     ) &
     _notify_pid=$!
+    # dispatcher 的 acp_session_reap 靠这个 pid 杀残留 notify 子 shell（worker 被
+    # SIGKILL 时子 shell 会变成持有 FIFO 的永久孤儿）
+    printf '%s\n' "$_notify_pid" > "${SESSION_EVENT_FILE%/*}/notify.pid" 2>/dev/null || true
 
     while true; do
-        trap 'ACP_INT_IDLE=true' INT  # 空闲时收到 INT（cancel 竞态）：中断 read 但不退出
+        trap 'ACP_INT_IDLE=true' INT TERM  # 空闲时收到 INT/TERM（cancel/退出竞态）：中断 read 但不立即退出
         ACP_INT_IDLE=false
         if ! util_read_msg <&3; then
             if [[ -f "${TURN_CANCEL_FILE:-}" ]]; then
@@ -1968,7 +1983,7 @@ acp_worker_main_loop() {  # agent_main_loop 的 ACP 变体：不自动 SESSION_E
     trap - INT
     kill "$_notify_pid" 2>/dev/null; wait "$_notify_pid" 2>/dev/null || true
     cleanup_all_pipes
-    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "${TURN_BUSY_FILE:-}" "${TURN_PIDS_FILE:-}" 2>/dev/null || true
+    rm -f "$INPUT_FIFO" "$NOTIFY_FIFO" "$NOTIFY_BUF" "${TURN_BUSY_FILE:-}" "${TURN_PIDS_FILE:-}" "${SESSION_EVENT_FILE%/*}/notify.pid" 2>/dev/null || true
 }
 
 acp_shutdown_workers() {  # $1=signal：向全部 worker 单 pid 发信号（不广播进程组）
@@ -1980,6 +1995,57 @@ acp_shutdown_workers() {  # $1=signal：向全部 worker 单 pid 发信号（不
 }
 
 acp_worker_alive() { local pid; pid="$(acp_session_pid "$1")"; [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; }
+
+acp_session_unset() {  # $1=sid：注销会话（清 pid/cwd 动态变量 + 从列表移除）
+    local v sid new=""
+    v="$(acp_sid_var "$1")_PID"; eval "$v=''"
+    v="$(acp_sid_var "$1")_CWD"; eval "$v=''"
+    for sid in $ACP_SID_LIST; do [[ "$sid" == "$1" ]] || new="$new $sid"; done
+    ACP_SID_LIST="$new"
+}
+
+# worker 已退出（含僵尸）→ 回收后注销会话：wait 僵尸、杀残留 notify 子 shell、
+# 清 busy/cancel 标志、删 FIFO（残留 USER_INPUT 不能被下一个 worker 消费）。
+# 返回 0=已注销（该 sid 可 session/resume），1=worker 仍存活（或未注册）。
+# 为什么必须做：仅用 pid 非空判断会把「worker 已死、会话目录还在」误判成
+# 「session already active」而拒绝 resume（issue #116-4）。
+acp_session_reap() {  # $1=sid
+    local pid stat sd npid
+    pid="$(acp_session_pid "$1")"
+    [[ -n "$pid" ]] || return 1
+    if kill -0 "$pid" 2>/dev/null; then
+        stat="$(ps -o stat= -p "$pid" 2>/dev/null)"
+        [[ -n "$stat" && "$stat" != *Z* ]] && return 1
+        wait "$pid" 2>/dev/null || true
+    fi
+    sd="$(acp_session_dir "$1" "$(acp_session_cwd "$1")")"
+    if [[ -n "$sd" ]]; then
+        # notify 子 shell 在 worker 内 set -m 后自成进程组：worker 被杀它还挂在
+        # NOTIFY_FIFO 上读，且持有 ACP_OUT/stdout 写端（不收则永久孤儿）
+        npid="$(cat "$sd/notify.pid" 2>/dev/null)"
+        [[ -n "$npid" ]] && { kill -KILL -- "-$npid" 2>/dev/null || kill -KILL "$npid" 2>/dev/null || true; }
+        rm -f "$sd/notify.pid" "$sd/acp.busy" "$sd/acp.cancel" "$sd/input.fifo" "$sd/notify.fifo" 2>/dev/null || true
+    fi
+    acp_session_unset "$1"
+    return 0
+}
+
+# 取消一个进行中的轮次（session/cancel 通知与退出 drain 共用）。
+# 后台子 shell 的 SIGINT 被 bash 强制 SIG_IGN（`&` 任务），trap 装不上，所以
+# 真正生效的是 acp.cancel 标志文件（agent_loop 逐帧检查）+ 断 curl（SSE 源）
+# + CANCEL 控制帧（唤醒空闲阻塞在 INPUT_FIFO 上的 worker read）。
+acp_cancel_session() {  # $1=sid
+    local sid="$1" cpid sd cfifo
+    cpid="$(acp_session_pid "$sid")"
+    sd="$(acp_session_dir "$sid" "$(acp_session_cwd "$sid")")"
+    [[ -n "$cpid" && -n "$sd" && -f "$sd/acp.busy" ]] || return 0
+    : > "$sd/acp.cancel" 2>/dev/null || true
+    kill -INT "$cpid" 2>/dev/null || true
+    # curl pid 文件由 llm_call 子 shell 写入，其中 $$ 为 dispatcher pid（bash 子 shell 继承父 $$）
+    kill -INT "$(cat "/tmp/agent_curl_pid.$$.${sid}" 2>/dev/null)" 2>/dev/null || true
+    cfifo="$(acp_session_fifo "$sid" "$(acp_session_cwd "$sid")")"
+    ( exec 5> "$cfifo" && util_write_msg "CANCEL" >&5 ) 2>/dev/null || true
+}
 acp_wait_workers() {  # 轮询等待全部 worker 退出（bash 3.2 无 wait -n/-T），超时后由调用方 KILL 兜底
     local sid i n
     for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
@@ -2007,7 +2073,10 @@ acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_em
 
     exec 10>&1   # ACP_STDOUT：只留给 acp_out.awk
     exec 1>&2    # dispatcher 与所有子进程的 stdout → stderr（结构性隔离）
-    exec 13> >(util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/acp_out.awk" >&10)
+    # acp_out 是唯一回包通道：忽略 SIGTERM，生命周期只由 fd 13 的 EOF 控制。
+    # 否则 client killpg 时它先于 worker 退出，drain 期间 worker 发出的
+    # cancelled 通知与 prompt 回包全部丢失（issue #116-5）。
+    exec 13> >(trap '' TERM; util_awk_run -f "$AWK_DIR/json.awk" -f "$AWK_DIR/acp_out.awk" >&10)
     exec 11<> "$_lock_fifo"
     printf x >&11 2>/dev/null || true
     export ACP_LOCK_FD=11 ACP_OUT_FD=13
@@ -2026,21 +2095,11 @@ acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_em
                 acp_reply_error "${REPLY_MESSAGE[1]}" "${REPLY_MESSAGE[2]}" "${REPLY_MESSAGE[3]}"
                 ;;
             NOTIF)
-                # session/cancel：只影响目标会话；无进行中轮次（无 busy 文件）时忽略
+                # session/cancel：只影响目标会话；worker 已死则先回收，无进行中
+                # 轮次（无 busy 文件）时 acp_cancel_session 自己忽略
                 _csid="${REPLY_MESSAGE[2]}"
-                _cpid="$(acp_session_pid "$_csid")"
-                _sdir="$(acp_session_dir "$_csid" "$(acp_session_cwd "$_csid")")"
-                if [[ -n "$_cpid" && -n "$_sdir" && -f "$_sdir/acp.busy" ]]; then
-                    # SIGINT 在后台异步子 shell 中 trap 不执行（bash 行为），取消状态
-                    # 经 acp.cancel 标志文件传递；同时断 curl（SSE 源）促使当前流尽快结束，
-                    # 并写 CANCEL 控制帧到 INPUT_FIFO 唤醒空闲阻塞中的 worker read
-                    : > "$_sdir/acp.cancel" 2>/dev/null || true
-                    kill -INT "$_cpid" 2>/dev/null || true
-                    # curl pid 文件由子 shell 写入，其中 $$ 为 dispatcher pid（bash 子 shell 继承父 $$）
-                    kill -INT "$(cat "/tmp/agent_curl_pid.$$.${_csid}" 2>/dev/null)" 2>/dev/null || true
-                    _cfifo="$(acp_session_fifo "$_csid" "$(acp_session_cwd "$_csid")")"
-                    ( exec 5> "$_cfifo" && util_write_msg "CANCEL" >&5 ) 2>/dev/null || true
-                fi
+                acp_session_reap "$_csid"
+                acp_cancel_session "$_csid"
                 ;;
             REQ)
                 _id="${REPLY_MESSAGE[1]}" _method="${REPLY_MESSAGE[2]}" _sid="${REPLY_MESSAGE[3]}"
@@ -2058,8 +2117,11 @@ acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_em
                         acp_reply_result "$_id" "{\"sessionId\":\"$_sid\"}"
                         ;;
                     session/resume)
+                        # worker 已退出（崩溃/被杀）时先回收，否则仅凭 pid 非空会
+                        # 误判成 already active 而永远无法恢复会话（issue #116-4）
+                        acp_session_reap "$_sid"
                         _sdir="$(acp_session_dir "$_sid" "$_cwd")"
-                        if [[ -n "$(acp_session_pid "$_sid")" ]]; then
+                        if acp_worker_alive "$_sid"; then
                             # 同一 dispatcher 内该 sid 已有活跃 worker：拒绝，避免双 reader 竞争同一 FIFO
                             acp_reply_error "$_id" -32600 "session already active: $_sid"
                         elif [[ -z "$_sdir" || ! -d "$_sdir" ]]; then
@@ -2073,6 +2135,10 @@ acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_em
                         fi
                         ;;
                     session/prompt)
+                        # worker 崩溃后 prompt 必须报 session not found（让 client
+                        # session/resume 恢复），不能把 USER_INPUT 写进无人读的 FIFO
+                        # 假装成功（issue #116-4）
+                        acp_session_reap "$_sid"
                         _pid="$(acp_session_pid "$_sid")"
                         _sdir="$(acp_session_dir "$_sid" "$(acp_session_cwd "$_sid")")"
                         if [[ -z "$_pid" ]]; then
@@ -2098,13 +2164,23 @@ acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_em
         esac
     done
 
-    if [[ "${ACP_SHUTDOWN:-}" == true ]]; then
-        # SIGINT/SIGTERM：先 drain（转发 INT，进行中的 prompt 以 cancelled 返回）
-        acp_shutdown_workers INT
+    # 退出前（stdin EOF 或 SIGINT/SIGTERM）：有进行中的轮次就先走完整取消再 drain，
+    # 让 agent 侧以 cancelled 收尾并删掉 acp.busy（否则后续 client 的 session/resume
+    # 会撞上「prompt already in progress」）。SIGINT 对后台子 shell 无效（bash 对
+    # `&` 任务强制 SIG_IGN，trap 装不上），只能复用 session/cancel 的
+    # 「标志文件 + 断流 + CANCEL 帧」路径（issue #116-5）。
+    local sid pid fifo _drain=false _dsd
+    for sid in $ACP_SID_LIST; do
+        _dsd="$(acp_session_dir "$sid" "$(acp_session_cwd "$sid")")"
+        if [[ -n "$_dsd" && -f "$_dsd/acp.busy" ]]; then
+            _drain=true
+            acp_cancel_session "$sid"
+        fi
+    done
+    if [[ "$_drain" == true ]]; then
         sleep 3
     fi
     # stdin EOF（或 drain 结束）：SESSION_END → wait → 关 acp_out → exit 0
-    local sid pid fifo
     for sid in $ACP_SID_LIST; do
         fifo="$(acp_session_fifo "$sid" "$(acp_session_cwd "$sid")")"
         [[ -n "$fifo" && -p "$fifo" ]] && { ( exec 5> "$fifo" && util_write_msg "SESSION_END" >&5 ) 2>/dev/null; } || true

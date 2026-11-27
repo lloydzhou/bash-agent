@@ -20,9 +20,9 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-/// 握手类请求超时。prompt 等待上限由 --prompt-timeout-ms 决定（0=不限）：
-/// 不限时靠 agent 退出时清空 pending（Sender 全部 drop）解除阻塞；
-/// 限时则超时报错并回收 pending 条目，避免 agent 活着但不回包卡死 worker（P1-5）。
+/// 握手类请求（initialize / session/new / session/resume）超时。
+/// prompt 一律不限时：靠 agent 退出时清空 pending（Sender 全部 drop）解除阻塞，
+/// 取消/强制停止由 session/cancel 通知与 terminate() 走独立路径。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// SIGTERM 后等 agent 自行排空退出的上限：agent.sh 的排空路径固定 sleep 3s
 /// 再收尾 worker，窗口给够它才有机会自己清干净。
@@ -46,8 +46,9 @@ pub(crate) struct AcpClient {
     pending: Arc<Mutex<HashMap<i64, SyncSender<Value>>>>,
     next_id: AtomicI64,
     pub(crate) session_id: String,
-    /// prompt 回包等待上限；None = 不限（P1-5）
-    prompt_timeout: Option<Duration>,
+    /// 上层 client 槽（Weak）：stdin 写失败等不可恢复错误时立即置空，
+    /// 让下一轮 prompt 重新 spawn，而不是等 watchdog 收尾（issue #116-6）
+    st: Weak<Mutex<Option<Arc<AcpClient>>>>,
     /// agent 进程组 id（process_group(0) 下等于子进程 pid）。
     /// Child 本身交给 watchdog 线程 wait/reap，这里只留 pgid 供发信号。
     pgid: i32,
@@ -64,7 +65,10 @@ pub(crate) struct AcpClient {
 /// 取全表 pid/ppid/pgid，求根进程（pid == pgid）的后代闭包，返回涉及的
 /// 进程组去重列表。一次 ps 调用，macOS/Linux 语法一致。
 fn snapshot_pgids(root_pid: i32) -> Vec<i32> {
-    let Ok(out) = Command::new("ps").args(["-axo", "pid=,ppid=,pgid="]).output() else {
+    let Ok(out) = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,pgid="])
+        .output()
+    else {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&out.stdout);
@@ -106,9 +110,7 @@ fn kill_groups(groups: &[i32]) {
     }
     let deadline = Instant::now() + ORPHAN_GRACE;
     loop {
-        let alive = groups
-            .iter()
-            .any(|&g| unsafe { libc::killpg(g, 0) } == 0);
+        let alive = groups.iter().any(|&g| unsafe { libc::killpg(g, 0) } == 0);
         if !alive || Instant::now() >= deadline {
             return;
         }
@@ -174,9 +176,7 @@ fn acp_finalize(
     let current = generation.load(Ordering::SeqCst);
     if mine != Some(current) {
         if mine.is_some() {
-            eprintln!(
-                "[webagent] stale acp exit (gen {mine:?} != {current}), keep current client"
-            );
+            eprintln!("[webagent] stale acp exit (gen {mine:?} != {current}), keep current client");
         }
         return;
     }
@@ -232,7 +232,11 @@ fn content_to_text(v: &Value) -> String {
             })
             .collect::<Vec<_>>()
             .join(""),
-        _ => v.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+        _ => v
+            .get("text")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string(),
     }
 }
 
@@ -267,6 +271,13 @@ fn acp_update_to_ws(update: &Value) -> Option<String> {
         }
         "tool_call_update" => {
             let status = update.get("status").and_then(|s| s.as_str()).unwrap_or("");
+            // in_progress 是流式中间态（标准 ACP agent 会持续推送）。映射成
+            // tool_result 会让前端提前收尾工具卡片（openToolId 置空），终态到达
+            // 时再新建一张 Result 卡片。中间态不映射，等 completed/failed 一次
+            // 性出结果（issue #116-2）
+            if status == "in_progress" {
+                return None;
+            }
             json!({
                 "type": "tool_result",
                 "tool_use_id": update.get("toolCallId").cloned().unwrap_or(Value::Null),
@@ -323,7 +334,6 @@ impl AcpClient {
         home: &Path,
         cwd: &Path,
         generation: Arc<AtomicU64>,
-        prompt_timeout: Option<Duration>,
         st_weak: Weak<Mutex<Option<Arc<AcpClient>>>>,
     ) -> Result<Self> {
         let mut cmd = Command::new(agent_bin);
@@ -498,7 +508,7 @@ impl AcpClient {
             pending,
             next_id,
             session_id: String::new(),
-            prompt_timeout,
+            st: st_weak.clone(),
             pgid,
             descendant_pgids,
             done_sig,
@@ -521,15 +531,19 @@ impl AcpClient {
         Ok(client)
     }
 
-    /// 统一请求入口：timeout=None 不限（agent 退出时 reader 清空 pending 解除
-    /// 阻塞）；Some(t) 超时报错。超时/退出路径都回收 pending 条目（P3-17）。
-    fn request_raw(
-        &self,
-        method: &str,
-        params: Value,
-        timeout: Option<Duration>,
-    ) -> Result<Value> {
-        let (id, rx) = send_request(&self.stdin, &self.pending, &self.next_id, method, params)?;
+    /// 统一请求入口：timeout=None 不限（agent 退出时清空 pending 解除阻塞）；
+    /// Some(t) 仅用于握手。超时/退出路径都回收 pending 条目（P3-17）。
+    fn request_raw(&self, method: &str, params: Value, timeout: Option<Duration>) -> Result<Value> {
+        let (id, rx) = match send_request(&self.stdin, &self.pending, &self.next_id, method, params)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                // stdin 写失败 = agent 已死/正在退出。立即注销自己，否则 watchdog
+                // 收尾前队列里的下一条请求会复用失效 client 再报一次错（#116-6）
+                self.invalidate();
+                return Err(e);
+            }
+        };
         let res = match timeout {
             Some(t) => rx.recv_timeout(t).map_err(|e| e.to_string()),
             None => rx.recv().map_err(|e| e.to_string()),
@@ -538,6 +552,19 @@ impl AcpClient {
             .inspect_err(|_| {
                 self.pending.lock().unwrap().remove(&id);
             })
+    }
+
+    /// 立即注销自己：仅当上层 state 仍指向本 client 时置空，让下一轮重新
+    /// spawn（用 last_sid 走 session/resume 恢复会话）。reader/watchdog 的
+    /// acp_finalize 有 finalized 去重，重复置空无害。
+    fn invalidate(&self) {
+        let Some(st) = self.st.upgrade() else { return };
+        let mut g = st.lock().unwrap();
+        if g.as_ref()
+            .is_some_and(|c| Arc::as_ptr(c) == self as *const AcpClient)
+        {
+            *g = None;
+        }
     }
 
     /// initialize 加 session/new 或 resume。resume 失败（含 -32002 会话不存在）退回 session/new。
@@ -607,7 +634,9 @@ impl AcpClient {
             "sessionId": self.session_id,
             "prompt": [{"type":"text","text": prompt}],
         });
-        let resp = self.request_raw("session/prompt", params, self.prompt_timeout)?;
+        // prompt 完全不限时：挂死由 session/cancel 通知与 terminate() 处理，
+        // 不再用超时兜底（超时只是把 agent 侧的轮次变成孤儿，见 issue #116-1）
+        let resp = self.request_raw("session/prompt", params, None)?;
         if let Some(e) = resp.get("error") {
             let msg = e
                 .pointer("/data/message")
@@ -615,6 +644,11 @@ impl AcpClient {
                 .or_else(|| e.get("message").and_then(|m| m.as_str()))
                 .unwrap_or("internal error")
                 .to_string();
+            // agent 侧 session 已失效（worker 崩溃后被回收，issue #116-4）：注销
+            // 自己，下一轮 spawn 用 last_sid 走 session/resume 自愈
+            if e.get("code").and_then(|c| c.as_i64()) == Some(-32002) {
+                self.invalidate();
+            }
             let evt = json!({"type":"error","message":msg}).to_string();
             hub.broadcast(&evt);
             return Ok(resp);
@@ -685,5 +719,67 @@ impl AcpClient {
             // 理论上不可达（SIGKILL 必杀、watchdog 必被唤醒）：兜底直接清
             kill_groups(&self.descendant_pgids.lock().unwrap().clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ws_event(v: Value) -> Option<Value> {
+        acp_update_to_ws(&v).map(|s| serde_json::from_str(&s).expect("合法 WS 事件 JSON"))
+    }
+
+    // issue #116-2：tool_call_update 的 in_progress 是流式中间态，不能映射成
+    // tool_result——否则前端会提前收尾工具卡片（openToolId 置空），终态到达时
+    // 再新建一张 Result 卡片
+    #[test]
+    fn tool_call_update_in_progress_is_ignored() {
+        let u = json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "status": "in_progress",
+            "content": [{"type":"content","content":{"type":"text","text":"partial"}}],
+        });
+        assert!(acp_update_to_ws(&u).is_none());
+    }
+
+    #[test]
+    fn tool_call_update_terminal_states_map_to_tool_result() {
+        for (status, is_error) in [("completed", false), ("failed", true)] {
+            let u = json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t1",
+                "status": status,
+                "content": [{"type":"content","content":{"type":"text","text":"done"}}],
+                "_meta": {"bash-agent": {"name": "Bash"}},
+            });
+            let evt = ws_event(u).expect("终态必须映射");
+            assert_eq!(evt["type"], "tool_result");
+            assert_eq!(evt["is_error"], is_error);
+            assert_eq!(evt["content"], "done");
+            assert_eq!(evt["name"], "Bash");
+        }
+    }
+
+    // 兼容性：缺 status 的 tool_call_update 仍按 completed 处理（老 agent/第三方）
+    #[test]
+    fn tool_call_update_without_status_still_maps() {
+        let u = json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "t1",
+            "content": {"type": "text", "text": "x"},
+        });
+        let evt = ws_event(u).expect("缺 status 不应丢弃");
+        assert_eq!(evt["type"], "tool_result");
+        assert_eq!(evt["is_error"], false);
+    }
+
+    #[test]
+    fn stop_reason_mapping() {
+        assert_eq!(stop_reason_to_ws("cancelled"), "interrupted");
+        assert_eq!(stop_reason_to_ws("end_turn"), "end_turn");
+        assert_eq!(stop_reason_to_ws("max_tokens"), "max_tokens");
+        assert_eq!(stop_reason_to_ws("refusal"), "error");
     }
 }

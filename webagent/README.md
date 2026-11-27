@@ -24,7 +24,6 @@ webagent --agent /path/to/agent.sh --protocol acp --port 8686
 | --agent PATH | dist/cagent | agent 可执行文件 |
 | --protocol P | stream-json | acp 或 stream-json |
 | --cancel-timeout-ms N | 10000 | acp 取消确认超时；超时后 UI 提供「强制停止」 |
-| --prompt-timeout-ms N | 0（不限） | acp prompt 回包等待上限；超时报 error 并结束本轮 |
 
 其余位置参数原样透传给 agent（如 --model、--provider、--session <id>、--continue）。
 ## 两种协议
@@ -58,8 +57,9 @@ prompt 送达 agent）：
 
 - cancel：发 session/cancel 通知，等待 agent 回 stopReason=cancelled
   （上限 --cancel-timeout-ms）
-- force_kill：跳过等待，先 SIGTERM agent 进程组，最多等 5s 让 agent 排空
-  （agent.sh 收到 SIGTERM 后固定 3s 退出），未退再 SIGKILL（再等 2s）
+- force_kill：跳过等待，先 SIGTERM agent 进程组（有进行中轮次时 agent 走
+  完整取消并以 cancelled 收尾，约 3s），最多等 5s 排空，未退再 SIGKILL
+  （再等 2s）
 
 ### 强停 / 异常退出收尾
 
@@ -83,7 +83,9 @@ Ctrl+C 退出 webagent 走同一条收尾路径（先 SIGTERM 等排空，超时
 
 与 stream-json 模式一致（session_start / user_input / text / thinking /
 tool_call / tool_result / usage / stop / error / stderr / process_exit）。
-tool_call 与 tool_result 的 name 来自 agent 侧 _meta.bash-agent.name 扩展。
+tool_call 与 tool_result 的 name 来自 agent 侧 _meta.bash-agent.name 扩展；
+tool_call_update 的 in_progress 中间态不映射，只有 completed/failed 才转成
+tool_result（避免前端把中间态当结果提前收尾工具卡片）。
 
 ## 会话与恢复
 
@@ -91,6 +93,10 @@ tool_call 与 tool_result 的 name 来自 agent 侧 _meta.bash-agent.name 扩展
   首次握手的 resume 目标（不存在则回退新建）
 - --continue：resume 最近活跃会话
 - 进程内崩溃恢复：respawn 优先 resume 同进程已知会话，其次启动参数
+- agent 侧 worker 崩溃：agent 自动回收死 worker（wait 僵尸、清 busy/cancel
+  标志与 notify 孤儿、重建 FIFO），session/resume 会重新拉起 worker；
+  session/prompt 收到 -32002 时 webagent 自动注销当前 client，下一轮
+  respawn 并 resume 同一会话，无需用户操作
 
 ## 环境变量
 
