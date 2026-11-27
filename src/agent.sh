@@ -1792,14 +1792,15 @@ acp_cancel_session() {  # $1=sid
     cfifo="$(acp_session_fifo "$sid" "$(acp_session_cwd "$sid")")"
     ( exec 5> "$cfifo" && util_write_msg "CANCEL" >&5 ) 2>/dev/null || true
 }
-acp_wait_workers() {  # 轮询等待全部 worker 退出（bash 3.2 无 wait -n/-T），超时后由调用方 KILL 兜底
-    local sid i n
+acp_wait_workers() {  # 12s 轮询 → KILL 残留 → 回收（KILL 必须在此处 wait 之前：INT/CANCEL 对卡在长 tool 的 worker 无效，wait 无超时）
+    local sid i n pid
     for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
         n=0
         for sid in $ACP_SID_LIST; do acp_worker_alive "$sid" && n=$(( n + 1 )); done
         (( n == 0 )) && break
         sleep 0.5
     done
+    acp_shutdown_workers KILL
     for sid in $ACP_SID_LIST; do
         pid="$(acp_session_pid "$sid")"
         [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
@@ -1920,8 +1921,7 @@ acp_mode() {  # dispatcher：stdin(fd0)←acp_in 的 RESP 帧；回包经 acp_em
         fifo="$(acp_session_fifo "$sid" "$(acp_session_cwd "$sid")")"
         [[ -n "$fifo" && -p "$fifo" ]] && { ( exec 5> "$fifo" && util_write_msg "SESSION_END" >&5 ) 2>/dev/null; } || true
     done
-    acp_wait_workers
-    acp_shutdown_workers KILL  # 兜底：仍未退出的 worker
+    acp_wait_workers  # 12s 轮询 + KILL 兜底 + 回收僵尸
     exec 13>&- 2>/dev/null; exec 11>&- 2>/dev/null; exec 10>&- 2>/dev/null
     rm -rf "$_acp_tmp" 2>/dev/null || true
     exit 0
